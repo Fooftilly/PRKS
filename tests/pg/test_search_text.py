@@ -21,7 +21,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.runner import Outcome, run_job
 from backend.storage.objects import LocalFilesystemStorage
-from backend.pdf_text import PDFTextExtractorUnavailable
+from backend.pdf_text import PDFTextExtractionError, PDFTextExtractorUnavailable
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_search_refresh import SearchTestCase
 
@@ -128,6 +128,12 @@ class ExtractionTests(TextTestCase):
         self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED, Outcome.SUCCEEDED])
         self.assertEqual([(r["status"], r["text"]) for r in self.rows(empty)], [("empty", "")])
         self.assertEqual([(r["status"], r["text"]) for r in self.rows(broken)], [("failed", "")])
+
+    def test_an_extraction_past_its_time_bound_is_failed_not_retried(self) -> None:
+        work = self.pdf_work("Slow", "words")
+        self.fake = PDFTextExtractionError("extraction_timeout")
+        self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])
+        self.assertEqual([(r["status"], r["text"]) for r in self.rows(work)], [("failed", "")])
 
     def test_a_missing_extractor_records_no_outcome(self) -> None:
         work = self.pdf_work("Paper", "words")

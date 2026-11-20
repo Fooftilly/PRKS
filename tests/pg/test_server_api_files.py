@@ -77,7 +77,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertIn(work["id"], self.found("overwritefailoldterm"))
         self.ok(self.send("POST", f"/api/works/{work['id']}/pdf",
                           {"file_b64": base64.b64encode(pdf_bytes("overwritefailnewterm")).decode("ascii")}))
-        with mock.patch.object(pdf_text, "extract_pdf", side_effect=pdf_text.PDFTextExtractionError("bad")):
+        with mock.patch.object(pdf_text, "extract_pdf_bounded", side_effect=pdf_text.PDFTextExtractionError("bad")):
             self.run_jobs()
         self.assertNotIn(work["id"], self.found("overwritefailoldterm"))
         self.assertNotIn(work["id"], self.found("overwritefailnewterm"))

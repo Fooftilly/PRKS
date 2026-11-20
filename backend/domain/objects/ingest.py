@@ -110,7 +110,7 @@ def _linearized(storage: StorageBackend, source: StoredObject, file_name: str,
                 with open(out, "rb") as handle:
                     shutil.copyfileobj(handle, sink, IO_CHUNK_SIZE)
 
-            return _put(storage, mint_name(NAMESPACE_ASSET_OBJECTS, file_name), copy), "ok"
+            return _put(storage, mint_name(NAMESPACE_ASSET_OBJECTS, file_name), copy), reason
     except (OSError, StorageObjectError) as exc:
         LOGGER.warning("pdf_linearize_error context=%s error_type=%s", safe_log_label(context),
                        safe_error_type(exc))

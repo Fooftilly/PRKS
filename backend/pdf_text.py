@@ -3,16 +3,35 @@
 PyMuPDF extraction with its size cap and privacy-safe failure labels, the
 per-Work sync result and the empty rebuild summary. No store. Moved from
 ``backend/text_index.py``.
+
+:func:`extract_pdf_bounded` runs :func:`extract_pdf` in a child process
+that is killed after ``EXTRACT_TIMEOUT_SECONDS`` (#1321): a page loop can
+check a deadline only between pages, and one slow page would still hold
+the job worker. A child that times out or dies without a result is a
+per-PDF failure (``extraction_timeout`` / ``extractor_crashed``), never an
+empty document.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess  # nosec B404 - runs this module's own extractor, no shell
+import sys
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.log_safety import safe_error_type
 
 _MAX_EXTRACTED_CHARS = 2_000_000
+
+# Wall-time bound for one PDF. PyMuPDF reads ordinary books in seconds; only
+# a pathological file gets near this.
+EXTRACT_TIMEOUT_SECONDS = 300
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+_RESULT_NAME = "result.json"
 
 
 class PDFTextExtractorUnavailable(Exception):
@@ -83,6 +102,148 @@ def extract_pdf(
     return PDFTextExtraction(text=txt, empty=False, truncated=truncated)
 
 
+def _run_child(args: List[str], timeout: float) -> tuple[str, Dict[str, Any]]:
+    """Run ``python -m backend.pdf_text *args``: ``("ok", result)``, ``("timeout", {})`` or ``("crashed", {})``.
+
+    The child writes its JSON result as ``_RESULT_NAME`` in its working
+    directory, a fresh scratch, and imports backend through PYTHONPATH. The
+    result goes through a file, not stdout, because MuPDF writes its own
+    messages to stdout. A timed-out child is killed and reaped.
+    """
+    with tempfile.TemporaryDirectory(prefix="prks-pdf-text-") as scratch:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_ROOT, env.get("PYTHONPATH")) if p)
+        try:
+            subprocess.run(  # nosec B603 - fixed argv, no shell
+                [sys.executable, "-m", "backend.pdf_text", *args],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=scratch,
+                env=env,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return "timeout", {}
+        try:
+            with open(os.path.join(scratch, _RESULT_NAME), encoding="utf-8") as handle:
+                result = json.load(handle)
+        except (OSError, ValueError):
+            return "crashed", {}
+    return ("ok", result) if isinstance(result, dict) else ("crashed", {})
+
+
+def extract_pdf_bounded(
+    pdf_path: str,
+    max_chars: int = _MAX_EXTRACTED_CHARS,
+    timeout: float = EXTRACT_TIMEOUT_SECONDS,
+) -> PDFTextExtraction:
+    """:func:`extract_pdf` in a child process killed after ``timeout`` seconds.
+
+    Raises :class:`PDFTextExtractorUnavailable` when the child cannot import
+    PyMuPDF and :class:`PDFTextExtractionError` for an unreadable PDF, a
+    timeout (``extraction_timeout``) or a child that ends without a result
+    (``extractor_crashed``).
+    """
+    outcome, result = _run_child(["extract", os.path.abspath(pdf_path), str(int(max_chars))], timeout)
+    if outcome == "timeout":
+        raise PDFTextExtractionError("extraction_timeout")
+    if outcome != "ok":
+        raise PDFTextExtractionError("extractor_crashed")
+    if result.get("unavailable"):
+        raise PDFTextExtractorUnavailable()
+    if "error" in result:
+        raise PDFTextExtractionError(str(result["error"]))
+    return PDFTextExtraction(
+        text=str(result["text"]), empty=bool(result["empty"]), truncated=bool(result["truncated"])
+    )
+
+
+def same_pages_bounded(first_path: str, second_path: str, timeout: float) -> bool:
+    """Whether both PDFs show the same content (:func:`_pdf_fingerprint`, #1322).
+
+    Runs in a child process killed after ``timeout`` seconds; a timeout, a
+    crash, a missing PyMuPDF or an unreadable file all answer False.
+    """
+    outcome, result = _run_child(
+        ["compare", os.path.abspath(first_path), os.path.abspath(second_path)], timeout)
+    return outcome == "ok" and result.get("same") is True
+
+
+# The semantic properties of a form field (PyMuPDF Widget), not its object number.
+_WIDGET_FIELDS = ("field_name", "field_type", "field_value", "field_flags", "field_label", "choice_values")
+
+
+def _stable(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)
+
+
+def _pdf_fingerprint(pdf_path: str) -> Dict[str, Any]:
+    """What a reader sees and uses in a PDF, without PDF object numbers (a repair may renumber them).
+
+    Per page: size, text, pixels rendered at 72 dpi (text alone misses
+    images, drawings and scans), links, annotations and form widgets (blank
+    fields render nothing and ``annots()`` skips them). Per document: the
+    outline, page labels and embedded files (by name and SHA-256 of their bytes).
+    """
+    import hashlib
+
+    import pymupdf
+
+    pages: List[Dict[str, Any]] = []
+    with pymupdf.open(pdf_path) as doc:
+        for page in doc:
+            raw = page.get_text("text")
+            pixmap = page.get_pixmap(alpha=False)
+            pages.append({
+                "rect": str(page.rect),
+                "text": raw if isinstance(raw, str) else "",
+                "pixels": hashlib.sha256(pixmap.samples).hexdigest(),
+                "links": sorted(_stable({k: v for k, v in link.items() if k not in ("xref", "id")})
+                                for link in page.get_links()),
+                "annots": sorted(_stable([annot.type, str(annot.rect), annot.flags, annot.info.get("content", "")])
+                                 for annot in page.annots()),
+                "widgets": sorted(_stable([str(widget.rect)] + [getattr(widget, name, None) for name in _WIDGET_FIELDS])
+                                  for widget in page.widgets()),
+            })
+        embedded = sorted(_stable([name, hashlib.sha256(doc.embfile_get(name)).hexdigest()])
+                          for name in doc.embfile_names())
+        return {
+            "pages": pages,
+            "outline": _stable(doc.get_toc(simple=True)),
+            "page_labels": _stable(doc.get_page_labels()),
+            "embedded": embedded,
+        }
+
+
+def _child_main(argv: List[str]) -> int:
+    """``python -m backend.pdf_text extract PDF MAX_CHARS`` or ``... compare PDF PDF``.
+
+    Writes its JSON result as ``_RESULT_NAME`` in the working directory (the
+    parent's scratch), never to a path from argv.
+    """
+    result: Dict[str, Any]
+    if argv[0] == "compare":
+        try:
+            result = {"same": _pdf_fingerprint(argv[1]) == _pdf_fingerprint(argv[2])}
+        except Exception as exc:
+            result = {"same": False, "error": safe_error_type(exc)}
+    else:
+        try:
+            found = extract_pdf(argv[1], int(argv[2]))
+            result = {"text": found.text, "empty": found.empty, "truncated": found.truncated}
+        except PDFTextExtractorUnavailable:
+            result = {"unavailable": True}
+        except PDFTextExtractionError as exc:
+            result = {"error": exc.reason}
+    # Scratch read once by the parent after this process exits; a write cut
+    # short is not valid JSON, which the parent reads as a crash.
+    with open(_RESULT_NAME, "w", encoding="utf-8") as handle:
+        json.dump(result, handle)
+    return 0
+
+
 def _empty_summary(
     *, extractor_unavailable: bool = False, fts_rebuilt: bool = False
 ) -> Dict[str, Any]:
@@ -100,3 +261,7 @@ def _empty_summary(
         "extractor_unavailable": extractor_unavailable,
         "skipped": 0,
     }
+
+
+if __name__ == "__main__":
+    sys.exit(_child_main(sys.argv[1:]))

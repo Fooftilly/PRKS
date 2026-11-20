@@ -14,6 +14,14 @@ _MISSING_QPDF_WARNED = False
 # and the upload keeps the source as its working file. qpdf linearizes large
 # ordinary PDFs in seconds; only a pathological input gets near this bound.
 QPDF_TIMEOUT_SECONDS = 120
+# qpdf exits 3 when it finished with warnings, usually after repairing a
+# damaged file (#1322). Its copy is used only when PyMuPDF shows the same
+# content as the source (backend.pdf_text._pdf_fingerprint: pages, text,
+# rendered pixels, links, annotations, form fields, outline, page labels,
+# attachments); the comparison runs in a child process killed after this
+# many seconds, which keeps the source.
+QPDF_WARNINGS_EXIT = 3
+REPAIRED_CHECK_SECONDS = 30.0
 
 
 def _env_truthy(name: str) -> bool | None:
@@ -62,7 +70,7 @@ def _qpdf(ctx: str) -> tuple[str | None, str]:
 
 
 def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> str:
-    """Run ``qpdf --linearize src dst``: ``ok``, ``qpdf-failed`` or ``qpdf-timeout`` (logged)."""
+    """Run ``qpdf --linearize src dst``: ``ok``, ``qpdf-warnings``, ``qpdf-failed`` or ``qpdf-timeout`` (logged)."""
     try:
         proc = subprocess.run(
             [qpdf, "--linearize", src_path, dst_path],
@@ -80,6 +88,9 @@ def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> str:
             QPDF_TIMEOUT_SECONDS,
         )
         return "qpdf-timeout"
+    if proc.returncode == QPDF_WARNINGS_EXIT:
+        LOGGER.info("pdf_linearize_warnings context=%s", ctx)
+        return "qpdf-warnings"
     if proc.returncode != 0:
         LOGGER.warning(
             "pdf_linearize_failed context=%s exit_code=%s",
@@ -90,6 +101,19 @@ def _run_qpdf(qpdf: str, src_path: str, dst_path: str, ctx: str) -> str:
     return "ok"
 
 
+def _repaired_copy_matches(src_path: str, dst_path: str) -> bool:
+    """Whether qpdf's repaired copy is linearized and shows the source's pages unchanged.
+
+    qpdf repairs can drop objects, so a copy that PyMuPDF reads differently
+    (or cannot read, or not within ``REPAIRED_CHECK_SECONDS``) is refused and
+    the source kept. The comparison runs in a child process killed at that
+    bound, so a slow page cannot hold the upload.
+    """
+    from backend.pdf_text import same_pages_bounded
+
+    return is_pdf_linearized(dst_path) and same_pages_bounded(src_path, dst_path, REPAIRED_CHECK_SECONDS)
+
+
 def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tuple[bool, str]:
     """Write a linearized copy of ``src_path`` to ``dst_path``. Returns (written, reason).
 
@@ -98,9 +122,12 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
     under a new key through its ``StorageBackend``, which makes it durable,
     so nothing is synced here. Reasons, with (written) in front: (False)
     ``disabled`` / ``missing-qpdf`` / ``missing-file`` / ``qpdf-failed`` /
-    ``qpdf-timeout`` / ``error``; (True) ``ok``. A timed-out qpdf is killed
-    after ``QPDF_TIMEOUT_SECONDS``; its partial output is scratch the caller
-    discards.
+    ``qpdf-warnings`` / ``qpdf-timeout`` / ``error``; (True) ``ok`` /
+    ``ok-repaired``. A timed-out qpdf is killed after
+    ``QPDF_TIMEOUT_SECONDS``; its partial output is scratch the caller
+    discards. A qpdf that exits 3 (warnings) gives ``ok-repaired`` when its
+    copy shows the source's content unchanged (``same_pages_bounded``), else
+    ``qpdf-warnings``.
     """
     with perf_span("pdf_linearize"):
         ctx = safe_log_label(context, fallback="unknown")
@@ -111,6 +138,10 @@ def linearize_pdf_to(src_path: str, dst_path: str, *, context: str = "") -> tupl
             return False, "missing-file"
         try:
             outcome = _run_qpdf(qpdf, src_path, dst_path, ctx)
+            if outcome == "qpdf-warnings" and os.path.exists(dst_path):
+                if _repaired_copy_matches(src_path, dst_path):
+                    return True, "ok-repaired"
+                LOGGER.info("pdf_linearize_repair_refused context=%s", ctx)
             if outcome != "ok":
                 return False, outcome
         except Exception as e:
