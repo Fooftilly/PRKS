@@ -37,6 +37,11 @@ With TLS on, PRKS treats the site as HTTPS:
   `PRKS_PUBLIC_ORIGIN` only when browsers use a different name or port than
   the one PRKS serves.
 
+Browsers reach PRKS by the name on the certificate. An IP literal or
+`localhost` needs no further setting; a DNS name such as `prks.home.arpa` must
+be listed in `PRKS_TRUSTED_HOSTS`, or PRKS answers 421 (it checks `Host` on
+every request).
+
 Plain HTTP is not served on the TLS port: one process speaks either HTTP or
 HTTPS. HTTP/2 is not offered.
 
@@ -65,15 +70,16 @@ reads `docker-compose.override.yml` by itself):
 services:
   web:
     volumes:
-      - ./tls:/run/prks-tls:ro
+      - ./secrets/tls:/run/prks-tls:ro
     environment:
       PRKS_TLS_CERT_FILE: /run/prks-tls/cert.pem
       PRKS_TLS_KEY_FILE: /run/prks-tls/key.pem
 ```
 
-The `web` container runs as `UID`:`GID` from `.env`, so that user must be able
-to read `key.pem`. Publish the port as usual (`PRKS_PUBLISH_HOST`) and open
-`https://<host>:8080`.
+Keep the files under `secrets/`, which Git and Docker builds ignore, never in
+a tracked directory. The `web` container runs as `UID`:`GID` from `.env`, so
+that user must be able to read `key.pem`. Publish the port as usual
+(`PRKS_PUBLISH_HOST`) and open `https://<host>:8080`.
 
 ## Behind Caddy
 

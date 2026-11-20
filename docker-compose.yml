@@ -90,7 +90,7 @@ services:
         - CMD
         - python
         - -c
-        - "import os, ssl, urllib.request; tls = bool(os.environ.get('PRKS_TLS_CERT_FILE')); ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; urllib.request.urlopen(('https' if tls else 'http') + '://127.0.0.1:8080/readyz', timeout=4, context=ctx if tls else None)"
+        - "import os, ssl, urllib.request; tls = bool(os.environ.get('PRKS_TLS_CERT_FILE', '').strip()); ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; urllib.request.urlopen(('https' if tls else 'http') + '://127.0.0.1:8080/readyz', timeout=4, context=ctx if tls else None)"
       interval: 10s
       timeout: 5s
       retries: 3

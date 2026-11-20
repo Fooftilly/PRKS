@@ -10,6 +10,7 @@ falls back silently. Errors name the variable, never a path or file contents.
 
 from __future__ import annotations
 
+import os
 import ssl
 from dataclasses import dataclass
 from typing import Mapping, Optional
@@ -32,6 +33,9 @@ class HttpSettingsError(ValueError):
 
 
 def _readable(variable: str, path: str) -> None:
+    # A regular file only: opening a FIFO (or a device) could block startup.
+    if not os.path.isfile(path):
+        raise HttpSettingsError(f"{variable} names a file PRKS cannot read.")
     try:
         with open(path, "rb"):
             pass

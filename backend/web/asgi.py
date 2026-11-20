@@ -419,7 +419,7 @@ class PrksAsgiApp:
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._threads)
         if self._admitted >= self._max_admitted:
-            await _send_busy(send)
+            await _send_busy(send, https=scope.get("scheme") == "https")
             return
         self._admitted += 1
         # The receiver starts before the wait for a thread, so a client that
@@ -508,21 +508,23 @@ class PrksAsgiApp:
                 loop.call_soon_threadsafe(_resolve, done)
 
 
-async def _send_busy(send: Send) -> None:
-    """503 for a request over the wait-list bound, without starting a thread."""
+async def _send_busy(send: Send, *, https: bool) -> None:
+    """503 for a request over the wait-list bound, without starting a thread.
+
+    Over PRKS's own TLS it carries HSTS too, like every ``PRKSHandler`` answer.
+    """
     LOGGER.info("request_rejected reason=server_busy")
-    await send({
-        "type": "http.response.start",
-        "status": 503,
-        "headers": [
-            (b"content-type", b"application/json; charset=utf-8"),
-            (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
-            (b"cache-control", b"no-store"),
-            (b"retry-after", b"1"),
-            (b"x-content-type-options", b"nosniff"),
-            (b"connection", b"close"),
-        ],
-    })
+    headers = [
+        (b"content-type", b"application/json; charset=utf-8"),
+        (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
+        (b"cache-control", b"no-store"),
+        (b"retry-after", b"1"),
+        (b"x-content-type-options", b"nosniff"),
+        (b"connection", b"close"),
+    ]
+    if https:
+        headers.append((b"strict-transport-security", server_module.HSTS_VALUE.encode("ascii")))
+    await send({"type": "http.response.start", "status": 503, "headers": headers})
     await send({"type": "http.response.body", "body": _BUSY_BODY, "more_body": False})
 
 

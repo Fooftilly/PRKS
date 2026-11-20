@@ -71,7 +71,7 @@ class PostgresComposeFileTests(unittest.TestCase):
             with self.subTest(variable=name):
                 self.assertIn(f'{name}: "${{{name}:-}}"', web)
                 self.assertRegex(_read(".env.example"), rf"(?m)^{name}=$")
-        self.assertIn("os.environ.get('PRKS_TLS_CERT_FILE')", web)
+        self.assertIn("os.environ.get('PRKS_TLS_CERT_FILE', '').strip()", web)
         self.assertIn("('https' if tls else 'http') + '://127.0.0.1:8080/readyz'", web)
 
     def test_roles_run_through_prks_app(self) -> None:

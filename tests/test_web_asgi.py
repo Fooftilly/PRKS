@@ -82,8 +82,11 @@ class HttpSettingsTests(unittest.TestCase):
         with open(not_pem, "w", encoding="ascii") as handle:
             handle.write("not a certificate\n")
         other_cert, other_key = temporary_pair(self)
+        fifo = os.path.join(os.path.dirname(cert), "key.fifo")
+        os.mkfifo(fifo)  # opening it would block until a writer came
         locked = encrypted_key(os.path.dirname(key), key)
         cases = (
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: fifo}, ENV_TLS_KEY_FILE),
             # Refused, never a passphrase prompt on the terminal.
             ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: locked}, ENV_TLS_KEY_FILE),
             ({ENV_TLS_CERT_FILE: cert}, ENV_TLS_KEY_FILE),
@@ -101,7 +104,7 @@ class HttpSettingsTests(unittest.TestCase):
             message = caught.exception.message
             self.assertIn(variable, message)
             # The error names the variable, never the path or the file's text.
-            for path in (cert, key, missing, not_pem, other_cert, other_key, locked):
+            for path in (cert, key, missing, not_pem, other_cert, other_key, locked, fifo):
                 self.assertNotIn(path, message)
                 self.assertNotIn(os.path.basename(path), message)
             self.assertNotIn("not a certificate", message)
@@ -800,6 +803,19 @@ class TlsTransportTests(unittest.TestCase):
                 got, _, headers = self.request(method, path)
                 self.assertEqual(got, status)
                 self.assertEqual(headers.get("strict-transport-security"), server_module.HSTS_VALUE)
+
+    def test_the_busy_answer_over_tls_carries_hsts(self):
+        for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
+            sent = []
+
+            async def send(message, sent=sent):
+                sent.append(message)
+
+            asyncio.run(asgi._send_busy(send, https=https))
+            headers = dict(sent[0]["headers"])
+            with self.subTest(https=https):
+                self.assertEqual(sent[0]["status"], 503)
+                self.assertEqual(headers.get(b"strict-transport-security"), expected)
 
     def test_the_client_sees_the_configured_certificate(self):
         conn = http.client.HTTPSConnection(
