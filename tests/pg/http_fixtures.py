@@ -1,7 +1,7 @@
 """A real PRKS HTTP server with PostgreSQL authentication, for the PR 5/5 tests (L-ID-1 #626).
 
 Each test gets a fresh migrated PostgreSQL database (``IdentityTestCase``)
-and its own ``PRKSThreadingTCPServer`` on a free loopback port, configured
+and its own HTTP server (``make_server``) on a free loopback port, configured
 the way ``run_server`` configures it, with the PostgreSQL Library of that
 database bound to a storage root in a temporary directory (never ``data/``).
 """
@@ -63,9 +63,6 @@ _SENTINEL: Any = object()
 class HttpAuthTestCase(IdentityTestCase):
     """Fresh PostgreSQL identity + a PRKS server on its Library per test."""
 
-    #: The HTTP transport serve() started: "stdlib" or "uvicorn" (#1329).
-    transport = "uvicorn"
-
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()  # skips without PRKS_TEST_DATABASE_URL
@@ -125,12 +122,7 @@ class HttpAuthTestCase(IdentityTestCase):
         module = self.server_module
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
-        # Uvicorn is the default; PRKS_TEST_HTTP_TRANSPORT=stdlib runs this suite over the stdlib server until #1329 Phase B3 deletes it.
-        from backend.web.settings import ENV_SERVER, HttpServerSettings
-
-        http = HttpServerSettings.from_env({ENV_SERVER: os.environ.get("PRKS_TEST_HTTP_TRANSPORT", "")})
-        self.transport = http.transport
-        httpd = module.make_server(("127.0.0.1", 0), http)
+        httpd = module.make_server(("127.0.0.1", 0))
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
         httpd.prks_access_gate = module.LibraryAccessGate()

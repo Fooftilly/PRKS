@@ -9,15 +9,19 @@ process model.
 
 ## Migration status
 
-Phase B1 (#1335) added the Uvicorn transport (`backend/web/`). Phase B2
-makes it the default: `PRKS_HTTP_SERVER` defaults to `uvicorn`, and
-`PRKS_HTTP_SERVER=stdlib` selects the old server until B3 deletes it.
-`PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the threads that run PRKS
-request work; up to 8 requests per thread wait for one, and further requests
-get an immediate 503 with `Retry-After`. Compose passes both settings to
-`web`. The PostgreSQL HTTP suites run
-over Uvicorn by default; `PRKS_TEST_HTTP_TRANSPORT=stdlib` runs them over the
-old server.
+Phase B1 (#1335) added the Uvicorn transport (`backend/web/`), and Phase B2
+(#1338) made it the default. Phase B3 removes the standard-library server:
+`PRKSThreadingTCPServer` and the `stdlib` choice are gone, `make_server`
+always binds Uvicorn, and `PRKS_HTTP_SERVER` is retired (a non-empty value
+refuses to start). `PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the
+threads that run PRKS request work; up to 8 requests per thread wait for one,
+and further requests get an immediate 503 with `Retry-After`. Compose passes
+`PRKS_HTTP_THREADS` to `web`.
+
+What is left of step 8 below: `PRKSHandler` still subclasses
+`http.server.SimpleHTTPRequestHandler` (for header parsing and the static
+frontend files), so the `http.server` import stays until the handler no
+longer depends on it.
 
 ## Decision
 

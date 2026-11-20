@@ -1,6 +1,5 @@
 from backend import work_note_sync, work_source_sync
 import http.server
-import socketserver
 import json
 import gzip
 import os
@@ -2341,38 +2340,16 @@ class PRKSHandler(http.server.SimpleHTTPRequestHandler):
         if (getattr(self, "command", "") or "").upper() != "HEAD":
             self.wfile.write(body)
 
-class PRKSThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
-    daemon_threads = True
-    block_on_close = False
-    allow_reuse_address = True
-    # Set by run_server() and test servers before serving; the handler reads
-    # them through ``self.server``.
-    prks_bind_host: str
-    prks_trusted_hosts: frozenset[str]
-    prks_access_gate: "LibraryAccessGate"
-    prks_auth: Any
-    prks_jobs: Any
-    prks_readiness: Any
-
-
-
-
 def make_server(address: tuple[str, int], http: "HttpServerSettings | None" = None) -> Any:
-    """Bind the HTTP server for ``http.transport`` (#1329); the caller sets its ``prks_*``.
+    """Bind the Uvicorn HTTP server (#1329); the caller sets its ``prks_*``.
 
-    ``uvicorn`` (the default) is ``backend.web.asgi.UvicornServing``;
-    ``stdlib`` is ``PRKSThreadingTCPServer``, kept until #1329 Phase B3 and the
-    only transport that does not import Uvicorn. Both run the same
-    ``PRKSHandler`` dispatch.
+    It serves ``PRKSHandler`` dispatch through ``backend.web.asgi``.
     """
-    from backend.web.settings import TRANSPORT_UVICORN, HttpServerSettings
+    from backend.web.asgi import UvicornServing
+    from backend.web.settings import HttpServerSettings
 
     http = http or HttpServerSettings()
-    if http.transport == TRANSPORT_UVICORN:
-        from backend.web.asgi import UvicornServing
-
-        return UvicornServing(address, threads=http.threads)
-    return PRKSThreadingTCPServer(address, PRKSHandler)
+    return UvicornServing(address, threads=http.threads)
 
 
 def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None, http=None):
@@ -2384,8 +2361,6 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     from backend.web.settings import HttpServerSettings
 
     http = http or HttpServerSettings()
-    # Setup for allowing reusing address
-    socketserver.TCPServer.allow_reuse_address = True
     with make_server((host, port), http) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
@@ -2401,10 +2376,10 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
-            "server_starting bind_scope=%s port=%s transport=%s",
+            "server_starting bind_scope=%s port=%s threads=%s",
             safe_bind_scope(host),
             port,
-            safe_log_label(http.transport),
+            http.threads,
         )
         if jobs is not None:
             # Runs the embedded worker while serving and stops it gracefully
