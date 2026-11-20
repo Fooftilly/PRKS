@@ -108,16 +108,20 @@ HSTS_VALUE = "max-age=31536000"
 # no inline script or handler, no eval. 'wasm-unsafe-eval' lets the PDF viewer
 # compile its PDFium WebAssembly, and blob: workers and images are what that
 # viewer makes. Inline styles stay allowed: markup still sets CSS variables in
-# style attributes. Nothing may frame PRKS, and no page URL leaves in Referer.
+# style attributes. Images may come from anywhere, as Research Notes figures
+# and video thumbnails are remote URLs. The only other site PRKS talks to is
+# YouTube: its player frame and the oEmbed lookup behind New File's autofill.
+# Nothing may frame PRKS, and no page URL leaves in Referer.
 CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    "img-src * data: blob:",
     "font-src 'self' data:",
-    "connect-src 'self' data: blob:",
+    "connect-src 'self' data: blob: https://www.youtube.com",
     "worker-src 'self' blob:",
     "media-src 'self' blob:",
+    "frame-src https://www.youtube.com",
     "object-src 'none'",
     "base-uri 'none'",
     "form-action 'self'",

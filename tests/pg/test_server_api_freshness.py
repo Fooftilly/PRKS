@@ -354,6 +354,12 @@ class ShellTests(FreshnessTestCase):
         self.assertNotIn("'unsafe-inline'", script_src)
         self.assertNotIn("'unsafe-eval'", script_src)
         self.assertIn("frame-ancestors 'none'", policy)
+        directives = dict(part.split(" ", 1) for part in policy.split("; "))
+        # The YouTube player and its oEmbed lookup are the only other site.
+        self.assertEqual(directives["frame-src"], "https://www.youtube.com")
+        self.assertIn("https://www.youtube.com", directives["connect-src"].split())
+        # Research Notes figures and video thumbnails are remote images.
+        self.assertEqual(directives["img-src"].split()[0], "*")
 
     def test_the_vue_bundle_is_served_with_the_shell(self) -> None:
         bundle = self.get("/vue/prks-vue.js")
