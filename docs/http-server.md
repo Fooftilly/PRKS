@@ -13,7 +13,9 @@ Phase B1 (#1335) added the Uvicorn transport (`backend/web/`). Phase B2
 makes it the default: `PRKS_HTTP_SERVER` defaults to `uvicorn`, and
 `PRKS_HTTP_SERVER=stdlib` selects the old server until B3 deletes it.
 `PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the threads that run PRKS
-request work, and Compose passes it to `web`. The PostgreSQL HTTP suites run
+request work; up to 8 requests per thread wait for one, and further requests
+get an immediate 503 with `Retry-After`. Compose passes both settings to
+`web`. The PostgreSQL HTTP suites run
 over Uvicorn by default; `PRKS_TEST_HTTP_TRANSPORT=stdlib` runs them over the
 old server.
 

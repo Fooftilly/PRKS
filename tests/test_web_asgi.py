@@ -105,6 +105,32 @@ class UvicornTransportTests(unittest.TestCase):
         self.port = self.httpd.server_address[1]
         self._wait_listening()
 
+    def _start_server(self, threads=4):
+        """Another Uvicorn transport, configured like setUp's; returns its port."""
+        httpd = server_module.make_server(
+            ("127.0.0.1", 0), HttpServerSettings.from_env({ENV_SERVER: "uvicorn", ENV_THREADS: str(threads)})
+        )
+        httpd.prks_bind_host = "127.0.0.1"
+        httpd.prks_trusted_hosts = frozenset()
+        httpd.prks_access_gate = server_module.LibraryAccessGate()
+        httpd.prks_auth = None
+        httpd.prks_jobs = None
+        httpd.prks_readiness = None
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        port = httpd.server_address[1]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                if self.request("GET", "/healthz", port=port)[0] == 200:
+                    return port
+            except OSError:
+                time.sleep(0.05)
+        self.fail("the second Uvicorn transport did not start")
+
     def _wait_listening(self):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -116,9 +142,9 @@ class UvicornTransportTests(unittest.TestCase):
                 time.sleep(0.05)
         self.fail("the Uvicorn transport did not start")
 
-    def request(self, method, path, headers=None, body=None, conn=None):
+    def request(self, method, path, headers=None, body=None, conn=None, port=None):
         own = conn is None
-        conn = conn or http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn = conn or http.client.HTTPConnection("127.0.0.1", port or self.port, timeout=10)
         try:
             conn.request(method, path, body=body, headers=headers or {})
             response = conn.getresponse()
@@ -315,6 +341,64 @@ class UvicornTransportTests(unittest.TestCase):
             self.assertEqual(result.get("status"), 200)
             for thread in slow:
                 thread.join(5)
+
+    def test_requests_past_the_wait_list_bound_get_503_at_once(self):
+        # 4 threads x QUEUE_PER_THREAD (patched to 1) = 4 may wait; the next is refused.
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        original = asgi._AsgiHandler.do_GET
+
+        def slow_or_normal(handler):
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi, "QUEUE_PER_THREAD", 1):
+            port = self._start_server()
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+            busy = [threading.Thread(target=self.request, args=("GET", "/slow", None, None, None, port), daemon=True)
+                    for _ in range(4)]
+            for thread in busy:
+                thread.start()
+            for _ in busy:
+                self.assertTrue(started.acquire(timeout=5))
+            statuses = []
+            waiters = [threading.Thread(target=lambda: statuses.append(self.request("GET", "/healthz", port=port)[0]),
+                                        daemon=True) for _ in range(4)]
+            for thread in waiters:
+                thread.start()
+            time.sleep(0.5)  # let all four reach the wait list
+            status, body, headers = self.request("GET", "/healthz", port=port)
+            self.assertEqual(status, 503)
+            self.assertIn(b"server_busy", body)
+            self.assertEqual(headers.get("retry-after"), "1")
+            release.set()
+            for thread in busy + waiters:
+                thread.join(5)
+            self.assertEqual(statuses, [200, 200, 200, 200])
+
+    def test_a_large_head_sent_in_pieces_is_accepted(self):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.addCleanup(sock.close)
+        value = b"v" * 20000  # over h11's 16 KiB default, under PRKS's 64 KiB
+        sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: ")
+        for start in range(0, len(value), 5000):  # the head stays incomplete past 16 KiB
+            sock.sendall(value[start:start + 5000])
+            time.sleep(0.05)
+        sock.sendall(b"\r\nConnection: close\r\n\r\n")
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+        self.assertTrue(response.startswith(b"HTTP/1.1 200"), response[:80])
 
     def test_idle_keep_alive_connections_do_not_refuse_requests(self):
         idle = []

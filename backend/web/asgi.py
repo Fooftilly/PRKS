@@ -61,6 +61,16 @@ KEEP_ALIVE_SECONDS = 5
 #: The stdlib server's request limits, kept: header count and line length.
 MAX_HEADERS = 100
 MAX_LINE_BYTES = 65536
+#: The largest request head (request line and headers) h11 buffers while it
+#: arrives in pieces. h11's own default is 16 KiB, which would refuse a head
+#: sent in fragments that the same head sent at once passes.
+MAX_REQUEST_HEAD_BYTES = MAX_LINE_BYTES
+#: Requests that may wait for a PRKS thread, per thread. Past that the
+#: server answers 503 at once, so a flood cannot grow the wait list without
+#: bound (``limit_concurrency`` stays unset: it also counts idle keep-alive
+#: connections, ``docs/http-server.md``).
+QUEUE_PER_THREAD = 8
+_BUSY_BODY = b'{"error":"server_busy"}'
 
 _DROPPED_RESPONSE_HEADERS = frozenset({b"server", b"date"})
 #: Uvicorn loggers that log request data at TRACE (below DEBUG).
@@ -345,6 +355,8 @@ class PrksAsgiApp:
     def __init__(self, server: "UvicornServing", threads: int) -> None:
         self._server = server
         self._threads = threads
+        self._max_waiting = threads * QUEUE_PER_THREAD
+        self._waiting = 0
         self._slots: Optional[asyncio.Semaphore] = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -352,23 +364,36 @@ class PrksAsgiApp:
             return  # lifespan is off; no WebSocket routes
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._threads)
+        if self._slots.locked() and self._waiting >= self._max_waiting:
+            await _send_busy(send)
+            return
+        self._waiting += 1
+        try:
+            await self._slots.acquire()
+        finally:
+            self._waiting -= 1
+        try:
+            await self._serve(scope, receive, send)
+        finally:
+            self._slots.release()
+
+    async def _serve(self, scope: Scope, receive: Receive, send: Send) -> None:
         loop = asyncio.get_running_loop()
-        async with self._slots:
-            done: asyncio.Future[None] = loop.create_future()
-            receiver = _Receiver(receive)
-            watch = asyncio.ensure_future(receiver.run())
-            thread = threading.Thread(
-                target=self._run,
-                args=(loop, done, scope, receiver, send),
-                name="prks-http",
-                daemon=True,
-            )
-            thread.start()
-            try:
-                await done
-            finally:
-                watch.cancel()
-                receiver.gone.set()
+        done: asyncio.Future[None] = loop.create_future()
+        receiver = _Receiver(receive)
+        watch = asyncio.ensure_future(receiver.run())
+        thread = threading.Thread(
+            target=self._run,
+            args=(loop, done, scope, receiver, send),
+            name="prks-http",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            await done
+        finally:
+            watch.cancel()
+            receiver.gone.set()
 
     def _run(
         self,
@@ -397,6 +422,24 @@ class PrksAsgiApp:
         finally:
             with contextlib.suppress(RuntimeError):  # the loop has closed
                 loop.call_soon_threadsafe(_resolve, done)
+
+
+async def _send_busy(send: Send) -> None:
+    """503 for a request over the wait-list bound, without starting a thread."""
+    LOGGER.info("request_rejected reason=server_busy")
+    await send({
+        "type": "http.response.start",
+        "status": 503,
+        "headers": [
+            (b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
+            (b"cache-control", b"no-store"),
+            (b"retry-after", b"1"),
+            (b"x-content-type-options", b"nosniff"),
+            (b"connection", b"close"),
+        ],
+    })
+    await send({"type": "http.response.body", "body": _BUSY_BODY, "more_body": False})
 
 
 def _resolve(done: "asyncio.Future[None]") -> None:
@@ -449,6 +492,7 @@ class UvicornServing:
             server_header=False,
             date_header=True,
             timeout_keep_alive=KEEP_ALIVE_SECONDS,
+            h11_max_incomplete_event_size=MAX_REQUEST_HEAD_BYTES,
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
         )
 
