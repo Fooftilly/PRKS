@@ -1054,5 +1054,36 @@ class ShutdownTests(unittest.TestCase):
         self.assertNotEqual(result, [(200, b"slow")])
         self.assertFalse(thread.is_alive() and (thread.join(5) or thread.is_alive()))
 
+    def test_repeated_servers_leave_no_request_threads_behind(self):
+        def request_threads():
+            return [t for t in threading.enumerate() if t.name == "prks-http"]
+
+        before = len(request_threads())
+        for _ in range(3):
+            httpd, thread = self._serving()
+            port = httpd.server_address[1]
+            conns = []
+            for _ in range(4):  # several at once, so the pool grows past one thread
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        conn.request("GET", "/healthz")
+                        break
+                    except ConnectionRefusedError:
+                        self.assertLess(time.monotonic(), deadline, "the server never answered")
+                        time.sleep(0.05)
+                        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conns.append(conn)
+            for conn in conns:
+                self.assertEqual(conn.getresponse().status, 200)
+                conn.close()
+            httpd.shutdown()
+            thread.join(5)
+        deadline = time.monotonic() + 5
+        while len(request_threads()) > before and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(len(request_threads()), before, "request threads outlived their server")
+
 if __name__ == "__main__":
     unittest.main()

@@ -444,35 +444,48 @@ class _Workers:
     never holds the process open. The ``PRKS_HTTP_THREADS`` slots bound the
     work; a new thread starts only when no thread is idle, which after the
     first requests happens only if a request's task was cancelled while its
-    work still runs.
+    work still runs. :meth:`close` (when serving ends) retires the idle
+    threads at once and each busy one when its request returns, so servers
+    started and stopped in one process leave no threads behind.
     """
 
     def __init__(self) -> None:
-        self._jobs: "queue.SimpleQueue[Callable[[], None]]" = queue.SimpleQueue()
+        self._jobs: "queue.SimpleQueue[Optional[Callable[[], None]]]" = queue.SimpleQueue()
         self._lock = threading.Lock()
         self._idle = 0
+        self._closed = False
 
     def submit(self, job: Callable[[], None]) -> None:
         with self._lock:
-            start = self._idle == 0
+            start = self._closed or self._idle == 0
             if not start:
                 self._idle -= 1  # that idle thread takes this job
-        self._jobs.put(job)
         if start:
-            threading.Thread(target=self._loop, args=(True,), name="prks-http", daemon=True).start()
+            # A job after close() (none is expected) still runs, on a thread
+            # that then ends.
+            threading.Thread(target=self._loop, args=(job,), name="prks-http", daemon=True).start()
+        else:
+            self._jobs.put(job)
 
-    def _loop(self, claimed: bool) -> None:
-        # ``claimed``: a job was queued for this thread when it started.
-        while True:
-            if not claimed:
-                with self._lock:
-                    self._idle += 1
-            claimed = False
-            job = self._jobs.get()
+    def close(self) -> None:
+        """Retire every thread: idle ones now, busy ones after their request."""
+        with self._lock:
+            self._closed = True
+            idle, self._idle = self._idle, 0
+        for _ in range(idle):
+            self._jobs.put(None)
+
+    def _loop(self, job: Optional[Callable[[], None]]) -> None:
+        while job is not None:
             try:
                 job()
             except BaseException:  # noqa: BLE001 - _run reports its own errors; keep the thread
                 LOGGER.exception("http_worker_job_failed")
+            with self._lock:
+                if self._closed:
+                    return
+                self._idle += 1
+            job = self._jobs.get()
 
 
 class PrksAsgiApp:
@@ -488,6 +501,10 @@ class PrksAsgiApp:
         self._admitted = 0
         self._slots: Optional[asyncio.Semaphore] = None
         self._workers = _Workers()
+
+    def close(self) -> None:
+        """Serving has ended: retire the request threads."""
+        self._workers.close()
 
     @property
     def admitted(self) -> int:
@@ -738,6 +755,8 @@ class UvicornServing:
         try:
             self._server.run(sockets=[self._socket])
         finally:
+            if self.app is not None:
+                self.app.close()
             self._stopped.set()
 
     def shutdown(self) -> None:
