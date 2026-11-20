@@ -473,50 +473,54 @@ class UvicornTransportTests(unittest.TestCase):
         self.assertEqual(admitted, 0)
 
     def test_a_queued_request_keeps_its_whole_body(self):
-        async def scenario():
-            release = asyncio.Event()
-            bodies = []
+        # 1000-byte chunks are merged while queued; 40000-byte ones pass the
+        # QUEUED_BODY_BYTES bound, so the receiver waits on the full queue.
+        for size in (1000, 40000):
+            with self.subTest(chunk=size):
+                bodies, expected = asyncio.run(self._queued_upload(size))
+                self.assertEqual(bodies, [expected])
 
-            async def hold(scope, receiver, send):
-                if scope["path"] == "/first":
-                    await release.wait()
-                    return
-                body = b""
-                while True:
-                    message = await receiver.messages.get()
-                    body += message.get("body", b"")
-                    if not message.get("more_body", False):
-                        break
-                bodies.append(body)
+    async def _queued_upload(self, size):
+        release = asyncio.Event()
+        bodies = []
 
-            async def idle():
-                await asyncio.Event().wait()
-                return {"type": "http.disconnect"}
+        async def hold(scope, receiver, send):
+            if scope["path"] == "/first":
+                await release.wait()
+                return
+            body = b""
+            while True:
+                message = await receiver.messages.get()
+                body += message.get("body", b"")
+                if not message.get("more_body", False):
+                    break
+            bodies.append(body)
 
-            chunks = [b"a" * 1000, b"b" * 1000, b"c" * 1000]
-            messages = [{"type": "http.request", "body": c, "more_body": i < 2} for i, c in enumerate(chunks)]
+        async def idle():
+            await asyncio.Event().wait()
+            return {"type": "http.disconnect"}
 
-            async def uploading():
-                if messages:
-                    return messages.pop(0)
-                return await idle()
+        chunks = [b"a" * size, b"b" * size, b"c" * size]
+        messages = [{"type": "http.request", "body": c, "more_body": i < 2} for i, c in enumerate(chunks)]
 
-            async def send(message):
-                pass
+        async def uploading():
+            if messages:
+                return messages.pop(0)
+            return await idle()
 
-            app = asgi.PrksAsgiApp(mock.Mock(), 1)
-            app._serve = hold
-            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
-            await asyncio.sleep(0.05)
-            queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, uploading, send))
-            await asyncio.sleep(0.1)
-            release.set()
-            await first
-            await asyncio.wait_for(queued, 2)
-            return bodies, b"".join(chunks)
+        async def send(message):
+            pass
 
-        bodies, expected = asyncio.run(scenario())
-        self.assertEqual(bodies, [expected])
+        app = asgi.PrksAsgiApp(mock.Mock(), 1)
+        app._serve = hold
+        first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, idle, send))
+        await asyncio.sleep(0.05)
+        queued = asyncio.ensure_future(app({"type": "http", "path": "/upload"}, uploading, send))
+        await asyncio.sleep(0.1)
+        release.set()
+        await first
+        await asyncio.wait_for(queued, 2)
+        return bodies, b"".join(chunks)
 
     def test_cancelling_a_queued_request_keeps_the_thread_slot(self):
         async def scenario():
