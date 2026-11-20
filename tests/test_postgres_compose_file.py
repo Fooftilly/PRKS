@@ -65,6 +65,15 @@ class PostgresComposeFileTests(unittest.TestCase):
         self.assertIn("/readyz", web)
         self.assertIn('PRKS_EMBEDDED_WORKER: "0"', web)
 
+    def test_web_passes_its_own_tls_and_probes_https_with_it(self) -> None:
+        web = _service(self.text, "web")
+        for name in ("PRKS_TLS_CERT_FILE", "PRKS_TLS_KEY_FILE"):
+            with self.subTest(variable=name):
+                self.assertIn(f'{name}: "${{{name}:-}}"', web)
+                self.assertRegex(_read(".env.example"), rf"(?m)^{name}=$")
+        self.assertIn("os.environ.get('PRKS_TLS_CERT_FILE', '').strip()", web)
+        self.assertIn("('https' if tls else 'http') + '://127.0.0.1:8080/readyz'", web)
+
     def test_roles_run_through_prks_app(self) -> None:
         self.assertIn('entrypoint: ["python", "/app/prks_app.py"]', self.text)
         self.assertIn('command: ["serve", "--host", "0.0.0.0"]', _service(self.text, "web"))

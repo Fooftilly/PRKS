@@ -22,6 +22,7 @@ from typing import Any, Optional
 from backend.domain.identity.login_limiter import LoginLimits, TrustedProxies
 from backend.domain.identity.web_start import AuthMode, WebAuth, WebAuthSettings
 from tests.pg.identity_fixtures import PASSWORD, IdentityTestCase
+from tests.tls_certificate import client_context, temporary_pair
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -102,6 +103,7 @@ class HttpAuthTestCase(IdentityTestCase):
         )[0]["library_id"]
         self.instance_id = "IN-" + uuid.uuid4().hex.upper()
         self.port = 0
+        self.tls_cert: Optional[str] = None
 
     # -- the server --------------------------------------------------------------------
 
@@ -112,17 +114,32 @@ class HttpAuthTestCase(IdentityTestCase):
         return WebAuthSettings(mode=mode, **kwargs)
 
     def serve(
-        self, settings: Optional[WebAuthSettings] = None, *, auth: Any = _SENTINEL, jobs: Any = None
+        self,
+        settings: Optional[WebAuthSettings] = None,
+        *,
+        auth: Any = _SENTINEL,
+        jobs: Any = None,
+        tls: bool = False,
     ) -> Optional[WebAuth]:
         """Start a server on a free loopback port; ``auth=None`` serves without ``PRKS_AUTH``.
 
         ``jobs`` is the PRKS_AUTH runtime's ``WebJobs`` (job diagnostics), as
-        ``run_server`` sets it; its worker is not started here.
+        ``run_server`` sets it; its worker is not started here. ``tls`` serves
+        HTTPS with a throwaway self-signed certificate, and :meth:`call` then
+        speaks HTTPS to it.
         """
+        from backend.web.settings import HttpServerSettings
+
         module = self.server_module
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
-        httpd = module.make_server(("127.0.0.1", 0))
+        http = HttpServerSettings()
+        self.tls_cert = None
+        if tls:
+            cert, key = temporary_pair(self)
+            http = HttpServerSettings(tls_cert_file=cert, tls_key_file=key)
+            self.tls_cert = cert
+        httpd = module.make_server(("127.0.0.1", 0), http)
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
         httpd.prks_access_gate = module.LibraryAccessGate()
@@ -141,7 +158,8 @@ class HttpAuthTestCase(IdentityTestCase):
 
     @property
     def origin(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        scheme = "https" if self.tls_cert else "http"
+        return f"{scheme}://127.0.0.1:{self.port}"
 
     # -- requests ----------------------------------------------------------------------
 
@@ -157,7 +175,13 @@ class HttpAuthTestCase(IdentityTestCase):
         epoch: Any = None,
         host: Optional[str] = None,
     ) -> Response:
-        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
+        conn: http.client.HTTPConnection
+        if self.tls_cert:
+            conn = http.client.HTTPSConnection(
+                "127.0.0.1", self.port, timeout=30, context=client_context(self.tls_cert)
+            )
+        else:
+            conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         try:
             conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
             conn.putheader("Host", host or f"127.0.0.1:{self.port}")

@@ -6,10 +6,12 @@ PostgreSQL HTTP suites over the same server.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.client
 import logging
 import os
 import socket
+import ssl
 import sys
 import tempfile
 import threading
@@ -28,9 +30,12 @@ from backend.web import asgi  # noqa: E402
 from backend.web.settings import (  # noqa: E402
     DEFAULT_THREADS,
     ENV_THREADS,
+    ENV_TLS_CERT_FILE,
+    ENV_TLS_KEY_FILE,
     HttpServerSettings,
     HttpSettingsError,
 )
+from tests.tls_certificate import client_context, encrypted_key, temporary_pair  # noqa: E402
 
 
 class _Collect(logging.Handler):
@@ -62,6 +67,51 @@ class HttpSettingsTests(unittest.TestCase):
             with self.subTest(env=env), self.assertRaises(HttpSettingsError) as caught:
                 HttpServerSettings.from_env(env)
             self.assertIn(ENV_THREADS, caught.exception.message)
+
+    def test_tls_files_are_loaded_together(self):
+        cert, key = temporary_pair(self)
+        got = HttpServerSettings.from_env({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: f" {key} "})
+        self.assertEqual((got.tls, got.tls_cert_file, got.tls_key_file), (True, cert, key))
+        self.assertFalse(HttpServerSettings.from_env({}).tls)
+        self.assertFalse(HttpServerSettings.from_env({ENV_TLS_CERT_FILE: " ", ENV_TLS_KEY_FILE: ""}).tls)
+
+    def test_unusable_tls_settings_refuse_and_name_the_variable(self):
+        cert, key = temporary_pair(self)
+        missing = os.path.join(os.path.dirname(cert), "absent-secret-name.pem")
+        not_pem = os.path.join(os.path.dirname(cert), "not-pem.txt")
+        with open(not_pem, "w", encoding="ascii") as handle:
+            handle.write("not a certificate\n")
+        other_cert, other_key = temporary_pair(self)
+        fifo = os.path.join(os.path.dirname(cert), "key.fifo")
+        os.mkfifo(fifo)  # opening it would block until a writer came
+        locked = encrypted_key(os.path.dirname(key), key)
+        empty_locked = encrypted_key(os.path.dirname(key), key, passphrase="")
+        cases = (
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: fifo}, ENV_TLS_KEY_FILE),
+            # Refused, never a passphrase prompt on the terminal.
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: locked}, ENV_TLS_KEY_FILE),
+            # Encrypted with an empty passphrase: Uvicorn would still prompt.
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: empty_locked}, ENV_TLS_KEY_FILE),
+            ({ENV_TLS_CERT_FILE: cert}, ENV_TLS_KEY_FILE),
+            ({ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
+            ({ENV_TLS_CERT_FILE: missing, ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: missing}, ENV_TLS_KEY_FILE),
+            ({ENV_TLS_CERT_FILE: os.path.dirname(cert), ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
+            ({ENV_TLS_CERT_FILE: not_pem, ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: other_key}, ENV_TLS_KEY_FILE),
+            ({ENV_TLS_CERT_FILE: key, ENV_TLS_KEY_FILE: cert}, ENV_TLS_CERT_FILE),
+        )
+        for env, variable in cases:
+            with self.subTest(env=env), self.assertRaises(HttpSettingsError) as caught:
+                HttpServerSettings.from_env(env)
+            message = caught.exception.message
+            self.assertIn(variable, message)
+            # The error names the variable, never the path or the file's text.
+            for path in (cert, key, missing, not_pem, other_cert, other_key, locked, fifo):
+                self.assertNotIn(path, message)
+                self.assertNotIn(os.path.basename(path), message)
+            self.assertNotIn("not a certificate", message)
+            self.assertIsNone(caught.exception.__cause__)
 
     def test_make_server_serves_with_uvicorn(self):
         httpd = server_module.make_server(("127.0.0.1", 0))
@@ -694,9 +744,119 @@ class UvicornTransportTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(self.request("GET", "/healthz", conn=idle[0])[0], 200)  # still reusable
 
+    def test_plain_http_responses_do_not_send_hsts(self):
+        for path in ("/healthz", "/", "/api/tags"):
+            with self.subTest(path=path):
+                _, _, headers = self.request("GET", path)
+                self.assertNotIn("strict-transport-security", headers)
+
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}
         self.assertEqual(self.request("GET", "/healthz", headers=headers)[0], 431)
+
+
+class TlsTransportTests(unittest.TestCase):
+    """PRKS's own TLS over a real socket, with a throwaway self-signed pair (#1339)."""
+
+    def setUp(self):
+        self.cert, key = temporary_pair(self)
+        self.httpd = server_module.make_server(
+            ("127.0.0.1", 0), HttpServerSettings(2, tls_cert_file=self.cert, tls_key_file=key)
+        )
+        self.httpd.prks_bind_host = "127.0.0.1"
+        self.httpd.prks_trusted_hosts = frozenset()
+        self.httpd.prks_access_gate = server_module.LibraryAccessGate()
+        self.httpd.prks_auth = None
+        self.httpd.prks_jobs = None
+        self.httpd.prks_readiness = None
+        thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 10)
+        self.addCleanup(self.httpd.server_close)
+        self.addCleanup(self.httpd.shutdown)
+        self.port = self.httpd.server_address[1]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                if self.request("GET", "/healthz")[0] == 200:
+                    return
+            except OSError:
+                time.sleep(0.05)
+        self.fail("the TLS transport did not start")
+
+    def request(self, method, path, headers=None):
+        conn = http.client.HTTPSConnection(
+            "127.0.0.1", self.port, timeout=10, context=client_context(self.cert)
+        )
+        try:
+            conn.request(method, path, headers=headers or {})
+            response = conn.getresponse()
+            return response.status, response.read(), {k.lower(): v for k, v in response.getheaders()}
+        finally:
+            conn.close()
+
+    def test_https_responses_carry_hsts(self):
+        for method, path, status in (
+            ("GET", "/healthz", 200),
+            ("GET", "/", 200),
+            ("GET", "/api/tags", 503),
+            ("GET", "/no-such/../../file", 404),
+        ):
+            with self.subTest(path=path):
+                got, _, headers = self.request(method, path)
+                self.assertEqual(got, status)
+                self.assertEqual(headers.get("strict-transport-security"), server_module.HSTS_VALUE)
+
+    def test_uvicorns_own_parser_400_carries_no_hsts(self):
+        # The documented boundary (docs/https.md): Uvicorn answers a request it
+        # cannot parse before PRKS runs, so that 400 has no HSTS header.
+        raw = socket.create_connection(("127.0.0.1", self.port), timeout=10)
+        with client_context(self.cert).wrap_socket(raw, server_hostname="127.0.0.1") as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: 127.0.0.1\r\n\r\n")
+            received = b""
+            with contextlib.suppress(OSError):
+                while chunk := sock.recv(4096):
+                    received += chunk
+        head = received.split(b"\r\n\r\n", 1)[0].lower()
+        self.assertTrue(head.startswith(b"http/1.1 400"), received[:40])
+        self.assertNotIn(b"strict-transport-security", head)
+
+    def test_the_busy_answer_over_tls_carries_hsts(self):
+        for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
+            sent = []
+
+            async def send(message, sent=sent):
+                sent.append(message)
+
+            asyncio.run(asgi._send_busy(send, https=https))
+            headers = dict(sent[0]["headers"])
+            with self.subTest(https=https):
+                self.assertEqual(sent[0]["status"], 503)
+                self.assertEqual(headers.get(b"strict-transport-security"), expected)
+
+    def test_the_client_sees_the_configured_certificate(self):
+        conn = http.client.HTTPSConnection(
+            "127.0.0.1", self.port, timeout=10, context=client_context(self.cert)
+        )
+        try:
+            conn.request("GET", "/healthz")
+            self.assertEqual(conn.getresponse().status, 200)
+            assert isinstance(conn.sock, ssl.SSLSocket)
+            peer = conn.sock.getpeercert()
+            assert peer is not None
+            self.assertEqual(peer["subject"], ((("commonName", "127.0.0.1"),),))
+        finally:
+            conn.close()
+
+    def test_plain_http_to_the_tls_port_is_not_served(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+            sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            received = b""
+            with contextlib.suppress(OSError):
+                while chunk := sock.recv(4096):
+                    received += chunk
+        # The TLS handshake fails: no HTTP response, only the connection closing.
+        self.assertFalse(received.startswith(b"HTTP/"), received[:40])
 
 
 class ShutdownTests(unittest.TestCase):

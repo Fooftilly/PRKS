@@ -76,16 +76,21 @@ services:
       PRKS_PUBLIC_ORIGIN: "${PRKS_PUBLIC_ORIGIN:-}"
       PRKS_TRUSTED_PROXIES: "${PRKS_TRUSTED_PROXIES:-}"
       PRKS_HTTP_THREADS: "${PRKS_HTTP_THREADS:-}"
+      # PRKS's own TLS (docs/https.md): paths inside the container, mounted
+      # by an override file. Empty serves plain HTTP.
+      PRKS_TLS_CERT_FILE: "${PRKS_TLS_CERT_FILE:-}"
+      PRKS_TLS_KEY_FILE: "${PRKS_TLS_KEY_FILE:-}"
     ports:
       - "${PRKS_PUBLISH_HOST:-127.0.0.1}:${PRKS_PUBLISH_PORT:-8080}:8080"
     healthcheck:
       # /readyz: pool, schema, setup ready, root still paired. A first run
-      # stays unhealthy until setup is complete.
+      # stays unhealthy until setup is complete. Over PRKS's own TLS the probe
+      # speaks https to loopback and does not check the certificate's name.
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=4)"
+        - "import os, ssl, urllib.request; tls = bool(os.environ.get('PRKS_TLS_CERT_FILE', '').strip()); ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE; urllib.request.urlopen(('https' if tls else 'http') + '://127.0.0.1:8080/readyz', timeout=4, context=ctx if tls else None)"
       interval: 10s
       timeout: 5s
       retries: 3

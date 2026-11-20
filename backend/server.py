@@ -102,6 +102,8 @@ LOGGER = logging.getLogger("prks.server")
 
 PORT = 8080
 DEFAULT_HOST = "127.0.0.1"
+# Sent on every response served over PRKS's own TLS (#1339).
+HSTS_VALUE = "max-age=31536000"
 # Default for `python prks_app.py --testing`; non-testing bind refuses this port (see _validate_listen_port).
 PRKS_TESTING_DEFAULT_PORT = 8070
 
@@ -442,19 +444,6 @@ def parse_request_origin(value: str) -> tuple[str, str, int | None] | None:
     return (parsed.scheme, hostname, port)
 
 
-def origin_matches_request(
-    origin: tuple[str, str, int | None], req_hostname: str, req_port: int | None
-) -> bool:
-    scheme, hostname, port = origin
-    if scheme != "http":
-        return False
-    if hostname != req_hostname:
-        return False
-    origin_port = 80 if port is None else port
-    request_port = 80 if req_port is None else req_port
-    return origin_port == request_port
-
-
 def json_content_type_allowed(header_value: str) -> bool:
     msg = Message()
     msg["content-type"] = header_value
@@ -759,6 +748,8 @@ def _skip_to(stream, offset: int) -> None:
 class PRKSHandler(HttpHandlerBase):
     #: Set per request by the code that builds the handler (``backend.web.asgi``).
     _prks_request_id: str = ""
+    # "https" when this request came over PRKS's own TLS (``backend.web.asgi``).
+    _prks_scheme: str = "http"
     # Non-fingerprinted JS/CSS must revalidate so users don't get stale app versions.
     _STATIC_REVALIDATE_EXTS = frozenset({".css", ".js", ".map"})
     _STATIC_LONG_CACHE_EXTS = frozenset(
@@ -860,23 +851,6 @@ class PRKSHandler(HttpHandlerBase):
         self._prks_request_host = (hostname, port)
         return True
 
-    def _validate_mutation_origin(self) -> bool:
-        origins = self.headers.get_all("Origin") or []
-        if not origins:
-            return True
-        if len(origins) != 1:
-            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
-            return False
-        parsed = parse_request_origin(origins[0])
-        if parsed is None:
-            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
-            return False
-        hostname, port = self._prks_request_host
-        if not origin_matches_request(parsed, hostname, port):
-            self._reject_request(403, "origin_not_allowed", "origin_not_allowed")
-            return False
-        return True
-
     def _prks_admit(self, parsed_path) -> bool:
         """Authentication admission for an ``/api/`` request (L-ID-1 #626).
 
@@ -911,6 +885,7 @@ class PRKSHandler(HttpHandlerBase):
                 headers=self.headers,
                 peer=str(self.client_address[0]),
                 request_host=self._prks_request_host,
+                scheme=self._prks_scheme,
                 parse_origin=parse_request_origin,
                 read_json=read_json,
                 route_fences_epoch=True,
@@ -1079,6 +1054,10 @@ class PRKSHandler(HttpHandlerBase):
         # re-interpreted as HTML by MIME sniffing. This closes the reflected-XSS
         # class for JSON/API bodies that echo library content back to the page.
         self.send_header("X-Content-Type-Options", "nosniff")
+        if self._prks_scheme == "https":
+            # Served over PRKS's own TLS (#1339): browsers keep to https for a
+            # year. Not includeSubDomains: other hosts under the name are not ours.
+            self.send_header("Strict-Transport-Security", HSTS_VALUE)
         if getattr(self, "_prks_unread_body", False):
             # Unread body bytes must never be parsed as the next request:
             # close the connection after this response (send_header sets
@@ -2325,7 +2304,9 @@ def make_server(address: tuple[str, int], http: "HttpServerSettings | None" = No
     from backend.web.settings import HttpServerSettings
 
     http = http or HttpServerSettings()
-    return UvicornServing(address, threads=http.threads)
+    return UvicornServing(
+        address, threads=http.threads, tls_cert_file=http.tls_cert_file, tls_key_file=http.tls_key_file
+    )
 
 
 def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=None, http=None):
@@ -2352,10 +2333,11 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}
         LOGGER.info(
-            "server_starting bind_scope=%s port=%s threads=%s",
+            "server_starting bind_scope=%s port=%s threads=%s tls=%s",
             safe_bind_scope(host),
             port,
             http.threads,
+            "on" if http.tls else "off",
         )
         if jobs is not None:
             # Runs the embedded worker while serving and stops it gracefully

@@ -27,6 +27,11 @@ beneath the frontend directory are served, each resolved with its symlinks
 answers 404, and directory listings are not served. That completes step 8
 below.
 
+#1339 adds PRKS's own TLS on this server: `PRKS_TLS_CERT_FILE` and
+`PRKS_TLS_KEY_FILE` (`backend.web.settings`, loaded once at start) are passed
+to Uvicorn, and a request served over TLS gets `Secure` cookies, HSTS and an
+`https` expected origin. See [docs/https.md](https.md).
+
 ## Decision
 
 | Question | Answer |
@@ -146,5 +151,5 @@ Linux (directly or in Docker Compose) is the main supported server platform; CI 
 ## Not decided here
 
 - **Multiple web processes**: after #1331, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
-- **HTTP/2 and TLS termination**: these stay with the reverse proxy.
+- **HTTP/2**: stays with the reverse proxy. TLS termination was decided later (#1339, 2026-11-20): PRKS can serve HTTPS itself (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`, [docs/https.md](https.md)), and a reverse proxy such as Caddy stays the recommended path for internet exposure.
 - **Exact pins.** Phase B adds `uvicorn`, `starlette` and their dependencies (`h11`, `click`, `anyio`, `idna`) to `requirements.txt`, `dependency-inventory.json`, `THIRD_PARTY_NOTICES.md` and the Pyright CI install step. It installs plain `uvicorn`, not `uvicorn[standard]`: uvloop and httptools are optional speedups PRKS does not need.

@@ -73,7 +73,8 @@ class WebAuthSettings:
     idle: timedelta
     trusted_proxies: TrustedProxies
     # The origin browsers use when it is not the server's own address (an
-    # HTTPS reverse proxy). ``None``: only the request's own http origin.
+    # HTTPS reverse proxy). ``None``: only the request's own origin (https over
+    # PRKS's own TLS, #1339; http otherwise).
     public_origin: Optional[Origin] = None
 
     @property

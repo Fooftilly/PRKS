@@ -120,6 +120,33 @@ class SessionFlowTests(HttpAuthTestCase):
         self.assert_cookie(out, "prks_session", "/", secure=True)
 
 
+    def test_prks_own_tls_makes_the_site_https(self) -> None:
+        # #1339: over PRKS's own TLS the cookies are Secure, responses send
+        # HSTS and the expected origin is the request's own https origin.
+        self.serve(tls=True)
+        res = self.sign_in()
+        self.assertEqual(res.status, 200, res.raw)
+        self.assertEqual(res.header("Strict-Transport-Security"), ["max-age=31536000"])
+        session = self.assert_cookie(res, "prks_session", "/", secure=True)
+        self.assert_cookie(res, "prks_login_device", "/api/login", secure=True)
+        cookies = {"prks_session": session["value"]}
+        renewed = self.call("GET", "/api/session", cookies=cookies)
+        self.assertEqual(renewed.status, 200)
+        self.assert_cookie(renewed, "prks_session", "/", secure=True)
+        http_origin = f"http://127.0.0.1:{self.port}"
+        self.assertEqual(self.sign_in(origin=http_origin).status, 403)
+        self.assertEqual(self.add_tag(cookies, origin=http_origin).status, 403)
+        self.assertEqual(self.add_tag(cookies).status, 200)
+        out = self.call("POST", "/api/logout", cookies=cookies)
+        self.assert_cookie(out, "prks_session", "/", secure=True)
+
+    def test_plain_http_keeps_an_http_origin_and_plain_cookies(self) -> None:
+        cookies = self.session_cookie()
+        https_origin = f"https://127.0.0.1:{self.port}"
+        self.assertEqual(self.add_tag(cookies, origin=https_origin).status, 403)
+        self.assertEqual(self.call("GET", "/api/session", cookies=cookies).header("Strict-Transport-Security"), [])
+
+
 class NonEnumerationTests(HttpAuthTestCase):
     """Every refused sign-in looks the same and costs one Argon2id check."""
 

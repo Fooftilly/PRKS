@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -55,6 +56,22 @@ class SplitRoleTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 2, proc.stderr)
         self.assertIn("PRKS_DATABASE_URL", proc.stderr)
+
+    def test_serve_refuses_unusable_tls_before_touching_anything(self) -> None:
+        # #1339: the HTTP settings are checked before the database or the
+        # storage root; the error names the variable, never the path.
+        with tempfile.TemporaryDirectory() as root:
+            env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_")}
+            env.update(PRKS_STORAGE=root, PRKS_TLS_CERT_FILE=os.path.join(root, "hidden-name.pem"))
+            proc = subprocess.run(
+                [sys.executable, "prks_app.py", "--testing"],
+                cwd=_ROOT, env=env, capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn("PRKS cannot start its HTTP server", proc.stderr)
+            self.assertIn("PRKS_TLS_KEY_FILE", proc.stderr)
+            self.assertNotIn("hidden-name", proc.stderr)
+            self.assertEqual(os.listdir(root), [])
 
 
 if __name__ == "__main__":

@@ -49,8 +49,10 @@ boundary); nothing here scopes rows.
 one ``Origin`` that equals the expected origin, or no ``Origin`` with
 ``Sec-Fetch-Site: same-origin``. The expected origin is ``PRKS_PUBLIC_ORIGIN``
 when it is set (and then only it: a plain-http request to the same host is
-cross-origin), otherwise the request's own ``http`` origin from its validated
-``Host``.
+cross-origin), otherwise the request's own origin from its validated
+``Host``: ``https`` when PRKS served it over its own TLS
+(``PRKS_TLS_CERT_FILE``, #1339), ``http`` otherwise. Cookies are ``Secure``
+behind an ``https`` public origin and over PRKS's own TLS.
 The expected origin is never derived from ``X-Forwarded-*``. The only
 forwarded value used anywhere is ``X-Forwarded-For`` for the login limiter's
 address key, and only from a peer in ``PRKS_TRUSTED_PROXIES``.
@@ -154,6 +156,7 @@ class HttpRequest:
     headers: Message
     peer: str  # the TCP peer address
     request_host: tuple[str, Optional[int]]  # the validated Host header
+    scheme: str  # "https" when PRKS itself served the request over TLS
     parse_origin: OriginParser
     # Reads the JSON body; returns ANSWERED when it already sent a refusal.
     read_json: Callable[[], object]
@@ -186,24 +189,29 @@ def _set_cookie(name: str, value: str, *, path: str, max_age: int, secure: bool)
     return ("Set-Cookie", "; ".join(parts))
 
 
-def _session_cookie(auth: WebAuth, token: str, expires_at: datetime) -> tuple[str, str]:
+def _secure(auth: WebAuth, request: HttpRequest) -> bool:
+    """``Secure`` cookies behind an https public origin or over PRKS's own TLS."""
+    return auth.settings.secure_cookies or request.scheme == "https"
+
+
+def _session_cookie(auth: WebAuth, request: HttpRequest, token: str, expires_at: datetime) -> tuple[str, str]:
     remaining = int((expires_at - datetime.now(timezone.utc)).total_seconds())
     return _set_cookie(
         SESSION_COOKIE, token, path=SESSION_COOKIE_PATH, max_age=remaining,
-        secure=auth.settings.secure_cookies,
+        secure=_secure(auth, request),
     )
 
 
-def _cleared_session_cookie(auth: WebAuth) -> tuple[str, str]:
+def _cleared_session_cookie(auth: WebAuth, request: HttpRequest) -> tuple[str, str]:
     return _set_cookie(
-        SESSION_COOKIE, "", path=SESSION_COOKIE_PATH, max_age=0, secure=auth.settings.secure_cookies
+        SESSION_COOKIE, "", path=SESSION_COOKIE_PATH, max_age=0, secure=_secure(auth, request)
     )
 
 
-def _device_cookie(auth: WebAuth, token: str) -> tuple[str, str]:
+def _device_cookie(auth: WebAuth, request: HttpRequest, token: str) -> tuple[str, str]:
     return _set_cookie(
         LOGIN_DEVICE_COOKIE, token, path=LOGIN_DEVICE_COOKIE_PATH,
-        max_age=int(DEVICE_TOKEN_LIFETIME.total_seconds()), secure=auth.settings.secure_cookies,
+        max_age=int(DEVICE_TOKEN_LIFETIME.total_seconds()), secure=_secure(auth, request),
     )
 
 
@@ -249,7 +257,7 @@ def origin_allowed(request: HttpRequest, auth: WebAuth) -> bool:
     expected = auth.settings.public_origin
     if expected is None:
         hostname, port = request.request_host
-        expected = ("http", hostname, port)
+        expected = (request.scheme, hostname, port)
     return _normalized(origin) == _normalized(expected)
 
 
@@ -352,7 +360,7 @@ def _get_session(auth: WebAuth, request: HttpRequest) -> Reply:
     presented = cookie(request, SESSION_COOKIE)
     if auth.mode is AuthMode.SESSION and presented is not None:
         # Sliding expiry: the cookie lives as long as the renewed row.
-        headers.append(_session_cookie(auth, presented, session.expires_at))
+        headers.append(_session_cookie(auth, request, presented, session.expires_at))
     return Reply(200, body, tuple(headers))
 
 
@@ -394,7 +402,7 @@ def _login(auth: WebAuth, request: HttpRequest) -> Union[Reply, _Answered]:
 
 def _signed_in(auth: WebAuth, request: HttpRequest, token: str, device_token: str) -> Reply:
     """Answer a successful login: replace the browser's earlier session and set both cookies."""
-    headers = [_device_cookie(auth, device_token)]
+    headers = [_device_cookie(auth, request, device_token)]
     try:
         session = sessions.resolve_session(auth.db, token, idle=auth.settings.idle, library_id=auth.library_id)
         if session is None:
@@ -410,7 +418,7 @@ def _signed_in(auth: WebAuth, request: HttpRequest, token: str, device_token: st
         return _error(401, "invalid_credentials", tuple(headers))
     except DatabaseError:
         return Reply(503, {"error": "unavailable"}, tuple(headers))
-    headers += [_session_cookie(auth, token, session.expires_at), (EPOCH_HEADER, str(epoch))]
+    headers += [_session_cookie(auth, request, token, session.expires_at), (EPOCH_HEADER, str(epoch))]
     return Reply(200, {"signed_in": True, "session": body}, tuple(headers))
 
 
@@ -421,7 +429,7 @@ def _logout(auth: WebAuth, request: HttpRequest) -> Reply:
             sessions.revoke_session(auth.db, presented)
         except DatabaseError:
             return _UNAVAILABLE
-    return Reply(200, {"signed_out": True}, (_cleared_session_cookie(auth),))
+    return Reply(200, {"signed_out": True}, (_cleared_session_cookie(auth, request),))
 
 
 def _identity_route(auth: WebAuth, request: HttpRequest) -> Optional[Outcome]:

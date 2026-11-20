@@ -12,6 +12,7 @@ For a first run, start with [Getting Started](Getting-Started.md). For backup/re
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks. Port **8070**, `data_testing/` when `PRKS_STORAGE` is unset, and refusal of `/data` and the repository `data/` tree are described in [Testing mode](Getting-Started.md#testing-mode). |
 | `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
 | `PRKS_HTTP_THREADS` | Requests that run PRKS work at the same time under Uvicorn, from 1 to 256. Default `16`. Up to 8 more requests per thread wait for a free one; past that the server answers 503 with `Retry-After`. Idle keep-alive connections and clients still sending their headers hold no thread; a request whose body is being read (an upload) holds its thread until the body has arrived or the route's idle timeout ends it. The request head (request line and headers) may be up to 64 KiB, however it arrives. A larger one is refused: with 431 from PRKS, or with 400 when a head well past the limit (over 128 KiB) is still arriving and the HTTP parser stops it first. |
+| `PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE` | PEM certificate chain and unencrypted private key; set both to serve HTTPS directly. A missing, unreadable or mismatched pair, or only one of the two, refuses to start. With TLS on, cookies are `Secure`, responses PRKS writes send HSTS (not the `400` Uvicorn sends itself for a request it cannot parse) and the cross-site check expects `https`. The certificate is read at start only: restart after renewing it. For internet exposure prefer a reverse proxy such as Caddy ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)). |
 | `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
@@ -55,8 +56,8 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_MIGRATE_ON_START` | `serve` | `1` (default) applies the schema at start. `0` leaves that to `migrate` and only verifies it: the web process still refuses a schema other than its code's. `worker` never applies the schema and always verifies it. Compose sets `0`. |
 | `PRKS_EMBEDDED_WORKER` | `serve` | `1` (default) runs a job worker inside the web process. `0` runs none, for a separate `worker`. Compose sets `0`. |
 | `PRKS_LIBRARY_BACKEND` | every role | Retired (PG-C2 #641): PostgreSQL is the only Library backend. A process that finds it set, to any value, refuses to start with exit status 2; remove it. |
-| `PRKS_PUBLIC_ORIGIN` | `serve` | The origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org`: scheme, host and optional port only. Sign-in checks `Origin` against it, and its host is accepted as a `Host`. |
-| `PRKS_TRUSTED_PROXIES` | `serve` | Comma-separated proxy addresses or networks whose `X-Forwarded-For` is believed for sign-in rate limiting. Name only your proxy, and make the web port reachable only by it. Anyone who reaches the port from a trusted address can spread sign-in attempts over invented addresses. |
+| `PRKS_PUBLIC_ORIGIN` | `serve` | The origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org`: scheme, host and optional port only. Sign-in checks `Origin` against it, and its host is accepted as a `Host`. Unset, the expected origin is the request's own (`https` with PRKS's own TLS, `http` otherwise). |
+| `PRKS_TRUSTED_PROXIES` | `serve` | Comma-separated proxy addresses or networks whose `X-Forwarded-For` is believed for sign-in rate limiting. Name only your proxy, by the address PRKS sees its connections come from (in Compose, its address on a Compose network; a proxy on the host appears as the Docker bridge gateway, not `127.0.0.1`), and make the web port reachable only by it. Anyone who reaches the port from a trusted address can spread sign-in attempts over invented addresses. |
 | `PRKS_SESSION_IDLE_DAYS` | `serve` | Days a session stays valid without use, 1 to 365. Default `30`. |
 | `PRKS_LOGIN_WINDOW_SECONDS` | `serve` | Length of the sign-in rate-limit window, 1 second to 1 day. Default `900` (15 minutes). |
 | `PRKS_LOGIN_ACCOUNT_LIMIT` | `serve` | Sign-in attempts allowed per account per window from a browser that is not a known sign-in device for it, 1 to 10000. Default `5`. |
@@ -78,6 +79,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_PUBLISH_HOST` | `127.0.0.1` | Host address the web port is published on. Leave it on loopback unless an HTTPS reverse proxy you control sits in front. |
 | `PRKS_PUBLISH_PORT` | `8080` | Host port the web port is published on. |
 | `PRKS_PUBLIC_ORIGIN`, `PRKS_TRUSTED_PROXIES`, `PRKS_TRUSTED_HOSTS`, `PRKS_HTTP_THREADS` | empty | Passed to `web` (above). |
+| `PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE` | empty | Passed to `web` (above): paths inside the container. Mount the files with an override file ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)); the `web` health check then probes over `https`. |
 
 ### Health endpoints
 

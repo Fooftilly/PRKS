@@ -357,6 +357,8 @@ class _AsgiHandler(server_module.PRKSHandler):
         self.client_address = (str(client[0]), int(client[1]))
         self.command = str(scope.get("method", "GET")).upper()
         self.path = _target(scope)
+        # "https" when Uvicorn served this request over TLS (#1339).
+        self._prks_scheme = "https" if scope.get("scheme") == "https" else "http"
         self.request_version = f"HTTP/{scope.get('http_version', '1.1')}"
         self.requestline = f"{self.command} {self.path} {self.request_version}"
         self.raw_requestline = self.requestline.encode("latin-1", "replace") + b"\r\n"
@@ -417,7 +419,7 @@ class PrksAsgiApp:
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._threads)
         if self._admitted >= self._max_admitted:
-            await _send_busy(send)
+            await _send_busy(send, https=scope.get("scheme") == "https")
             return
         self._admitted += 1
         # The receiver starts before the wait for a thread, so a client that
@@ -506,21 +508,23 @@ class PrksAsgiApp:
                 loop.call_soon_threadsafe(_resolve, done)
 
 
-async def _send_busy(send: Send) -> None:
-    """503 for a request over the wait-list bound, without starting a thread."""
+async def _send_busy(send: Send, *, https: bool) -> None:
+    """503 for a request over the wait-list bound, without starting a thread.
+
+    Over PRKS's own TLS it carries HSTS too, like every ``PRKSHandler`` answer.
+    """
     LOGGER.info("request_rejected reason=server_busy")
-    await send({
-        "type": "http.response.start",
-        "status": 503,
-        "headers": [
-            (b"content-type", b"application/json; charset=utf-8"),
-            (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
-            (b"cache-control", b"no-store"),
-            (b"retry-after", b"1"),
-            (b"x-content-type-options", b"nosniff"),
-            (b"connection", b"close"),
-        ],
-    })
+    headers = [
+        (b"content-type", b"application/json; charset=utf-8"),
+        (b"content-length", str(len(_BUSY_BODY)).encode("ascii")),
+        (b"cache-control", b"no-store"),
+        (b"retry-after", b"1"),
+        (b"x-content-type-options", b"nosniff"),
+        (b"connection", b"close"),
+    ]
+    if https:
+        headers.append((b"strict-transport-security", server_module.HSTS_VALUE.encode("ascii")))
+    await send({"type": "http.response.start", "status": 503, "headers": headers})
     await send({"type": "http.response.body", "body": _BUSY_BODY, "more_body": False})
 
 
@@ -550,10 +554,20 @@ class UvicornServing:
     prks_jobs: Any
     prks_readiness: Any
 
-    def __init__(self, address: tuple[str, int], *, threads: int) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        *,
+        threads: int,
+        tls_cert_file: Optional[str] = None,
+        tls_key_file: Optional[str] = None,
+    ) -> None:
         self._socket = socket.create_server(address, family=socket.AF_INET, backlog=128)
         self.server_address: tuple[str, int] = self._socket.getsockname()[:2]
         self._threads = threads
+        # Uvicorn wraps each accepted connection in TLS when these are set.
+        self._tls_cert_file = tls_cert_file
+        self._tls_key_file = tls_key_file
         self._server: Optional[_Server] = None
         self.app: Optional[PrksAsgiApp] = None
         self._lock = threading.Lock()
@@ -578,6 +592,8 @@ class UvicornServing:
             timeout_keep_alive=KEEP_ALIVE_SECONDS,
             h11_max_incomplete_event_size=H11_HEAD_BUFFER_BYTES,
             timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_SECONDS,
+            ssl_certfile=self._tls_cert_file,
+            ssl_keyfile=self._tls_key_file,
         )
 
     def serve_forever(self, poll_interval: float = 0.5) -> None:  # noqa: ARG002 - Serving protocol
