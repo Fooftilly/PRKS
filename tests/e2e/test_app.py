@@ -281,7 +281,7 @@ class AppShellAndNavigationTests(_BrowserE2E):
 
 class ResearchNoteConceptGraphTests(_BrowserE2E):
     def test_research_note_creates_concept_and_graph_edge(self):
-        server, page, _collector = self._start_app()
+        server, page, collector = self._start_app()
         work_id = server.ids["work_a"]
         _open_work_from_home(page, WORK_A_TITLE)
         page.wait_for_selector(".CodeMirror")
@@ -346,6 +346,17 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         page.wait_for_selector(".CodeMirror")
         saved = page.evaluate("() => { const ed = %s; return ed && ed.value && ed.value(); }" % _FOCUSED_WORK_NOTES)
         self.assertIn("[[concept:Culture Industry]]", saved)
+        # NOTES carries an `<img onerror>` probe. EasyMDE and DOMPurify parse
+        # the rendered HTML in a DOMParser document, which shares the page's
+        # CSP, so Chromium reports the probe's handler as refused (#1305).
+        # That refusal is the policy working; any other console error still
+        # fails the test.
+        refused = [entry for entry in collector.console_errors
+                   if entry.startswith("Executing inline event handler violates")]
+        self.assertTrue(refused, "the CSP never saw the probe's inline handler")
+        collector.console_errors[:] = [
+            entry for entry in collector.console_errors if entry not in refused
+        ]
 
 
 class PersonGraphFocusTests(_BrowserE2E):

@@ -273,6 +273,8 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.unlink(page, server.ids['jane'])
         self.pending(page, 1)
+        # The panel repaints after the queue settles (see wait_detail_people).
+        self.wait_detail_people(page, absent=[JANE_DISPLAY])
         self.assertEqual(self.detail_people(page), [])
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
