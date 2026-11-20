@@ -35,7 +35,7 @@ from backend.web.settings import (  # noqa: E402
     HttpServerSettings,
     HttpSettingsError,
 )
-from tests.tls_certificate import client_context, temporary_pair  # noqa: E402
+from tests.tls_certificate import client_context, encrypted_key, temporary_pair  # noqa: E402
 
 
 class _Collect(logging.Handler):
@@ -82,7 +82,10 @@ class HttpSettingsTests(unittest.TestCase):
         with open(not_pem, "w", encoding="ascii") as handle:
             handle.write("not a certificate\n")
         other_cert, other_key = temporary_pair(self)
+        locked = encrypted_key(os.path.dirname(key), key)
         cases = (
+            # Refused, never a passphrase prompt on the terminal.
+            ({ENV_TLS_CERT_FILE: cert, ENV_TLS_KEY_FILE: locked}, ENV_TLS_KEY_FILE),
             ({ENV_TLS_CERT_FILE: cert}, ENV_TLS_KEY_FILE),
             ({ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
             ({ENV_TLS_CERT_FILE: missing, ENV_TLS_KEY_FILE: key}, ENV_TLS_CERT_FILE),
@@ -98,7 +101,7 @@ class HttpSettingsTests(unittest.TestCase):
             message = caught.exception.message
             self.assertIn(variable, message)
             # The error names the variable, never the path or the file's text.
-            for path in (cert, key, missing, not_pem, other_cert, other_key):
+            for path in (cert, key, missing, not_pem, other_cert, other_key, locked):
                 self.assertNotIn(path, message)
                 self.assertNotIn(os.path.basename(path), message)
             self.assertNotIn("not a certificate", message)

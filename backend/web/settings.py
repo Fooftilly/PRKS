@@ -52,7 +52,9 @@ def _tls_files(env: Mapping[str, str]) -> tuple[Optional[str], Optional[str]]:
     _readable(ENV_TLS_CERT_FILE, cert)
     _readable(ENV_TLS_KEY_FILE, key)
     try:
-        ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(cert, key)
+        # An empty passphrase: an encrypted key is refused here instead of
+        # OpenSSL prompting on the terminal.
+        ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(cert, key, password="")
     except (ssl.SSLError, OSError, ValueError):
         raise HttpSettingsError(
             f"{ENV_TLS_CERT_FILE} and {ENV_TLS_KEY_FILE} are not a matching PEM certificate "
