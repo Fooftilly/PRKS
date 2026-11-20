@@ -136,6 +136,9 @@ class _Receiver:
         self._receive = receive
         self.messages: asyncio.Queue[Message] = asyncio.Queue(maxsize=1)
         self.gone = threading.Event()
+        #: Set on ``http.disconnect`` only (not when the task merely ends), for
+        #: code on the loop: a request still waiting for a thread is dropped.
+        self.disconnected = asyncio.Event()
         self._discard = asyncio.Event()
 
     async def run(self) -> None:
@@ -144,6 +147,7 @@ class _Receiver:
                 message = await self._receive()
                 if message.get("type") != "http.request":
                     self.gone.set()
+                    self.disconnected.set()
                     if not self._discard.is_set():
                         await self._put(message)
                     return
@@ -367,21 +371,53 @@ class PrksAsgiApp:
         if self._slots.locked() and self._waiting >= self._max_waiting:
             await _send_busy(send)
             return
-        self._waiting += 1
-        try:
-            await self._slots.acquire()
-        finally:
-            self._waiting -= 1
-        try:
-            await self._serve(scope, receive, send)
-        finally:
-            self._slots.release()
-
-    async def _serve(self, scope: Scope, receive: Receive, send: Send) -> None:
-        loop = asyncio.get_running_loop()
-        done: asyncio.Future[None] = loop.create_future()
+        # The receiver starts before the wait for a thread, so a client that
+        # leaves while queued is seen (Uvicorn reports it only via receive())
+        # and its request is dropped instead of run for nobody. Body messages
+        # wait in the receiver's queue meanwhile; none is lost.
         receiver = _Receiver(receive)
         watch = asyncio.ensure_future(receiver.run())
+        try:
+            self._waiting += 1
+            try:
+                acquired = await self._acquire_unless_disconnected(receiver)
+            finally:
+                self._waiting -= 1
+            if not acquired:
+                return
+            try:
+                await self._serve(scope, receiver, send)
+            finally:
+                self._slots.release()
+        finally:
+            watch.cancel()
+            receiver.gone.set()
+
+    async def _acquire_unless_disconnected(self, receiver: _Receiver) -> bool:
+        """Take a thread slot; False (holding none) if the client leaves first."""
+        assert self._slots is not None
+        acquire = asyncio.ensure_future(self._slots.acquire())
+        left = asyncio.ensure_future(receiver.disconnected.wait())
+        try:
+            await asyncio.wait({acquire, left}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            left.cancel()
+            if not acquire.done():
+                acquire.cancel()
+        try:
+            await acquire
+        except asyncio.CancelledError:
+            if not acquire.cancelled():
+                raise  # this task itself was cancelled
+            return False
+        if receiver.disconnected.is_set():
+            self._slots.release()  # acquired as the client left: run nothing
+            return False
+        return True
+
+    async def _serve(self, scope: Scope, receiver: _Receiver, send: Send) -> None:
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
         thread = threading.Thread(
             target=self._run,
             args=(loop, done, scope, receiver, send),
@@ -389,11 +425,7 @@ class PrksAsgiApp:
             daemon=True,
         )
         thread.start()
-        try:
-            await done
-        finally:
-            watch.cancel()
-            receiver.gone.set()
+        await done
 
     def _run(
         self,

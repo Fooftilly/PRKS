@@ -383,6 +383,43 @@ class UvicornTransportTests(unittest.TestCase):
                 thread.join(5)
             self.assertEqual(statuses, [200, 200, 200, 200])
 
+    def test_a_request_whose_client_leaves_while_queued_never_runs(self):
+        release = threading.Event()
+        started = threading.Semaphore(0)
+        ran = []
+        original = asgi._AsgiHandler.do_GET
+
+        def routes(handler):
+            if handler.path == "/abandoned":
+                ran.append(handler.path)
+            if handler.path != "/slow":
+                return original(handler)
+            started.release()
+            release.wait(10)
+            handler.send_response(200)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+            return None
+
+        self.addCleanup(release.set)
+        with mock.patch.object(asgi._AsgiHandler, "do_GET", routes):
+            busy = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
+            for thread in busy:
+                thread.start()
+            for _ in busy:  # every thread is held
+                self.assertTrue(started.acquire(timeout=5))
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            sock.sendall(b"GET /abandoned HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            time.sleep(0.3)  # it is waiting for a thread
+            sock.close()
+            time.sleep(0.3)  # the disconnect reaches the receiver
+            release.set()
+            for thread in busy:
+                thread.join(5)
+            self.assertEqual(self.request("GET", "/healthz")[0], 200)
+            time.sleep(0.2)
+        self.assertEqual(ran, [], "a request ran after its client had left")
+
     def test_a_large_head_sent_in_pieces_is_accepted(self):
         sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
         self.addCleanup(sock.close)
