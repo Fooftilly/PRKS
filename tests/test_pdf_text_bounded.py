@@ -127,7 +127,7 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
 
     def drawn(self, name: str, *, drawing: bool = False, image: bool = False,
               annot: bool = False, link: bool = False, field: bool = False,
-              outline: bool = False, attachment: bool = False, shift_objects: int = 0) -> str:
+              outline: bool = False, attachment: bytes | bool = False, shift_objects: int = 0) -> str:
         """One page with the same text; optionally a red drawing, an image, a note or a link."""
         import pymupdf
 
@@ -158,7 +158,7 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
         if outline:
             doc.set_toc([[1, "Chapter", 1]])
         if attachment:
-            doc.embfile_add("data.csv", b"a,b\n1,2\n")
+            doc.embfile_add("data.csv", attachment if isinstance(attachment, bytes) else b"a,b\n1,2\n")
         path = self.write(name, doc.tobytes())
         doc.close()
         return path
@@ -171,6 +171,12 @@ class BoundedExtractionRoundTripTests(unittest.TestCase):
                 full = self.drawn(f"{lost}.pdf", **{lost: True})
                 self.assertEqual(pdf_text.extract_pdf(full).text.strip(), "same words")
                 self.assertFalse(same_pages_bounded(full, bare, 30))
+
+    def test_an_attachment_with_the_same_name_and_size_but_other_bytes_differs(self) -> None:
+        first = self.drawn("bank-a.pdf", attachment=b"BANK=1234\n")
+        second = self.drawn("bank-b.pdf", attachment=b"BANK=9999\n")
+        self.assertTrue(same_pages_bounded(first, self.drawn("bank-a2.pdf", attachment=b"BANK=1234\n"), 30))
+        self.assertFalse(same_pages_bounded(first, second, 30))
 
     def test_the_same_link_under_another_object_number_is_the_same_page(self) -> None:
         import pymupdf

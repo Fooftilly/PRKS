@@ -185,7 +185,7 @@ def _pdf_fingerprint(pdf_path: str) -> Dict[str, Any]:
     Per page: size, text, pixels rendered at 72 dpi (text alone misses
     images, drawings and scans), links, annotations and form widgets (blank
     fields render nothing and ``annots()`` skips them). Per document: the
-    outline, page labels and embedded files.
+    outline, page labels and embedded files (by name and SHA-256 of their bytes).
     """
     import hashlib
 
@@ -207,7 +207,8 @@ def _pdf_fingerprint(pdf_path: str) -> Dict[str, Any]:
                 "widgets": sorted(_stable([str(widget.rect)] + [getattr(widget, name, None) for name in _WIDGET_FIELDS])
                                   for widget in page.widgets()),
             })
-        embedded = sorted(_stable([name, doc.embfile_info(name).get("size")]) for name in doc.embfile_names())
+        embedded = sorted(_stable([name, hashlib.sha256(doc.embfile_get(name)).hexdigest()])
+                          for name in doc.embfile_names())
         return {
             "pages": pages,
             "outline": _stable(doc.get_toc(simple=True)),
