@@ -5,6 +5,7 @@ HTTP suite over this transport when ``PRKS_TEST_HTTP_TRANSPORT=uvicorn``.
 """
 from __future__ import annotations
 
+import asyncio
 import http.client
 import logging
 import os
@@ -382,6 +383,78 @@ class UvicornTransportTests(unittest.TestCase):
             for thread in busy + waiters:
                 thread.join(5)
             self.assertEqual(statuses, [200, 200, 200, 200])
+
+    def test_a_burst_on_free_threads_cannot_pass_the_wait_list_bound(self):
+        # Driven at the ASGI level so the burst is exact: every request enters
+        # before any slot acquisition has run. 1 thread + 1 waiter admitted.
+        async def burst():
+            release = asyncio.Event()
+            served = []
+            statuses = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                await release.wait()
+
+            async def receive():
+                await asyncio.Event().wait()  # the client never sends or leaves
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                if message["type"] == "http.response.start":
+                    statuses.append(message["status"])
+
+            with mock.patch.object(asgi, "QUEUE_PER_THREAD", 1):
+                app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            scope = {"type": "http", "path": "/burst"}
+            calls = [asyncio.ensure_future(app(scope, receive, send)) for _ in range(20)]
+            await asyncio.sleep(0.2)
+            seen = (list(statuses), list(served))
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*calls), 5)
+            return seen, served, app._admitted
+
+        (refused, running), served, admitted = asyncio.run(burst())
+        self.assertEqual(refused, [503] * 18)
+        self.assertEqual(running, ["/burst"])
+        self.assertEqual(served, ["/burst", "/burst"])
+        self.assertEqual(admitted, 0)
+
+    def test_cancelling_a_queued_request_keeps_the_thread_slot(self):
+        async def scenario():
+            release = asyncio.Event()
+            served = []
+
+            async def hold(scope, receiver, send):
+                served.append(scope["path"])
+                if scope["path"] == "/first":
+                    await release.wait()
+
+            async def receive():
+                await asyncio.Event().wait()
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                pass
+
+            app = asgi.PrksAsgiApp(mock.Mock(), 1)
+            app._serve = hold
+            first = asyncio.ensure_future(app({"type": "http", "path": "/first"}, receive, send))
+            await asyncio.sleep(0.05)
+            queued = asyncio.ensure_future(app({"type": "http", "path": "/cancelled"}, receive, send))
+            await asyncio.sleep(0.05)
+            queued.cancel()
+            release.set()
+            await first
+            await asyncio.gather(queued, return_exceptions=True)
+            await asyncio.wait_for(app({"type": "http", "path": "/after"}, receive, send), 2)
+            return served, queued.cancelled(), app._admitted
+
+        served, cancelled, admitted = asyncio.run(scenario())
+        self.assertTrue(cancelled, "the cancellation was swallowed")
+        self.assertEqual(served, ["/first", "/after"])
+        self.assertEqual(admitted, 0)
 
     def test_a_request_whose_client_leaves_while_queued_never_runs(self):
         release = threading.Event()

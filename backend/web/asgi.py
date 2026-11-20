@@ -370,8 +370,11 @@ class PrksAsgiApp:
     def __init__(self, server: "UvicornServing", threads: int) -> None:
         self._server = server
         self._threads = threads
-        self._max_waiting = threads * QUEUE_PER_THREAD
-        self._waiting = 0
+        # Requests running or waiting for a thread. Counted synchronously
+        # before any await, so a burst cannot slip past the bound while slot
+        # acquisitions are still pending.
+        self._max_admitted = threads + threads * QUEUE_PER_THREAD
+        self._admitted = 0
         self._slots: Optional[asyncio.Semaphore] = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -379,9 +382,10 @@ class PrksAsgiApp:
             return  # lifespan is off; no WebSocket routes
         if self._slots is None:
             self._slots = asyncio.Semaphore(self._threads)
-        if self._slots.locked() and self._waiting >= self._max_waiting:
+        if self._admitted >= self._max_admitted:
             await _send_busy(send)
             return
+        self._admitted += 1
         # The receiver starts before the wait for a thread, so a client that
         # leaves while queued is seen (Uvicorn reports it only via receive())
         # and its request is dropped instead of run for nobody. Body messages
@@ -389,11 +393,7 @@ class PrksAsgiApp:
         receiver = _Receiver(receive)
         watch = asyncio.ensure_future(receiver.run())
         try:
-            self._waiting += 1
-            try:
-                acquired = await self._acquire_unless_disconnected(receiver)
-            finally:
-                self._waiting -= 1
+            acquired = await self._acquire_unless_disconnected(receiver)
             if not acquired:
                 return
             try:
@@ -401,6 +401,7 @@ class PrksAsgiApp:
             finally:
                 self._slots.release()
         finally:
+            self._admitted -= 1
             watch.cancel()
             receiver.gone.set()
 
@@ -409,22 +410,25 @@ class PrksAsgiApp:
         assert self._slots is not None
         acquire = asyncio.ensure_future(self._slots.acquire())
         left = asyncio.ensure_future(receiver.disconnected.wait())
+        acquired = False
         try:
             await asyncio.wait({acquire, left}, return_when=asyncio.FIRST_COMPLETED)
+            if not acquire.done():
+                acquire.cancel()
+            # Settle the acquisition without awaiting its result, so a
+            # cancellation of this task itself is never caught here.
+            await asyncio.wait({acquire})
+            acquired = not acquire.cancelled() and acquire.exception() is None
         finally:
             left.cancel()
             if not acquire.done():
-                acquire.cancel()
-        try:
-            await acquire
-        except asyncio.CancelledError:
-            if not acquire.cancelled():
-                raise  # this task itself was cancelled
-            return False
-        if receiver.disconnected.is_set():
-            self._slots.release()  # acquired as the client left: run nothing
-            return False
-        return True
+                acquire.cancel()  # Semaphore.acquire hands back a slot it was given
+            elif acquired and receiver.disconnected.is_set():
+                self._slots.release()  # acquired as the client left: run nothing
+                acquired = False
+            elif not acquired and not acquire.cancelled() and acquire.exception() is None:
+                self._slots.release()  # this task was cancelled after the slot was taken
+        return acquired
 
     async def _serve(self, scope: Scope, receiver: _Receiver, send: Send) -> None:
         loop = asyncio.get_running_loop()
