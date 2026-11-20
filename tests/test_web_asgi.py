@@ -27,7 +27,6 @@ from backend.web import asgi  # noqa: E402
 from backend.web.settings import (  # noqa: E402
     DEFAULT_THREADS,
     ENV_THREADS,
-    RETIRED_ENV_SERVER,
     HttpServerSettings,
     HttpSettingsError,
 )
@@ -62,15 +61,6 @@ class HttpSettingsTests(unittest.TestCase):
             with self.subTest(env=env), self.assertRaises(HttpSettingsError) as caught:
                 HttpServerSettings.from_env(env)
             self.assertIn(ENV_THREADS, caught.exception.message)
-
-    def test_the_retired_server_setting_refuses_any_value(self):
-        # #1329 Phase B3 removed the stdlib server; a leftover choice must not be ignored.
-        for value in ("stdlib", "uvicorn", " Uvicorn "):
-            with self.subTest(value=value), self.assertRaises(HttpSettingsError) as caught:
-                HttpServerSettings.from_env({RETIRED_ENV_SERVER: value})
-            self.assertIn(RETIRED_ENV_SERVER, caught.exception.message)
-        # Empty (Compose's ``${PRKS_HTTP_SERVER:-}`` when unset) is the same as unset.
-        self.assertEqual(HttpServerSettings.from_env({RETIRED_ENV_SERVER: " "}), HttpServerSettings())
 
     def test_make_server_serves_with_uvicorn(self):
         httpd = server_module.make_server(("127.0.0.1", 0))

@@ -12,9 +12,9 @@ process model.
 Phase B1 (#1335) added the Uvicorn transport (`backend/web/`), and Phase B2
 (#1338) made it the default. Phase B3 removes the standard-library server:
 `PRKSThreadingTCPServer` and the `stdlib` choice are gone, `make_server`
-always binds Uvicorn, and `PRKS_HTTP_SERVER` is retired (a non-empty value
-refuses to start). `PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the
-threads that run PRKS request work; up to 8 requests per thread wait for one,
+always binds Uvicorn, and the `PRKS_HTTP_SERVER` setting is deleted.
+`PRKS_HTTP_THREADS` (1 to 256, default 16) bounds the threads that run PRKS
+request work; up to 8 requests per thread wait for one,
 and further requests get an immediate 503 with `Retry-After`. Compose passes
 `PRKS_HTTP_THREADS` to `web`.
 

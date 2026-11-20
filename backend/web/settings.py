@@ -1,11 +1,8 @@
 """HTTP server settings, read once at startup (#1329).
 
 PRKS serves HTTP with Uvicorn only. ``PRKS_HTTP_THREADS`` bounds the threads
-that run PRKS request work. ``PRKS_HTTP_SERVER`` chose between Uvicorn and the
-standard-library server while both existed; #1329 Phase B3 removed the
-standard-library server, so a non-empty value now refuses to start rather
-than being ignored. Invalid values refuse to start; nothing falls back
-silently.
+that run PRKS request work. Invalid values refuse to start; nothing falls
+back silently.
 """
 
 from __future__ import annotations
@@ -14,8 +11,6 @@ from dataclasses import dataclass
 from typing import Mapping
 
 ENV_THREADS = "PRKS_HTTP_THREADS"
-#: Retired by #1329 Phase B3; read only to refuse a leftover value.
-RETIRED_ENV_SERVER = "PRKS_HTTP_SERVER"
 
 DEFAULT_THREADS = 16
 MIN_THREADS = 1
@@ -36,11 +31,6 @@ class HttpServerSettings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "HttpServerSettings":
-        if env.get(RETIRED_ENV_SERVER, "").strip():
-            raise HttpSettingsError(
-                f"{RETIRED_ENV_SERVER} is no longer read: PRKS always serves HTTP with Uvicorn. "
-                f"Remove {RETIRED_ENV_SERVER} from the environment (and from any .env file)."
-            )
         raw_threads = env.get(ENV_THREADS, "").strip()
         threads = DEFAULT_THREADS
         if raw_threads:
