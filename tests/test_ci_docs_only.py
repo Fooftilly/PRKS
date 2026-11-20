@@ -59,6 +59,14 @@ def _repo(root: Path) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
+# Fixtures that quote a bot's own comment text naming an audited config file.
+# They never open the file; only this exact quoted line is exempt.
+_QUOTED_CONFIG_NAMES = {
+    (".coderabbit.yaml", "tests/test_review_bot_noise_workflow.py"):
+        "**Configuration used**: Repository: Fooftilly/PRKS/.coderabbit.yaml",
+}
+
+
 class DocsOnlyCIClassifierTests(unittest.TestCase):
     def test_approved_paths_only(self):
         approved = (
@@ -122,11 +130,11 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
 
     def test_audited_config_files_are_exact_root_paths(self):
-        for path in (".codacy.yml", ".pr_agent.toml"):
+        for path in (".codacy.yml", ".coderabbit.yaml", ".pr_agent.toml"):
             with self.subTest(approved=path):
                 self.assertTrue(is_audited_config(path))
         for path in (
-            ".mergify.yml", ".coderabbit.yaml", ".greptile/config.json",
+            ".mergify.yml", ".coderabbit.yml", "docs/.coderabbit.yaml", ".greptile/config.json",
             ".codacy.yaml", "docs/.codacy.yml", "./.codacy.yml", "/.codacy.yml",
             ".github/workflows/test-gate.yml", "eslint.config.mjs", "ruff.toml",
             "setup.cfg", "pyrightconfig.json", ".bandit",
@@ -154,10 +162,15 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                         ):
                             continue
                         try:
-                            if name in path.read_text(encoding="utf-8"):
-                                hits.append(str(path.relative_to(ROOT)))
+                            text = path.read_text(encoding="utf-8")
                         except (OSError, UnicodeError):
                             continue
+                        quoted = _QUOTED_CONFIG_NAMES.get((name, str(path.relative_to(ROOT))))
+                        if quoted is not None:
+                            # Only quoted bot comment text may name the file here.
+                            text = text.replace(quoted, "")
+                        if name in text:
+                            hits.append(str(path.relative_to(ROOT)))
                 root_files = (
                     "run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore",
                     "docker-compose.yml", "docker-build.sh", "docker-entrypoint.sh",
