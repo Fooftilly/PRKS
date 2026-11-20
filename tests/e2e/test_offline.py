@@ -2356,6 +2356,11 @@ class OfflineFoundationTests(unittest.TestCase):
         work_a = server.ids["work_a"]
 
         snapshot_hits = {"n": 0}
+        # After the two failures, hold the snapshot until the test has seen
+        # the viewer waiting for its base. Unheld, the retry can land before
+        # the preview state is ever polled, and the test misses it.
+        held = []
+        holding = {"on": True}
 
         def fail_then_ok_snapshot(route):
             req = route.request
@@ -2368,6 +2373,9 @@ class OfflineFoundationTests(unittest.TestCase):
                         content_type="application/json",
                         body='{"error":"temporary"}',
                     )
+                    return
+                if holding["on"]:
+                    held.append(route)
                     return
             route.fallback()
 
@@ -2389,6 +2397,9 @@ class OfflineFoundationTests(unittest.TestCase):
             self.assertEqual(_pdf_mode(page), "preview")
             self.assertFalse(_pdf_markup_tools_available(page))
 
+            holding["on"] = False
+            _continue_held_routes(held)
+            held.clear()
             page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=30000)
             page.wait_for_function(
                 """() => {
@@ -2404,6 +2415,8 @@ class OfflineFoundationTests(unittest.TestCase):
             _wait_pdf_markup_tools_settled(page, timeout=30000)
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
+            holding["on"] = False
+            _continue_held_routes(held)
             try:
                 page.unroute("**/api/works/**", fail_then_ok_snapshot)
             except Exception:
