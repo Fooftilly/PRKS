@@ -53,7 +53,7 @@ The property tests are `tests/pg/test_tags_properties.py` and `tests/pg/test_wor
 
 ## PDF Range header fuzzing
 
-`tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.server.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
+`tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.byte_range.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
 
 ## Hypothesis profiles
 

@@ -1338,6 +1338,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/web",
                 "backend/entity_ids.py",
                 "backend/concurrency.py",
+                "backend/byte_range.py",
                 "backend/research_markup.py",
                 "backend/pdf_linearize.py",
                 "backend/derived_cache_publish.py",

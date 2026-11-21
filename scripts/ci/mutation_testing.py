@@ -78,6 +78,10 @@ TARGETS: dict[str, Target] = {
         mutate=("backend/sync_protocol.py",),
         tests=("tests/test_sync_envelope_rules.py", "tests/test_sync_envelope_properties.py"),
     ),
+    "byte-range": Target(
+        mutate=("backend/byte_range.py",),
+        tests=("tests/test_byte_range_properties.py",),
+    ),
     "research-markup": Target(
         mutate=("backend/research_markup.py",),
         tests=("tests/test_research_markup.py", "tests/test_research_markup_differential.py"),
@@ -86,11 +90,8 @@ TARGETS: dict[str, Target] = {
         mutate=("scripts/ci/docs_only.py", "scripts/ci/check_docs_only.py", "scripts/ci/wiki_links.py"),
         tests=("tests/test_ci_docs_only.py", "tests/test_wiki_source_links.py"),
         deselect=(
-            "tests/test_ci_docs_only.py::DocsOnlyCIClassifierTests::test_cli_scope_defaults_narrow_and_rejects_unknown",
-            "tests/test_ci_docs_only.py::DocsOnlyCIClassifierTests::test_a_stale_event_base_uses_the_merge_commits_first_parent",
-            "tests/test_ci_docs_only.py::DocsOnlyCIClassifierTests::test_the_markdown_validator_uses_the_same_base_as_the_classifier",
-            "tests/test_ci_docs_only.py::DocsOnlyCIClassifierTests::test_a_stale_base_merge_with_a_pr_code_change_still_runs_full_ci",
-            "tests/test_wiki_source_links.py::WikiLinkRuleTests::test_the_cli_rewrites_in_place_and_fails_on_a_bad_link",
+            "tests/test_ci_docs_only.py::DocsOnlyCIClassifierTests::test_the_entrypoints_run_as_scripts",
+            "tests/test_wiki_source_links.py::WikiLinkRuleTests::test_the_cli_runs_as_a_script",
         ),
     ),
 }
