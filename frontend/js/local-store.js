@@ -1651,10 +1651,8 @@
                 assertTagIsNotBeingMerged(rows, tagId, 'attached or removed');
                 const createOp = tagCreationDependency(rows, tagId,
                     'it cannot be attached to anything');
-                /* A Folder this device created and has not had acknowledged:
-                 * its Tag change waits for that create, and fails with it. */
-                const folderOp = folderCreationDependency(rows, folderId,
-                    'its Tags cannot be changed');
+                // A Folder this device is still creating is tagged after it exists.
+                const folderOp = folderCreationDependency(rows, folderId, 'it cannot be tagged');
                 const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
                     r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
                 if (existing) {

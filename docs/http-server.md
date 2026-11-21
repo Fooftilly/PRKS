@@ -1,7 +1,7 @@
 # Production HTTP server (#1329)
 
-Status: **accepted** (#1330, merged 2026-11-19); Phase B (the migration) is in
-progress, see "Migration status". This settles the pre-1.0 question in
+Status: **accepted** (#1330, merged 2026-11-19); Phase B (the migration) is
+done and Phase C (hardening) is in progress, see "Migration status". This settles the pre-1.0 question in
 `docs/postgresql-architecture.md` §4.5 (PG20, decision 9, risk R9). The
 maintainer decided on 2026-11-19 to replace the stdlib server rather than
 harden it behind a reverse proxy. This document picks the stack and the
@@ -32,13 +32,75 @@ below.
 to Uvicorn, and a request served over TLS gets `Secure` cookies, HSTS and an
 `https` expected origin. See [docs/https.md](https.md).
 
+**No Starlette** (maintainer decision, 2026-11-20). B1 to B3 wrote the parts
+Starlette was meant to supply directly on plain ASGI (`backend/web/asgi.py`):
+streamed bodies, disconnects, the bounded queue, head limits, TLS and static
+files. Every cross-cutting check already runs once, in `PRKSHandler`, so
+Starlette would now replace little of PRKS's code for a new runtime dependency
+and a port of the whole handler surface. The design steps below that name
+Starlette are superseded on that point; the behaviour they describe holds.
+
+Phase C so far:
+
+- **Request-head deadline.** Uvicorn has no limit on how long a client takes
+  to send a request head: a connection with a half-sent head, or with no bytes
+  at all, stayed open for good. A client now has `REQUEST_HEAD_SECONDS` (15 s)
+  from the connection's start (over TLS, from the end of the handshake,
+  which asyncio bounds at 60 s on its own), and again from the end of each
+  response, to send a whole head; trickling bytes does not extend it. Idle keep-alive still
+  closes after 5 s.
+- **`TCP_NODELAY`.** asyncio sets it only on sockets whose `proto` is
+  `IPPROTO_TCP`, and an accepted socket reports 0. Without it a response's
+  head and body left as two segments, and on a keep-alive connection, which
+  browsers use, every request waited about 40 ms for the client's delayed
+  ACK. It is now set on each accepted connection.
+- **Reused request threads.** Request work runs on reused daemon threads
+  instead of a new thread per request; `PRKS_HTTP_THREADS` still bounds it.
+- **Fewer event-loop crossings.** A response's head is sent with its first
+  body chunk, and the newest chunk with the end of the body (a stream's
+  `flush()` sends at once), so a typical response crosses from its thread to
+  the event loop once instead of four times.
+- **Graceful stop** is tested over real sockets: a request in flight
+  finishes before the stop returns, and a stop never waits past its grace for
+  one that outlives it. The embedded worker's stop is tested in
+  `tests/pg/test_embedded_worker.py`. The web pool and the data root's shared
+  lease end with the process, as before.
+
+### Baseline (2026-11-20)
+
+Measured on one 4-CPU Linux container with Python 3.13. The server ran
+`make_server` with 16 threads, and the client ran as a separate process, using
+1 or 16 threads for 5 s per row, with no database. `/api/tags` is the 503
+admission answer without `PRKS_AUTH`. The old server is the stdlib transport at
+9ddeb4c, the last commit that had it. Numbers are requests per second, then
+p50 latency in ms. These are informational only, with no budget attached, and
+#765 owns real workload benchmarks.
+
+| Route, clients | stdlib, new connection | Uvicorn, new connection | Uvicorn, keep-alive |
+| --- | --- | --- | --- |
+| `/healthz`, 1 | 1342, 0.73 | 1271, 0.75 | 1511, 0.63 |
+| `/healthz`, 16 | 1870, 3.14 | 1123, 13.5 | 1676, 9.06 |
+| `/` (static), 1 | 1115, 0.88 | 829, 1.15 | 1128, 0.87 |
+| `/` (static), 16 | 959, 7.82 | 869, 18.3 | 961, 16.5 |
+| `/api/tags`, 1 | 1231, 0.78 | 966, 1.01 | 1338, 0.72 |
+| `/api/tags`, 16 | 1577, 3.73 | 1199, 13.2 | 1507, 10.2 |
+
+Before the changes above, the Uvicorn transport managed about half the
+stdlib's rate on new connections (for example 668 requests per second on
+`/healthz` with one client), and about 23 requests per second on a keep-alive
+connection, because of the delayed ACK. The stdlib server spoke HTTP/1.0
+and closed every connection. At 16 clients Uvicorn's latency is higher,
+because one event loop parses every request where the stdlib ran a thread per
+connection. That is ample for one person's library, and it is the price of
+keeping slow clients off the request threads.
+
 ## Decision
 
 | Question | Answer |
 | --- | --- |
 | Interface | **ASGI** at the edge only. |
 | Server | **Uvicorn**, pinned like every other runtime dependency. |
-| Framework | **Starlette** as the thin request/response layer. PRKS keeps its own dispatch, admission, controllers and response rules; Starlette's routing, middleware stack and request parsing are used only where they replace code PRKS would otherwise write. |
+| Framework | **None** (changed 2026-11-20, see "Migration status"). It was **Starlette** as a thin request/response layer; PRKS's own plain ASGI adapter took that role. |
 | Domain code | Stays **synchronous** (psycopg 3 sync API, PG3). Each request's PRKS work runs in a bounded worker thread pool. Nothing in `backend/domain/` becomes `async`. |
 | Process model | **One web process**, as today. Multiple web processes wait for #1331, which moves the last process-local state into PostgreSQL. |
 
@@ -82,7 +144,7 @@ Everything below was read from master 02845f1.
   - request IDs and safe logging;
   - performance spans and `Server-Timing`;
   - the Library epoch header;
-  - `X-Content-Type-Options`;
+  - the security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Content-Security-Policy`, `Referrer-Policy`; #1305);
   - static cache headers;
   - closing the connection after an unread body.
 - **Streaming responses:**
@@ -107,7 +169,7 @@ Everything below was read from master 02845f1.
 
 | Option | Fit for PRKS | Verdict |
 | --- | --- | --- |
-| **Uvicorn + Starlette** (ASGI) | Most used and most active (see above). The event loop owns the sockets, so slow clients hold no worker thread. Bodies stream to the app as they arrive. Graceful shutdown drains in-flight requests. Runs on Linux, macOS and Windows. The cost is an async edge: sync PRKS code runs in a thread pool, and the two streamed-upload routes pull chunks through a small `anyio.from_thread` bridge (spiked below). Starlette has no global body limit, so PRKS keeps enforcing its own per-route limits, as it does today. | **Chosen** |
+| **Uvicorn + Starlette** (ASGI) | Most used and most active (see above). The event loop owns the sockets, so slow clients hold no worker thread. Bodies stream to the app as they arrive. Graceful shutdown drains in-flight requests. Runs on Linux, macOS and Windows. The cost is an async edge: sync PRKS code runs in a thread pool, and the two streamed-upload routes pull chunks through a small `anyio.from_thread` bridge (spiked below). Starlette has no global body limit, so PRKS keeps enforcing its own per-route limits, as it does today. | **Chosen** (Uvicorn; Starlette dropped 2026-11-20) |
 | **Gunicorn** (`gthread`, one worker) | Popular, mature and active, and it streams bodies. It is Unix only. The maintainer accepted a second, Windows-only server if that were the only obstacle, with Linux as the main supported platform. But two servers means two sets of body, timeout and shutdown behavior to test, and the realistic Windows partner (Waitress) buffers whole bodies. Gunicorn's main strength, many worker processes, is unusable until #1331, and its threaded workers tie a thread to each slow client. Uvicorn gives one server on every platform. If several processes are wanted after #1331, Gunicorn can still manage Uvicorn workers on Linux without changing the app. | Rejected for now |
 | **Cheroot** (WSGI, threaded) | Streams bodies, drains on `stop()`, runs on Windows. But it is little used (2.8 M downloads a month) with a slow release cadence. Half-sent requests hold pool threads until the socket timeout. | Rejected: long-term support |
 | **Waitress** (WSGI, threaded) | Handles slow clients well, but has had no release since 2024-11. It buffers *every* request body before calling the app, so a 64 GiB restore archive would be spooled to the temp directory and copied again. `close()` does not drain. | Rejected |
@@ -152,4 +214,4 @@ Linux (directly or in Docker Compose) is the main supported server platform; CI 
 
 - **Multiple web processes**: after #1331, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
 - **HTTP/2**: stays with the reverse proxy. TLS termination was decided later (#1339, 2026-11-20): PRKS can serve HTTPS itself (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`, [docs/https.md](https.md)), and a reverse proxy such as Caddy stays the recommended path for internet exposure.
-- **Exact pins.** Phase B adds `uvicorn`, `starlette` and their dependencies (`h11`, `click`, `anyio`, `idna`) to `requirements.txt`, `dependency-inventory.json`, `THIRD_PARTY_NOTICES.md` and the Pyright CI install step. It installs plain `uvicorn`, not `uvicorn[standard]`: uvloop and httptools are optional speedups PRKS does not need.
+- **Exact pins.** Phase B added `uvicorn` and its dependencies (`h11`, `click`); `starlette`, `anyio` and `idna` are not needed after the 2026-11-20 decision. They go to `requirements.txt`, `dependency-inventory.json`, `THIRD_PARTY_NOTICES.md` and the Pyright CI install step. It installs plain `uvicorn`, not `uvicorn[standard]`: uvloop and httptools are optional speedups PRKS does not need.

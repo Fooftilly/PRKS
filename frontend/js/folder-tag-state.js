@@ -49,12 +49,14 @@
         return result;
     }
     async function readOptions(folderId, options = {}) {
-        /* A Folder created on this device and not yet acknowledged has no
-         * server row to ask: it has no Tags and no relation revisions yet, so
-         * its options are known here. Asking anyway is a 404 for a real Folder. */
-        if (typeof root.prksPendingFolderCreates === 'function' &&
-            root.prksPendingFolderCreates(await durableOperations()).some(op => op.entity_id === folderId)) {
-            return { value: { folder_id: folderId, assigned: [], known_absent: {} }, source: 'pending-create', cachedAt: null };
+        /* A Folder this device is still creating has no Tags on the server
+         * yet, and asking for its options would only answer 404. Tags queued
+         * for it are overlaid from the durable queue like any others. */
+        const creating = (await durableOperations()).some(op => op && op.entity_type === 'folder' &&
+            op.entity_id === folderId && op.operation === 'CREATE_FOLDER' &&
+            op.status !== 'acknowledged' && op.status !== 'conflict' && op.status !== 'discarded');
+        if (creating) {
+            return { value: { folder_id: folderId, assigned: [], known_absent: {} }, source: 'local', cachedAt: null };
         }
         const result = await root.prksOfflineReadEntity('folder-tag-options', folderId,
             '/api/folders/' + encodeURIComponent(folderId) + '/tag-options', {

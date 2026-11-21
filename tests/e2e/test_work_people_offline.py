@@ -147,17 +147,19 @@ class OfflineWorkPeopleTests(unittest.TestCase):
     def pending(self, page, count, pred=None):
         # wait_for_async: page.wait_for_function treats a settled Promise as
         # always-truthy, so durable-queue gates must poll the resolved value.
+        # The predicate is spliced into the source: the app's CSP refuses
+        # `new Function` in the page (#1305).
         wait_for_async(
             page,
-            """([n, pred]) => {
-                const matches = new Function('r', 'return ' + pred);
+            """(n) => {
+                const matches = (r) => (%s);
                 return prksSync.store.listOperations().then(rows => {
                     const filtered = rows.filter(matches);
                     return filtered.length === n
                         && !filtered.some(r => r.status === 'syncing');
                 });
-            }""",
-            arg=[count, pred or self.ROLE_OPS],
+            }""" % (pred or self.ROLE_OPS),
+            arg=count,
             timeout=25000,
             message='Sync did not settle')
 
@@ -271,6 +273,8 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.unlink(page, server.ids['jane'])
         self.pending(page, 1)
+        # The panel repaints after the queue settles (see wait_detail_people).
+        self.wait_detail_people(page, absent=[JANE_DISPLAY])
         self.assertEqual(self.detail_people(page), [])
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
@@ -333,9 +337,9 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         page.locator('#save-work-bib-btn').click()
         self.pending(page, 1, self.FIELD_OPS)
         operations = page.evaluate(
-            "pred => prksSync.store.listOperations().then(r => r"
-            "  .filter(new Function('r', 'return ' + pred))"
-            "  .map(o => o.payload))", self.FIELD_OPS)
+            "() => prksSync.store.listOperations().then(r => r"
+            "  .filter(r => (%s))"
+            "  .map(o => o.payload))" % self.FIELD_OPS)
         self.assertEqual(operations, [{'field': 'author_text', 'value': 'New Text Author'}])
 
         page.evaluate("r => { void prksNavigate(r); }", self.BROWSE)
@@ -366,9 +370,9 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.assertIn('Mark Twain', self.detail_people(page))
         self.assertNotIn(JANE_DISPLAY, self.detail_people(page))
         operations = page.evaluate(
-            "pred => prksSync.store.listOperations().then(r => r"
-            "  .filter(new Function('r', 'return ' + pred))"
-            "  .map(o => [o.operation, o.payload.credit_name]))", self.ROLE_OPS)
+            "() => prksSync.store.listOperations().then(r => r"
+            "  .filter(r => (%s))"
+            "  .map(o => [o.operation, o.payload.credit_name]))" % self.ROLE_OPS)
         self.assertEqual(operations, [['ADD_WORK_PERSON_ROLE', 'Mark Twain']],
                          'one operation, carrying the credit')
 

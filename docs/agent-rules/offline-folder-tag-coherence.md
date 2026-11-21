@@ -111,7 +111,9 @@ Every production Folder write goes through the `api.js` wrappers
 one boundary per operation. All of them are **durable** and carry no
 connectivity guard; what they can still refuse is an unknown base (Folder fields
 via `prksFolderSaveMessage()`, Folder tags when `folder-tag-options` has never
-been prepared). Folder-tag add/remove enqueue `ADD_FOLDER_TAG` /
+been prepared). A Folder this device is still creating needs no prepared
+options: it has no Tags on the server, so its base is revision 0, and its tag
+writes depend on the `CREATE_FOLDER` operation. Folder-tag add/remove enqueue `ADD_FOLDER_TAG` /
 `REMOVE_FOLDER_TAG` through `coalesceFolderTag` / `prksFolderTagEdit`, mirroring
 Work tags. The Folder create surfaces (New Folder and the New File folder picker in
 `NewFileFolder.vue`) both route through `createFolder()` rather than posting

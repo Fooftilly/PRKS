@@ -154,7 +154,7 @@ class BrowseOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def all_paths(self, page):
         seen = []
@@ -198,10 +198,9 @@ class BrowseOfflineTests(unittest.TestCase):
         ids = server.ids
         o._open_work_from_home(page, WORK_A_TITLE)
         o._wait_entity_cached(page, 'work', ids['work_a'])
-        # Let the open event be acknowledged first. Its acknowledgement bumps
-        # the Recent generation, so a /api/recent fetched while it is still
-        # queued is (correctly) never cached, and recent:index would not exist.
-        o._drain_durable(page, 'the Work open event never retired')
+        # The Work-open ACK bumps Recent's generation; fetch Recent after it
+        # retires, or its cache write is refused (see cache_all).
+        o._drain_durable(page, message='Work-open operation did not retire before Recent warm-up')
         self.recent(page)
         o._wait_list_cached(page, 'recent:index')
         self.offline(page, context)

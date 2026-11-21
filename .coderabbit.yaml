@@ -9,7 +9,6 @@ tone_instructions: >-
 
 reviews:
   profile: assertive
-  request_changes_workflow: false
 
   high_level_summary: true
   collapse_walkthrough: true
@@ -19,7 +18,16 @@ reviews:
   related_issues: true
   related_prs: true
   poem: false
+  in_progress_fortune: false
+  estimate_code_review_effort: false
   enable_prompt_for_ai_agents: true
+
+  merge_risk_instructions: |
+    Higher risk: PostgreSQL schema or migration changes (backend/db/**),
+    service-worker and offline/sync changes (frontend/sw.js,
+    backend/**/*sync*.py), backup/restore, storage-root and file-deletion
+    paths, authentication/session handling, and CI workflow permissions.
+    Lower risk: documentation-only, test-only, and isolated UI copy changes.
 
   auto_review:
     enabled: true
@@ -27,14 +35,9 @@ reviews:
     drafts: true
 
   path_filters:
-    - "!frontend/vendor/**/*.js"
-    - "!frontend/vendor/**/*.css"
-    - "!frontend/vendor/**/*.woff2"
-    - "!frontend/vendor/**/*.wasm"
+    - "!frontend/vendor/**"
+    - "!frontend/vue/**"
     - "!docs/screenshots/**/*.png"
-    - "!data/**"
-    - "!data_testing/**"
-    - "!artifacts/**"
     - "!**/*.zip"
 
   path_instructions:
@@ -74,7 +77,7 @@ reviews:
         docs/local-first-rollout-status.md to distinguish current coverage from
         planned behavior in docs/local-first-sync.md.
 
-    - path: "backend/db_*"
+    - path: "backend/db/**"
       instructions: |
         Treat database, schema, and migration changes as data-integrity
         sensitive. Verify the fresh-database schema and migrations remain in
@@ -144,7 +147,13 @@ reviews:
   tools:
     github-checks:
       enabled: true
-      timeout_ms: 900000
+
+  finishing_touches:
+    unit_tests:
+      enabled: false
+
+chat:
+  art: false
 
 knowledge_base:
   opt_out: false

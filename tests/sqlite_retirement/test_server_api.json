@@ -527,7 +527,7 @@
     },
     "TestServerAPI.test_every_response_forbids_mime_sniffing": {
       "replaced_by": [
-        "tests/pg/test_server_api_freshness.py::ShellTests.test_every_response_forbids_mime_sniffing"
+        "tests/pg/test_server_api_freshness.py::ShellTests.test_every_kind_of_response_carries_the_security_headers"
       ]
     },
     "TestServerAPI.test_failed_tag_merge_changes_no_canonical_relationship": {
