@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
@@ -150,6 +151,44 @@ def bibtex(db: Database, ctx: RequestContext, work_id: str) -> str:
 CITATION_FORMATS = ("csl-json", "bibtex")
 
 
+_BIBTEX_KEY_RE = re.compile(r"^(@[^{]*\{)([^,\n]*)(,)")
+
+
+def _unique_bibtex_keys(entries: list[str]) -> list[str]:
+    """Entries whose citation keys are unique in one export.
+
+    Each entry's key comes from its first author and year (``Doe2024``), so
+    two Works can share one, and BibTeX drops the later entry. The first
+    keeps its key; later ones take the first free suffix ``a``, ``b``, …
+    ``z``, ``aa``, …, as BibTeX styles do, checked against every key taken.
+    """
+    keys = [m.group(2) if (m := _BIBTEX_KEY_RE.match(entry)) else "" for entry in entries]
+    taken = set(keys)
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry, key in zip(entries, keys):
+        if not key or key not in seen:
+            seen.add(key)
+            out.append(entry)
+            continue
+        n = 0
+        while True:
+            n += 1
+            suffix, value = "", n
+            while value:
+                value, rest = divmod(value - 1, 26)
+                suffix = chr(ord("a") + rest) + suffix
+            if key + suffix not in taken:
+                break
+        unique = key + suffix
+        taken.add(unique)
+        seen.add(unique)
+        match = _BIBTEX_KEY_RE.match(entry)
+        assert match is not None  # the key was read from this entry
+        out.append(match.group(1) + unique + entry[match.end(2):])
+    return out
+
+
 def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
     """``POST /api/citations``: the selected Works' citations in one format, read in one snapshot.
 
@@ -175,19 +214,21 @@ def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
         raise BulkWorkError("Unknown citation format.")
     work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
 
-    def read(scope: LibraryScope) -> list[tuple[str, Any]]:
-        return [(work_id, None if "\x00" in work_id else citation.bibtex_inputs(scope, work_id))
-                for work_id in work_ids]
+    def read(scope: LibraryScope) -> tuple[list[tuple[str, Any]], dict[str, bool]]:
+        found = [(work_id, None if "\x00" in work_id else citation.citation_inputs(scope, work_id))
+                 for work_id in work_ids]
+        return found, (citation.bibtex_profile(scope) if fmt == "bibtex" else {})
 
-    found = library_query(db, ctx, read)
+    found, profile = library_query(db, ctx, read)
     missing = [work_id for work_id, inputs in found if inputs is None]
     present = [(work_id, inputs) for work_id, inputs in found if inputs is not None]
     if fmt == "csl-json":
         items = [format_csl(work_id, record, roles, video=record["source_kind"] == "video")
-                 for work_id, (record, roles, _profile) in present]
+                 for work_id, (record, roles) in present]
         return {"format": fmt, "items": items, "missing": missing}
-    entries = [format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
-               for _work_id, (record, roles, profile) in present]
+    entries = _unique_bibtex_keys([
+        format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
+        for _work_id, (record, roles) in present])
     return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
 
 

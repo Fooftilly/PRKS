@@ -62,6 +62,9 @@ class CslFormatTests(unittest.TestCase):
         self.assertEqual(item({"published_date": "2020-04-40"})["issued"], {"date-parts": [[2020, 4]]})
         self.assertEqual(item({"published_date": "", "year": "1999"})["issued"], {"date-parts": [[1999]]})
         self.assertEqual(item({"published_date": "spring", "year": "c. 1900"}).get("issued"), None)
+        # A standalone year may have fewer than four digits; a date may not.
+        self.assertEqual(item({"year": "950"})["issued"], {"date-parts": [[950]]})
+        self.assertEqual(item({"published_date": "950-01-01"}).get("issued"), None)
 
     def test_fields_map_and_empty_ones_are_left_out(self):
         cited = item({"journal": " J ", "publisher": "", "location": "Paris;  ;New   York", "pages": "3--4",

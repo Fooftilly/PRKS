@@ -54,6 +54,8 @@ CSL_TYPES: dict[str, str] = {
 _GENRES = {"mastersthesis": "Master's thesis", "phdthesis": "PhD thesis"}
 _ROLE_VARIABLES = (("Author", "author"), ("Editor", "editor"), ("Translator", "translator"))
 _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
+#: A standalone year, which may have fewer than four digits (``950``).
+_YEAR_RE = re.compile(r"^\s*(\d{1,4})\s*$")
 
 
 def _text(value: Any) -> str:
@@ -89,8 +91,8 @@ def _role_name(role: dict[str, Any]) -> Optional[dict[str, str]]:
 
 
 def _issued(work: dict[str, Any]) -> Optional[dict[str, Any]]:
-    for raw in (work.get("published_date"), work.get("year")):
-        match = _DATE_RE.match(_text(raw))
+    for raw, pattern in ((work.get("published_date"), _DATE_RE), (work.get("year"), _YEAR_RE)):
+        match = pattern.match(_text(raw))
         if match:
             parts = [int(part) for part in match.groups() if part]
             if len(parts) > 1 and not 1 <= parts[1] <= 12:

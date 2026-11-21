@@ -82,14 +82,27 @@ def target_credits(scope: LibraryScope, work_id: str, manifestation_id: str) -> 
     return out
 
 
-def bibtex_inputs(scope: LibraryScope, work_id: str
-                  ) -> Optional[tuple[dict[str, Any], list[dict[str, Any]], dict[str, bool]]]:
-    """The record, credits and export profile of ``generate_bibtex``; None for no such Work."""
+def citation_inputs(scope: LibraryScope, work_id: str
+                    ) -> Optional[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    """The citation record and credits of one Work; None for no such Work."""
     target = citation_target(scope, work_id)
     if target is None:
         return None
     record = citation_record(scope, work_id)
     if record is None:  # pragma: no cover - the target is the Work's own Manifestation
         return None
-    profile = app_settings.settings_response(scope)[app_settings.BIBTEX_EXPORT_FIELDS]
-    return record, target_credits(scope, work_id, target), dict(profile)
+    return record, target_credits(scope, work_id, target)
+
+
+def bibtex_profile(scope: LibraryScope) -> dict[str, bool]:
+    """The Library's BibTeX export profile."""
+    return dict(app_settings.settings_response(scope)[app_settings.BIBTEX_EXPORT_FIELDS])
+
+
+def bibtex_inputs(scope: LibraryScope, work_id: str
+                  ) -> Optional[tuple[dict[str, Any], list[dict[str, Any]], dict[str, bool]]]:
+    """The record, credits and export profile of ``generate_bibtex``; None for no such Work."""
+    inputs = citation_inputs(scope, work_id)
+    if inputs is None:
+        return None
+    return inputs[0], inputs[1], bibtex_profile(scope)
