@@ -65,10 +65,31 @@ class BackgroundTeardownTests(unittest.TestCase):
         self.assertIsInstance(caught.exception.__cause__, OSError)
         harness.finish_pending_teardown()  # reported once, not again
 
-    def test_the_failure_is_raised_by_the_next_stop(self):
+    def test_the_failure_is_raised_by_the_next_stop_which_still_stops_its_server(self):
         self._stop_later(_FakeServer(error=OSError("disk")), "tests.e2e.test_x.T.test_failed")
+        second = _FakeServer()
         with self.assertRaisesRegex(RuntimeError, "test_failed failed"):
-            self._stop_later(_FakeServer(), "tests.e2e.test_x.T.test_next")
+            self._stop_later(second, "tests.e2e.test_x.T.test_next")
+        harness.finish_pending_teardown()
+        self.assertTrue(second.finished.is_set())
+
+    def test_a_concurrent_waiter_still_sees_the_teardown_being_joined(self):
+        release = threading.Event()
+        server = _FakeServer(release)
+        self._stop_later(server)
+        waiter = threading.Thread(target=harness.finish_pending_teardown)
+        waiter.start()
+        # The first waiter is joining; a second (a signal handler, atexit)
+        # must also wait instead of finding nothing pending.
+        threading.Timer(0.05, release.set).start()
+        harness.finish_pending_teardown()
+        self.assertTrue(server.finished.is_set())
+        waiter.join(5)
+        self.assertIsNone(harness._PENDING_TEARDOWN)
+
+    def test_the_lock_is_reentrant_for_a_signal_handler(self):
+        with harness._TEARDOWN_LOCK:
+            harness.stop_all_servers()  # would deadlock on a plain Lock
 
     def test_the_module_cleanup_drains_the_last_teardown(self):
         with mock.patch.object(harness.unittest, "addModuleCleanup") as add, \
@@ -89,6 +110,37 @@ class BackgroundTeardownTests(unittest.TestCase):
             harness.stop_all_servers()
         self.assertTrue(server.finished.is_set())
         self.assertIsNone(harness._PENDING_TEARDOWN)
+
+
+class _StuckProcess:
+    def poll(self):
+        return None
+
+    def terminate(self):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return None
+
+
+class FinishStopTests(unittest.TestCase):
+    def test_a_process_that_does_not_exit_keeps_its_database_and_entry(self):
+        server = object.__new__(harness.AppServer)
+        server.proc = _StuckProcess()
+        server._stdout = server._stderr = None
+        server.library = mock.Mock()
+        server._library_store = None
+        server._tmpdir = mock.Mock()
+        with mock.patch.object(harness, "_LIVE_SERVERS", [server]) as live:
+            with self.assertRaisesRegex(RuntimeError, "did not exit"):
+                server._finish_stop()
+            self.assertEqual(live, [server])
+        self.assertIsNotNone(server.proc)
+        server.library.drop.assert_not_called()
+        server._tmpdir.cleanup.assert_not_called()
 
 
 if __name__ == "__main__":

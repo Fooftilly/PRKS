@@ -4730,7 +4730,7 @@ class RequestCoordinatorTests(_BrowserE2E):
 class MarkdownFixtureTests(_BrowserE2E):
     def test_markdown_security_fixture_variants(self):
         server = FixtureServer()
-        self.addCleanup(server.stop_later)
+        self.addCleanup(server.stop)
         server.start()
         for suffix in ("", "?dompurify=absent", "?dompurify=unsupported"):
             assert _BROWSER is not None
@@ -4783,7 +4783,7 @@ _GALLERY_SECTIONS = (
 class DesignSystemGalleryTests(_BrowserE2E):
     def test_gallery_themes_and_widths(self):
         server = FixtureServer()
-        self.addCleanup(server.stop_later)
+        self.addCleanup(server.stop)
         server.start()
         widths = (1440, 900, 600, 390)
         for theme in ("light", "dark"):
