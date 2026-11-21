@@ -1,21 +1,19 @@
 name: SonarCloud
 
-# CI-based SonarCloud analysis with coverage (#1373). Not a required check.
-# The coverage jobs rerun the unchanged Test Gate commands (`python
-# run_tests.py`, `scripts/test-postgres`, Vitest) under coverage.py / V8, in
-# parallel with the Test Gate, so the required gate keeps its speed and its
-# pinned commands. Only the final scan job sees SONAR_TOKEN; test code never
-# runs with it. Fork and Dependabot PRs have no Actions secrets, so the scan
-# is skipped there.
+# CI-based SonarCloud analysis (#1373). Not a required check.
+# Pull requests get the scan alone (about a minute): bugs, smells and
+# security findings, no coverage. Coverage is measured on master only: the
+# nightly "Master CI after merges" run dispatches this workflow when something
+# merged, and the coverage jobs rerun the unchanged Test Gate commands
+# (`python run_tests.py`, `scripts/test-postgres`, Vitest) under coverage.py /
+# V8. Only the scan job sees SONAR_TOKEN; test code never runs with it. Fork
+# and Dependabot PRs get no Actions secrets, so they are skipped.
 on:
   pull_request:
     branches:
       - master
     paths-ignore:
       - "**/*.md"
-  push:
-    branches:
-      - master
   workflow_dispatch:
 
 permissions:
@@ -28,10 +26,7 @@ concurrency:
 jobs:
   python-unit-coverage:
     name: Coverage - unit, API, structural tests
-    if: >-
-      github.actor != 'dependabot[bot]' &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -78,10 +73,7 @@ jobs:
 
   postgres-coverage:
     name: Coverage - PostgreSQL helpers (${{ matrix.shard }}/4)
-    if: >-
-      github.actor != 'dependabot[bot]' &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -149,10 +141,7 @@ jobs:
 
   vitest-coverage:
     name: Coverage - Vitest
-    if: >-
-      github.actor != 'dependabot[bot]' &&
-      (github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -202,6 +191,15 @@ jobs:
   scan:
     name: SonarCloud scan
     needs: [python-unit-coverage, postgres-coverage, vitest-coverage]
+    # Runs after the coverage jobs on master, and alone on pull requests where
+    # they are skipped.
+    if: >-
+      !cancelled() &&
+      !contains(needs.*.result, 'failure') &&
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -213,11 +211,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
       - name: Install pinned coverage.py
+        if: github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail
@@ -227,12 +227,14 @@ jobs:
             --no-input "--only-binary=:all:" "$pin"
 
       - name: Download coverage data
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: sonar-coverage-*
           path: ${{ runner.temp }}/sonar-coverage
 
       - name: Combine Python coverage and place the LCOV report
+        if: github.event_name == 'workflow_dispatch'
         env:
           COVERAGE_ROOT: ${{ runner.temp }}/sonar-coverage
         shell: bash

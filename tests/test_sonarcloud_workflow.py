@@ -42,14 +42,26 @@ class SonarCloudWorkflowTests(unittest.TestCase):
         for ref in re.findall(r"uses: (\S+)", self.text):
             self.assertRegex(ref, r"@[0-9a-f]{40}$", ref)
 
-    def test_coverage_jobs_skip_fork_pull_requests(self):
+    def test_coverage_runs_only_on_master_dispatch_and_prs_get_the_scan_alone(self):
+        # Nikola 2026-11-21: PRs get the quick scan, coverage comes from the
+        # nightly master run (master-ci.yml dispatches this workflow).
+        on = self.text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("  pull_request:", on)
+        self.assertIn("  workflow_dispatch:", on)
+        self.assertNotIn("push:", on)
+        master_only = "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master'"
         for name in ("python-unit-coverage", "postgres-coverage", "vitest-coverage"):
-            self.assertIn(
-                "github.event.pull_request.head.repo.full_name == github.repository",
-                self.jobs[name],
-                name,
-            )
-        self.assertIn("needs: [python-unit-coverage, postgres-coverage, vitest-coverage]", self.jobs["scan"])
+            self.assertIn(master_only, self.jobs[name], name)
+        scan = self.jobs["scan"]
+        self.assertIn("needs: [python-unit-coverage, postgres-coverage, vitest-coverage]", scan)
+        self.assertIn("!contains(needs.*.result, 'failure')", scan)
+        # Forks and Dependabot get no Actions secrets.
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", scan)
+        self.assertIn("github.actor != 'dependabot[bot]'", scan)
+        steps = scan.split("    steps:\n", 1)[1].split("      - name: ")[1:]
+        for step in steps:
+            if step.startswith(("Set up Python", "Install pinned coverage", "Download coverage", "Combine Python")):
+                self.assertIn("if: github.event_name == 'workflow_dispatch'", step, step.splitlines()[0])
 
     def test_coverage_jobs_run_the_unchanged_test_gate_commands(self):
         self.assertRegex(self.jobs["python-unit-coverage"], r"(?m)^\s+python run_tests\.py$")

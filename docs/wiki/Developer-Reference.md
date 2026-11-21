@@ -82,15 +82,18 @@ using synthetic local PR merge histories.
 
 ### SonarCloud
 
-`.github/workflows/sonarcloud.yml` analyses every same-repository PR and every
-`master` push (CI-based analysis; Automatic Analysis is off). Three coverage
-jobs rerun the unchanged Test Gate commands in parallel with it: `python
+`.github/workflows/sonarcloud.yml` is CI-based analysis (Automatic Analysis is
+off). Same-repository PRs get the scan alone, about a minute: findings, no
+coverage. Coverage is measured on `master` only: the nightly "Master CI after
+merges" run (`master-ci.yml`) dispatches the workflow when something merged.
+Three coverage jobs then rerun the unchanged Test Gate commands: `python
 run_tests.py` and the four `scripts/test-postgres` shards under coverage.py,
 and the full Vitest suite with V8 coverage. coverage.py starts in every Python
 process through a `.pth` hook (`scripts/ci/sonar_coverage_hook.py`) configured
 by `scripts/ci/sonar-coverage.ini`; there is deliberately no root `.coveragerc`.
 The scan job combines the data and is the only job that sees `SONAR_TOKEN`.
-Fork PRs have no token and skip the workflow. It is not a required check.
+Fork and Dependabot PRs get no token and skip the scan. It is not a required
+check.
 
 Root `sonar-project.properties` sets test code (`tests/`, `frontend-app`
 `*.test.*`, fixtures and `test-support/`), the vendored and generated
