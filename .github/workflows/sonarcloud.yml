@@ -165,7 +165,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # V8 coverage slows heavy suites (citeproc formatting) past the
+          # 5 s default; the Test Gate keeps the default.
           ./node_modules/.bin/vitest run \
+            --testTimeout=30000 \
             --coverage.enabled \
             --coverage.provider=v8 \
             --coverage.include='src/**/*.{ts,vue}' \
