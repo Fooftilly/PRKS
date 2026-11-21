@@ -99,13 +99,9 @@ def iter_double_bracket_inners_chunked(
             yield bytes(inner)
 
 
-def normalize_pdf_mentioned_label(raw: bytes | str) -> str:
+def normalize_pdf_mentioned_label(raw: bytes) -> str:
     """Decode and strip a PDF ``[[...]]`` inner to a person lookup key."""
-    if isinstance(raw, bytes):
-        text = raw.decode("utf-8", errors="ignore")
-    else:
-        text = str(raw)
-    text = text.strip()
+    text = raw.decode("utf-8", errors="ignore").strip()
     if not text:
         return ""
     return "".join(c for c in text if c.isalnum() or c.isspace() or c in "-_")

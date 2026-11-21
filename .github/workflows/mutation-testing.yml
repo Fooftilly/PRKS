@@ -43,14 +43,17 @@ jobs:
     outputs:
       result-byte-range: ${{ steps.run.outputs.result-byte-range }}
       result-docs-only-ci: ${{ steps.run.outputs.result-docs-only-ci }}
+      result-entity-ids: ${{ steps.run.outputs.result-entity-ids }}
+      result-pdf-byte-mentions: ${{ steps.run.outputs.result-pdf-byte-mentions }}
       result-research-markup: ${{ steps.run.outputs.result-research-markup }}
       result-sync-envelope: ${{ steps.run.outputs.result-sync-envelope }}
+      result-tag-color: ${{ steps.run.outputs.result-tag-color }}
       result-text-identity: ${{ steps.run.outputs.result-text-identity }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target: [byte-range, docs-only-ci, research-markup, sync-envelope, text-identity]
+        target: [byte-range, docs-only-ci, entity-ids, pdf-byte-mentions, research-markup, sync-envelope, tag-color, text-identity]
     steps:
       - name: Checkout PRKS
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

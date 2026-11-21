@@ -94,7 +94,7 @@ class EntityIdTests(unittest.TestCase):
 
     def test_generator_rejects_unsupported_prefix_shapes(self):
         for prefix in ("a", "ab", "abc", "abcd", "ABCD", "P1", "1", "AB-", " A", "A ", "Ä", "A\n", 42, None):
-            with self.subTest(prefix=prefix), self.assertRaises(ValueError):
+            with self.subTest(prefix=prefix), self.assertRaisesRegex(ValueError, r"\Ainvalid id prefix\Z"):
                 entity_ids.generate(prefix)  # pyright: ignore[reportArgumentType]
 
     def test_invalid_prefix_is_refused(self):
