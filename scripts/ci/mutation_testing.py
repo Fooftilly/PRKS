@@ -211,7 +211,8 @@ def _mutmut(workspace: Path, *args: str, timeout: float | None = None) -> subpro
     ) as process:
         try:
             stdout, stderr = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            # Its own session also keeps it from Ctrl+C, so stop the group here.
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
             raise
@@ -239,7 +240,11 @@ def run(name: str, workspace: Path, max_children: int) -> int:
     except ValueError as exc:
         print(f"Mutation run incomplete: {name}: {exc}", file=sys.stderr)
         return 1
-    names = survivors(_mutmut(workspace, "results").stdout)
+    results = _mutmut(workspace, "results")
+    if results.returncode:
+        print(f"Mutation run incomplete: {name}: mutmut results failed", file=sys.stderr)
+        return 1
+    names = survivors(results.stdout)
     text = summary(name, target, stats, names)
     print(text)
     print("\n".join(names))
