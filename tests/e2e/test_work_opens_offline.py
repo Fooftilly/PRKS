@@ -26,7 +26,7 @@ def tearDownModule():
 class OfflineWorkOpenTests(unittest.TestCase):
     def start(self):
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop); server.start()
+        self.addCleanup(server.stop_later); server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers='allow')
         self.addCleanup(context.close)
         self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
