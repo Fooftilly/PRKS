@@ -147,7 +147,8 @@ class SaveTests(RemoteImageTestCase):
         self.assertIsNotNone(self.save(url))
 
     def test_an_ampersand_spelt_as_a_character_reference_matches(self) -> None:
-        for number, spelling in enumerate(("&#38;", "&#038;", "&#x26;", "&#X26;", "&AMP;")):
+        for number, spelling in enumerate(("&#38;", "&#038;", "&#x26;", "&#X26;", "&AMP;",
+                                            "&#38", "&#0038")):
             with self.subTest(spelling=spelling):
                 self.noted(f'<img src="https://example.org/chart{number}.png?w=400{spelling}format=png">')
                 self.assertIsNotNone(self.save(f"https://example.org/chart{number}.png?w=400&format=png"))
@@ -388,6 +389,16 @@ class LifecycleTests(RemoteImageTestCase):
         self.save(url)
         self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
                  ('<img src="https://example.org/chart.png?w=400&#38;format=png">', work_id))
+        self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(set(self.rows()), {url})
+        self.assertEqual(self.claims(), set())
+
+    def test_the_prune_keeps_a_figure_named_through_a_reference_without_its_semicolon(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        work_id = self.noted(f"![x]({url})")
+        self.save(url)
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
+                 ('<img src="https://example.org/chart.png?w=400&#38format=png">', work_id))
         self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
         self.assertEqual(set(self.rows()), {url})
         self.assertEqual(self.claims(), set())
