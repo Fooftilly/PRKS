@@ -15,6 +15,8 @@ Check:
 ./.venv/bin/python -m pip install -r requirements.txt
 ```
 
+If that fails with `No module named pip`, the venv was created without pip. Either install with uv (`uv pip install --python ./.venv/bin/python -r requirements.txt`) or bootstrap pip first (`./.venv/bin/python -m ensurepip --upgrade`). The failure message from PRKS names the command that fits your interpreter.
+
 ## Browser cannot reach PRKS
 
 Confirm the process bind address and port.

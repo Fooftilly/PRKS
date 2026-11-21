@@ -786,6 +786,9 @@ class InstalledPinTests(unittest.TestCase):
         )
 
 
+_HAS_PIP = {"has_pip": True, "has_ensurepip": True, "uv_available": False}
+
+
 class RemediationMessageTests(unittest.TestCase):
     def test_venv_recommends_same_interpreter_pip(self):
         ctx = detect_platform_context(
@@ -795,6 +798,7 @@ class RemediationMessageTests(unittest.TestCase):
             system="Linux",
             environ={},
             externally_managed=False,
+            **_HAS_PIP,
         )
         msg = remediation_message(
             missing=["Pillow"],
@@ -834,6 +838,7 @@ class RemediationMessageTests(unittest.TestCase):
             system="Windows",
             environ={},
             externally_managed=False,
+            **_HAS_PIP,
         )
         msg = remediation_message(missing=["Pillow"], ctx=ctx)
         assert_remediation_is_safe(msg)
@@ -848,6 +853,7 @@ class RemediationMessageTests(unittest.TestCase):
             system="Linux",
             environ={},
             externally_managed=True,
+            **_HAS_PIP,
         )
         msg = remediation_message(missing=["Pillow"], ctx=ctx)
         self.assertIn("EXTERNALLY-MANAGED", msg)
@@ -865,12 +871,133 @@ class RemediationMessageTests(unittest.TestCase):
             system="Linux",
             environ={"PRKS_CONTAINER": "1"},
             externally_managed=False,
+            **_HAS_PIP,
         )
         msg = remediation_message(mismatched=[("Pillow", "1.0", "12.3.0")], ctx=ctx)
         assert_remediation_is_safe(msg)
         self.assertIn("PRKS_CONTAINER", msg)
         self.assertIn("docker-build", msg)
         self.assertNotIn("pip install", msg)
+
+
+    def _venv_ctx(self, **installers):
+        return detect_platform_context(
+            prefix="/home/u/PRKS/.venv",
+            base_prefix="/usr",
+            executable="/home/u/PRKS/.venv/bin/python",
+            system="Linux",
+            environ={},
+            externally_managed=False,
+            **installers,
+        )
+
+    def test_venv_without_pip_prefers_uv(self):
+        ctx = self._venv_ctx(has_pip=False, has_ensurepip=True, uv_available=True)
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        self.assertIn("has no pip", msg)
+        self.assertIn(
+            "uv pip install --python /home/u/PRKS/.venv/bin/python -r requirements.txt",
+            msg,
+        )
+        self.assertNotIn("-m pip install", msg)
+        assert_remediation_is_safe(msg)
+
+    def test_venv_without_pip_or_uv_bootstraps_ensurepip(self):
+        ctx = self._venv_ctx(has_pip=False, has_ensurepip=True, uv_available=False)
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        ensure = "/home/u/PRKS/.venv/bin/python -m ensurepip --upgrade"
+        pip = "/home/u/PRKS/.venv/bin/python -m pip install -r requirements.txt"
+        self.assertIn(ensure, msg)
+        self.assertIn(pip, msg)
+        self.assertLess(msg.index(ensure), msg.index(pip))
+        self.assertNotIn("uv pip", msg)
+        assert_remediation_is_safe(msg)
+
+    def test_venv_without_pip_or_ensurepip_points_to_uv(self):
+        ctx = self._venv_ctx(has_pip=False, has_ensurepip=False, uv_available=False)
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        self.assertIn("neither pip nor ensurepip", msg)
+        self.assertIn("https://docs.astral.sh/uv/", msg)
+        self.assertIn("uv pip install --python /home/u/PRKS/.venv/bin/python", msg)
+        self.assertNotIn("-m pip install", msg)
+        self.assertNotIn("ensurepip --upgrade", msg)
+
+    def test_venv_with_pip_ignores_uv(self):
+        ctx = self._venv_ctx(has_pip=True, has_ensurepip=True, uv_available=True)
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        self.assertIn("/home/u/PRKS/.venv/bin/python -m pip install -r requirements.txt", msg)
+        self.assertNotIn("uv pip", msg)
+
+    def test_venv_uv_command_quotes_paths(self):
+        ctx = detect_platform_context(
+            prefix="/home/u/My PRKS/.venv",
+            base_prefix="/usr",
+            executable="/home/u/My PRKS/.venv/bin/python",
+            system="Linux",
+            environ={},
+            externally_managed=False,
+            has_pip=False,
+            has_ensurepip=False,
+            uv_available=True,
+        )
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        cmd = next(line.strip() for line in msg.splitlines() if "uv pip install" in line)
+        self.assertEqual(
+            shlex.split(cmd),
+            ["uv", "pip", "install", "--python", "/home/u/My PRKS/.venv/bin/python",
+             "-r", "requirements.txt"],
+        )
+
+    def test_externally_managed_without_ensurepip_uses_uv_venv(self):
+        ctx = detect_platform_context(
+            prefix="/usr",
+            base_prefix="/usr",
+            executable="/usr/bin/python3",
+            system="Linux",
+            environ={},
+            externally_managed=True,
+            has_pip=False,
+            has_ensurepip=False,
+            uv_available=True,
+        )
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        min_req = ">=" + ".".join(str(x) for x in python_min_version())
+        self.assertIn(f'uv venv --python "{min_req}" .venv', msg)
+        self.assertIn("uv pip install --python ./.venv/bin/python -r requirements.txt", msg)
+        self.assertNotIn("-m venv", msg)
+        self.assertNotIn("-m pip install", msg)
+        assert_remediation_is_safe(msg)
+
+    def test_host_without_ensurepip_or_uv_warns_venv_lacks_pip(self):
+        ctx = detect_platform_context(
+            prefix="/usr",
+            base_prefix="/usr",
+            executable="/usr/bin/python3",
+            system="Linux",
+            environ={},
+            externally_managed=False,
+            has_pip=False,
+            has_ensurepip=False,
+            uv_available=False,
+        )
+        msg = remediation_message(missing=["uvicorn"], ctx=ctx)
+        self.assertIn("no ensurepip", msg)
+        self.assertIn("python3 -m venv .venv", msg)
+        self.assertIn("uv pip install --python /usr/bin/python3 -r requirements.txt", msg)
+        self.assertNotIn("/usr/bin/python3 -m pip install", msg)
+
+    def test_windows_uv_venv_commands(self):
+        cmds = format_venv_create_commands(is_windows=True, use_uv=True, python_min=(3, 12))
+        self.assertEqual(cmds[0], 'uv venv --python ">=3.12" .venv')
+        self.assertEqual(
+            cmds[1], r"uv pip install --python .venv\Scripts\python.exe -r requirements.txt"
+        )
+
+    def test_context_detects_installers_by_default(self):
+        ctx = detect_platform_context(environ={})
+        self.assertIsInstance(ctx.has_pip, bool)
+        self.assertIsInstance(ctx.has_ensurepip, bool)
+        self.assertIsInstance(ctx.uv_available, bool)
 
     def test_assert_safe_rejects_bad_advice(self):
         with self.assertRaises(AssertionError):
