@@ -1316,9 +1316,11 @@ def finish_pending_teardown():
     with _TEARDOWN_LOCK:
         if _PENDING_TEARDOWN is not pending:
             return  # another caller already reported it
-        _PENDING_TEARDOWN = None
+        # Listed as stuck before it stops being pending, so a signal handler
+        # re-entering this lock always finds it in one of the two.
         if alive:
             _STUCK_TEARDOWNS.append(pending)
+        _PENDING_TEARDOWN = None
     if alive:
         raise RuntimeError("PRKS E2E teardown of %s did not finish" % (test_id or "a server"))
     if failure:
