@@ -1060,11 +1060,19 @@ def _failure_detail(result) -> str:
     return "\n".join(chunks)
 
 
+# harness.finish_pending_teardown() raises a background teardown's failure in
+# the next test; the failed teardown's own test is named in the message.
+_TEARDOWN_FAILURE = re.compile(r"PRKS E2E teardown of (tests\.[\w.]+) (?:failed|did not finish)")
+
+
 def _failed_ids_from_result(result) -> list:
     ids = []
     for group in (result.failures, result.errors):
-        for test, _trace in group:
+        for test, trace in group:
             ids.append(test.id())
+            # Also the test whose server's teardown failed, so --last-failed
+            # reruns it and not only the test that reported it.
+            ids.extend(m for m in _TEARDOWN_FAILURE.findall(trace or "") if m not in ids)
     return ids
 
 

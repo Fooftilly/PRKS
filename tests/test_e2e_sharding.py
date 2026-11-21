@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -424,6 +425,29 @@ class ShardAssignmentTests(unittest.TestCase):
         self.assertEqual(module_of("tests.e2e.test_app.Klass.test_x"), "tests.e2e.test_app")
         self.assertEqual(module_of("mod.Klass.test_x"), "mod")
         self.assertEqual(module_of("weird"), "weird")
+
+
+class TeardownFailureAttributionTests(unittest.TestCase):
+    def test_a_deferred_teardown_failure_also_marks_its_own_test_failed(self):
+        class _Test:
+            def __init__(self, test_id):
+                self._id = test_id
+
+            def id(self):
+                return self._id
+
+        trace = (
+            "Traceback (most recent call last):\n"
+            "RuntimeError: PRKS E2E teardown of tests.e2e.test_app.A.test_first failed\n"
+        )
+        result = types.SimpleNamespace(
+            failures=[(_Test("tests.e2e.test_app.C.test_third"), "AssertionError: x\n")],
+            errors=[(_Test("tests.e2e.test_app.B.test_second"), trace)],
+        )
+        with _import_runner() as runner:
+            ids = runner._failed_ids_from_result(result)
+        self.assertEqual(ids, ["tests.e2e.test_app.C.test_third", "tests.e2e.test_app.B.test_second",
+                               "tests.e2e.test_app.A.test_first"])
 
 
 class ExternalShardPartitionerTests(unittest.TestCase):
