@@ -197,6 +197,39 @@ class ManagedPdfTests(ManagedPdfTestCase):
         new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
         self.assertIn(f"{new_stem}.webp", self.thumb_names(work["id"]))
 
+    def test_a_render_published_after_its_work_is_deleted_leaves_no_copy(self) -> None:
+        """The render is held just before publishing its copy while the Work is
+        deleted and its thumbnails cleared; the copy it then publishes must
+        not outlive the delete."""
+        import threading
+
+        work = self.upload("Thumb Delete Race", "thumbdeleterace", "thumb_delete_race.pdf")
+        original = self.server_module.publish_derived_cache_bytes
+        publishing, deleted = threading.Event(), threading.Event()
+        self.addCleanup(deleted.set)
+        # The handler swallows errors from its cache write, so the held call
+        # records what happened and the test asserts it outside the handler.
+        resumed: list[bool] = []
+
+        def held(*args: Any, **kwargs: Any) -> Any:
+            publishing.set()
+            resumed.append(deleted.wait(10))
+            return original(*args, **kwargs)
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "publish_derived_cache_bytes", held):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(publishing.wait(10))
+            self.assertIn(self.send("DELETE", f"/api/works/{work['id']}").status, (200, 204))
+            deleted.set()
+            viewer.join(20)
+            self.assertFalse(viewer.is_alive())
+        self.assertEqual(resumed, [True])  # the copy was published after the delete
+        self.assertEqual(result["res"].status, 404)
+        self.assertEqual(self.thumb_names(work["id"]), set())
+
     def replace_pdf(self, work_id: str, text: str) -> dict[str, Any]:
         return self.ok(self.send("POST", f"/api/works/{work_id}/pdf",
                                  {"file_b64": base64.b64encode(pdf_bytes(text)).decode("ascii")}))

@@ -19,6 +19,7 @@ from urllib.request import urlopen, Request
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.derived_caches import (
+    prks_delete_pdf_thumbnails_for_work_id,
     prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
 )
@@ -1615,6 +1616,14 @@ class PRKSHandler(HttpHandlerBase):
                         self.send_error(404, "Thumbnail unavailable")
                         return
 
+                if not cache_hit and not works_api.thumbnail_fields(self, db, w_id):
+                    # The Work was deleted while this render ran. Its delete
+                    # clears the thumbnails once, after its commit; reading the
+                    # Work again after publishing means a copy published after
+                    # that cleanup is removed here instead.
+                    prks_delete_pdf_thumbnails_for_work_id(w_id, thumbs_root)
+                    self.send_error(404, "Work not found")
+                    return
                 if not generated_bytes:
                     self.send_error(404, "Thumbnail unavailable")
                     return
