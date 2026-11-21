@@ -29,7 +29,8 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Iterator
+from urllib.parse import quote
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -53,10 +54,11 @@ WORKFLOWS = (
 POLL_SECONDS = 60
 # How long a dispatched run may take to appear in the run list.
 APPEAR_SECONDS = 300
-# diff_base() reads the whole run history: nightly runs fill 100 pages of
-# 100 in about 27 years, and a history longer than that is an error.
+# Before any run has passed, diff_base() reads the whole history for the
+# first run. GitHub lists at most 1000 runs per filter: nearly three years
+# of nightly failures, after which it refuses rather than guess.
 HISTORY_PER_PAGE = 100
-HISTORY_PAGES = 100
+HISTORY_PAGES = 10
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -69,9 +71,7 @@ def _ours(run: dict[str, Any]) -> bool:
 
 def dispatched_runs(client: Client, workflow: str) -> list[dict[str, Any]]:
     """This script's master runs of ``workflow``, newest first."""
-    page = client.request(
-        "GET", f"actions/workflows/{workflow}/runs?branch={BRANCH}&event=workflow_dispatch&per_page=30",
-    )
+    page = client.request("GET", _runs_query(workflow, "&per_page=30"))
     return [run for run in (page or {}).get("workflow_runs", []) if _ours(run)]
 
 
@@ -88,17 +88,16 @@ def decide(run: dict[str, Any] | None, head: str) -> tuple[str, str]:
     return "start", f"retrying this commit after {run.get('conclusion')}"
 
 
-def _all_dispatched_runs(client: Client, workflow: str) -> Iterator[dict[str, Any]]:
-    """Every one of this script's master runs of ``workflow``, newest first, page by page."""
-    for page in range(1, HISTORY_PAGES + 1):
-        runs = (client.request(
-            "GET", f"actions/workflows/{workflow}/runs?branch={BRANCH}&event=workflow_dispatch"
-                   f"&per_page={HISTORY_PER_PAGE}&page={page}",
-        ) or {}).get("workflow_runs", [])
-        yield from (run for run in runs if _ours(run))
-        if len(runs) < HISTORY_PER_PAGE:
-            return
-    raise RuntimeError(f"{workflow}: no end to the run history after {HISTORY_PAGES} pages")
+def _runs_query(workflow: str, extra: str = "") -> str:
+    # Filtered by actor on GitHub's side: the run list returns at most 1000
+    # results per filter, and a person's dispatches would otherwise use them up.
+    return (f"actions/workflows/{workflow}/runs?branch={BRANCH}&event=workflow_dispatch"
+            f"&actor={quote(DISPATCHER)}{extra}")
+
+
+def _sha(run: dict[str, Any]) -> str | None:
+    sha = run.get("head_sha")
+    return sha if isinstance(sha, str) and _SHA.match(sha) else None
 
 
 def diff_base(client: Client, workflow: str) -> str | None:
@@ -107,18 +106,24 @@ def diff_base(client: Client, workflow: str) -> str | None:
     Never the commit of a failed run: retrying a failed commit against
     itself would show the diff-aware guards an empty diff and pass. Until
     one run passes, every run keeps the first checked commit as its base.
-    The whole history is read, so a long run of failures cannot push the
-    last pass out of view.
+    The last pass is asked for directly (``status=success``), so no run of
+    failures can push it out of view.
     """
+    passed = (client.request("GET", _runs_query(workflow, "&status=success&per_page=10")) or {})
+    for run in passed.get("workflow_runs", []):
+        if _ours(run) and run.get("conclusion") == "success" and _sha(run):
+            return _sha(run)
+    # Nothing has passed yet: the oldest run is the first commit checked.
     oldest = None
-    for run in _all_dispatched_runs(client, workflow):
-        sha = run.get("head_sha")
-        if not isinstance(sha, str) or not _SHA.match(sha):
-            continue
-        if run.get("status") == "completed" and run.get("conclusion") == "success":
-            return sha
-        oldest = sha
-    return oldest
+    for page in range(1, HISTORY_PAGES + 1):
+        runs = (client.request("GET", _runs_query(workflow, f"&per_page={HISTORY_PER_PAGE}&page={page}"))
+                or {}).get("workflow_runs", [])
+        for run in runs:
+            if _ours(run) and _sha(run):
+                oldest = _sha(run)
+        if len(runs) < HISTORY_PER_PAGE:
+            return oldest
+    raise RuntimeError(f"{workflow}: more than {HISTORY_PAGES * HISTORY_PER_PAGE} runs and none passed")
 
 
 def dispatch_body(client: Client, workflow: str) -> dict[str, Any]:

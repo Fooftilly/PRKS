@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unittest
 from unittest import mock
+from urllib.parse import unquote
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ class FakeActions:
         self.dispatched: list[tuple[str, Any]] = []
         self.polls = 0
         self.pages_read = 0
+        self.actor_filtered = False
 
     def request(self, method, path, body=None):
         if path == "branches/master":
@@ -49,8 +51,15 @@ class FakeActions:
         assert "event=workflow_dispatch" in path and "branch=master" in path, path
         query = dict(part.split("=", 1) for part in path.split("?", 1)[1].split("&"))
         per_page, page = int(query["per_page"]), int(query.get("page", "1"))
-        self.pages_read = max(self.pages_read, page)
-        return {"workflow_runs": [dict(r) for r in self.runs[(page - 1) * per_page:page * per_page]]}
+        runs = self.runs
+        if "actor" in query:
+            self.actor_filtered = True
+            runs = [r for r in runs if r["actor"]["login"] == unquote(query["actor"])]
+        if query.get("status") == "success":
+            runs = [r for r in runs if r["conclusion"] == "success"]
+        else:
+            self.pages_read = max(self.pages_read, page)
+        return {"workflow_runs": [dict(r) for r in runs[(page - 1) * per_page:page * per_page]]}
 
 
 def _no_sleep(_seconds):
@@ -144,18 +153,26 @@ class RunWorkflowTests(unittest.TestCase):
         master_ci.run_workflow(gh, "static-analysis.yml", sleep=_no_sleep)
         self.assertEqual(gh.dispatched[0][1]["inputs"], {"diff_base": first})
 
-    def test_a_last_pass_past_the_first_page_is_still_the_base(self):
-        # 150 failed nights at HEAD bury the last pass at OLD on page two.
-        failures = [_run(1000 - i, HEAD, conclusion="failure") for i in range(150)]
+    def test_a_last_pass_behind_many_failures_is_still_the_base(self):
+        # 1500 failed nights at HEAD, past GitHub's 1000-result cap, bury the pass at OLD.
+        failures = [_run(5000 - i, HEAD, conclusion="failure") for i in range(1500)]
         gh = FakeActions(failures + [_run(1, OLD)])
         master_ci.run_workflow(gh, "static-analysis.yml", sleep=_no_sleep)
         self.assertEqual(gh.dispatched[0][1]["inputs"], {"diff_base": OLD})
-        self.assertEqual(gh.pages_read, 2)
+        self.assertEqual(gh.pages_read, 1)  # the decision's page; the last pass was asked for directly
+
+    def test_runs_are_filtered_by_actor_on_githubs_side(self):
+        # A person's runs must not use up the 1000-result cap.
+        people = [_run(900 - i, OLD, actor=PERSON) for i in range(20)]
+        first = "d" * 40
+        gh = FakeActions(people + [_run(2, HEAD, conclusion="failure"), _run(1, first, conclusion="failure")])
+        self.assertEqual(master_ci.diff_base(gh, "static-analysis.yml"), first)
+        self.assertTrue(gh.actor_filtered)
 
     def test_a_history_without_end_is_refused(self):
         gh = FakeActions([_run(1, HEAD, conclusion="failure")])
         with mock.patch.object(master_ci, "HISTORY_PER_PAGE", 1), mock.patch.object(master_ci, "HISTORY_PAGES", 1):
-            with self.assertRaisesRegex(RuntimeError, "no end to the run history"):
+            with self.assertRaisesRegex(RuntimeError, "none passed"):
                 master_ci.diff_base(gh, "static-analysis.yml")
 
     def test_only_static_analysis_gets_a_diff_base(self):
