@@ -175,7 +175,7 @@ needs streaming hash computation at ingest, which `put_new` provides (§10.2).
 
 | Class | Contents (current and future) | Backed up | Relocated | May be deleted by PRKS |
 | --- | --- | --- | --- | --- |
-| **Canonical file-backed** | managed Asset objects (PDFs now; web snapshots and attachments later), preserved pristine originals (`source_locator`), portrait objects, future user-uploaded portraits, and, under PostgreSQL, PDFs queued in Files for Processing (§9.4) | yes | yes (copied and verified) | only through the Asset or claim lifecycle |
+| **Canonical file-backed** | managed Asset objects (PDFs now; web snapshots and attachments later), preserved pristine originals (`source_locator`), portrait objects, saved remote images (`remote-images`), future user-uploaded portraits, and, under PostgreSQL, PDFs queued in Files for Processing (§9.4) | yes | yes (copied and verified) | only through the Asset or claim lifecycle |
 | **Durable operational** | root marker `prks-root.json`; restore and relocation journals under `.prks-maintenance/`; bootstrap config (**outside** the root) | no (the marker is recreated for a restore target, §7.1) | the marker is rewritten, and journals are per-operation | journals are removed only when their operation has completed |
 | **Operational logs** | `prks-errors.log*` | no | no (a new log starts in the new root) | rotation |
 | **Derived / rebuildable** | `thumbs/`, future caches and projections | no | no (rebuilt) | at any time |
@@ -188,6 +188,14 @@ which is the current inventory's choice. They use their own namespace,
 `portraits`, and are keyed by person ID plus URL hash, which is already
 path-free. If #60 or a later issue turns a portrait into a user-uploaded
 Asset, it moves into `asset-objects`.
+
+**Saved remote images (`remote-images/`) are canonical for the same reason.**
+Under PostgreSQL, a video File's thumbnail and a figure in a note that live on
+another site are served from a transcoded copy (#1351;
+`backend/domain/objects/remote_images.py`), so the page loads no image from
+another site. Each copy is an immutable object under a fresh key, named by a
+`prks.remote_images` row per Library and source URL, and backed up with the
+Library. The row is kept when the note stops naming the URL.
 
 **Rule: a derived cache may never become impossible to rebuild because it
 shares a parent directory with canonical data.** Every derived component is
@@ -202,6 +210,7 @@ artifact inside a canonical namespace directory.
 ├── prks-root.json            durable operational   storage_root_id, layout_version
 ├── pdfs/                     canonical             namespace asset-objects
 ├── people/                   canonical             namespace portraits
+├── remote-images/            canonical             namespace remote-images
 ├── thumbs/                   derived
 ├── prks-errors.log*          operational log       may be outside via PRKS_LOG_FILE
 └── .prks-maintenance/        staging + journals    restore-staging/, rollback/, backup/, restore-journal.json,

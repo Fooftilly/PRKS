@@ -1705,8 +1705,8 @@ Every managed file goes through `StorageBackend` (#311 Phase B).
   `backend/AGENTS.md`, with three changes: the claim table is
   `object_cleanup_claims(namespace, name, library_id, recorded_at,
   last_attempt_at, hold)`; the three-valued reference check counts Asset
-  locators, person portraits, Processing item locators (§11.5) and live
-  restore runs' staged keys instead of `works.file_path`; the retry pass
+  locators, person portraits, saved remote images (#1351), Processing item
+  locators (§11.5) and live restore runs' staged keys instead of `works.file_path`; the retry pass
   is a job instead of a startup scan.
 - **Staged restore objects** count as referenced. The three-valued
   reference check and the orphan sweep treat a key listed in

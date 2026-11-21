@@ -2,8 +2,8 @@
 
 The fixture writes at least one row of every table on
 ``tables.BACKUP_CONTENT_TABLES`` (the test fails when a new content table has
-none) and stores an object of every namespace: Work PDFs, a Processing upload
-and a Person portrait. After a backup, the Library is changed in every family;
+none) and stores an object of every namespace: Work PDFs, a Processing upload,
+a Person portrait and a saved note figure. After a backup, the Library is changed in every family;
 the restore must bring back each table exactly, generated columns included,
 and every archived object must be stored with its bytes.
 """
@@ -19,7 +19,7 @@ from psycopg import sql
 
 from backend.domain.identity.library_scope import Capability, Isolation, library_command
 from backend.domain.maintenance import tables
-from backend.domain.objects import portraits
+from backend.domain.objects import portraits, remote_images
 from backend.domain.processing import commands as processing
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, NAMESPACES, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT
@@ -91,7 +91,10 @@ class EveryTableRoundTripTests(RestoreTestCase):
         lib.patch_app_settings({"annotation_author": "Ada"})
         # Research.
         engines = lib.create_concept("Engines")["id"]
-        lib.save_work_notes(first, "On [[concept:Engines]]")
+        lib.save_work_notes(first, "On [[concept:Engines]] ![figure](https://example.org/figure.png)")
+        figure = remote_images.store(self.objects, image())
+        self.edit_command(lambda scope: remote_images.commit(scope, self.objects, "https://example.org/figure.png",
+                                                             figure))
         lib.replace_concept_aliases(engines, ["Machines"])
         lib.replace_concept_parents(engines, [lib.create_concept("Mechanism")["id"]])
         claim = lib.create_position("Engines compute")["id"]

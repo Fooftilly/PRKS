@@ -144,7 +144,9 @@
         assert('keeps pre/code', markedDom.querySelector('pre code') && markedDom.querySelector('pre code').textContent === 'code');
         assert('keeps table', markedDom.querySelector('table thead th') && markedDom.querySelector('table tbody td'));
         assert('keeps https link', markedDom.querySelector('a[href="https://example.com"]'));
-        assert('keeps https image', markedDom.querySelector('img[src="https://example.com/image.png"][alt="Image"]'));
+        var markedImg = markedDom.querySelector('img[alt="Image"]');
+        assert('an https image loads its saved copy',
+            markedImg && markedImg.getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png'));
         assert('keeps hr', markedDom.querySelector('hr'));
         assert('keeps br', markedDom.querySelector('br'));
 
@@ -203,7 +205,12 @@
         assert('strips \\/evil.example', hrefGone('\\/evil.example'));
 
         var imgOk = asDom(sanitize('<img src="https://example.com/image.png" alt="n">'));
-        assert('keeps https img src', imgOk.querySelector('img[src="https://example.com/image.png"]'));
+        assert('an https img src becomes its saved copy',
+            imgOk.querySelector('img').getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png'));
+        var relImg = asDom(sanitize('<img src="/logo.svg" alt="n">'));
+        assert('keeps a same-origin img src', relImg.querySelector('img').getAttribute('src') === '/logo.svg');
+        var credImg = asDom(sanitize('<img src="https://user:pw@example.com/x.png" alt="n">'));
+        assert('strips an img src with credentials', !credImg.querySelector('img').getAttribute('src'));
         ['data:image/png,aaaa', 'blob:https://example.com/1', 'file:///x.png',
             'javascript:alert(1)', '//evil.example/x.png']
             .forEach(function (u) {

@@ -321,6 +321,8 @@ SELECT 'asset-objects', object_locator FROM {s}.processing_items
  WHERE library_id = {lib} AND object_locator IS NOT NULL
 UNION
 SELECT 'portraits', portrait_locator FROM {s}.persons WHERE library_id = {lib} AND portrait_locator IS NOT NULL
+UNION
+SELECT 'remote-images', locator FROM {s}.remote_images WHERE library_id = {lib}
 """
 _CLAIMS_TABLE = "prks.object_cleanup_claims"
 _CANCEL_JOBS_SQL: LiteralString = """
@@ -350,7 +352,9 @@ WHERE o.run_id = %(run)s AND (
         OR EXISTS (SELECT 1 FROM prks.processing_items p WHERE p.library_id <> %(library_id)s
                    AND p.object_locator = o.name)))
   OR (o.namespace = 'portraits' AND EXISTS (
-        SELECT 1 FROM prks.persons pe WHERE pe.library_id <> %(library_id)s AND pe.portrait_locator = o.name)))
+        SELECT 1 FROM prks.persons pe WHERE pe.library_id <> %(library_id)s AND pe.portrait_locator = o.name))
+  OR (o.namespace = 'remote-images' AND EXISTS (
+        SELECT 1 FROM prks.remote_images ri WHERE ri.library_id <> %(library_id)s AND ri.locator = o.name)))
 LIMIT 1
 """
 

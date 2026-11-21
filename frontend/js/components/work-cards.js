@@ -38,6 +38,9 @@ function prksWorkThumbUrl(workId, page) {
 const PRKS_WORK_THUMB_PLACEHOLDER =
     'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
+/** A remote thumb's saved copy (backend/api/remote_images.py). */
+const PRKS_REMOTE_IMAGE_PREFIX = '/api/remote-images?url=';
+
 /** PDF managed thumbs: `/api/works/<id>/thumbnail?page=<n>` only. */
 
 /**
@@ -65,16 +68,30 @@ function prksSafeWorkThumbSrc(raw) {
         return '/api/works/' + encodeURIComponent(workId) + '/thumbnail?page=' + page;
     }
 
-    // Relative non-PDF paths are never Work thumbs.
-    if (src.charAt(0) === '/' || src.charAt(0) === '.') return '';
+    // A video thumb's saved copy (an already-mapped src) is mapped again
+    // from the URL it names.
+    let remote = src;
+    if (src.indexOf(PRKS_REMOTE_IMAGE_PREFIX) === 0) {
+        try {
+            remote = decodeURIComponent(src.slice(PRKS_REMOTE_IMAGE_PREFIX.length));
+        } catch (_err) {
+            return '';
+        }
+    } else if (src.charAt(0) === '/' || src.charAt(0) === '.') {
+        // Other relative non-PDF paths are never Work thumbs.
+        return '';
+    }
 
     try {
-        const u = new URL(src);
+        const u = new URL(remote);
         const proto = String(u.protocol || '').toLowerCase();
         if (proto !== 'http:' && proto !== 'https:') return '';
         if (u.username || u.password) return '';
-        // Reconstruct so the returned value is not the tainted DOM string.
-        return u.protocol + '//' + u.host + u.pathname + u.search + u.hash;
+        // Load it as PRKS's saved copy, the URL exactly as the Work stores it
+        // (the server matches it to thumb_url) and only as an encoded query
+        // value of PRKS's own route: the page loads no image from another
+        // site (CSP img-src 'self', #1351).
+        return PRKS_REMOTE_IMAGE_PREFIX + encodeURIComponent(remote);
     } catch (_err) {
         return '';
     }

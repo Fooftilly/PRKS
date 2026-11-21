@@ -55,7 +55,7 @@ It can navigate to major entities and sections, search the library, create commo
 
 ## Notes and research context
 
-Research Notes live with a Work and use durable local-first operations. PRKS also supports structured research entities—Concepts, Positions, Arguments and Stances—described in [Research Network](Research-Network.md).
+Research Notes live with a Work and use durable local-first operations. An image in Markdown (`![caption](https://…)`) and a video's thumbnail are shown from a copy PRKS saves the first time an editor views them, so the other site never sees who reads the note and the image survives if the site goes away. Only static JPEG, PNG, WebP or GIF images are saved (an animated GIF or an SVG is not), up to 1600 pixels on the longer edge. PRKS also supports structured research entities—Concepts, Positions, Arguments and Stances—described in [Research Network](Research-Network.md).
 
 ## Processing queue
 

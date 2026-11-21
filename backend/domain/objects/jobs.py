@@ -77,6 +77,7 @@ from backend.jobs.runner import JobRun
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
+    NAMESPACE_REMOTE_IMAGES,
     InvalidStorageKey,
     LocalFilesystemStorage,
     StorageBackend,
@@ -93,7 +94,7 @@ SWEEP_EVERY = timedelta(days=7)
 SCHEDULE_EVERY = timedelta(minutes=1)
 HEARTBEAT_EVERY = 25
 # The sweep's order; a cursor names one of these.
-SWEEP_NAMESPACES = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS)
+SWEEP_NAMESPACES = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, NAMESPACE_REMOTE_IMAGES)
 # The SQLite catalogue of a data root (production and testing names).
 SQLITE_CATALOGUES = ("prks_data.db", "prks_data_testing.db")
 

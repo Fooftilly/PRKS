@@ -101,7 +101,9 @@ BACKUP_CONTENT_TABLES: tuple[str, ...] = (
     "prks.processing_item_drafts",
     "prks.processing_item_roles",
     "prks.processing_item_tags",
-    # Cleanup claims travel with the objects they describe (150_objects.sql).
+    # Saved remote images and the cleanup claims travel with the objects
+    # they describe (150_objects.sql).
+    "prks.remote_images",
     "prks.object_cleanup_claims",
     # Revisions and the sync ledger (040_sync.sql, §7.3).
     "prks.entity_revisions",

@@ -36,6 +36,7 @@ from backend.api import person_groups as person_groups_api
 from backend.api import persons as persons_api
 from backend.api import playlists as playlists_api
 from backend.api import positions as positions_api
+from backend.api import remote_images as remote_images_api
 from backend.api import search as search_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
@@ -109,15 +110,16 @@ HSTS_VALUE = "max-age=31536000"
 # compile its PDFium WebAssembly, and blob: workers and images are what that
 # viewer makes. No inline style either (ZAP 10055): per-element CSS variables
 # go through CSSOM (prksCssVarClass), and the Vue bundle adopts its CSS as a
-# constructable stylesheet. Images may come from anywhere, as Research Notes figures
-# and video thumbnails are remote URLs. The only other site PRKS talks to is
-# YouTube: its player frame and the oEmbed lookup behind New File's autofill.
+# constructable stylesheet. Images are PRKS's own too: a video thumbnail or a
+# note figure on another site is served as a saved copy (/api/remote-images,
+# #1351). The only other site PRKS talks to is YouTube: its player frame and
+# the oEmbed lookup behind New File's autofill.
 # Nothing may frame PRKS, and no page URL leaves in Referer.
 CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
     "style-src 'self'",
-    "img-src * data: blob:",
+    "img-src 'self' data: blob:",
     "font-src 'self' data:",
     "connect-src 'self' data: blob: https://www.youtube.com",
     "worker-src 'self' blob:",
@@ -1800,6 +1802,8 @@ class PRKSHandler(HttpHandlerBase):
             elif persons_api.handle_detail(self, db, path):
                 return
             elif works_api.handle_browse(self, db, path):
+                return
+            elif remote_images_api.handle_get(self, db, path, query):
                 return
             elif search_api.handle_get(self, db, path, query):
                 return

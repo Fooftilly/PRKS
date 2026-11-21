@@ -360,8 +360,9 @@ class ShellTests(FreshnessTestCase):
         # The YouTube player and its oEmbed lookup are the only other site.
         self.assertEqual(directives["frame-src"], "https://www.youtube.com")
         self.assertIn("https://www.youtube.com", directives["connect-src"].split())
-        # Research Notes figures and video thumbnails are remote images.
-        self.assertEqual(directives["img-src"].split()[0], "*")
+        # Remote figures and video thumbnails are saved copies (/api/remote-images):
+        # no wildcard (ZAP 10055) and no other site.
+        self.assertEqual(directives["img-src"], "'self' data: blob:")
 
     def test_the_vue_bundle_is_served_with_the_shell(self) -> None:
         bundle = self.get("/vue/prks-vue.js")

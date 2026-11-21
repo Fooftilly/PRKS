@@ -4,7 +4,8 @@
 referenced when any catalogue row names it, whatever its Library: an Asset's
 ``storage_locator`` or ``source_locator`` or a ``ready`` Processing item's
 ``object_locator`` (``asset-objects``, §11.5), a Person's
-``portrait_locator`` (``portraits``), or a staged key of a restore run that
+``portrait_locator`` (``portraits``), a saved remote image's ``locator``
+(``remote-images``), or a staged key of a restore run that
 is neither committed nor failed (``restore_run_objects``). The check is
 three-valued, as on SQLite (``backend/AGENTS.md``): ``None`` means "not
 known" (a namespace with no catalogue), and nothing is deleted on it.
@@ -67,6 +68,7 @@ from backend.jobs import queue
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
+    NAMESPACE_REMOTE_IMAGES,
     InvalidStorageKey,
     ObjectIntegrityError,
     StorageBackend,
@@ -102,6 +104,9 @@ SELECT EXISTS (SELECT 1 FROM prks.assets WHERE storage_locator = %(name)s)
 _PORTRAIT_REFERENCES: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.persons WHERE portrait_locator = %(name)s) AS referenced
 """
+_REMOTE_IMAGE_REFERENCES: LiteralString = """
+SELECT EXISTS (SELECT 1 FROM prks.remote_images WHERE locator = %(name)s) AS referenced
+"""
 _STAGED_REFERENCES: LiteralString = """
 SELECT EXISTS (
   SELECT 1 FROM prks.restore_run_objects o JOIN prks.restore_runs r ON r.id = o.run_id
@@ -121,6 +126,9 @@ LIMIT 1
 _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.persons WHERE library_id <> %(library_id)s AND portrait_locator = %(name)s LIMIT 1
 """
+_REMOTE_IMAGE_NAMED_BY_ANOTHER_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.remote_images WHERE library_id <> %(library_id)s AND locator = %(name)s LIMIT 1
+"""
 # A key another Library released is not this Library's to adopt either.
 _CLAIMED_BY_ANOTHER_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.object_cleanup_claims
@@ -135,6 +143,9 @@ LIMIT 1
 """
 _PORTRAIT_NAMED_IN_LIBRARY: LiteralString = """
 SELECT 1 FROM prks.persons WHERE library_id = %(library_id)s AND portrait_locator = %(name)s LIMIT 1
+"""
+_REMOTE_IMAGE_NAMED_IN_LIBRARY: LiteralString = """
+SELECT 1 FROM prks.remote_images WHERE library_id = %(library_id)s AND locator = %(name)s LIMIT 1
 """
 # A claim names the Library that released the key; an orphan's claim (no
 # Library) is taken over, another Library's claim is left as it is.
@@ -153,6 +164,7 @@ LIMIT 1
 _NAMED_HERE: dict[str, LiteralString] = {
     NAMESPACE_ASSET_OBJECTS: _NAMED_IN_LIBRARY,
     NAMESPACE_PORTRAITS: _PORTRAIT_NAMED_IN_LIBRARY,
+    NAMESPACE_REMOTE_IMAGES: _REMOTE_IMAGE_NAMED_IN_LIBRARY,
 }
 _RECORD_ORPHAN: LiteralString = """
 INSERT INTO prks.object_cleanup_claims (namespace, name) VALUES (%(namespace)s, %(name)s)
@@ -249,6 +261,9 @@ def references(tx: Transaction, key: StorageKey) -> Optional[bool]:
     if key.namespace == NAMESPACE_PORTRAITS:
         row = tx.execute(_PORTRAIT_REFERENCES, params).fetchone()
         return bool(row is not None and row["referenced"])
+    if key.namespace == NAMESPACE_REMOTE_IMAGES:
+        row = tx.execute(_REMOTE_IMAGE_REFERENCES, params).fetchone()
+        return bool(row is not None and row["referenced"])
     return None
 
 
@@ -264,6 +279,8 @@ def _held_elsewhere_sql(namespace: str) -> LiteralString:
         held += " OR EXISTS (" + _NAMED_BY_ANOTHER_LIBRARY + ")"
     elif namespace == NAMESPACE_PORTRAITS:
         held += " OR EXISTS (" + _PORTRAIT_NAMED_BY_ANOTHER_LIBRARY + ")"
+    elif namespace == NAMESPACE_REMOTE_IMAGES:
+        held += " OR EXISTS (" + _REMOTE_IMAGE_NAMED_BY_ANOTHER_LIBRARY + ")"
     return held + ") AS held"
 
 
@@ -451,7 +468,8 @@ def retry_claims(db: Database, storage: StorageBackend, *, library_id: Optional[
 
 def sweep(db: Database, storage: StorageBackend, *, grace: timedelta = DEFAULT_SWEEP_GRACE,
           now: Optional[float] = None,
-          namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS)) -> int:
+          namespaces: Iterable[str] = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS,
+                                       NAMESPACE_REMOTE_IMAGES)) -> int:
     """Claim every object older than ``grace`` that nothing names; returns how many were claimed.
 
     Never deletes an object: the claims are settled by :func:`settle` like any

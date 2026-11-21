@@ -40,12 +40,14 @@ LOGGER = logging.getLogger("prks.storage")
 
 NAMESPACE_ASSET_OBJECTS = "asset-objects"
 NAMESPACE_PORTRAITS = "portraits"
-NAMESPACES = frozenset({NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS})
+NAMESPACE_REMOTE_IMAGES = "remote-images"
+NAMESPACES = frozenset({NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, NAMESPACE_REMOTE_IMAGES})
 # Layout 1 (§4.2): existing directory names are kept; the namespace decouples
 # code from them.
 LAYOUT_1_NAMESPACE_DIRS: Mapping[str, str] = {
     NAMESPACE_ASSET_OBJECTS: "pdfs",
     NAMESPACE_PORTRAITS: "people",
+    NAMESPACE_REMOTE_IMAGES: "remote-images",
 }
 
 MAX_KEY_NAME_BYTES = 255

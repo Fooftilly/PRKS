@@ -86,6 +86,28 @@
         return allowedSchemes[scheme] === true;
     }
 
+    /*
+     * PRKS serves every image itself (CSP img-src 'self'): an http(s) image is
+     * loaded as the Library's saved copy (GET /api/remote-images, #1351), never
+     * from the other site. Returns that route for a public-looking http(s)
+     * URL, else ''. The server decides what it fetches.
+     */
+    var PRKS_REMOTE_IMAGE_ROUTE = '/api/remote-images?url=';
+
+    function prksRemoteImageSrc(value) {
+        var trimmed = prksTrimUriControls(value);
+        if (!trimmed || trimmed.length > 2048) return '';
+        var parsed;
+        try {
+            parsed = new URL(trimmed);
+        } catch (_err) {
+            return '';
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+        if (parsed.username || parsed.password || !parsed.hostname) return '';
+        return PRKS_REMOTE_IMAGE_ROUTE + encodeURIComponent(trimmed);
+    }
+
     function prksClassTokens(node) {
         var raw = node.getAttribute('class');
         if (!raw) return [];
@@ -115,8 +137,14 @@
             }
         }
         if (tag === 'img' && node.hasAttribute('src')) {
-            if (!prksUriIsAllowed(node.getAttribute('src'), PRKS_SAFE_SCHEMES_IMG)) {
+            var imgSrc = node.getAttribute('src');
+            if (!prksUriIsAllowed(imgSrc, PRKS_SAFE_SCHEMES_IMG)) {
                 node.removeAttribute('src');
+            } else if (prksUriScheme(prksTrimUriControls(imgSrc))) {
+                // An absolute http(s) figure: the saved copy, or nothing.
+                var saved = prksRemoteImageSrc(imgSrc);
+                if (saved) node.setAttribute('src', saved);
+                else node.removeAttribute('src');
             }
         }
 
@@ -163,6 +191,8 @@
             purifier = null;
         }
     }
+
+    window.prksRemoteImageSrc = prksRemoteImageSrc;
 
     window.prksSanitizeMarkdownPreviewHtml = function (html) {
         if (html == null || html === '') return '';

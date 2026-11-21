@@ -82,6 +82,9 @@ ROWS: tuple[Row, ...] = (
     Row("persons", READ, "GET", "/api/persons"),
     Row("persons", READ, "GET", "/api/persons/{person}/profile-image"),  # streams the cached portrait
     Row("persons", EDIT, "POST", "/api/persons", {"first_name": "Grace", "last_name": "Hopper {unique}"}),
+    # A URL the Library names nowhere: the owner's answer is 404, and nothing is fetched.
+    Row("remote_images", READ, "GET", "/api/remote-images?url=https%3A%2F%2Fexample.invalid%2Fx.png",
+        allowed=(404,)),
     Row("person_groups", EDIT, "POST", "/api/person-groups", {"name": "Matrix group {unique}"}),
     Row("concepts", EDIT, "POST", "/api/concepts", {"name": "Matrix concept {unique}"}),
     Row("positions", EDIT, "POST", "/api/positions", {"name": "Matrix position {unique}"}),
@@ -106,7 +109,9 @@ ROWS: tuple[Row, ...] = (
 # Modules that are not a route family of their own.
 _NOT_FAMILIES = frozenset({"__init__"})
 # Families with no mutating route.
-_READ_ONLY = frozenset({"search"})
+# Families with no mutating route. A saved remote image is written only by a
+# read (``GET /api/remote-images`` fills it, as the portrait route does).
+_READ_ONLY = frozenset({"search", "remote_images"})
 
 
 class AuthorizationMatrixTests(HttpAuthTestCase):

@@ -32,6 +32,8 @@ def request_access_mode(method: str, path: str, query: str = "") -> str | None:
             return MODE_MUTATION
         if path.startswith("/api/works/") and path.endswith("/thumbnail"):
             return MODE_MUTATION
+        if path == "/api/remote-images":
+            return MODE_MUTATION
         return MODE_READ
     if method == "POST":
         if path == "/api/backups/progress":

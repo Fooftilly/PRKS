@@ -30,7 +30,8 @@ from backend.jobs.handlers import REGISTRY, HandlerRegistry
 from backend.jobs.runner import JobRun, Outcome, run_job
 from backend.jobs.worker import Worker, WorkerSettings
 from tests import acting_context as facade_context
-from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
+from backend.storage.objects import (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, NAMESPACE_REMOTE_IMAGES,
+                                     LocalFilesystemStorage, StorageKey)
 from tests.pg.test_objects_lifecycle import DAY, ObjectsTestCase
 from tests.pg.test_objects_portraits import URL, image
 
@@ -393,7 +394,8 @@ class SweepPassTests(ObjectJobsTestCase):
         self.assertEqual(listings, [
             [(NAMESPACE_ASSET_OBJECTS, 4, 4)],
             [(NAMESPACE_ASSET_OBJECTS, 4, 2), (NAMESPACE_PORTRAITS, 2, 2)],
-            [(NAMESPACE_PORTRAITS, 4, 1)],
+            # The last namespace is empty; its listing ends the cycle.
+            [(NAMESPACE_PORTRAITS, 4, 1), (NAMESPACE_REMOTE_IMAGES, 3, 0)],
         ])
         progress = [row["progress"] for row in self.sql(
             "SELECT progress FROM prks.jobs WHERE kind = %s ORDER BY created_at, id", (jobs.SWEEP_KIND,))]
