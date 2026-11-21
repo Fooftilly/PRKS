@@ -83,13 +83,24 @@ using synthetic local PR merge histories.
 
 ### SonarCloud
 
-SonarCloud runs Automatic Analysis on every PR and on `master`; there is no
-Sonar CI job and no coverage import yet. Root `.sonarcloud.properties` tells it
-which files are test code (`tests/`, `frontend-app` `*.test.*`, fixtures and
-`test-support/`) and excludes vendored and generated files, mirroring
-`.codacy.yml`. New code on `master` is the last 30 days (set in the SonarCloud
-project settings). Sonar reads that file only from the default branch, so a
-change to it takes effect after merge.
+`.github/workflows/sonarcloud.yml` is CI-based analysis (Automatic Analysis is
+off). Same-repository PRs get the scan alone, about a minute: findings, no
+coverage. Coverage is measured on `master` only: the nightly "Master CI after
+merges" run (`master-ci.yml`) dispatches the workflow when something merged.
+Three coverage jobs then rerun the unchanged Test Gate commands: `python
+run_tests.py` and the four `scripts/test-postgres` shards under coverage.py,
+and the full Vitest suite with V8 coverage. coverage.py starts in every Python
+process through a `.pth` hook (`scripts/ci/sonar_coverage_hook.py`) configured
+by `scripts/ci/sonar-coverage.ini`; there is deliberately no root `.coveragerc`.
+The scan job combines the data and is the only job that sees `SONAR_TOKEN`.
+Fork and Dependabot PRs get no token and skip the scan. It is not a required
+check.
+
+Root `sonar-project.properties` sets test code (`tests/`, `frontend-app`
+`*.test.*`, fixtures and `test-support/`), the vendored and generated
+exclusions (mirroring `.codacy.yml`), and which code coverage applies to:
+`backend/` + `prks_app.py` and `frontend-app/src`. New code on `master` is the
+last 30 days (SonarCloud project settings).
 
 ### Optional SonarQube CLI (Claude Code)
 

@@ -22,6 +22,7 @@ EXPECTED_TRIGGER_PATHS = (
     "docker-entrypoint.sh",
     "docker-compose.yml",
     "requirements.txt",
+    "requirements-lock.txt",
     "dependency-inventory.json",
     "backend/dependency_gate.py",
     "backend/storage/config.py",
@@ -269,11 +270,12 @@ class DockerRuntimeSmokeTests(unittest.TestCase):
 
     def test_runs_actual_image_on_isolated_loopback_and_checks_api(self):
         source = WORKFLOW.read_text(encoding="utf-8")
+        # The image's own non-root user (#1374) must be what starts the app.
+        self.assertNotIn("--user ", source)
         for required in (
             "docker build --tag prks-ci-runtime-smoke:latest .",
             "docker run -d --name",
             "--publish 127.0.0.1:18080:8080",
-            "--user 1000:1000",
             "--tmpfs /data:rw,size=128m,uid=1000,gid=1000",
             "--env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1",
             # PostgreSQL is the only backend (PG-C2 #641): a private database,

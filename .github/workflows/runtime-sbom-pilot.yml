@@ -11,6 +11,7 @@ on:
       - "Dockerfile"
       - "docker-entrypoint.sh"
       - "requirements.txt"
+      - "requirements-lock.txt"
       - "dependency-inventory.json"
       - "scripts/ci/summarize_runtime_sbom.py"
       - "tests/test_runtime_sbom_summary.py"
