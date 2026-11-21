@@ -511,16 +511,24 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             root.mkdir()
             stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
             first = _git(root, "rev-parse", "HEAD^1")
-            _git(root, "tag", "on-first", first)
             shallow = Path(folder) / "shallow"
-            _git(Path(folder), "clone", "-q", "--depth=1", "--no-tags", f"file://{root}", str(shallow))
+            _git(Path(folder), "clone", "-q", "--depth=1", f"file://{root}", str(shallow))
             missing = subprocess.run(  # nosec B603,B607 - fixture git, shell=False
                 ["git", "cat-file", "-e", f"{first}^{{commit}}"], cwd=shallow, capture_output=True, check=False)
             self.assertNotEqual(missing.returncode, 0)
-            self.assertEqual(merge_base_parent(shallow, stale, head), first)
+            calls: list[tuple[str, ...]] = []
+            real_git = docs_only._git
+
+            def recording_git(where: Path, *args: str) -> Any:
+                calls.append(args)
+                return real_git(where, *args)
+
+            with mock.patch.object(docs_only, "_git", recording_git):
+                self.assertEqual(merge_base_parent(shallow, stale, head), first)
+            # Both flags matter only for cost (one commit, no tag refs), which
+            # the result cannot show, so the fetch command itself is pinned.
+            self.assertIn(("fetch", "--no-tags", "--quiet", "--depth=1", "origin", first), calls)
             self.assertEqual(_git(shallow, "cat-file", "-t", first), "commit")
-            self.assertEqual(_git(shallow, "rev-list", "--count", first), "1")
-            self.assertEqual(_git(shallow, "tag", "--list"), "")
 
     def test_the_event_base_is_kept_when_git_cannot_answer(self):
         # Not a repository, or a merge whose first parent is neither present
