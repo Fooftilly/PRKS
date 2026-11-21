@@ -771,7 +771,6 @@ class PageCollector:
         self._fast_local_route = _env_enabled(ROUTE_FASTPATH_ENV)
         self._pdf_posts = []
         self._ann_posts = []
-        self._save_confirms = []
         page.on("pageerror", self._on_page_error)
         page.on("console", self._on_console)
         page.on("requestfailed", self._on_failed)
@@ -842,8 +841,6 @@ class PageCollector:
             self._pdf_posts.append(status)
         if method == "POST" and path.endswith("/annotations"):
             self._ann_posts.append(status)
-        if method == "GET" and path.endswith("/save-confirm"):
-            self._save_confirms.append(status)
         if status >= 500:
             self.http_5xx.append("%s %s -> %s" % (method, path, status))
 
@@ -918,7 +915,6 @@ class PageCollector:
     def reset_handshake(self) -> None:
         self._pdf_posts.clear()
         self._ann_posts.clear()
-        self._save_confirms.clear()
 
     def wait_pdf_handshake(self, page, timeout_ms: int = 25000, since_ms: int = 0) -> None:
         page.wait_for_function(
@@ -951,12 +947,9 @@ class PageCollector:
         )
         if not durable and not self._ann_posts:
             raise AssertionError("expected POST /api/works/{id}/annotations during PDF save handshake")
-        if not durable and not self._save_confirms:
-            raise AssertionError("expected GET /api/works/{id}/save-confirm during PDF save handshake")
         statuses = list(self._pdf_posts)
         if not durable:
             statuses.extend(self._ann_posts)
-            statuses.extend(self._save_confirms)
         if any(s >= 400 for s in statuses):
             raise AssertionError("PDF save handshake had a failed response")
 

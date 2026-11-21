@@ -367,7 +367,16 @@ class HeartbeatTests(RunnerTestCase):
         thread, result, _error = self.in_thread(
             lambda: self.run_one(job, heartbeat_every=timedelta(milliseconds=20))
         )
-        self.steal(job_id)
+        # steal() expires the lease and then reclaims it in two statements; a
+        # 20 ms heartbeat landing between them renews the lease and the claim
+        # finds nothing. Reclaim in one statement, as claim() does once expired.
+        reclaimed = self.run_sql(
+            "UPDATE prks.jobs SET lease_id = gen_random_uuid(), locked_by = 'thief', "
+            "attempts = attempts + 1, locked_until = now() + interval '1 hour' "
+            "WHERE id = %s AND state = 'running' RETURNING id",
+            (job_id,),
+        )
+        self.assertEqual(len(reclaimed), 1)
         stolen.set()
         thread.join(30)
         self.assertEqual(result, [Outcome.LOST])

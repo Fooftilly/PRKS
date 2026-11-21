@@ -11,7 +11,6 @@ import uuid
 import logging
 import ipaddress
 import itertools
-from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, TypeVar
 from email.message import Message
 from urllib.parse import urlparse, parse_qs, quote, unquote
@@ -20,6 +19,8 @@ from urllib.request import urlopen, Request
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.derived_caches import (
+    prks_delete_pdf_thumbnails_for_work_id,
+    prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
 )
 from backend.domain.people.errors import MissingPersonError
@@ -91,7 +92,6 @@ from backend.domain.maintenance.upload import (
     stream_upload_to_file,
 )
 from backend.person_image import identify_cached_portrait_subtype
-from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 from backend.web.handler_base import HttpHandlerBase
 
 if TYPE_CHECKING:
@@ -765,22 +765,6 @@ class PRKSHandler(HttpHandlerBase):
         )
         self.send_json(status, {"error": error})
 
-    def _library_access(self, parsed_path):
-        mode = request_access_mode(
-            getattr(self, "command", "") or "GET",
-            parsed_path.path,
-            parsed_path.query,
-        )
-        if mode is None:
-            return nullcontext()
-        if mode == MODE_BACKUP:
-            # The worker writes a PostgreSQL backup from one snapshot; nothing
-            # here needs writes held off while the browser follows it.
-            return nullcontext()
-        gate = getattr(self.server, "prks_access_gate", None)
-        if gate is None:
-            return nullcontext()
-        return gate.scope(mode)
 
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
@@ -1079,8 +1063,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_get(parsed_path)
+            self.handle_api_get(parsed_path)
         else:
             self._serve_frontend(parsed_path)
 
@@ -1122,8 +1105,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_head(parsed_path)
+            self.handle_api_head(parsed_path)
         else:
             self._serve_frontend(parsed_path, head=True)
 
@@ -1139,32 +1121,27 @@ class PRKSHandler(HttpHandlerBase):
             if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX):
-                # A JSON body is read before the Library gate, as every other
-                # POST does: a client that stalls mid-body must not hold the
-                # restore's exclusive gate. ``stage`` streams its own body.
+                # ``stage`` streams its own body; the others read JSON first.
                 backup_body = None
                 if parsed_path.path != '/api/backups/stage':
                     backup_body = self._read_json_body()
                     if backup_body is _JSON_BODY_REJECTED:
                         return
-                with self._library_access(parsed_path):
-                    try:
-                        self._handle_postgres_backup_post(parsed_path.path, backup_body)
-                    except Exception as exc:
-                        self._send_internal_error(exc)
+                try:
+                    self._handle_postgres_backup_post(parsed_path.path, backup_body)
+                except Exception as exc:
+                    self._send_internal_error(exc)
                 return
             if upload:
-                with self._library_access(parsed_path):
-                    try:
-                        processing_api.handle_upload(self, db)
-                    except Exception as exc:
-                        self._send_internal_error(exc)
+                try:
+                    processing_api.handle_upload(self, db)
+                except Exception as exc:
+                    self._send_internal_error(exc)
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_post(parsed_path, data)
+            self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1178,8 +1155,7 @@ class PRKSHandler(HttpHandlerBase):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_patch(parsed_path, data)
+            self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1231,8 +1207,7 @@ class PRKSHandler(HttpHandlerBase):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_put(parsed_path, data)
+            self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1261,8 +1236,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_delete(parsed_path)
+            self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1523,22 +1497,26 @@ class PRKSHandler(HttpHandlerBase):
                     pdf_mtime = 0.0
 
                 cache_base = prks_thumb_cache_stem(
-                    w_id, page, thumb.get("primary_asset_id")
+                    w_id, page, thumb.get("primary_asset_id"), source=pdf_filename
                 )
                 thumbs_root = _require_bound(thumbs_dir, "thumbs_dir")
                 path_webp = os.path.join(thumbs_root, cache_base + ".webp")
 
                 cache_path: str | None = None
                 serve_mime = "image/webp"
-                if os.path.exists(path_webp):
-                    try:
-                        if os.path.getmtime(path_webp) >= pdf_mtime:
+                generated_bytes: bytes | None = None
+                # Read a hit now: a prune may remove the file before it is
+                # sent, and a vanished file is then simply a miss.
+                try:
+                    if os.path.getmtime(path_webp) >= pdf_mtime:
+                        with open(path_webp, "rb") as cached:
+                            generated_bytes = cached.read() or None
+                        if generated_bytes is not None:
                             cache_path = path_webp
-                    except OSError:
-                        pass
+                except OSError:
+                    generated_bytes = None
 
                 cache_hit = cache_path is not None
-                generated_bytes: bytes | None = None
                 if cache_hit:
                     try:
                         record_counter("thumbnail_cache_hits")
@@ -1613,6 +1591,12 @@ class PRKSHandler(HttpHandlerBase):
                             publish_derived_cache_bytes(
                                 thumbs_root, f"{cache_base}.{ext}", generated_bytes
                             )
+                            # Only copies older than the PDF just rendered go: a
+                            # late render of replaced bytes never evicts a newer
+                            # PDF's copy, whatever order the two finish in.
+                            prks_prune_thumbnail_page(
+                                thumbs_root, w_id, page, f"{cache_base}.{ext}", older_than=pdf_mtime
+                            )
                         except Exception:
                             try:
                                 tmp_path = os.path.join(thumbs_root, tmp_name)
@@ -1632,7 +1616,15 @@ class PRKSHandler(HttpHandlerBase):
                         self.send_error(404, "Thumbnail unavailable")
                         return
 
-                if not (cache_path and os.path.exists(cache_path)) and not generated_bytes:
+                if not cache_hit and not works_api.thumbnail_fields(self, db, w_id):
+                    # The Work was deleted while this render ran. Its delete
+                    # clears the thumbnails once, after its commit; reading the
+                    # Work again after publishing means a copy published after
+                    # that cleanup is removed here instead.
+                    prks_delete_pdf_thumbnails_for_work_id(w_id, thumbs_root)
+                    self.send_error(404, "Work not found")
+                    return
+                if not generated_bytes:
                     self.send_error(404, "Thumbnail unavailable")
                     return
                 try:
@@ -1640,12 +1632,7 @@ class PRKSHandler(HttpHandlerBase):
                     self.send_header("Content-Type", serve_mime)
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
-                    if cache_path and os.path.exists(cache_path):
-                        with open(cache_path, "rb") as f:
-                            self.wfile.write(f.read())
-                    elif generated_bytes:
-                        # Checked above: no usable cache file means bytes were generated.
-                        self.wfile.write(generated_bytes)
+                    self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
             elif works_api.handle_state(self, db, path):
@@ -2103,7 +2090,7 @@ class PRKSHandler(HttpHandlerBase):
 
         ``stage`` is dispatched before its body is read and streams the
         archive itself; every earlier answer closes the connection. The other
-        routes' JSON ``data`` was read before the Library gate was taken. A
+        routes' JSON ``data`` is read before this is called. A
         restore replaces the PostgreSQL Library (``backend.api.maintenance``).
         """
         from backend.api import maintenance as maintenance_api
@@ -2119,9 +2106,8 @@ class PRKSHandler(HttpHandlerBase):
             if content_length is None:
                 return
 
-            # The upload holds the Library's read gate, which a restore waits
-            # out: read it with the Processing upload's idle timeout and
-            # deadline, so a stalled client cannot hold the gate.
+            # Read with the Processing upload's idle timeout and deadline, so
+            # a stalled client cannot hold a request thread.
             sock = self.connection
             previous_timeout = sock.gettimeout()
 
@@ -2279,7 +2265,6 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     with make_server((host, port), http) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
-        httpd.prks_access_gate = LibraryAccessGate()
         # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
         # only for test servers (prks_app always starts identity).
         httpd.prks_auth = auth

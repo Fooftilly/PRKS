@@ -27,22 +27,66 @@ PRKS_THUMB_CACHE_REV = 2
 
 
 def prks_thumb_cache_stem(
-    work_id: str, page: int, asset_id: Optional[str] = None
+    work_id: str, page: int, asset_id: Optional[str] = None, source: Optional[str] = None
 ) -> str:
     """Cache filename stem for one PDF page thumbnail (no extension).
 
     Includes the selected primary Asset id when known so switching the primary
     PDF cannot reuse a cache file generated from a previous Asset (mtime alone
     is insufficient when the new PDF is older than an existing thumb).
+
+    ``source`` names the exact PDF bytes rendered: a managed PDF's file name,
+    which is immutable per storage key (PG14). A render that started from
+    bytes since replaced (a materialization, a replacement) then publishes
+    under the old bytes' name and is never served for the new ones, however
+    late it finishes (#1331).
     """
     safe = prks_thumb_cache_safe_wid(work_id)
     p = int(page) if page is not None else 1
     if p < 1:
         p = 1
     asset = prks_thumb_cache_safe_asset_id(asset_id)
+    if source:
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+        return f"{safe}_p{p}_a{asset}_s{digest}_v{PRKS_THUMB_CACHE_REV}"
     if asset:
         return f"{safe}_p{p}_a{asset}_v{PRKS_THUMB_CACHE_REV}"
     return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
+
+
+def prks_prune_thumbnail_page(
+    thumbs_dir: str, work_id: str, page: int, keep: str, older_than: float
+) -> None:
+    """Remove one Work page's other cached thumbnails older than ``older_than`` (best-effort).
+
+    ``older_than`` is the modification time of the PDF that ``keep`` was
+    rendered from. Each managed PDF is a new file (PG14), and a thumbnail is
+    only written after its PDF exists, so a thumbnail of the same PDF or of
+    any newer one is never older than that: whatever order concurrent
+    renders and replaces finish in, this removes only copies of older PDFs.
+    A late render of an older PDF may still publish after this; the next
+    render of a newer PDF removes it.
+    """
+    prefix = f"{prks_thumb_cache_safe_wid(work_id)}_p{int(page)}"
+    page_pat = re.compile(
+        r"^" + re.escape(prefix) + r"(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        re.IGNORECASE,
+    )
+    try:
+        names = os.listdir(thumbs_dir)
+    except OSError:
+        return
+    for fname in names:
+        # A prefix test first: one directory read, and the pattern runs only
+        # on this page's own names.
+        if fname == keep or not fname.startswith(prefix) or not page_pat.match(fname):
+            continue
+        path = os.path.join(thumbs_dir, fname)
+        try:
+            if os.path.getmtime(path) < older_than:
+                os.remove(path)
+        except OSError:
+            pass
 
 
 def prks_person_image_cache_safe_id(person_id: str) -> str:
@@ -128,11 +172,11 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tup
     if not os.path.isdir(td):
         return ()
     pat_final = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
         re.IGNORECASE,
     )
     pat_tmp = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
         re.IGNORECASE,
     )
     try:

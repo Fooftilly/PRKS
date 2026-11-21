@@ -277,7 +277,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # Materialization fail-closed: ACK-only reconcile must not be swallowed.
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass_end = works_pdf.index(
-            "\n    // PRKS may go offline mid-confirmation-loop", mat_pass_at
+            "\n    let queueRequested = false;", mat_pass_at
         )
         mat_pass = works_pdf[mat_pass_at:mat_pass_end]
         self.assertIn("if (!prksBeginAnnotationMaterializationGate(runtime))", mat_pass)
@@ -288,7 +288,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertNotIn("catch (_eRec)", mat_pass)
         # Legacy path: annotations first, then PDF with claimed replace generation.
         legacy_ann = mat_pass.index("`/api/works/${workId}/annotations`")
-        legacy_claim = mat_pass.index("await exportAndPersistPdfCopy(saveToken, replaceGen)")
+        legacy_claim = mat_pass.index("await exportAndPersistPdfCopy(replaceGen)")
         self.assertLess(legacy_ann, legacy_claim)
         self.assertIn("Annotation save missing generation", mat_pass)
         self.assertIn("canonical_annotation_set_revision", mat_pass[legacy_ann:legacy_claim + 80])
@@ -450,7 +450,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         mat_pass_at = works_pdf.index("async function runWorkAnnotationAndPdfPersistencePass")
         mat_pass = works_pdf[
             mat_pass_at : works_pdf.index(
-                "\n    // PRKS may go offline mid-confirmation-loop", mat_pass_at
+                "\n    let queueRequested = false;", mat_pass_at
             )
         ]
         self.assertIn("file_path: runtime.filePath", mat_pass)
@@ -525,7 +525,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertLess(rethrow, export_fn.index("prksOfflineMarkEntityChanged"))
         # Cache failure must escape export so the durable success path never
         # clears the pending revision. Only STALE does that, and it does not retry.
-        pass_at = works_pdf.index("await exportAndPersistPdfCopy(saveToken, claimed)")
+        pass_at = works_pdf.index("await exportAndPersistPdfCopy(claimed)")
         clear_at = works_pdf.index(
             "runtime.pendingMaterializationRevision = null", pass_at
         )

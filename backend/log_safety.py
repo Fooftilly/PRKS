@@ -135,7 +135,6 @@ _NESTED_STATIC = {
             "annotations-state",
             "annotations-snapshot",
             "pdf-materialization",
-            "save-confirm",
             "related_folders",
             "pdf",
             "tags",

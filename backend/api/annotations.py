@@ -2,8 +2,8 @@
 
 ``GET /api/works/:id/annotations-state`` and ``/annotations-snapshot`` (with
 ETags), ``GET /api/works/:id/pdf-materialization``, ``GET
-/api/works/:id/annotations`` (the list as a JSON string), ``GET
-/api/works/:id/save-confirm?token=``, ``POST /api/works/:id/annotations/adopt``
+/api/works/:id/annotations`` (the list as a JSON string), ``POST
+/api/works/:id/annotations/adopt``
 (byte-only user markup), ``POST /api/works/:id/pdf`` (replace the PDF, or with
 ``materialized_annotation_set_revision`` store the viewer's rendered
 annotations) and ``POST /api/works/:id/annotations`` (the legacy full-list
@@ -12,12 +12,12 @@ those ``server.py`` answered before PG-C3.
 
 The calls go to ``backend/domain/annotations/annotation_commands`` for the
 admitted request's context on the served Library's database, so authorization
-stays in ``library_query`` and ``library_command``. The save tokens that
-``save-confirm`` reports are this process's memory, as before: a save's
-``save_token`` is recorded only once the save succeeded.
+stays in ``library_query`` and ``library_command``. A save is confirmed by
+its own ``200``, which is sent only after its transaction committed; nothing
+about a save is kept in this process (#1331).
 
 ``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
+admission checks. Each ``handle_*`` returns ``True`` when the path
 belongs to this family (including refusals already sent), else ``False`` so
 dispatch continues.
 """
@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import threading
 from typing import Any, Optional
 
 from backend.etags import etag_for_representation
@@ -34,10 +33,6 @@ from backend.pdf_annotations import WorkAnnotationError
 from backend.services.work_pdf_replace import stale_materialization_body
 
 _PREFIX = "/api/works/"
-
-_LAST_PDF_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
-_LAST_ANNOTATION_SAVE_TOKEN_BY_WORK: dict[str, str] = {}
-_SAVE_TOKEN_LOCK = threading.Lock()
 
 
 def _commands() -> Any:
@@ -114,31 +109,7 @@ def handle_get(handler: Any, db: Any, path: str, query: Any) -> bool:
         handler.send_json(200, {"work_id": w_id,
                                 "annotations_json": _commands().annotations_json(*_actor(handler, db), w_id)})
         return True
-    if path.endswith("/save-confirm"):
-        w_id = _sub(path, "save-confirm")
-        if w_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        _save_confirm(handler, w_id, query)
-        return True
     return False
-
-
-def _save_confirm(handler: Any, w_id: str, query: Any) -> None:
-    token = (query.get("token", [""])[0] or "").strip()
-    if not token:
-        handler.send_json(400, {"error": "token is required"})
-        return
-    with _SAVE_TOKEN_LOCK:
-        pdf_saved = _LAST_PDF_SAVE_TOKEN_BY_WORK.get(w_id) == token
-        ann_saved = _LAST_ANNOTATION_SAVE_TOKEN_BY_WORK.get(w_id) == token
-    handler.send_json(200, {
-        "work_id": w_id,
-        "token": token,
-        "pdf_saved": pdf_saved,
-        "annotations_saved": ann_saved,
-        "saved": bool(pdf_saved and ann_saved),
-    })
 
 
 def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
@@ -179,7 +150,6 @@ def _adopt(handler: Any, db: Any, path: str, data: Any) -> None:
 
 def _post_pdf(handler: Any, db: Any, w_id: str, data: Any) -> None:
     file_b64 = data.get("file_b64", "")
-    save_token = str(data.get("save_token", "") or "").strip()
     claimed_set_rev = data.get("materialized_annotation_set_revision", None)
     if not file_b64:
         handler.send_error(400, "No file_b64 provided")
@@ -189,11 +159,7 @@ def _post_pdf(handler: Any, db: Any, w_id: str, data: Any) -> None:
     except (binascii.Error, ValueError):
         handler.send_json(400, {"error": "Invalid file_b64 payload"})
         return
-    status, body = _write_pdf(handler, db, w_id, pdf_bytes, claimed_set_rev)
-    if status == 200 and save_token:
-        with _SAVE_TOKEN_LOCK:
-            _LAST_PDF_SAVE_TOKEN_BY_WORK[w_id] = save_token
-    handler.send_json(status, body)
+    handler.send_json(*_write_pdf(handler, db, w_id, pdf_bytes, claimed_set_rev))
 
 
 def _write_pdf(handler: Any, db: Any, work_id: str, pdf_bytes: bytes,
@@ -238,11 +204,9 @@ def _replace_all(handler: Any, db: Any, w_id: str, data: Any) -> None:
                                 "code": "malformed_annotation_payload"})
         return
     annotations_json = data.get("annotations_json")
-    save_token = str(data.get("save_token", "") or "").strip()
-    # Legacy handshake is annotations-first: this endpoint only replaces
+    # Legacy saves are annotations-first: this endpoint only replaces
     # metadata and returns the exact replace generation. Never mark PDF
-    # materialization here: save_token is solely for save-confirm
-    # bookkeeping, not proof of bytes. Marking belongs to POST /pdf with
+    # materialization here. Marking belongs to POST /pdf with
     # materialized_annotation_set_revision (the same claim path as durable).
     # The client must send its acknowledged tip so a stale viewer cannot
     # overwrite newer annotations or delete siblings omitted locally.
@@ -256,9 +220,6 @@ def _replace_all(handler: Any, db: Any, w_id: str, data: Any) -> None:
     except WorkAnnotationError as e:
         handler.send_json(e.http_status, {"error": str(e), "code": e.code})
         return
-    if save_token:
-        with _SAVE_TOKEN_LOCK:
-            _LAST_ANNOTATION_SAVE_TOKEN_BY_WORK[w_id] = save_token
     handler.send_json(200, {
         "status": "saved",
         "path": "legacy-full-list",

@@ -142,7 +142,6 @@ class HttpAuthTestCase(IdentityTestCase):
         httpd = module.make_server(("127.0.0.1", 0), http)
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
-        httpd.prks_access_gate = module.LibraryAccessGate()
         httpd.prks_auth = auth
         httpd.prks_jobs = jobs
         if auth is not None and auth.settings.public_origin is not None:

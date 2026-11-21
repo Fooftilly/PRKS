@@ -110,7 +110,7 @@ keeping slow clients off the request threads.
 | Server | **Uvicorn**, pinned like every other runtime dependency. |
 | Framework | **None** (changed 2026-11-20, see "Migration status"). It was **Starlette** as a thin request/response layer; PRKS's own plain ASGI adapter took that role. |
 | Domain code | Stays **synchronous** (psycopg 3 sync API, PG3). Each request's PRKS work runs in a bounded worker thread pool. Nothing in `backend/domain/` becomes `async`. |
-| Process model | **One web process**, as today. Multiple web processes wait for #1331, which moves the last process-local state into PostgreSQL. |
+| Process model | **One web process**, as today. #1331 removed the last process-local state; multiple web processes still wait for the interim `content.lock` to be lifted (its follow-up). |
 
 ## Long-term support
 
@@ -163,9 +163,9 @@ Everything below was read from master 02845f1.
   - Processing upload (`POST /api/processing-items`, up to 2 GiB);
   - backup stage (`POST /api/backups/stage`, up to 64 GiB by default).
 
-  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline, because the upload holds the Library read gate that a restore waits for.
+  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline. A stalled client still holds its request thread until one of them ends the read. On Uvicorn, enough stalled uploads can fill the bounded `PRKS_HTTP_THREADS` pool for that long; the timeouts bound the hold, they do not prevent it.
 - **Lifecycle.** `run_server` binds the server. The embedded job worker (`backend/jobs/embedded.py`) serves the server and stops it gracefully on SIGTERM or SIGINT. The web process holds the data root's lease shared and bumps the start generation once per process start (§7.5, §11.1).
-- **Process-local state** that correctness still depends on: `LibraryAccessGate` and the save-confirm tokens. #1331 retires them, as §7.5 requires.
+- **Process-local state**: none that correctness depends on. #1331 deleted the last of it, the `LibraryAccessGate` and the save-confirm tokens (§7.5).
 - **What the stdlib server lacks:**
   - socket timeouts (`StreamRequestHandler.timeout` is `None`, so an idle or half-sent request holds its thread forever);
   - a bound on thread count;
@@ -220,6 +220,6 @@ Linux (directly or in Docker Compose) is the main supported server platform; CI 
 
 ## Not decided here
 
-- **Multiple web processes**: after #1331, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
+- **Multiple web processes**: once the `content.lock` follow-up to #1331 lands, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
 - **HTTP/2**: stays with the reverse proxy. TLS termination was decided later (#1339, 2026-11-20): PRKS can serve HTTPS itself (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`, [docs/https.md](https.md)), and a reverse proxy such as Caddy stays the recommended path for internet exposure.
 - **Exact pins.** Phase B added `uvicorn` and its dependencies (`h11`, `click`); `starlette`, `anyio` and `idna` are not needed after the 2026-11-20 decision. They go to `requirements.txt`, `dependency-inventory.json`, `THIRD_PARTY_NOTICES.md` and the Pyright CI install step. It installs plain `uvicorn`, not `uvicorn[standard]`: uvloop and httptools are optional speedups PRKS does not need.

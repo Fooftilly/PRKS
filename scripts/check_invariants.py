@@ -38,7 +38,6 @@ PYRIGHT_TYPED_SLICE_SCOPES = (
     "backend/storage",
     "backend/web",
     "backend/entity_ids.py",
-    "backend/concurrency.py",
     "backend/byte_range.py",
     "backend/research_markup.py",
     "backend/pdf_linearize.py",

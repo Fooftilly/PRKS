@@ -15,7 +15,6 @@ from __future__ import annotations
 import http.client
 import json
 import socket
-import threading
 import time
 import uuid
 from typing import Any, Optional
@@ -240,24 +239,11 @@ class UploadTests(ProcessingHttpTestCase):
         self.assertIn(b"connection: close", rest.lower())
         self.assertEqual(self.ok(self.get("/api/processing-items"))["items"], [])
 
-    def test_a_stalled_upload_times_out_and_frees_the_gate_for_a_restore(self) -> None:
-        gate = self.httpd.prks_access_gate
-        restored = threading.Event()
-
-        def restore() -> None:
-            while not gate.snapshot()["active_reads"]:
-                time.sleep(0.01)
-            with gate.restore():
-                restored.set()
-
-        waiter = threading.Thread(target=restore, daemon=True)
-        waiter.start()
+    def test_a_stalled_upload_times_out(self) -> None:
         with mock.patch.object(processing_api, "UPLOAD_IDLE_SECONDS", 0.5):
             raw, elapsed = self._stalled_upload(trickle=False)
-        waiter.join(10)
         self.assert_timed_out(raw)
         self.assertLess(elapsed, 5)
-        self.assertTrue(restored.is_set())
 
     def test_a_trickling_upload_misses_its_deadline(self) -> None:
         # Each read gets a byte well within the idle timeout; only the deadline ends it.

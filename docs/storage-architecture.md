@@ -660,6 +660,12 @@ library appears, the user panics" failure mode.
   reads drained and held off only during P6 (rebind barrier) ────────────────────────────────────┤
 ```
 
+> **Superseded mechanism.** The process-local `LibraryAccessGate` this
+> section builds on was deleted in #1331. Before the in-app move is built
+> (#720), its scopes must be re-based on what restore uses instead: the
+> committed `libraries.maintenance` flag and the Library maintenance lock
+> (`docs/postgresql-architecture.md` §7.4). The phase order below still holds.
+
 **Gate admission (in-app move).** The move is one request whose route
 `request_access_mode()` classifies **at request admission** as a dedicated
 `MODE_RELOCATE`, the way `POST /api/backups/progress` is admitted as

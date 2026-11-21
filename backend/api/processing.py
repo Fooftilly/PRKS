@@ -17,8 +17,8 @@ filename, percent-encoded UTF-8, in ``PRKS-Filename``. ``server.py``
 dispatches it before any body is read and marks the request's body unread
 until :func:`handle_upload` has consumed it, so every answer decided earlier
 (admission, a header refusal, a used key, a refused body) carries
-``Connection: close``. The upload holds the Library's read gate while it
-streams, which a restore waits out, so the body must arrive within a bound:
+``Connection: close``. The upload holds a request thread while it
+streams, so the body must arrive within a bound:
 each read waits at most ``UPLOAD_IDLE_SECONDS``, and the whole body must
 arrive by a deadline set from its declared length. A stalled or trickling
 upload is answered 408 and its connection closed.
@@ -50,7 +50,7 @@ MAX_BATCH = 500
 # How long one read of an upload's body may wait for a byte.
 UPLOAD_IDLE_SECONDS = 30.0
 # The whole body must arrive within the grace plus its length at this rate,
-# so a trickle cannot hold the read gate (and so a restore) forever.
+# so a trickle cannot hold a request thread forever.
 UPLOAD_GRACE_SECONDS = 60.0
 UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024
 FILENAME_HEADER = "PRKS-Filename"

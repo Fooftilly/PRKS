@@ -1337,7 +1337,6 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/storage",
                 "backend/web",
                 "backend/entity_ids.py",
-                "backend/concurrency.py",
                 "backend/byte_range.py",
                 "backend/research_markup.py",
                 "backend/pdf_linearize.py",
@@ -1643,7 +1642,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
             self.assertIn("backend/entity_ids.py", findings[0].message)
-            self.assertIn("backend/concurrency.py", findings[0].message)
+            self.assertIn("backend/research_markup.py", findings[0].message)
 
     def test_pyright_typed_slice_rejects_second_slice_include(self):
         """Reverting to the second-slice include loses the third-slice scopes."""
@@ -1654,7 +1653,6 @@ class EngineeringInvariantTests(unittest.TestCase):
             typed["include"] = [
                 "backend/storage",
                 "backend/entity_ids.py",
-                "backend/concurrency.py",
             ]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
@@ -1703,9 +1701,9 @@ class EngineeringInvariantTests(unittest.TestCase):
             "ignore": [
                 *protected_files,
                 "backend/entity_ids.py",
-                "backend/concurrency.py",
+                "backend/log_safety.py",
                 "backend/*.py",
-                "**/concurrency.py",
+                "**/log_safety.py",
                 "backend/research_markup.py",
                 "backend/pdf_linearize.py",
                 "**/derived_cache_publish.py",
@@ -1714,7 +1712,7 @@ class EngineeringInvariantTests(unittest.TestCase):
             "exclude": [
                 *protected_files,
                 "backend/entity_ids.py",
-                "./backend/concurrency.py",
+                "./backend/log_safety.py",
                 "backend/*_ids.py",
                 "backend/research_markup.py",
                 "./backend/pdf_linearize.py",

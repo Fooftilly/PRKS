@@ -4,11 +4,10 @@ PRKS is a local-first research application with a Python backend, PostgreSQL per
 
 ```mermaid
 flowchart LR
-    U[Browser / PWA] -->|HTTP / API| S[PRKS threaded HTTP server]
-    S --> G[LibraryAccessGate]
-    G --> DB[(PostgreSQL Library)]
-    G --> F[Managed files]
-    G --> I[Derived indexes / caches]
+    U[Browser / PWA] -->|HTTP / API| S[PRKS on Uvicorn]
+    S --> DB[(PostgreSQL Library)]
+    S --> F[Managed files]
+    S --> I[Derived indexes / caches]
     U --> LS[(Browser local store)]
     LS <-->|durable ops + reconciliation| S
 ```
@@ -25,9 +24,7 @@ Browser / PWA
   |
   | HTTP / API
   v
-PRKS threaded HTTP server
-  |
-  +--> LibraryAccessGate / canonical mutation boundaries
+PRKS on Uvicorn (backend/web/asgi.py)
   |
   +--> PostgreSQL database (web, worker and migrate processes share it)
   |
@@ -49,7 +46,6 @@ Important backend areas include:
 - `backend/library.py` — the PostgreSQL Library handle (database and storage) the routes hold; they call `backend/domain/` commands directly.
 - `backend/domain/` — Library commands and queries by area (Works, People, Organization, Research, Search, objects, maintenance, identity).
 - `backend/db/` and `backend/db/schema/` — the connection pool, transaction helpers, and the schema files the `migrate` runner applies.
-- `backend/concurrency.py` — storage-access coordination.
 - `backend/sync/` and `backend/*_sync.py` — durable operation protocol, handlers, and the per-family rules.
 - `backend/domain/maintenance/` — verified backup (format 2) and restore.
 - `backend/jobs/` — the PostgreSQL job queue and worker (text extraction, derived rebuilds, object cleanup, backups).

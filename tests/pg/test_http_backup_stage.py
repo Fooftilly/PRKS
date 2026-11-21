@@ -1,8 +1,7 @@
 """``POST /api/backups/stage`` and ``/restore`` on the PostgreSQL Library (PG-C1 #640, PG-C2 #641).
 
-The staged upload holds the Library's read gate, which a restore waits out, so
-its body is read with the Processing upload's idle timeout and deadline: a
-stalled client is answered ``408`` and frees the gate. A body refused before
+The staged upload's body is read with the Processing upload's idle timeout
+and deadline: a stalled client is answered ``408`` and stages nothing. A body refused before
 or after it is read stages nothing, and a restore needs the confirmation and
 a token this user staged. The whole backup, stage and restore round trip is
 ``tests/pg/test_postgres_library_start.py``.
@@ -14,7 +13,6 @@ import http.client
 import json
 import os
 import socket
-import threading
 import time
 from unittest import mock
 
@@ -41,28 +39,15 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
                 raw += chunk
         return raw, time.monotonic() - started
 
-    def test_a_stalled_stage_upload_times_out_and_frees_the_gate_for_a_restore(self) -> None:
-        gate = self.httpd.prks_access_gate
-        restored = threading.Event()
-
-        def restore() -> None:
-            while not gate.snapshot()["active_reads"]:
-                time.sleep(0.01)
-            with gate.restore():
-                restored.set()
-
-        waiter = threading.Thread(target=restore, daemon=True)
-        waiter.start()
+    def test_a_stalled_stage_upload_times_out_and_stages_nothing(self) -> None:
         with mock.patch.object(processing_api, "UPLOAD_IDLE_SECONDS", 0.5):
             raw, elapsed = self._stalled_stage()
-        waiter.join(10)
 
         status_line, _, rest = raw.partition(b"\r\n")
         self.assertIn(b" 408 ", status_line)
         self.assertEqual(json.loads(rest.partition(b"\r\n\r\n")[2])["reason"], "upload_timeout")
         self.assertIn(b"connection: close", rest.lower())
         self.assertLess(elapsed, 5)
-        self.assertTrue(restored.is_set())
         assert self.server_module._bound_storage is not None
         directory = staged.staged_dir(self.server_module._bound_storage.root)
         self.assertEqual(os.listdir(directory) if os.path.isdir(directory) else [], [])

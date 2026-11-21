@@ -105,6 +105,144 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertEqual(res.status, 200, res.raw[:300])
         self.assertTrue(res.header("Content-Type")[0].startswith("image/"))
 
+    def test_a_thumbnail_rendered_from_replaced_bytes_is_never_served_for_the_new_ones(self) -> None:
+        """A render that started before a replace and publishes after it (#1331:
+        no gate orders the two any more) is cached under the old bytes' name:
+        it is never served for the new PDF and never evicts the new copy."""
+        import threading
+
+        from backend.derived_caches import prks_thumb_cache_stem
+
+        work = self.upload("Thumb Race", "thumbraceold", "thumb_race.pdf")
+        original = self.server_module._prks_thumbnail_bytes_from_pixmap
+        rendering, replaced = threading.Event(), threading.Event()
+        self.addCleanup(replaced.set)
+        first = [True]
+
+        def slow(pix: Any) -> tuple[bytes, str]:
+            if first[0]:
+                first[0] = False
+                rendering.set()
+                self.assertTrue(replaced.wait(10))
+            return original(pix)
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "_prks_thumbnail_bytes_from_pixmap", slow):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(rendering.wait(10))
+            new = self.replace_pdf(work["id"], "thumbracenew")
+            # The new PDF is viewed, and cached, before the old render ends.
+            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+            replaced.set()
+            viewer.join(20)
+            self.assertEqual(result["res"].status, 200)
+        assert self.storage is not None
+        primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
+        old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=work["file_path"].rsplit("/", 1)[1])
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        self.assertNotEqual(old_stem, new_stem)
+        names = set(os.listdir(self.storage.thumbs_dir))
+        # The late render landed under the old bytes' name and evicted nothing.
+        self.assertEqual({f"{old_stem}.webp", f"{new_stem}.webp"} - names, set())
+        with open(os.path.join(self.storage.thumbs_dir, f"{new_stem}.webp"), "rb") as handle:
+            current = handle.read()
+        self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").raw, current)
+        # The first render of a newer PDF prunes both older copies.
+        newest = self.replace_pdf(work["id"], "thumbracenewest")
+        self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+        newest_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=newest["file_path"].rsplit("/", 1)[1])
+        self.assertEqual(self.thumb_names(work["id"]), {f"{newest_stem}.webp"})
+
+    def test_a_render_that_resumes_its_prune_after_a_replace_keeps_the_new_copy(self) -> None:
+        """The interleaving a current-PDF check could not close: the old render
+        is held between publishing its copy and pruning, the PDF is replaced
+        and its thumbnail cached, then the old prune runs. It removes only
+        copies older than the PDF it rendered, so the new copy survives."""
+        import threading
+
+        from backend.derived_caches import prks_thumb_cache_stem
+
+        work = self.upload("Thumb Prune Race", "thumbpruneold", "thumb_prune_race.pdf")
+        original = self.server_module.prks_prune_thumbnail_page
+        pruning, replaced = threading.Event(), threading.Event()
+        self.addCleanup(replaced.set)
+        first = [True]
+        # The handler swallows errors from its prune, so the held call records
+        # what happened and the test asserts it outside the handler.
+        resumed: list[bool] = []
+
+        def held(*args: Any, **kwargs: Any) -> None:
+            if first[0]:
+                first[0] = False
+                pruning.set()
+                resumed.append(replaced.wait(10))
+            original(*args, **kwargs)
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "prks_prune_thumbnail_page", held):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(pruning.wait(10))
+            new = self.replace_pdf(work["id"], "thumbprunenew")
+            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+            replaced.set()
+            viewer.join(20)
+            self.assertFalse(viewer.is_alive())
+            self.assertEqual(result["res"].status, 200)
+        self.assertEqual(resumed, [True])  # the old prune ran, after the replace
+        primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        self.assertIn(f"{new_stem}.webp", self.thumb_names(work["id"]))
+
+    def test_a_render_published_after_its_work_is_deleted_leaves_no_copy(self) -> None:
+        """The render is held just before publishing its copy while the Work is
+        deleted and its thumbnails cleared; the copy it then publishes must
+        not outlive the delete."""
+        import threading
+
+        work = self.upload("Thumb Delete Race", "thumbdeleterace", "thumb_delete_race.pdf")
+        original = self.server_module.publish_derived_cache_bytes
+        publishing, deleted = threading.Event(), threading.Event()
+        self.addCleanup(deleted.set)
+        # The handler swallows errors from its cache write, so the held call
+        # records what happened and the test asserts it outside the handler.
+        resumed: list[bool] = []
+
+        published: list[bool] = []
+
+        def held(root: str, name: str, data: Any) -> Any:
+            publishing.set()
+            resumed.append(deleted.wait(10))
+            out = original(root, name, data)
+            published.append(os.path.isfile(os.path.join(root, name)))
+            return out
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "publish_derived_cache_bytes", held):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(publishing.wait(10))
+            self.assertIn(self.send("DELETE", f"/api/works/{work['id']}").status, (200, 204))
+            deleted.set()
+            viewer.join(20)
+            self.assertFalse(viewer.is_alive())
+        self.assertEqual(resumed, [True])  # the copy was published after the delete
+        self.assertEqual(published, [True])
+        self.assertEqual(result["res"].status, 404)
+        self.assertEqual(self.thumb_names(work["id"]), set())
+
+    def replace_pdf(self, work_id: str, text: str) -> dict[str, Any]:
+        return self.ok(self.send("POST", f"/api/works/{work_id}/pdf",
+                                 {"file_b64": base64.b64encode(pdf_bytes(text)).decode("ascii")}))
+
+    def thumb_names(self, work_id: str) -> set[str]:
+        assert self.storage is not None
+        return {name for name in os.listdir(self.storage.thumbs_dir) if name.startswith(work_id + "_")}
+
     def test_the_pdf_route_validates_the_whole_suffix(self) -> None:
         work = self.upload("Route Suffix Guard", "route", "route_suffix_guard.pdf")
         name = work["file_path"].rsplit("/", 1)[1]

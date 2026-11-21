@@ -147,9 +147,8 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | ---- | ---- |
 | `DESIGN.md` | Authoritative UI visual/interaction contract. |
 | `prks_app.py` | Only process entry: parses `--testing`, `--port`, `--host`, starts the server. |
-| `backend/server.py` | Threaded stdlib HTTP server and handler: static frontend, method dispatch, shared transport (host/origin, body limits, JSON/ETags). |
+| `backend/server.py` | Request handler behind the ASGI adapter (`backend/web/asgi.py`): static frontend, method dispatch, shared transport (host/origin, body limits, JSON/ETags). |
 | `backend/api/` | Optional domain HTTP controllers extracted from `server.py` (parse/validate, invoke domain, map errors). First family: Saved Views. |
-| `backend/concurrency.py` | Process-local library access gate (reads, mutations, backup, restore). |
 | `backend/db/` | PostgreSQL pool, transaction helpers, error mapping, and the `migrate` schema runner over `backend/db/schema/`. |
 | `backend/library.py` | The PostgreSQL Library handle (database and storage) the routes hold; they call `backend/domain/` commands directly. |
 | `backend/domain/` | Library commands and queries by area, identity and authorization, objects, backup/restore, search. |
