@@ -22,6 +22,7 @@ EXPECTED_TRIGGER_PATHS = (
     "docker-entrypoint.sh",
     "docker-compose.yml",
     "requirements.txt",
+    "requirements-lock.txt",
     "dependency-inventory.json",
     "backend/dependency_gate.py",
     "backend/storage/config.py",

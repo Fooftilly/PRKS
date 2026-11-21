@@ -38,6 +38,8 @@ from backend.dependency_gate import (
     validate_npm_island,
     validate_python_version,
     validate_requirements_file,
+    validate_runtime_lock,
+    parse_runtime_lock,
     validate_vue_production,
 )
 
@@ -1402,6 +1404,98 @@ class DockerfileConsistencyTests(unittest.TestCase):
         )
         self.assertIn("qpdf", dockerfile_apt_packages(docker))
         self.assertTrue(validate_dockerfile(_PROJECT).ok)
+
+
+_H1 = "a" * 64
+_H2 = "b" * 64
+_LOCKED_DOCKERFILE = (
+    "FROM python:3.12-slim\n"
+    "COPY requirements.txt requirements-lock.txt ./\n"
+    "RUN pip install --no-cache-dir --isolated \\\n"
+    "    --only-binary=:all: --require-hashes -r requirements-lock.txt\n"
+)
+
+
+class RuntimeLockTests(unittest.TestCase):
+    """requirements-lock.txt: the hashed install the Docker image uses (#1374)."""
+
+    def _repo(self, root: Path, *, requirements: str, lock: str | None, docker: str = _LOCKED_DOCKERFILE) -> None:
+        (root / "requirements.txt").write_text(requirements, encoding="utf-8")
+        (root / "Dockerfile").write_text(docker, encoding="utf-8")
+        if lock is not None:
+            (root / "requirements-lock.txt").write_text(lock, encoding="utf-8")
+
+    def _codes(self, root: Path) -> list[str]:
+        return [i.code for i in validate_runtime_lock(root).issues]
+
+    def test_parse_joins_continuations_markers_and_normalises_names(self):
+        entries = parse_runtime_lock(
+            "# header\n"
+            f"Pillow==13.0.0 \\\n    --hash=sha256:{_H1} \\\n    --hash=sha256:{_H2}\n"
+            f"tzdata==2026.6 ; sys_platform == 'win32' \\\n    --hash=sha256:{_H1}\n"
+        )
+        self.assertEqual(entries["pillow"], ("13.0.0", (_H1, _H2)))
+        self.assertEqual(entries["tzdata"][0], "2026.6")
+
+    def test_parse_rejects_entry_without_hash_or_exact_pin(self):
+        for text in ("uvicorn==0.54.0\n", f"uvicorn>=0.54 --hash=sha256:{_H1}\n", "-r requirements.txt\n"):
+            with self.subTest(text=text), self.assertRaises(RequirementsPinError):
+                parse_runtime_lock(text)
+
+    def test_matching_lock_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.0.0\n",
+                lock=f"pillow==13.0.0 --hash=sha256:{_H1}\nolefile==0.47 --hash=sha256:{_H2}\n",
+            )
+            self.assertEqual(self._codes(root), [])
+
+    def test_missing_lock_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(root, requirements="Pillow==13.0.0\n", lock=None)
+            self.assertEqual(self._codes(root), ["runtime_lock_missing"])
+
+    def test_version_drift_and_missing_package_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.1.0\nuvicorn==0.54.0\n",
+                lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
+            )
+            self.assertEqual(self._codes(root), ["runtime_lock_stale", "runtime_lock_stale"])
+
+    def test_dockerfile_must_install_from_the_lock_with_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.0.0\n",
+                lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
+                docker="FROM python:3.12-slim\nRUN pip install -r requirements.txt\n",
+            )
+            self.assertEqual(self._codes(root), ["runtime_lock_unused"])
+
+    def test_live_lock_matches_requirements(self):
+        result = validate_runtime_lock(_PROJECT)
+        self.assertTrue(result.ok, [i.message for i in result.issues])
+
+
+class DockerImageUserTests(unittest.TestCase):
+    """The runtime image runs as an unprivileged user (#1374)."""
+
+    def test_final_stage_ends_as_non_root_user(self):
+        docker = (_PROJECT / "Dockerfile").read_text(encoding="utf-8")
+        final_stage = docker.rsplit("\nFROM ", 1)[-1]
+        users = re.findall(r"(?m)^USER\s+(\S+)\s*$", final_stage)
+        self.assertTrue(users, "final stage has no USER")
+        self.assertNotIn(users[-1].split(":")[0], {"root", "0"})
+        # Matches docker-compose.yml's default user so bind mounts keep one owner.
+        self.assertRegex(final_stage, r"ARG PRKS_UID=1000")
+        self.assertRegex(final_stage, r"chown -R prks:prks /data")
 
 
 class RepoGateLiveTests(unittest.TestCase):

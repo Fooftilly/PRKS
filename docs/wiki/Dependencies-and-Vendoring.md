@@ -6,6 +6,8 @@ PRKS deliberately keeps its runtime dependency surface small and makes dependenc
 
 Exact runtime package pins live in `requirements.txt`. PRKS validates the running Python version and installed package versions before normal startup work.
 
+The Docker image installs from `requirements-lock.txt` instead: `requirements.txt` resolved with every transitive package and each distribution's sha256, installed with `pip install --only-binary=:all: --require-hashes`. After changing `requirements.txt`, run `python scripts/lock_runtime_requirements.py` (needs [uv](https://docs.astral.sh/uv/) and network access) and commit both files. The dependency gate fails while the two disagree.
+
 Development-only Python tooling is declared separately in `requirements-dev.txt` (Playwright for E2E, `openapi-core` for the unit-contract preflight). Contributors who run `python run_tests.py` must install both files; a runtime-only install is enough to run the app, not the fast suite.
 
 The application must not silently install or upgrade packages at runtime.
