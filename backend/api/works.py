@@ -205,7 +205,15 @@ def create(handler: Any, db: Any, file_path: str, upload: Optional[tuple[str, by
     commands = _commands()
     writing = None
     if upload is not None:
+        from backend.domain.processing.uploads import PDF_MAGIC
+
         name, data = upload
+        # The same rule as a Processing upload (#772): nothing is stored
+        # for bytes that are not a PDF, and the caller is told why.
+        if not data:
+            raise ValueError("The uploaded file is empty.")
+        if not data.startswith(PDF_MAGIC):
+            raise ValueError("The upload is not a PDF.")
 
         def write(out: Any) -> None:
             out.write(data)
@@ -342,6 +350,25 @@ def handle_bulk(handler: Any, db: Any, path: str, data: Any) -> bool:
         "requested": result.get("requested"),
         "updated": result.get("updated"),
     })
+    return True
+
+
+def handle_citations(handler: Any, db: Any, path: str, data: Any) -> bool:
+    """``POST /api/citations``: CSL-JSON items or combined BibTeX for selected Works.
+
+    A read: it changes nothing. It is a POST because a selection of up to
+    ``PRKS_BULK_WORK_MAX`` ids does not fit a query string.
+    """
+    from backend.domain.works.rules import BulkWorkError
+
+    if path != "/api/citations":
+        return False
+    try:
+        result = _commands().citations(*_actor(handler, db), data)
+    except BulkWorkError as e:
+        handler.send_json(int(e.http_status), {"error": str(e)})
+        return True
+    handler.send_json(200, result)
     return True
 
 

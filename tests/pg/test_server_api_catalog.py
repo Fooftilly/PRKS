@@ -10,6 +10,8 @@ These replace the matching ``tests/test_server_api.py`` cases.
 
 from __future__ import annotations
 
+import base64
+import json
 from typing import Any
 
 from tests.pg.server_api_fixtures import ServerApiTestCase
@@ -137,3 +139,73 @@ class RecentAndBibtexTests(ServerApiTestCase):
         text = self.bibtex(work_id)
         for *_, expected in contributors:
             self.assertIn(expected, text)
+
+
+class CitationExportTests(ServerApiTestCase):
+    """``POST /api/citations`` (Citation V1, #41) and the New File PDF check (#772)."""
+
+    def cite(self, work_ids: Any, fmt: str = "csl-json", *, schema_valid: bool = True) -> Any:
+        """Send one citation request and check it against the OpenAPI slice.
+
+        ``schema_valid=False`` sends a body the schema refuses; only the
+        response is checked then.
+        """
+        from openapi_core import OpenAPI
+        from openapi_core.testing import MockRequest, MockResponse
+
+        from backend.api_contract.openapi import citations_openapi_document
+
+        payload = {"work_ids": work_ids, "format": fmt}
+        res = self.send("POST", "/api/citations", payload)
+        api = OpenAPI.from_dict(citations_openapi_document())
+        request = MockRequest(host_url="http://127.0.0.1", method="post", path="/api/citations",
+                              data=json.dumps(payload).encode())
+        if schema_valid:
+            api.validate_request(request)
+        api.validate_response(request, MockResponse(data=res.raw, status_code=res.status,
+                                                    content_type="application/json"))
+        return res
+
+    def test_selected_works_export_as_csl_json_in_request_order(self) -> None:
+        book = self.create_work("A Book", doc_type="book", year="1999", publisher="Press",
+                                location="Paris; Lyon", isbn="978-0", status="Not Started")["id"]
+        person_id = self.ok(self.send("POST", "/api/persons", {"first_name": "Ada", "last_name": "Byron"}))["id"]
+        self.ok(self.send("POST", "/api/roles", {"person_id": person_id, "work_id": book, "role_type": "Author"}))
+        article = self.create_work("An Article", doc_type="article", journal="Journal", volume="3",
+                                   pages="1--9", doi="10.1/x", published_date="2020-05-02",
+                                   author_text="Doe, Jane; John Roe", status="Not Started")["id"]
+        body = self.ok(self.cite([article, book, article, "W-NOSUCHWORK"]))
+        self.assertEqual(body["missing"], ["W-NOSUCHWORK"])
+        first, second = body["items"]
+        self.assertEqual(first, {
+            "id": article, "type": "article-journal", "title": "An Article",
+            "author": [{"family": "Doe", "given": "Jane"}, {"family": "Roe", "given": "John"}],
+            "issued": {"date-parts": [[2020, 5, 2]]}, "container-title": "Journal", "volume": "3",
+            "page": "1-9", "DOI": "10.1/x"})
+        self.assertEqual(second, {
+            "id": book, "type": "book", "title": "A Book", "author": [{"family": "Byron", "given": "Ada"}],
+            "issued": {"date-parts": [[1999]]}, "publisher": "Press", "publisher-place": "Paris; Lyon",
+            "ISBN": "978-0"})
+
+    def test_selected_works_export_as_one_bibtex_text(self) -> None:
+        one = self.create_work("First Bib", doc_type="book", year="2001", status="Not Started")["id"]
+        two = self.create_work("Second Bib", doc_type="book", year="2002", status="Not Started")["id"]
+        body = self.ok(self.cite([one, two], "bibtex"))
+        single = [self.get(f"/api/bibtex/{work_id}").raw.decode() for work_id in (one, two)]
+        self.assertEqual(body, {"format": "bibtex", "text": "\n\n".join(single), "missing": []})
+
+    def test_a_malformed_selection_is_refused(self) -> None:
+        work_id = self.create_work("Refused Cite", status="Not Started")["id"]
+        self.assertEqual(self.refused(self.cite([work_id], "ris", schema_valid=False), 400)["error"], "Unknown citation format.")
+        self.assertEqual(self.refused(self.cite([], schema_valid=False), 400)["error"], "No files selected.")
+        self.refused(self.cite(work_id, schema_valid=False), 400)
+        self.refused(self.send("POST", "/api/citations", ["not", "an", "object"]), 400)
+
+    def test_new_file_refuses_an_empty_or_non_pdf_upload(self) -> None:
+        before = self.titles()
+        empty = self.send("POST", "/api/works", {"title": "Empty Upload", "file_b64": "", "file_name": "e.pdf"})
+        self.assertEqual(self.refused(empty, 400)["error"], "The uploaded file is empty.")
+        text = self.send("POST", "/api/works", {"title": "Text Upload", "file_name": "t.pdf",
+                                                "file_b64": base64.b64encode(b"hello").decode("ascii")})
+        self.assertEqual(self.refused(text, 400)["error"], "The upload is not a PDF.")
+        self.assertEqual(self.titles(), before)
