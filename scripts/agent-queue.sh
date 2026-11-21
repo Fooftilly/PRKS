@@ -78,7 +78,7 @@ if command -v git >/dev/null 2>&1 && git -C "$repo_root" remote get-url origin >
   fi
 fi
 if [[ "$found" != true ]] && command -v curl >/dev/null 2>&1; then
-  if curl --fail --silent --show-error --location --connect-timeout 5 --max-time 20 \
+  if curl --proto '=https' --proto-redir '=https' --fail --silent --show-error --location --connect-timeout 5 --max-time 20 \
     'https://raw.githubusercontent.com/Fooftilly/PRKS/project3-agent-queue/agent-queue.json' \
     -o "$tmp" 2>/dev/null; then
     found=true

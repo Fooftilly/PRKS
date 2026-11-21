@@ -155,7 +155,7 @@ var prksOwnerResource = (function(exports) {
 			}
 		}
 		function kinds() {
-			return Array.from(slots.keys()).sort();
+			return Array.from(slots.keys()).sort((a, b) => Number(a > b) - Number(a < b));
 		}
 		return {
 			register,

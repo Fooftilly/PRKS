@@ -175,7 +175,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertIsNone(changed_documentation(root, "0" * 40))
 
     def test_audited_config_files_are_exact_root_paths(self):
-        for path in (".codacy.yml", ".coderabbit.yaml", ".pr_agent.toml"):
+        for path in (".codacy.yml", ".coderabbit.yaml", ".pr_agent.toml", ".sonarcloud.properties"):
             with self.subTest(approved=path):
                 self.assertTrue(is_audited_config(path))
         for path in (
@@ -183,6 +183,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             ".codacy.yaml", "docs/.codacy.yml", "./.codacy.yml", "/.codacy.yml",
             ".github/workflows/test-gate.yml", "eslint.config.mjs", "ruff.toml",
             "setup.cfg", "pyrightconfig.json", ".bandit",
+            "sonar-project.properties", "docs/.sonarcloud.properties",
         ):
             with self.subTest(rejected=path):
                 self.assertFalse(is_audited_config(path))
