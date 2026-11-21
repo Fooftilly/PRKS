@@ -427,11 +427,13 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             self.assertTrue(written and all(status in (200, 201) for status in written), written)
             archive = self.raw(port_a, "GET", "/api/backups/download?token=" + ready["token"])
             staged = self.raw_json(port_b, "/api/backups/stage", archive, headers_b)
-            # One snapshot: verified, holding the Works from before and only
-            # some of those written meanwhile.
+            # One snapshot, verified: every Work from before it, and not the
+            # ones the other process committed after it while the backup ran.
+            total = len(self.call(port_b, "GET", "/api/works")[1])
+            self.assertEqual(total, 3 + len(written))
             self.assertTrue(staged["verified"], staged)
             self.assertGreaterEqual(staged["summary"]["works"], 3)
-            self.assertLessEqual(staged["summary"]["works"], 3 + len(written))
+            self.assertLess(staged["summary"]["works"], total)
 
     def test_one_field_edited_from_two_web_processes_is_acknowledged_once(self) -> None:
         with (self.serving() as (name, root, port_a, headers_a),

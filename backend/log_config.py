@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from logging.handlers import TimedRotatingFileHandler
 
 from backend.log_safety import PrivacySafeFormatter, safe_error_type
@@ -49,6 +50,90 @@ def _chmod_owner_only(path: str, *, report: bool = False) -> None:
 
 
 class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """The error log: owner-only, rotated at midnight, shared by processes.
+
+    Several PRKS processes on one root (web processes, ``worker``) write the
+    same file, each through its own handler. The stdlib rollover assumes one
+    writer: a second process that finds the day already rotated returns
+    without reopening, so it keeps writing into the rotated file and retries
+    on every record. Here a rollover hard-links the file to its dated name,
+    which only one process can do for a given day, and every process reopens
+    the log when the name no longer points at the file it holds.
+    """
+
+    def emit(self, record):
+        self._reopen_if_moved()
+        super().emit(record)
+
+    def _reopen_if_moved(self) -> None:
+        """Reopen when another process rotated the file this handler holds."""
+        if self.stream is None:
+            return
+        try:
+            held = os.fstat(self.stream.fileno())
+        except (OSError, ValueError):
+            return
+        try:
+            if os.path.samestat(held, os.stat(self.baseFilename)):
+                return
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return
+        self.stream.close()
+        self.stream = self._open()
+
+    def doRollover(self):
+        current = int(time.time())
+        t = self.rolloverAt - self.interval
+        time_tuple = time.gmtime(t) if self.utc else time.localtime(t)
+        if not self.utc:
+            dst_now = time.localtime(current)[-1]
+            if dst_now != time_tuple[-1]:
+                time_tuple = time.localtime(t + (3600 if dst_now else -3600))
+        dated = self.rotation_filename(self.baseFilename + "." + time.strftime(self.suffix, time_tuple))
+        if self.stream:
+            self.stream.close()
+            self.stream = None
+        if self._rotate_once(dated) and self.backupCount > 0:
+            for old in self.getFilesToDelete():
+                try:
+                    os.remove(old)
+                except FileNotFoundError:
+                    pass  # another process removed it first
+        if not self.delay:
+            self.stream = self._open()
+        self.rolloverAt = self.computeRollover(current)
+        _chmod_owner_only(self.baseFilename, report=True)
+
+    def _rotate_once(self, dated: str) -> bool:
+        """Give the log its dated name unless a process already did; True when this one did."""
+        try:
+            os.link(self.baseFilename, dated)
+        except (FileExistsError, FileNotFoundError):
+            return False  # rotated already, by another process
+        except OSError:
+            # No hard links here: rename, which only a process that still
+            # finds no dated file attempts.
+            if os.path.exists(dated):
+                return False
+            try:
+                os.rename(self.baseFilename, dated)
+            except OSError:
+                return False
+            return True
+        try:
+            os.unlink(self.baseFilename)
+        except OSError:
+            # Another process still holds it open where that forbids the
+            # unlink (Windows): undo, and keep writing to one file today.
+            try:
+                os.unlink(dated)
+            except OSError:
+                pass
+            return False
+        return True
+
     def _open(self):
         if os.name == "posix":
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
@@ -69,10 +154,6 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             _chmod_owner_only(self.baseFilename)
             return stream
         return super()._open()
-
-    def doRollover(self):
-        super().doRollover()
-        _chmod_owner_only(self.baseFilename, report=True)
 
 
 def setup_logging(config: StorageConfig) -> None:

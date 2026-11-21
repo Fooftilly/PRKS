@@ -137,3 +137,54 @@ class TestSetupLogging(unittest.TestCase):
                     for handler in logging.getLogger().handlers:
                         self.assertIsInstance(handler.formatter, PrivacySafeFormatter)
 
+
+
+class SharedLogRotationTests(unittest.TestCase):
+    """Two processes' handlers on one error log (web processes beside each other)."""
+
+    def setUp(self):
+        from backend.log_config import _OwnerOnlyTimedRotatingFileHandler
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "prks-errors.log")
+        self.handlers = [_OwnerOnlyTimedRotatingFileHandler(self.path, when="midnight", backupCount=7,
+                                                            encoding="utf-8") for _ in range(2)]
+        for handler in self.handlers:
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self.addCleanup(handler.close)
+
+    def write(self, handler, message):
+        handler.handle(logging.LogRecord("prks", logging.ERROR, __file__, 1, message, None, None))
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().split()
+
+    def dated(self):
+        return [name for name in os.listdir(os.path.dirname(self.path)) if name != "prks-errors.log"]
+
+    def test_a_day_is_rotated_once_and_every_process_follows_the_new_file(self):
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        for handler in self.handlers:
+            handler.rolloverAt = 0  # midnight passed for both
+        self.write(first, "a2")  # rotates
+        self.write(second, "b2")  # finds the day rotated: reopens, rotates nothing
+        self.write(first, "a3")
+        (dated,) = self.dated()
+        self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
+        self.assertEqual(self.read(self.path), ["a2", "b2", "a3"])
+        self.assertGreater(second.rolloverAt, 0)
+
+    def test_a_process_reopens_the_log_another_rotated_before_its_own_midnight(self):
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        first.rolloverAt = 0
+        self.write(first, "a2")
+        self.write(second, "b2")  # its own rollover is not due, but its file was rotated away
+        (dated,) = self.dated()
+        self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
+        self.assertEqual(self.read(self.path), ["a2", "b2"])
