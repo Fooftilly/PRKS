@@ -36,9 +36,12 @@ from backend.domain.settings.rules import (
     _prks_parse_bibtex_export_fields_json,
 )
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.works.citation_styles import CITATION_STYLE_SET, DEFAULT_CITATION_STYLE
 
 ANNOTATION_AUTHOR = "annotation_author"
 BIBTEX_EXPORT_FIELDS = "bibtex_export_fields"
+#: The Library's default citation style (``backend.domain.works.citation_styles``).
+CITATION_STYLE = "citation_style"
 MAX_LEN = APP_SETTING_MAX_LEN
 
 _MAP_SQL: LiteralString = "SELECT key, value FROM prks.library_settings WHERE library_id = %(library_id)s"
@@ -65,11 +68,16 @@ def settings_map(scope: LibraryScope) -> dict[str, str]:
 
 
 def settings_response(scope: LibraryScope) -> dict[str, Any]:
-    """``get_app_settings_response``: the two keys the API has, with their defaults."""
+    """``get_app_settings_response``: the keys the API has, with their defaults.
+
+    A stored citation style PRKS no longer ships reads as the default.
+    """
     stored = settings_map(scope)
+    style = stored.get(CITATION_STYLE, "")
     return {
         ANNOTATION_AUTHOR: stored.get(ANNOTATION_AUTHOR, ""),
         BIBTEX_EXPORT_FIELDS: _prks_parse_bibtex_export_fields_json(stored.get(BIBTEX_EXPORT_FIELDS, "")),
+        CITATION_STYLE: style if style in CITATION_STYLE_SET else DEFAULT_CITATION_STYLE,
     }
 
 
@@ -80,6 +88,12 @@ def _author(raw: Any) -> str:
     if "\x00" in value:
         raise ValueError("annotation_author cannot contain NUL")
     return value
+
+
+def _style(raw: Any) -> str:
+    if not isinstance(raw, str) or raw not in CITATION_STYLE_SET:
+        raise ValueError("Unknown citation style.")
+    return raw
 
 
 def _profile_patch(raw: Any) -> dict[str, Any]:
@@ -96,8 +110,11 @@ def patch(scope: LibraryScope, data: Any) -> None:
         raise ValueError("invalid body")
     author = _author(data.get(ANNOTATION_AUTHOR)) if ANNOTATION_AUTHOR in data else None
     profile = _profile_patch(data.get(BIBTEX_EXPORT_FIELDS)) if BIBTEX_EXPORT_FIELDS in data else None
+    style = _style(data.get(CITATION_STYLE)) if CITATION_STYLE in data else None
     if author is not None:
         scope.execute(_UPSERT_SQL, {"key": ANNOTATION_AUTHOR, "value": author})
+    if style is not None:
+        scope.execute(_UPSERT_SQL, {"key": CITATION_STYLE, "value": style})
     if profile is not None:
         _merge_profile(scope, profile)
 

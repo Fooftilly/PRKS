@@ -1355,6 +1355,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/people/errors.py",
                 "backend/domain/works/bibtex_format.py",
                 "backend/domain/works/csl_format.py",
+                "backend/domain/works/citation_styles.py",
                 "backend/domain/people/rules.py",
                 "backend/etags.py",
                 "backend/domain/research/rules.py",

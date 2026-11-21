@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
+import { CITATION_STYLES, libraryCitationStyle } from '../citations/styles'
 import { bibtexExportSummary } from './bibtex-summary'
 import SettingsSwitch from './SettingsSwitch.vue'
 
@@ -14,6 +15,26 @@ interface ExportField {
 const fields = ref<ExportField[]>([])
 let dirty = false
 let timer = 0
+const style = ref(libraryCitationStyle())
+const styleStatus = ref('')
+let styleDirty = false
+
+async function onStyleChange(event: Event): Promise<void> {
+  const el = event.target
+  if (!(el instanceof HTMLSelectElement)) return
+  const previous = style.value
+  style.value = el.value
+  styleDirty = true
+  styleStatus.value = ''
+  window.prksSetCitationStyleCache?.(el.value)
+  try {
+    await window.prksPatchAppSettings?.({ citation_style: el.value })
+  } catch {
+    style.value = previous
+    window.prksSetCitationStyleCache?.(previous)
+    styleStatus.value = 'The citation style could not be saved. Try again when PRKS is reachable.'
+  }
+}
 
 function fieldDefs(): Array<readonly [string, string]> {
   const defs = window.PRKS_BIBTEX_EXPORT_FIELD_DEFS
@@ -77,6 +98,7 @@ onMounted(async () => {
   } catch {
     /* Toggles stay at the inclusive default. */
   }
+  if (!styleDirty) style.value = libraryCitationStyle()
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
@@ -89,6 +111,17 @@ onBeforeUnmount(() => {
 
 <template>
   <h4 class="prks-settings-panel__title">Export</h4>
+  <section class="prks-settings-section" aria-labelledby="prks-settings-citation-heading">
+    <PrksSectionHeader id="prks-settings-citation-heading">
+      Citation style <span class="prks-settings-scope">Library-wide</span>
+    </PrksSectionHeader>
+    <label for="prks-citation-style" class="prks-sr-only">Default citation style</label>
+    <select id="prks-citation-style" class="prks-settings-text-input" :value="style" @change="onStyleChange">
+      <option v-for="option in CITATION_STYLES" :key="option.id" :value="option.id">{{ option.label }}</option>
+    </select>
+    <p class="prks-settings-hint">Used when you copy a formatted citation or bibliography. A file can use its own style instead (Edit metadata).</p>
+    <p v-if="styleStatus" class="prks-settings-hint prks-inline-message--error" role="alert">{{ styleStatus }}</p>
+  </section>
   <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
     <PrksSectionHeader id="prks-settings-bibtex-heading">
       BibTeX / BibLaTeX export <span class="prks-settings-scope">Library-wide</span>

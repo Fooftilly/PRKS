@@ -11,6 +11,8 @@ and [dependency-inventory.json](dependency-inventory.json).
 
 | Component | Notice file included with PRKS |
 | --- | --- |
+| citeproc-js | [CPAL-1.0 or AGPL-3.0-or-later notice](frontend/vendor/citeproc/LICENSE); PRKS uses it under the AGPL option |
+| Citation Style Language styles (APA, Chicago, MLA, Harvard, IEEE, Vancouver) and en-US locale | [CC BY-SA 3.0 notice](frontend/vendor/csl/LICENSE) (files shipped unmodified) |
 | CodeMirror 5 | [MIT license](frontend/vendor/codemirror/LICENSE) |
 | Cytoscape.js | [MIT license](frontend/vendor/cytoscape/LICENSE) |
 | DOMPurify | [Apache 2.0 license copy](frontend/vendor/dompurify/LICENSE) (upstream offers alternative licensing) |

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import unittest
+from pathlib import Path
 
+from backend.dependency_gate import CSL_VENDOR_FILES
+from backend.domain.works.citation_styles import CITATION_STYLES, DEFAULT_CITATION_STYLE
 from backend.domain.works.csl_format import CSL_TYPES, format_csl
 from backend.work_metadata_sync import DOC_TYPES
+
+_ROOT = Path(__file__).resolve().parents[1]
 
 
 def item(work=None, roles=(), *, video=False):
@@ -70,6 +76,24 @@ class CslFormatTests(unittest.TestCase):
                          {"date-parts": [[2026, 11, 21]]})
         self.assertNotIn("accessed", item({"updated_at": "2026-11-21T10:00:00Z"}))
         self.assertNotIn("accessed", item({"source_url": "https://e.x", "updated_at": "2026"}))
+
+
+class CitationStyleRegistryTests(unittest.TestCase):
+    def test_the_vue_registry_lists_the_same_styles_in_the_same_order(self):
+        source = (_ROOT / "frontend-app" / "src" / "features" / "citations" / "styles.ts").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"\{ id: '([^']+)', label:", source), list(CITATION_STYLES))
+        self.assertIn(f"DEFAULT_CITATION_STYLE = '{DEFAULT_CITATION_STYLE}'", source)
+
+    def test_every_style_is_vendored_and_registered(self):
+        self.assertEqual([f"csl/{style}.csl" for style in CITATION_STYLES] + ["csl/locales-en-US.xml"],
+                         list(CSL_VENDOR_FILES))
+        for style in CITATION_STYLES:
+            text = (_ROOT / "frontend" / "vendor" / "csl" / f"{style}.csl").read_text(encoding="utf-8")
+            with self.subTest(style=style):
+                self.assertIn('xmlns="http://purl.org/net/xbiblio/csl"', text)
+                # An independent style: a dependent one would need its parent too.
+                self.assertNotIn('rel="independent-parent"', text)
+                self.assertIn("<bibliography", text)
 
 
 if __name__ == "__main__":

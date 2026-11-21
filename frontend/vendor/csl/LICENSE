@@ -1,0 +1,22 @@
+Citation Style Language styles and locale
+
+Styles (https://github.com/citation-style-language/styles):
+  apa.csl                          APA Style 7th edition
+  chicago-author-date.csl          Chicago Manual of Style 18th edition (author-date)
+  chicago-notes-bibliography.csl   Chicago Manual of Style 18th edition (notes and bibliography)
+  modern-language-association.csl  MLA Handbook 9th edition
+  harvard-cite-them-right.csl      Cite Them Right 12th edition (Harvard)
+  ieee.csl                         IEEE Reference Guide
+  nlm-citation-sequence.csl        NLM/Vancouver: Citing Medicine 2nd edition
+
+Locale (https://github.com/citation-style-language/locales):
+  locales-en-US.xml                English (US)
+
+These files are by the Citation Style Language project and their
+contributors (the authors and contributors are named in each file's
+<info> element). They are licensed under the Creative Commons
+Attribution-ShareAlike 3.0 Unported License:
+https://creativecommons.org/licenses/by-sa/3.0/
+
+PRKS ships them unmodified. The exact upstream commits and file hashes
+are recorded in VERSION next to this file.

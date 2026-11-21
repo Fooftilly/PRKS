@@ -4198,6 +4198,12 @@
           "type": "boolean"
         },
         {
+          "default": "''::text",
+          "name": "citation_style",
+          "not_null": true,
+          "type": "text"
+        },
+        {
           "name": "last_opened_at",
           "not_null": false,
           "type": "timestamp with time zone"
@@ -4227,6 +4233,7 @@
       ],
       "constraints": {
         "works_citation_manifestation_fkey": "FOREIGN KEY (library_id, citation_manifestation_id, id) REFERENCES prks.manifestations(library_id, id, work_id) DEFERRABLE INITIALLY DEFERRED",
+        "works_citation_style_not_null": "NOT NULL citation_style",
         "works_created_at_not_null": "NOT NULL created_at",
         "works_hide_pdf_link_annotations_not_null": "NOT NULL hide_pdf_link_annotations",
         "works_id_check": "CHECK (id ~ '^W-[0-9A-F]{32}$'::text)",

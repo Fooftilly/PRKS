@@ -272,8 +272,8 @@ class MergePlan:
 
 
 _ISOLATION: LiteralString = "SELECT current_setting('transaction_isolation') AS level"
-# Every Work-owned column but hide_pdf_link_annotations, a viewer
-# preference on which the target wins without a choice (§10.4).
+# Every Work-owned column but hide_pdf_link_annotations and citation_style,
+# preferences on which the target wins without a choice (§10.4).
 _LOCK_PAIR: LiteralString = """
 SELECT id, title, abstract, status, author_text, last_opened_at FROM prks.works
 WHERE library_id = %(library_id)s AND id = ANY(%(ids)s::text[])

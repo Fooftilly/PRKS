@@ -24,6 +24,7 @@ const SLOT_ATTRS = [
   'work-tags-read',
   'work-folder-read',
   'work-playlist-read',
+  'work-panel-citation',
 ] as const
 
 export interface WorkPanelReadRequest extends WorkPanelReadInput {
@@ -80,6 +81,7 @@ function slotMap(panel: HTMLElement): WorkPanelReadSlots {
     tags: has('work-tags-read'),
     folder: has('work-folder-read'),
     playlist: has('work-playlist-read'),
+    citation: has('work-panel-citation'),
   }
 }
 
@@ -93,6 +95,7 @@ export interface WorkPanelReadSlots {
   tags: boolean
   folder: boolean
   playlist: boolean
+  citation: boolean
 }
 
 function clearSlots(panel: HTMLElement): void {

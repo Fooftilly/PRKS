@@ -64,6 +64,16 @@ class SettingsTests(ServerApiTestCase):
         self.assertFalse(again["bibtex_export_fields"]["abstract"])
         self.assertFalse(again["bibtex_export_fields"]["isbn"])
 
+    def test_the_citation_style_defaults_to_apa_and_only_a_shipped_style_is_kept(self) -> None:
+        self.assertEqual(self.ok(self.get("/api/settings"))["citation_style"], "apa")
+        out = self.ok(self.send("PATCH", "/api/settings", {"citation_style": "ieee"}))
+        self.assertEqual(out["citation_style"], "ieee")
+        for refused in ("harvard1", "", None, ["apa"]):
+            with self.subTest(style=refused):
+                body = self.refused(self.send("PATCH", "/api/settings", {"citation_style": refused}), 400)
+                self.assertEqual(body["error"], "Unknown citation style.")
+        self.assertEqual(self.ok(self.get("/api/settings"))["citation_style"], "ieee")
+
 
 class WorkRouteTests(ServerApiTestCase):
     def test_create_get_patch_and_delete(self) -> None:
@@ -76,6 +86,16 @@ class WorkRouteTests(ServerApiTestCase):
         self.assertEqual(single["private_notes"], "Thesis ch. 3 — check with Mark")
         self.assertEqual(self.ok(self.send("DELETE", f"/api/works/{work['id']}")), {"status": "deleted"})
         self.assertEqual(self.get(f"/api/works/{work['id']}").status, 404)
+
+    def test_a_work_keeps_its_own_citation_style_or_the_library_default(self) -> None:
+        work = self.create_work("Styled Work")
+        self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["citation_style"], "")
+        self.ok(self.send("PATCH", f"/api/works/{work['id']}", {"citation_style": "ieee"}))
+        self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["citation_style"], "ieee")
+        self.refused(self.send("PATCH", f"/api/works/{work['id']}", {"citation_style": "harvard1"}), 400)
+        self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["citation_style"], "ieee")
+        self.ok(self.send("PATCH", f"/api/works/{work['id']}", {"citation_style": ""}))
+        self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["citation_style"], "")
 
     def test_deleting_a_missing_work_is_a_clean_no_op(self) -> None:
         self.assertEqual(self.ok(self.send("DELETE", "/api/works/W-DOESNOTEXIST")), {"status": "deleted"})

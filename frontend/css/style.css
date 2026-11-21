@@ -10632,6 +10632,33 @@ button.tag-add-shell__icon:focus-visible {
     padding: 6px 10px;
 }
 
+/* Formatted citation in the Work panel's Metadata disclosure (#41). */
+.work-citation {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-xs);
+    margin: var(--space-sm) 0;
+}
+
+.work-citation__heading {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-xs);
+    align-items: baseline;
+    margin: 0;
+}
+
+.work-citation__style {
+    color: var(--text-secondary);
+}
+
+.work-citation__text {
+    margin: 0;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
 /* List routes: hide tab strip — single contextual pane */
 #right-panel.right-panel--single-pane .tabs {
     display: none;
@@ -12694,7 +12721,8 @@ body.prks-bulk-selection-active #main-content {
     flex-shrink: 0;
 }
 
-.prks-bulk-organize-actions {
+.prks-bulk-organize-actions,
+.prks-bulk-cite-actions {
     display: flex;
     flex-direction: column;
     gap: var(--space-sm);

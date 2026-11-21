@@ -53,6 +53,11 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                     "docs/api/openapi-positions.json",
                     "frontend-app/src/api/generated/positions.ts",
                 ),
+                (
+                    "citations",
+                    "docs/api/openapi-citations.json",
+                    "frontend-app/src/api/generated/citations.ts",
+                ),
             ],
         )
         for item in families:
@@ -68,6 +73,7 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
             "processing-items": "export type ProcessingItem =",
             "performance-diagnostics": "export type PerformanceSnapshot =",
             "positions": "export type PositionSummary =",
+            "citations": "export type CslItem =",
         }
         for name, marker in markers.items():
             text = (_GENERATED / f"{name}.ts").read_text(encoding="utf-8")
@@ -151,6 +157,7 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                 "frontend-app/src/api/generated/saved-views.ts",
                 "frontend-app/src/api/generated/performance-diagnostics.ts",
                 "frontend-app/src/api/generated/positions.ts",
+                "frontend-app/src/api/generated/citations.ts",
             ],
         )
         workflow = _WORKFLOW.read_text(encoding="utf-8")

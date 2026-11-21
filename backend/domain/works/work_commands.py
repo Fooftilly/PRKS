@@ -391,7 +391,7 @@ METADATA_FIELDS = frozenset({
     "title", "status", "abstract", "published_date", "author_text", "year", "publisher", "location",
     "edition", "journal", "volume", "issue", "pages", "isbn", "doi", "text_content", "doc_type",
     "private_notes", "thumb_page", "source_kind", "source_url", "source_mime", "thumb_url", "provider",
-    "provider_id", "urldate", "file_path", "hide_pdf_link_annotations",
+    "provider_id", "urldate", "file_path", "hide_pdf_link_annotations", "citation_style",
 })
 
 

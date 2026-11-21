@@ -10,7 +10,7 @@ What moves is where each field lives. On SQLite every field is a ``works``
 column; here a field belongs to the row that owns it:
 
 - the Work: ``title``, ``status``, ``abstract``, ``author_text``,
-  ``hide_pdf_link_annotations``;
+  ``hide_pdf_link_annotations``, ``citation_style``;
 - the primary Manifestation: the bibliographic fields, ``urldate`` and
   ``source_url`` (a PDF's provenance, its citation URL);
 - the primary Asset: ``thumb_page``, ``thumb_url`` and ``source_mime``.
@@ -40,7 +40,7 @@ from backend.domain.works import revisions
 SCOPE_TYPE = "work-field"
 
 _WORK_COLUMNS: tuple[LiteralString, ...] = (
-    "title", "status", "abstract", "author_text", "hide_pdf_link_annotations",
+    "title", "status", "abstract", "author_text", "hide_pdf_link_annotations", "citation_style",
 )
 _MANIFESTATION_COLUMNS: tuple[LiteralString, ...] = (
     "doc_type", "year", "published_date", "edition", "publisher", "location", "journal",
@@ -82,7 +82,7 @@ _TOUCH_WORK: LiteralString = (
 
 _TARGET_SQL: LiteralString = """
 SELECT w.id, w.title, w.status, w.abstract, w.author_text, w.hide_pdf_link_annotations,
-       m.id AS manifestation_id, m.doc_type, m.year, m.published_date, m.edition, m.publisher,
+       w.citation_style, m.id AS manifestation_id, m.doc_type, m.year, m.published_date, m.edition, m.publisher,
        m.location, m.journal, m.volume, m.issue, m.pages, m.isbn, m.doi, m.urldate, m.url,
        a.id AS asset_id, a.kind AS asset_kind, a.url AS stream_url, a.provider, a.provider_id,
        a.thumb_page, a.thumb_url, a.media_type

@@ -1,0 +1,6 @@
+2.4.63
+source: https://github.com/Juris-M/citeproc-js
+npm: citeproc@2.4.63
+asset: node_modules/citeproc/citeproc_commonjs.js (trailing `module.exports = CSL` removed)
+sha256: 786275a6bf01e3009c0bee11a63bc4480cd0313fde69ea81fa3d8fc5ba550ec6
+license: CPAL-1.0 OR AGPL-3.0-or-later

@@ -27,6 +27,7 @@ export const WORK_META_FIELDS = [
   'abstract',
   'thumb_page',
   'author_text',
+  'citation_style',
 ] as const
 
 export type WorkMetaField = (typeof WORK_META_FIELDS)[number]
@@ -51,6 +52,7 @@ const PDF_BIB_FIELDS: readonly WorkMetaField[] = [
   'source_url',
   'abstract',
   'thumb_page',
+  'citation_style',
 ]
 
 export function blankWorkMetaDraft(): WorkMetaDraft {
@@ -72,7 +74,7 @@ export function cloneWorkMetaDraft(source: Partial<Record<string, unknown>> | nu
 export function workMetaGroupFields(group: string, sourceKind: string): readonly WorkMetaField[] {
   if (group === 'identity') return ['title', 'doc_type']
   if (group === 'status') return ['status']
-  if (group === 'bib') return sourceKind === 'video' ? ['author_text'] : PDF_BIB_FIELDS
+  if (group === 'bib') return sourceKind === 'video' ? ['author_text', 'citation_style'] : PDF_BIB_FIELDS
   return []
 }
 

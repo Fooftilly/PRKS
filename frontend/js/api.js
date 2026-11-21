@@ -436,6 +436,11 @@ function prksSetBibtexExportFieldsCache(obj) {
     window.__prksBibtexExportFields = obj && typeof obj === 'object' ? { ...obj } : {};
 }
 
+/** The Library's default citation style id from GET/PATCH /api/settings (read by the Vue citation formatter). */
+function prksSetCitationStyleCache(style) {
+    window.__prksCitationStyle = typeof style === 'string' ? style : '';
+}
+
 /** Display name for new PDF annotations; empty → "You". Synced on the server for all devices. */
 function getPrksAnnotationAuthor() {
     const v = (typeof window.__prksAnnotationAuthor === 'string' ? window.__prksAnnotationAuthor : '').trim();
@@ -468,6 +473,7 @@ function prksLoadAppSettings() {
             if (data && typeof data.bibtex_export_fields === 'object' && data.bibtex_export_fields !== null) {
                 prksSetBibtexExportFieldsCache(data.bibtex_export_fields);
             }
+            if (data && typeof data.citation_style === 'string') prksSetCitationStyleCache(data.citation_style);
             return data;
         })
         .catch(() => {
@@ -491,6 +497,7 @@ async function prksPatchAppSettings(partial) {
     if (data && typeof data.bibtex_export_fields === 'object' && data.bibtex_export_fields !== null) {
         prksSetBibtexExportFieldsCache(data.bibtex_export_fields);
     }
+    if (data && typeof data.citation_style === 'string') prksSetCitationStyleCache(data.citation_style);
     return data;
 }
 

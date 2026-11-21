@@ -370,3 +370,53 @@ class WorkBrowsingV1Tests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorkCitationTests(unittest.TestCase):
+    """Citation V1 (#41): the Work panel formats the saved record with the
+    vendored citeproc-js and CSL style, served by PRKS under its CSP."""
+
+    def test_the_metadata_disclosure_shows_and_copies_the_formatted_citation(self):
+        server = AppServer(seed_fn=seed_folders_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin)
+        self.addCleanup(context.close)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        context.grant_permissions(["clipboard-read", "clipboard-write"], origin=server.origin)
+        work_a = server.ids["work_a"]
+        requests = []
+        page.on("request", lambda req: requests.append(req.url))
+
+        page.evaluate("id => prksNavigate('#/works/' + encodeURIComponent(id))", work_a)
+        page.wait_for_selector("#right-panel details.work-details-metadata", timeout=15000)
+        page.wait_for_selector("#right-panel [data-prks-role='work-citation']", state="attached", timeout=10000)
+        self.assertFalse(
+            any(url.endswith("/api/citations") for url in requests),
+            "a closed Metadata disclosure reads no citation",
+        )
+
+        page.locator("#right-panel details.work-details-metadata > summary").click()
+        text = page.locator("#right-panel [data-prks-role='work-citation-text']")
+        page.wait_for_function(
+            "title => (document.querySelector(\"#right-panel [data-prks-role='work-citation-text']\")"
+            " || {}).textContent?.includes(title)",
+            arg=WORK_A_TITLE,
+            timeout=15000,
+        )
+        self.assertIn(
+            "APA", page.locator("#right-panel [data-prks-role='work-citation-style']").inner_text()
+        )
+        self.assertNotIn("Formatting", text.inner_text())
+        self.assertTrue(any(url.endswith("/vendor/csl/apa.csl") for url in requests))
+        self.assertTrue(any(url.endswith("/vendor/citeproc/citeproc.js") for url in requests))
+
+        copy = page.locator("#right-panel [data-prks-role='work-citation-copy']")
+        copy.click()
+        page.wait_for_function(
+            "() => (document.querySelector(\"#right-panel [data-prks-role='work-citation-copy']\")"
+            " || {}).textContent?.trim() === 'Copied'",
+            timeout=5000,
+        )
+        copied = page.evaluate("() => navigator.clipboard.readText()")
+        self.assertIn(WORK_A_TITLE, copied)
