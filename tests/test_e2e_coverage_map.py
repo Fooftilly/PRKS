@@ -341,6 +341,22 @@ class SelectForDiffTests(unittest.TestCase):
         self._commit()
         self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
 
+    def test_a_moved_or_deleted_revision_line_is_not_derived(self):
+        overrides = self._vue_repo()
+        sw = self.repo / "frontend" / "sw.js"
+        sw.write_text("a\nb\n    const DEPENDENCY_REVISION = 'aaa111';\n")
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"]["frontend/sw.js"]["rule"], "full")
+        sw.write_text("a\nb\n")
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"]["frontend/sw.js"]["rule"], "full")
+
+    def test_an_insertion_just_above_a_style_block_is_not_a_style_change(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("</template>\n", "</template>\n<!-- note -->\n"))
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["rule"], "coverage-map")
+
     def test_any_other_sw_change_is_not_derived(self):
         overrides = self._vue_repo()
         sw = self.repo / "frontend" / "sw.js"
@@ -396,8 +412,8 @@ class SourceMapTests(unittest.TestCase):
     def test_decodes_v3_mappings(self):
         # Line 0: col 0 -> source 0 line 0; col 2 -> source 0 line 1. Line 1: col 0 -> source 1 line 1.
         self.assertEqual(cm.decode_mappings("AAAA,EACA;ACAA"), [(0, 0, 0, 0), (0, 2, 0, 1), (1, 0, 1, 1)])
-        # Negative deltas and a name-less 1-field segment.
-        self.assertEqual(cm.decode_mappings("AAEA,C,EADA"), [(0, 0, 0, 2), (0, 3, 0, 1)])
+        # Negative deltas, and a one-field segment: generated code with no source.
+        self.assertEqual(cm.decode_mappings("AAEA,C,EADA"), [(0, 0, 0, 2), (0, 1, -1, -1), (0, 3, 0, 1)])
 
     def _bundle(self, repo: Path) -> cm.BundleMap:
         out = repo / "out"
@@ -422,6 +438,17 @@ class SourceMapTests(unittest.TestCase):
             bundle = self._bundle(Path(raw))
         # 0-15 ran (Card 2 and the dropped vue line), 15-35 did not, 35-45 ran (the mapping at 30 is in effect).
         self.assertEqual(bundle.lines([(0, 15, 1), (15, 35, 0), (35, 45, 1)]), {VUE: {2, 9}})
+
+    def test_unmapped_code_and_a_new_line_credit_no_source(self):
+        with tempfile.TemporaryDirectory() as raw:
+            out = Path(raw) / "out"
+            out.mkdir()
+            # Line 0: col 0 -> Card line 2, col 5 unmapped. Line 1 (offset 20) has no mapping at all.
+            source_map = {"sources": ["../frontend-app/src/components/Card.vue"], "mappings": "AACA,K;"}
+            bundle = cm.BundleMap(source_map, out, [0, 20], repo=Path(raw))
+        self.assertEqual(bundle.lines([(6, 9, 1)]), {})
+        self.assertEqual(bundle.lines([(21, 25, 1)]), {})
+        self.assertEqual(bundle.lines([(0, 4, 1)]), {VUE: {2}})
 
     def test_the_map_lists_code_lines_when_built_with_a_bundle(self):
         with tempfile.TemporaryDirectory() as raw:

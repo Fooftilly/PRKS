@@ -258,7 +258,10 @@ _B64 = {char: index for index, char in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZabcd
 
 
 def decode_mappings(mappings: str) -> list[tuple[int, int, int, int]]:
-    """Source map v3 ``mappings`` as ``(generated line, generated column, source, original line)``, 0-based."""
+    """Source map v3 ``mappings`` as ``(generated line, generated column, source, original line)``, 0-based.
+
+    A one-field segment starts generated code with no source: it is kept, with source -1.
+    """
     out: list[tuple[int, int, int, int]] = []
     source = original_line = original_column = 0
     for generated_line, text in enumerate(mappings.split(";")):
@@ -275,7 +278,9 @@ def decode_mappings(mappings: str) -> list[tuple[int, int, int, int]]:
                     values.append(-(value >> 1) if value & 1 else value >> 1)
                     value = shift = 0
             column += values[0]
-            if len(values) >= 4:
+            if len(values) == 1:
+                out.append((generated_line, column, -1, -1))
+            elif len(values) >= 4:
                 source += values[1]
                 original_line += values[2]
                 original_column += values[3]
@@ -294,20 +299,19 @@ class BundleMap:
             except (ValueError, OSError):
                 rel = None
             names.append(rel if rel is not None and is_vue_source(rel) else None)
-        self.offsets: list[int] = []
-        self.targets: list[tuple[str | None, int]] = []
+        # Each generated line starts unmapped: a mapping never carries over a line break.
+        entries: list[tuple[int, int, str | None, int]] = [(start, 0, None, 0) for start in starts]
         self.code_lines: dict[str, set[int]] = {}
         for line, column, source, original in decode_mappings(str(source_map.get("mappings") or "")):
             if line >= len(starts) or source >= len(names):
                 continue
-            rel = names[source]
-            self.offsets.append(starts[line] + column)
-            self.targets.append((rel, original + 1))
+            rel = names[source] if source >= 0 else None
+            entries.append((starts[line] + column, 1, rel, original + 1))
             if rel is not None:
                 self.code_lines.setdefault(rel, set()).add(original + 1)
-        order = sorted(range(len(self.offsets)), key=self.offsets.__getitem__)
-        self.offsets = [self.offsets[i] for i in order]
-        self.targets = [self.targets[i] for i in order]
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        self.offsets: list[int] = [offset for offset, _order, _rel, _line in entries]
+        self.targets: list[tuple[str | None, int]] = [(rel, line) for _offset, _order, rel, line in entries]
 
     def lines(self, pieces: Iterable[tuple[int, int, int]]) -> dict[str, set[int]]:
         """The source lines behind the executed ``pieces`` (start, end, count) of the bundle."""
@@ -585,9 +589,13 @@ def style_lines(text: str) -> set[int]:
 
 
 def _sw_only_revision(diff_text: str) -> bool:
+    """Whether the diff only rewrites the revision value in place: one line replaced by one, at the same line."""
+    hunks = parse_hunks(diff_text)
+    if len(hunks) != 1 or hunks[0][1] != 1 or hunks[0][3] != 1 or hunks[0][0] != hunks[0][2]:
+        return False
     changed = [line for line in diff_text.splitlines()
                if line[:1] in "+-" and not line.startswith(("+++", "---"))]
-    return bool(changed) and all(_SW_REVISION.match(line) for line in changed)
+    return len(changed) == 2 and all(_SW_REVISION.match(line) for line in changed)
 
 
 def parse_hunks(diff_text: str) -> list[tuple[int, int, int, int]]:
@@ -672,7 +680,8 @@ def _touches_style(repo: Path, rel: str, old_rev: str, new_rev: str,
             return True
         if new_style & set(range(new_start, new_start + new_count)):
             return True
-    return bool(old_style & touched_old_lines(hunks))
+    # An insertion next to a style block, outside it, touches no CSS.
+    return False
 
 
 def select_for_diff(
