@@ -127,6 +127,120 @@ class BackgroundTeardownTests(unittest.TestCase):
         self.assertIsNone(harness._PENDING_TEARDOWN)
 
 
+class _Clock:
+    """A fake monotonic clock that only moves when a fake join waits."""
+
+    def __init__(self):
+        self.now = 100.0
+        self.events: list[str] = []
+
+    def monotonic(self):
+        return self.now
+
+
+class _BlockedThread:
+    """A teardown thread that never finishes: each join just spends its timeout."""
+
+    def __init__(self, clock: _Clock, name: str):
+        self.clock = clock
+        self.name = name
+        self.timeouts: list[float] = []
+
+    def join(self, timeout=None):
+        assert timeout is not None, "a shutdown join must be bounded"
+        self.timeouts.append(timeout)
+        self.clock.events.append("join " + self.name)
+        self.clock.now += timeout
+
+    def is_alive(self):
+        return True
+
+
+class _ShutdownServer:
+    """A live server for stop_all_servers(): records what was done to it, and by whom."""
+
+    def __init__(self, clock: _Clock, name: str, live: list):
+        self.name = name
+        self.live = live
+        self.proc = mock.Mock()
+        self.proc.poll.return_value = None
+        self.proc.terminate.side_effect = lambda: clock.events.append("terminate " + name)
+        self.proc.kill.side_effect = lambda: clock.events.append("kill " + name)
+        self.finish_timeouts: list[float | None] = []
+
+    def _finish_stop(self, *, drop=True, timeout=None):
+        self.finish_timeouts.append(timeout)
+        self.live.remove(self)
+
+
+class ShutdownTests(unittest.TestCase):
+    """stop_all_servers() on a signal: one shared budget, and no second owner."""
+
+    def setUp(self):
+        harness.finish_pending_teardown()
+        self.clock = _Clock()
+        self.live: list = []
+        patches = [
+            mock.patch.object(harness, "_LIVE_SERVERS", self.live),
+            mock.patch.object(harness, "_STUCK_TEARDOWNS", []),
+            mock.patch.object(harness, "_PENDING_TEARDOWN", None),
+            mock.patch.object(harness.time, "monotonic", self.clock.monotonic),
+        ]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _owned(self, name):
+        server = _ShutdownServer(self.clock, name, self.live)
+        thread = _BlockedThread(self.clock, name)
+        self.live.append(server)
+        return server, (thread, "tests.e2e.test_x.T." + name, [], server)
+
+    def test_a_server_owned_by_a_running_teardown_is_killed_not_stopped_twice(self):
+        server, record = self._owned("owned")
+        harness._STUCK_TEARDOWNS.append(record)
+        harness.stop_all_servers(budget_s=1.0)
+        # Its teardown thread still owns it: no second _finish_stop from here.
+        self.assertEqual(server.finish_timeouts, [])
+        self.assertEqual(self.clock.events, ["terminate owned", "join owned", "kill owned"])
+        self.assertEqual(harness._STUCK_TEARDOWNS, [record])  # still running, still awaited
+
+    def test_the_pending_teardown_owns_its_server_too(self):
+        server, record = self._owned("pending")
+        harness._PENDING_TEARDOWN = record
+        harness.stop_all_servers(budget_s=1.0)
+        self.assertEqual(server.finish_timeouts, [])
+        self.assertIn("kill pending", self.clock.events)
+
+    def test_every_wait_shares_one_budget(self):
+        owners = [self._owned(name) for name in ("a", "b", "c")]
+        harness._STUCK_TEARDOWNS.extend(record for _server, record in owners)
+        free = _ShutdownServer(self.clock, "free", self.live)
+        self.live.append(free)
+        started = self.clock.now
+        harness.stop_all_servers(budget_s=6.0)
+        # SIGTERM reaches every live process before anything waits.
+        self.assertEqual(self.clock.events[:4], ["terminate a", "terminate b", "terminate c", "terminate free"])
+        joins = [t for _server, record in owners for t in record[0].timeouts]
+        # The first stuck teardown spends the whole budget; the rest get none.
+        self.assertEqual(joins, [6.0, 0.0, 0.0])
+        self.assertLessEqual(self.clock.now - started, 6.0)
+        # The unowned server is still stopped, with what is left (nothing here).
+        self.assertEqual(free.finish_timeouts, [0.0])
+        self.assertEqual([e for e in self.clock.events if e.startswith("kill")], ["kill a", "kill b", "kill c"])
+
+    def test_an_unowned_server_gets_half_the_time_left_for_each_signal(self):
+        free = _ShutdownServer(self.clock, "free", self.live)
+        self.live.append(free)
+        self.assertEqual(harness.stop_all_servers(budget_s=8.0), 1)
+        self.assertEqual(free.finish_timeouts, [4.0])
+
+    def test_the_default_budget_fits_the_parents_stop_timeout(self):
+        from tests.e2e import run
+
+        self.assertLess(harness.SHUTDOWN_BUDGET_S, run.WORKER_STOP_TIMEOUT_S)
+
+
 class FinishStopTests(unittest.TestCase):
     def test_a_process_that_does_not_exit_keeps_its_database_and_entry(self):
         server = object.__new__(harness.AppServer)

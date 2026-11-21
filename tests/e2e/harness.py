@@ -711,15 +711,16 @@ def wait_http(url: str, timeout: float = READY_TIMEOUT_S) -> None:
     raise RuntimeError("server did not become ready at %s: %s" % (url, last))
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def _terminate(proc: subprocess.Popen, timeout: float = STOP_TIMEOUT_S) -> None:
+    """SIGTERM, wait ``timeout``, then SIGKILL and wait ``timeout`` again."""
     if proc.poll() is not None:
         return
     proc.terminate()
     try:
-        proc.wait(timeout=STOP_TIMEOUT_S)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=STOP_TIMEOUT_S)
+        proc.wait(timeout=timeout)
 
 
 # Every AppServer that has started and not yet stopped, in this process. A
@@ -729,21 +730,56 @@ def _terminate(proc: subprocess.Popen) -> None:
 _LIVE_SERVERS = []
 
 
-def stop_all_servers() -> int:
-    """Stop every still-running AppServer. Never raises. Returns how many."""
-    stopped = 0
-    try:
-        # A background teardown owns its server: let it finish first.
-        finish_pending_teardown()
-    except Exception:
-        pass
-    # A teardown that outlived its join still owns its server: wait once more
-    # before stopping what is left from this thread.
-    _join_stuck_teardowns(STOP_TIMEOUT_S)
+# run.py's parent gives a worker WORKER_STOP_TIMEOUT_S (20 s) to exit after
+# SIGTERM before it kills it. stop_all_servers() spends at most this much, so
+# the worker still exits on its own and runs its last cleanups.
+SHUTDOWN_BUDGET_S = 15.0
+
+
+def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
+    """Stop every still-running AppServer within ``budget_s``. Never raises.
+
+    Returns how many servers this call stopped or saw stopped by their
+    teardown. Every live process gets SIGTERM first, so all of them exit in
+    parallel. A server whose background teardown is still running stays
+    that teardown's: this call never runs a second _finish_stop on it (two
+    threads would drop the same database and delete the same storage). If
+    the teardown is still running when the budget is spent, its process is
+    killed outright so no PRKS server outlives the worker; the teardown's
+    database drop is then lost with the process, which beats a worker the
+    parent has to kill.
+    """
+    deadline = time.monotonic() + max(0.0, budget_s)
+
+    def remaining() -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    live = list(_LIVE_SERVERS)
+    for server in live:
+        proc = server.proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+    records = _teardown_records()
+    for record in records:
+        record[0].join(timeout=remaining())
+    owned = {id(record[3]) for record in records if record[0].is_alive()}
+    _forget_finished_teardowns()
+    stopped = sum(1 for server in live if server not in _LIVE_SERVERS)
     for server in list(_LIVE_SERVERS):
+        if id(server) in owned:
+            proc = server.proc
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            continue
         try:
-            # Synchronous: callers exit the process right after this.
-            server._finish_stop()
+            # Half the time left for SIGTERM, half for SIGKILL (_terminate).
+            server._finish_stop(timeout=remaining() / 2)
             stopped += 1
         except Exception:
             pass
@@ -1196,7 +1232,7 @@ class AppServer:
         finally:
             _profile_phase("server_stop", time.perf_counter() - started)
 
-    def _finish_stop(self, *, drop=True):
+    def _finish_stop(self, *, drop=True, timeout=STOP_TIMEOUT_S):
         """End the process and close its logs; with ``drop``, also drop the database and storage.
 
         Records no profile phases itself: from stop_later() it runs while
@@ -1205,7 +1241,7 @@ class AppServer:
         _LIVE_SERVERS entry) so stop_all_servers() can try again.
         """
         if self.proc is not None:
-            _terminate(self.proc)
+            _terminate(self.proc, timeout)
             if self.proc.poll() is None:
                 raise RuntimeError("PRKS E2E server process did not exit")
         for handle in (self._stdout, self._stderr):
@@ -1238,7 +1274,7 @@ class AppServer:
             self.library = None
 
 
-# The one background teardown in flight: (thread, test id, error box). The
+# The one background teardown in flight: (thread, test id, error box, server). The
 # lock is re-entrant and only guards the reference: run.py's SIGTERM handler
 # calls stop_all_servers() on the main thread, possibly while that thread is
 # inside one of these functions.
@@ -1262,7 +1298,7 @@ def _start_teardown(server, test_id):
 
     thread = threading.Thread(target=run, name="prks-e2e-teardown", daemon=True)
     with _TEARDOWN_LOCK:
-        _PENDING_TEARDOWN = (thread, test_id, failure)
+        _PENDING_TEARDOWN = (thread, test_id, failure, server)
         register = not _TEARDOWN_CLEANUP_REGISTERED
         _TEARDOWN_CLEANUP_REGISTERED = True
     thread.start()
@@ -1291,7 +1327,7 @@ def finish_pending_teardown():
         pending = _PENDING_TEARDOWN
     if pending is None:
         return
-    thread, test_id, failure = pending
+    thread, test_id, failure, _server = pending
     # _terminate waits STOP_TIMEOUT_S, kills, and waits again; the drop and
     # cleanup are quick. A thread still alive after that is itself a failure.
     thread.join(timeout=4 * STOP_TIMEOUT_S)
@@ -1325,6 +1361,22 @@ def _join_stuck_teardowns(timeout):
             with _TEARDOWN_LOCK:
                 if record in _STUCK_TEARDOWNS:
                     _STUCK_TEARDOWNS.remove(record)
+
+
+def _teardown_records():
+    """The pending teardown and the stuck ones: every thread that may still own a server."""
+    with _TEARDOWN_LOCK:
+        pending = [_PENDING_TEARDOWN] if _PENDING_TEARDOWN is not None else []
+        return pending + list(_STUCK_TEARDOWNS)
+
+
+def _forget_finished_teardowns():
+    """Drop the teardowns that have finished (shutdown only: their failures are not reported)."""
+    global _PENDING_TEARDOWN
+    with _TEARDOWN_LOCK:
+        _STUCK_TEARDOWNS[:] = [record for record in _STUCK_TEARDOWNS if record[0].is_alive()]
+        if _PENDING_TEARDOWN is not None and not _PENDING_TEARDOWN[0].is_alive():
+            _PENDING_TEARDOWN = None
 
 
 def _drain_teardowns_at_exit():
