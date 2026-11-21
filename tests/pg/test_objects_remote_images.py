@@ -146,6 +146,12 @@ class SaveTests(RemoteImageTestCase):
         self.noted('<img src="https://example.org/chart.png?w=400&amp;format=png">')
         self.assertIsNotNone(self.save(url))
 
+    def test_an_ampersand_spelt_as_a_character_reference_matches(self) -> None:
+        for number, spelling in enumerate(("&#38;", "&#038;", "&#x26;", "&#X26;", "&AMP;")):
+            with self.subTest(spelling=spelling):
+                self.noted(f'<img src="https://example.org/chart{number}.png?w=400{spelling}format=png">')
+                self.assertIsNotNone(self.save(f"https://example.org/chart{number}.png?w=400&format=png"))
+
     def test_an_uppercase_scheme_is_saved(self) -> None:
         url = "HTTPS://example.org/figures/Graph.png"
         self.noted(f"![x]({url})")
@@ -366,6 +372,16 @@ class LifecycleTests(RemoteImageTestCase):
                                          lambda scope: remote_images.prune_page(scope, ""))
         self.assertEqual(dropped, 1)  # the old figure
         self.assertEqual(set(self.rows()), {THUMB, recent})
+
+    def test_the_prune_keeps_a_figure_named_through_a_numeric_reference(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        work_id = self.noted(f"![x]({url})")
+        self.save(url)
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
+                 ('<img src="https://example.org/chart.png?w=400&#38;format=png">', work_id))
+        self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(set(self.rows()), {url})
+        self.assertEqual(self.claims(), set())
 
     def test_a_backup_carries_the_saved_copy(self) -> None:
         self.video()

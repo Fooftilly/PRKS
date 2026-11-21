@@ -93,27 +93,25 @@ SUFFIXES = {"webp": ".webp", "jpeg": ".jpg"}
 # non-ASCII) and keeps the escapes it found, so a figure's text holds the
 # URL, its decoded form, or the form with only non-ASCII decoded (text that
 # mixes raw non-ASCII with escapes such as ``%20``), or its HTML-escaped form
-# (an inline ``<img src="...&amp;...">``).
-_NAMED: LiteralString = """
+# (an inline ``<img src="...&amp;...">``). An ``&`` the text spells as a
+# character reference (``&amp;``, ``&#38;``, ``&#x26;``) is read as ``&``
+# too: the renderer decodes it, so the page asks for the URL with ``&``.
+_NAMED: LiteralString = r"""
+WITH texts AS (
+  SELECT body AS text FROM prks.work_notes WHERE library_id = %(library_id)s
+  UNION ALL SELECT description FROM prks.concepts WHERE library_id = %(library_id)s
+  UNION ALL SELECT description FROM prks.positions WHERE library_id = %(library_id)s
+  UNION ALL SELECT main_text FROM prks.arguments WHERE library_id = %(library_id)s
+), spellings AS (
+  SELECT DISTINCT spelling FROM unnest(%(spellings)s::text[]) AS spelling
+)
 SELECT EXISTS (SELECT 1 FROM prks.assets
                WHERE library_id = %(library_id)s
                  AND (thumb_url = %(url)s OR split_part(thumb_url, '#', 1) = %(url)s))
-    OR EXISTS (SELECT 1 FROM prks.work_notes
-               WHERE library_id = %(library_id)s
-                 AND (strpos(body, %(url)s) > 0 OR strpos(body, %(decoded)s) > 0
-                      OR strpos(body, %(mixed)s) > 0 OR strpos(body, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.concepts
-               WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.positions
-               WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.arguments
-               WHERE library_id = %(library_id)s
-                 AND (strpos(main_text, %(url)s) > 0 OR strpos(main_text, %(decoded)s) > 0
-                      OR strpos(main_text, %(mixed)s) > 0 OR strpos(main_text, %(escaped)s) > 0)) AS named
+    OR EXISTS (SELECT 1 FROM texts CROSS JOIN LATERAL (
+                 SELECT regexp_replace(texts.text, '&(?:amp|#0*38|#x0*26);', '&', 'gi') AS folded) AS f
+               CROSS JOIN spellings
+               WHERE strpos(texts.text, spelling) > 0 OR strpos(f.folded, spelling) > 0) AS named
 """
 _SAVED: LiteralString = """
 SELECT locator, sha256, byte_size FROM prks.remote_images
@@ -212,8 +210,8 @@ def named(scope: LibraryScope, url: str) -> bool:
     """Whether the Library's own content names ``url``; reads only."""
     mixed = _NON_ASCII_ESCAPES.sub(lambda match: unquote(match.group(0)), url)
     escaped = html.escape(url, quote=True)
-    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url), "mixed": mixed,
-                                 "escaped": escaped}).fetchone()
+    spellings = [url, unquote(url), mixed, escaped]
+    row = scope.execute(_NAMED, {"url": url, "spellings": spellings}).fetchone()
     return bool(row is not None and row["named"])
 
 
