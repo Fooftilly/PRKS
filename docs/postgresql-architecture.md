@@ -218,8 +218,9 @@ finishes.
 
 The HTTP server's thread pool (`PRKS_HTTP_THREADS`) can be larger than the
 database pool (`docs/http-server.md` says how to size the two). Pool
-exhaustion is a 503 with `Retry-After`, never a hang, and a test pins that
-behavior.
+exhaustion is a 503, never a hang, and a test pins that behavior. A route
+answers it with `Retry-After`; admission and the sign-in routes answer a
+plain 503 `unavailable`.
 
 PgBouncer is **not** part of the design. A personal or small self-hosted
 deployment does not need it. If a deployment adds it, it must run in session

@@ -157,6 +157,11 @@ class SaveTests(RemoteImageTestCase):
         self.noted('<img src="https://example.org/chart.png?w=400&#38;label=O&#x27;Neil&amp;t=&quot;x&quot;">')
         self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=O'Neil&t=\"x\""))
 
+    def test_reference_names_are_case_sensitive(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&#38;label=&APOS;x&Amp;y">')
+        self.assertIsNone(self.save("https://example.org/chart.png?w=400&label='x&y"))
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=&APOS;x&Amp;y"))
+
     def test_a_reference_is_decoded_only_once(self) -> None:
         self.noted('<img src="https://example.org/chart.png?w=400&amp;amp;format=png">')
         self.assertIsNone(self.save("https://example.org/chart.png?w=400&format=png"))

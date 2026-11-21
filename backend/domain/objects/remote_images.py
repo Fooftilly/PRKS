@@ -98,7 +98,8 @@ SUFFIXES = {"webp": ".webp", "jpeg": ".jpg"}
 # ``'``, ``"`` and ``&`` references (``&#x27;``, ``&quot;``, ``&#38;``...)
 # decoded once, as an HTML parser reads them in an attribute: a numeric
 # reference may omit its ``;``, and so may ``&amp`` and ``&quot`` when no
-# letter, digit or ``=`` follows. The HTML-escaped spelling is matched against the raw text
+# letter, digit or ``=`` follows. Names are case-sensitive: HTML knows
+# ``&AMP;`` and ``&QUOT;`` but not ``&APOS;`` or ``&Amp;``. The HTML-escaped spelling is matched against the raw text
 # only: in decoded text it would name a URL that really contains ``&amp;``.
 _NAMED: LiteralString = r"""
 WITH texts AS (
@@ -115,9 +116,9 @@ SELECT EXISTS (SELECT 1 FROM prks.assets
     OR EXISTS (SELECT 1 FROM texts CROSS JOIN LATERAL (
                  -- The & pass runs last, so no reference is decoded twice.
                  SELECT regexp_replace(regexp_replace(regexp_replace(texts.text,
-                          '&(?:apos;|#0*39(?![0-9]);?|#x0*27(?![0-9a-f]);?)', '''', 'gi'),
-                          '&(?:quot;|quot(?![0-9a-z=])|#0*34(?![0-9]);?|#x0*22(?![0-9a-f]);?)', '"', 'gi'),
-                          '&(?:amp;|amp(?![0-9a-z=])|#0*38(?![0-9]);?|#x0*26(?![0-9a-f]);?)', '&', 'gi') AS text) AS decoded
+                          '&(?:apos;|#0*39(?![0-9]);?|#[xX]0*27(?![0-9a-fA-F]);?)', '''', 'g'),
+                          '&(?:(?:quot|QUOT)(?:;|(?![0-9A-Za-z=]))|#0*34(?![0-9]);?|#[xX]0*22(?![0-9a-fA-F]);?)', '"', 'g'),
+                          '&(?:(?:amp|AMP)(?:;|(?![0-9A-Za-z=]))|#0*38(?![0-9]);?|#[xX]0*26(?![0-9a-fA-F]);?)', '&', 'g') AS text) AS decoded
                CROSS JOIN unnest(%(decoded)s::text[]) AS spelling
                WHERE strpos(decoded.text, spelling) > 0) AS named
 """
