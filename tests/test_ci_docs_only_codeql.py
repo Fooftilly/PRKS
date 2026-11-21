@@ -49,7 +49,9 @@ def _guards(step: str) -> list[str]:
 class CodeQLDocsOnlyCIContractTests(unittest.TestCase):
     def test_keep_all_required_context_names_and_event_triggers(self):
         source = CODEQL.read_text(encoding="utf-8")
-        for trigger in ("push", "pull_request", "workflow_dispatch", "schedule"):
+        # No push trigger: master runs come from master-ci.yml after merges.
+        self.assertNotRegex(source, r"(?m)^  push:\s*$")
+        for trigger in ("pull_request", "workflow_dispatch", "schedule"):
             self.assertRegex(source, r"(?m)^  " + trigger + r":\s*$")
         # Restrict trigger-filter checks to the `on:` event section:
         # CodeQL's own `init.with.config` intentionally contains a

@@ -1,0 +1,53 @@
+name: Master CI after merges
+
+# Pull requests pass the full gates before they merge, so a merge no longer
+# reruns them on master. Once a night, one job per workflow starts it on
+# master's head when something merged since its last such run (or that run
+# failed), waits for it and fails when it fails (scripts/ci/master_ci.py).
+# scheduled-report.yml turns a failed night into the issue
+# "Scheduled check failing: Master CI after merges".
+on:
+  schedule:
+    # 01:23 local time keeps clear of the other night jobs and the DST hour.
+    - cron: "23 1 * * *"
+      timezone: Europe/Podgorica
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: master-ci
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ${{ matrix.workflow }}
+    if: ${{ github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-24.04
+    # The job only waits; the Full E2E Gate is the longest workflow it waits for.
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      actions: write # list runs and dispatch the full workflows
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep in sync with WORKFLOWS in scripts/ci/master_ci.py (tested).
+        workflow:
+          - e2e-gate.yml
+          - test-gate.yml
+          - static-analysis.yml
+          - codeql.yml
+          - zizmor.yml
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run the workflow if master's head needs it, and wait
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ matrix.workflow }}
+        run: python3 scripts/ci/master_ci.py --workflow "$WORKFLOW"

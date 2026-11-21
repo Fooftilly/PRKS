@@ -28,7 +28,7 @@ def tearDownModule():
 class FolderLibraryRouteSurfaceTests(unittest.TestCase):
     def start(self):
         server = AppServer(seed_fn=seed_graph_context_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(
             _BROWSER, server.origin, service_workers="allow"
@@ -162,7 +162,7 @@ class FolderLibraryRouteSurfaceTests(unittest.TestCase):
     def test_restored_filter_survives_folder_round_trip(self):
         """#1034: a claimed session filter stays on the pane after leave/return, and tree icons hydrate."""
         server = AppServer(seed_fn=seed_folders_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(
             _BROWSER, server.origin, service_workers="allow"

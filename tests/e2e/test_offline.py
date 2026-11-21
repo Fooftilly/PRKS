@@ -544,7 +544,7 @@ _PDF_SYNC_SETTLED_JS = (
 class OfflineFoundationTests(unittest.TestCase):
     def _start(self, seed_fn=seed_library):
         server = AppServer(seed_fn=seed_fn)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -1200,7 +1200,7 @@ class OfflineFoundationTests(unittest.TestCase):
     def test_online_prks_works_with_indexeddb_disabled(self):
         """Scenario 6: IndexedDB unavailable never blocks ordinary online PRKS use."""
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         assert _BROWSER is not None
         context = _BROWSER.new_context(
@@ -2607,7 +2607,7 @@ class OfflineConceptTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_concepts_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -3539,7 +3539,7 @@ class OfflinePositionTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_positions_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -3630,7 +3630,7 @@ class OfflinePositionTests(unittest.TestCase):
         empty state -- but its New Position escape route is disabled offline.
         That is a different thing from having no cached index at all."""
         server = AppServer(seed_fn=seed_concepts_library)  # no Positions seeded
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, _collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -4364,7 +4364,7 @@ class OfflineArgumentTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_arguments_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -4517,7 +4517,7 @@ class OfflineArgumentTests(unittest.TestCase):
         """A cached complete list with zero Stances still shows the ordinary
         "No Stances yet." empty state -- with durable creation available."""
         server = AppServer(seed_fn=seed_positions_library)  # Arguments, no Stances
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, _collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -5071,7 +5071,7 @@ class OfflineArgumentCoherenceTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_arguments_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -5530,7 +5530,7 @@ class OfflinePeopleTests(unittest.TestCase):
 
     def _start(self, seed_fn=seed_people_library):
         server = AppServer(seed_fn=seed_fn)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -6062,7 +6062,7 @@ class OfflinePeopleMutationTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_people_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)
@@ -6400,7 +6400,7 @@ class OfflinePeopleCoherenceTests(unittest.TestCase):
 
     def _start(self):
         server = AppServer(seed_fn=seed_people_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers="allow")
         self.addCleanup(context.close)

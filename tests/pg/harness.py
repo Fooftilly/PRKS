@@ -228,10 +228,18 @@ class PostgresHarness:
         """Drop every database of this run (clones first, the template last)."""
         with self._lock:
             template = self._template
-        for name in sorted(self._created - {template} if template else self._created):
-            if self.exists(name):
+        for name in sorted(set(self._created) - {template} if template else set(self._created)):
+            if not self.exists(name):
+                self._created.discard(name)
+                continue
+            try:
                 self.drop_database(name)
-            else:
+            except HarnessRefusal:
+                # An E2E teardown still running after its exit drain may drop
+                # (and forget) it between exists() and the ownership check.
+                # Gone is the goal; anything else still refuses.
+                if self.exists(name):
+                    raise
                 self._created.discard(name)
         if template is not None and template in self._created:
             self.drop_database(template)

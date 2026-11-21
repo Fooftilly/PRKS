@@ -57,7 +57,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         e2e_diag("START", tid)
         server = AppServer(seed_fn=seed_library)
         self.addCleanup(lambda: e2e_diag("SERVER_STOPPED", tid))
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         e2e_diag("SERVER_READY", tid)
         assert _HOLDER is not None

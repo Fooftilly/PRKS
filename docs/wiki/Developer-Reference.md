@@ -81,6 +81,16 @@ which branch was exercised. The separate test
 `python -m unittest tests.test_ci_workflow_lint_scope` covers both decisions
 using synthetic local PR merge histories.
 
+### SonarCloud
+
+SonarCloud runs Automatic Analysis on every PR and on `master`; there is no
+Sonar CI job and no coverage import yet. Root `.sonarcloud.properties` tells it
+which files are test code (`tests/`, `frontend-app` `*.test.*`, fixtures and
+`test-support/`) and excludes vendored and generated files, mirroring
+`.codacy.yml`. New code on `master` is the last 30 days (set in the SonarCloud
+project settings). Sonar reads that file only from the default branch, so a
+change to it takes effect after merge.
+
 ### Optional SonarQube CLI (Claude Code)
 
 Shared Claude Code secrets hooks (`.claude/settings.json`) and the project

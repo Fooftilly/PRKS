@@ -52,7 +52,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
     def start(self, title=PEOPLE_WORK_TITLE):
         server = AppServer(seed_fn=seed_work_people_library)
-        self.addCleanup(server.stop); server.start()
+        self.addCleanup(server.stop_later); server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin,
                                                  service_workers='allow')
         self.addCleanup(context.close)

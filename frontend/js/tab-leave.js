@@ -69,7 +69,7 @@ var prksTabLeave = (function(exports) {
 			return null;
 		}
 		function enqueue(ownerIds, job) {
-			const ids = [...new Set(ownerIds.map((id) => String(id)))].sort();
+			const ids = [...new Set(ownerIds.map((id) => String(id)))].sort((a, b) => Number(a > b) - Number(a < b));
 			const keys = ids.length ? ids : [""];
 			const previous = keys.map((id) => slots.get(id)).filter((slot) => !!slot);
 			const idle = previous.every((slot) => slot.done);
