@@ -1309,11 +1309,16 @@ def finish_pending_teardown():
 
 
 def _join_stuck_teardowns(timeout):
-    """Give teardowns that outlived their join one more bounded wait."""
+    """Give teardowns that outlived their join one more wait, ``timeout`` in all.
+
+    One shared deadline, not one per teardown: run.py's parent kills a
+    worker that does not exit within its own shutdown budget.
+    """
     with _TEARDOWN_LOCK:
         stuck = list(_STUCK_TEARDOWNS)
+    deadline = time.monotonic() + timeout
     for record in stuck:
-        record[0].join(timeout=timeout)
+        record[0].join(timeout=max(0.0, deadline - time.monotonic()))
         if not record[0].is_alive():
             with _TEARDOWN_LOCK:
                 if record in _STUCK_TEARDOWNS:
