@@ -7,13 +7,15 @@
  * and says why when it refuses one. Each imported style has a Delete with
  * the destructive confirm; deleting the Library's style makes the Library
  * use the default again, and a file that used it is cited in the Library's
- * style. The links point to where styles come from.
+ * style. The links point to where styles come from. The list is read each
+ * time the Export category is shown.
  */
-import { onMounted, ref } from 'vue'
+import { ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { MAX_CSL_BYTES, deleteImportedStyle, importStyle } from '../../api/citation-styles'
 import { PrksApiError } from '../../api/http'
 import { importedStyles, loadImportedStyles } from '../citations/styles'
+import { settingsActiveCategory } from './navigation'
 
 const emit = defineEmits<{
   /** An import or a delete finished, so the style picker may need to read the settings again. */
@@ -101,9 +103,10 @@ async function remove(id: string, title: string): Promise<void> {
   emit('changed', id)
 }
 
-onMounted(() => {
-  void refresh()
-})
+// Read when the Export category is shown, not when Settings mounts hidden at startup.
+watch(settingsActiveCategory, (category) => {
+  if (category === 'export') void refresh()
+}, { immediate: true })
 </script>
 
 <template>

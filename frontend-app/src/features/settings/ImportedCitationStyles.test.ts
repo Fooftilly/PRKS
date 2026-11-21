@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { resetImportedStylesForTests } from '../citations/styles'
+import { settingsActiveCategory } from './navigation'
 import ImportedCitationStyles from './ImportedCitationStyles.vue'
 
 const HOUSE = `custom-${'e'.repeat(32)}`
@@ -13,6 +14,7 @@ let importAnswer: { status: number; body: unknown }
 
 beforeEach(() => {
   resetImportedStylesForTests()
+  settingsActiveCategory.value = 'export'
   calls = []
   styles = [{ id: HOUSE, title: 'House Style', created_at: 'x' }]
   importAnswer = { status: 201, body: { id: `custom-${'f'.repeat(32)}`, title: 'New Style', created_at: 'x' } }
@@ -33,6 +35,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  settingsActiveCategory.value = 'general'
   vi.unstubAllGlobals()
   delete win.prksConfirmDestructive
   document.body.innerHTML = ''
@@ -50,6 +53,16 @@ function names(wrapper: ReturnType<typeof mount>): string[] {
 }
 
 describe('ImportedCitationStyles', () => {
+  it('reads the list only once the Export category is shown', async () => {
+    settingsActiveCategory.value = 'general'
+    const wrapper = mount(ImportedCitationStyles)
+    await flushPromises()
+    expect(calls).toEqual([])
+    settingsActiveCategory.value = 'export'
+    await flushPromises()
+    expect(names(wrapper)).toEqual(['House Style'])
+  })
+
   it('lists the imported styles and links to where styles come from', async () => {
     const wrapper = mount(ImportedCitationStyles)
     await flushPromises()

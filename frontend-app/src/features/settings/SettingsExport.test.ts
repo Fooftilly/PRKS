@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from '../citations/styles'
+import { settingsActiveCategory } from './navigation'
 import SettingsExport from './SettingsExport.vue'
 
 type StyleWindow = Window & {
@@ -26,6 +27,7 @@ let imported: Array<{ id: string; title: string; created_at: string }>
 
 beforeEach(() => {
   resetImportedStylesForTests()
+  settingsActiveCategory.value = 'export'
   imported = []
   vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
     if (init?.method === 'DELETE') {
@@ -47,6 +49,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  settingsActiveCategory.value = 'general'
   vi.unstubAllGlobals()
   delete win.prksLoadAppSettings
   delete win.prksConfirmDestructive
