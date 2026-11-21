@@ -300,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     results: list[MutationResult] = []
+    missing: list[str] = []
     if args.command == "mutation":
         root = str(Path(__file__).resolve().parents[2])
         if root not in sys.path:
