@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import stat
@@ -109,10 +110,10 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
         """
         if not logging.raiseExceptions:
             return
-        try:
-            sys.stderr.write(f"prks_log_file_write_failed error_type={safe_error_type(sys.exc_info()[1])}\n")
-        except Exception:
-            pass  # stderr itself is gone: nothing left to report to
+        error_type = safe_error_type(sys.exc_info()[1])
+        # When stderr itself is gone there is nothing left to report to.
+        with contextlib.suppress(Exception):
+            sys.stderr.write(f"prks_log_file_write_failed error_type={error_type}\n")
 
     def _reopen_if_moved(self) -> None:
         """Reopen when another process rotated the file this handler holds."""
