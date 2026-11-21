@@ -10,6 +10,9 @@ export type { CitationsBibtex, CitationsCslJson, CslItem }
 
 export const CITATIONS_CONTRACT_VERSION = '0.1.0'
 
+/** The most Works one request may name: `PRKS_BULK_WORK_MAX` in `backend/domain/works/rules.py`. */
+export const CITATION_EXPORT_MAX = 500
+
 const READ_ERROR = 'Could not read the citations.'
 
 function invalid(): PrksApiError {

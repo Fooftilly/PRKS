@@ -10,6 +10,7 @@ const citeproc = new Function(`${citeprocSource}\nreturn CSL;`)() as CiteprocMod
 const ITEM = { id: 'W-1', type: 'book', title: 'A Book', author: [{ family: 'Byron', given: 'Ada' }], issued: { 'date-parts': [[1999]] } }
 
 let answer: unknown
+let answerStatus = 200
 let copied: string[]
 let downloads: { name: string; type: string; text: string }[]
 
@@ -17,8 +18,9 @@ beforeEach(() => {
   setCiteprocLoaderForTests(() => Promise.resolve(citeproc))
   copied = []
   downloads = []
+  answerStatus = 200
   vi.stubGlobal('fetch', vi.fn(async (path: string) => {
-    if (path === '/api/citations') return new Response(JSON.stringify(answer))
+    if (path === '/api/citations') return new Response(JSON.stringify(answer), { status: answerStatus })
     if (path === '/vendor/csl/modern-language-association.csl') return new Response(mlaStyle)
     if (path === '/vendor/csl/locales-en-US.xml') return new Response(enUsLocale)
     return new Response('', { status: 404 })
@@ -64,6 +66,20 @@ describe('exportCitations', () => {
     await expect(exportCitations(['W-1'], 'formatted')).rejects.toBeInstanceOf(CitationExportError)
     answer = { format: 'bibtex', text: '', missing: ['W-1'] }
     await expect(exportCitations(['W-1'], 'bib-file')).rejects.toThrow('None of the selected files exist any more.')
+  })
+
+  it('refuses a selection over the limit before sending it', async () => {
+    const ids = Array.from({ length: 501 }, (_, index) => `W-${index}`)
+    await expect(exportCitations(ids, 'csl-json-file')).rejects.toThrow('Select at most 500 files to cite at once.')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('tells the reason PRKS gave for a refused export', async () => {
+    answerStatus = 400
+    answer = { error: 'Too many files selected.' }
+    const refused = exportCitations(['W-1'], 'bibtex')
+    await expect(refused).rejects.toBeInstanceOf(CitationExportError)
+    await expect(exportCitations(['W-1'], 'csl-json-file')).rejects.toThrow('Too many files selected.')
   })
 
   it('the bridge refuses an unknown kind and labels the Library style', async () => {

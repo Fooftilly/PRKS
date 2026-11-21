@@ -54,8 +54,8 @@ CSL_TYPES: dict[str, str] = {
 _GENRES = {"mastersthesis": "Master's thesis", "phdthesis": "PhD thesis"}
 _ROLE_VARIABLES = (("Author", "author"), ("Editor", "editor"), ("Translator", "translator"))
 _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
-#: A standalone year, which may have fewer than four digits (``950``).
-_YEAR_RE = re.compile(r"^\s*(\d{1,4})\s*$")
+#: The leading year of the Year field: one to four digits (``950``, ``2020`` of ``2020–2021``).
+_YEAR_RE = re.compile(r"^\s*(\d{1,4})(?!\d)")
 
 
 def _text(value: Any) -> str:

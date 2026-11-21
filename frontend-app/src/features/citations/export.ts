@@ -6,7 +6,8 @@
  * HTML it falls back to the shared plain-text copy. Downloads are made in the
  * page from a Blob: nothing is uploaded or fetched from elsewhere.
  */
-import { fetchBibtex, fetchCslItems } from '../../api/citations'
+import { CITATION_EXPORT_MAX, fetchBibtex, fetchCslItems } from '../../api/citations'
+import { PrksApiError } from '../../api/http'
 import { formatCitations } from './engine'
 import { libraryCitationStyle } from './styles'
 
@@ -70,20 +71,35 @@ function nothingLeft(): CitationExportError {
   return new CitationExportError('None of the selected files exist any more.')
 }
 
+/** A refusal PRKS explained (a 400, such as a selection over the limit), told as its own message. */
+async function explained<T>(read: () => Promise<T>): Promise<T> {
+  try {
+    return await read()
+  } catch (error) {
+    if (error instanceof PrksApiError && error.status === 400 && error.message) {
+      throw new CitationExportError(error.message)
+    }
+    throw error
+  }
+}
+
 /** Copy or download the Works' citations; formatted copies use the Library's default style. */
 export async function exportCitations(
   workIds: readonly string[],
   kind: CitationExportKind,
   styleId: string = libraryCitationStyle(),
 ): Promise<CitationExportResult> {
+  if (new Set(workIds).size > CITATION_EXPORT_MAX) {
+    throw new CitationExportError(`Select at most ${CITATION_EXPORT_MAX} files to cite at once.`)
+  }
   if (kind === 'bibtex' || kind === 'bib-file') {
-    const { text, missing } = await fetchBibtex(workIds)
+    const { text, missing } = await explained(() => fetchBibtex(workIds))
     if (!text.trim()) throw nothingLeft()
     if (kind === 'bibtex') await copyPlainText(text)
     else downloadText('prks-citations.bib', text + '\n', 'application/x-bibtex')
     return { cited: new Set(workIds).size - missing.length, missing: missing.length }
   }
-  const { items, missing } = await fetchCslItems(workIds)
+  const { items, missing } = await explained(() => fetchCslItems(workIds))
   if (!items.length) throw nothingLeft()
   if (kind === 'csl-json-file') {
     downloadText('prks-citations.json', JSON.stringify(items, null, 2) + '\n', 'application/vnd.citationstyles.csl+json')

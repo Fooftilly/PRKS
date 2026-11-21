@@ -64,6 +64,8 @@ class CslFormatTests(unittest.TestCase):
         self.assertEqual(item({"published_date": "spring", "year": "c. 1900"}).get("issued"), None)
         # A standalone year may have fewer than four digits; a date may not.
         self.assertEqual(item({"year": "950"})["issued"], {"date-parts": [[950]]})
+        self.assertEqual(item({"year": "2020–2021"})["issued"], {"date-parts": [[2020]]})
+        self.assertEqual(item({"year": "12345"}).get("issued"), None)
         self.assertEqual(item({"published_date": "950-01-01"}).get("issued"), None)
 
     def test_fields_map_and_empty_ones_are_left_out(self):
@@ -79,6 +81,14 @@ class CslFormatTests(unittest.TestCase):
                          {"date-parts": [[2026, 11, 21]]})
         self.assertNotIn("accessed", item({"updated_at": "2026-11-21T10:00:00Z"}))
         self.assertNotIn("accessed", item({"source_url": "https://e.x", "updated_at": "2026"}))
+
+
+class CitationExportLimitTests(unittest.TestCase):
+    def test_the_client_limit_is_the_bulk_selection_limit(self):
+        from backend.domain.works.rules import PRKS_BULK_WORK_MAX
+
+        source = (_ROOT / "frontend-app" / "src" / "api" / "citations.ts").read_text(encoding="utf-8")
+        self.assertIn(f"export const CITATION_EXPORT_MAX = {PRKS_BULK_WORK_MAX}", source)
 
 
 class CitationStyleRegistryTests(unittest.TestCase):
