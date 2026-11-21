@@ -2,8 +2,10 @@
  * PRKS app-shell / PDF service worker.
  *
  * Scope (see AGENTS.md "Offline / PWA" invariants):
- *   - App-shell + static-resource availability, plus a focused managed-PDF
- *     response cache. Nothing else.
+ *   - App-shell + static-resource availability, plus focused managed-PDF and
+ *     saved note-figure (/api/remote-images?...&figure=1, #1351) response
+ *     caches in the page's scoped cache. Nothing else; Work thumbnails are
+ *     never cached.
  *   - Never queues API mutations. Never generically caches /api/... JSON --
  *     app code/IndexedDB own structured offline records (offline-store.js /
  *     offline-runtime.js).
@@ -237,6 +239,14 @@
         }
     }
 
+    function searchOf(rawUrl, origin) {
+        try {
+            return new URL(rawUrl, origin).search;
+        } catch (_e) {
+            return '';
+        }
+    }
+
     function isNavigationRequest(request) {
         return !!(request && request.mode === 'navigate');
     }
@@ -251,6 +261,23 @@
     /** Canonical managed-PDF route only: /api/pdfs/<one filename segment>. */
     function isManagedPdfPath(pathname) {
         return /^\/api\/pdfs\/[^/]+$/.test(pathname);
+    }
+
+    /**
+     * A note figure's saved copy: /api/remote-images with one `url` and
+     * `figure=1` (markdown-sanitize.js). A Work thumbnail uses the same route
+     * without `figure`, and is never cached (offline media policy).
+     */
+    function isRemoteFigureRequest(pathname, search) {
+        if (pathname !== '/api/remote-images') return false;
+        let params;
+        try {
+            params = new URLSearchParams(search || '');
+        } catch (_e) {
+            return false;
+        }
+        return params.getAll('url').length === 1 && params.getAll('figure').length === 1 &&
+            params.get('figure') === '1';
     }
 
     function hasRangeHeader(request) {
@@ -768,10 +795,58 @@
             }
         }
 
+        /**
+         * A saved note figure, in the page's own scoped cache (the managed-PDF
+         * cache of its scope and Library epoch), so a note read offline shows
+         * the figures it showed online. The network first: a saved copy
+         * (200 with an ETag, its hash) is stored only while the session is
+         * still that cache's scope, before and after the fetch; an uncached
+         * copy (no ETag) is never stored, and a 404 (the Library no longer
+         * names the URL) drops the entry. Offline, the stored copy or a 503.
+         */
+        async function handleRemoteFigureRequest(request, key, clientId) {
+            const cacheName = await pdfCacheName(clientId || '', false);
+            if (!cacheName) {
+                try {
+                    return await fetchImpl(request);
+                } catch (_e) {
+                    return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
+                }
+            }
+            const cache = await cachesApi.open(cacheName);
+            try {
+                const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
+                const res = await fetchImpl(request);
+                const etag = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('ETag') : null;
+                if (res && res.status === 404) {
+                    cache.delete(key).catch(function () {});
+                } else if (etag && isCacheableStaticResponse(res)) {
+                    let cloned = null;
+                    try {
+                        cloned = res.clone();
+                    } catch (_eClone) {
+                        cloned = null;
+                    }
+                    if (cloned) {
+                        Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
+                            if (!checks[0] || !checks[1]) return false;
+                            return cache.put(key, cloned);
+                        }).catch(function () {});
+                    }
+                }
+                return res;
+            } catch (_e) {
+                const cached = await cache.match(key);
+                if (cached) return cached;
+                return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
+            }
+        }
+
         return {
             handleNavigation: handleNavigation,
             handleStatic: handleStatic,
             handlePdfRequest: handlePdfRequest,
+            handleRemoteFigureRequest: handleRemoteFigureRequest,
         };
     }
 
@@ -1012,6 +1087,11 @@
                 event.respondWith(handlers.handlePdfRequest(request, pathname, event.clientId || ''));
                 return;
             }
+            const search = searchOf(url, origin);
+            if (isRemoteFigureRequest(pathname, search)) {
+                event.respondWith(handlers.handleRemoteFigureRequest(request, pathname + search, event.clientId || ''));
+                return;
+            }
             if (pathname === '/' || pathname === '/index.html' || isNavigationRequest(request)) {
                 event.respondWith(handlers.handleNavigation(request));
                 return;
@@ -1065,9 +1145,11 @@
         isGetRequest: isGetRequest,
         isSameOriginUrl: isSameOriginUrl,
         pathnameOf: pathnameOf,
+        searchOf: searchOf,
         isNavigationRequest: isNavigationRequest,
         isStaticEligiblePath: isStaticEligiblePath,
         isManagedPdfPath: isManagedPdfPath,
+        isRemoteFigureRequest: isRemoteFigureRequest,
         hasRangeHeader: hasRangeHeader,
         parseRangeHeaderValue: parseRangeHeaderValue,
         isCacheableStaticResponse: isCacheableStaticResponse,

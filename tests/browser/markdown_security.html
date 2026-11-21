@@ -146,7 +146,7 @@
         assert('keeps https link', markedDom.querySelector('a[href="https://example.com"]'));
         var markedImg = markedDom.querySelector('img[alt="Image"]');
         assert('an https image loads its saved copy',
-            markedImg && markedImg.getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png'));
+            markedImg && markedImg.getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png') + '&figure=1');
         assert('keeps hr', markedDom.querySelector('hr'));
         assert('keeps br', markedDom.querySelector('br'));
 
@@ -206,7 +206,10 @@
 
         var imgOk = asDom(sanitize('<img src="https://example.com/image.png" alt="n">'));
         assert('an https img src becomes its saved copy',
-            imgOk.querySelector('img').getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png'));
+            imgOk.querySelector('img').getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png') + '&figure=1');
+        var hashImg = asDom(sanitize('<img src="https://example.com/chart.png#page=2" alt="n">'));
+        assert('a figure loads its saved copy without the fragment',
+            hashImg.querySelector('img').getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/chart.png') + '&figure=1');
         var relImg = asDom(sanitize('<img src="/logo.svg" alt="n">'));
         assert('keeps a same-origin img src', relImg.querySelector('img').getAttribute('src') === '/logo.svg');
         var ownOrigin = window.location.origin + '/icons/icon-192.png';

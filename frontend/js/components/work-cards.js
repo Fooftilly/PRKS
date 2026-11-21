@@ -90,8 +90,9 @@ function prksSafeWorkThumbSrc(raw) {
         // Load it as PRKS's saved copy, the URL exactly as the Work stores it
         // (the server matches it to thumb_url) and only as an encoded query
         // value of PRKS's own route: the page loads no image from another
-        // site (CSP img-src 'self', #1351).
-        return PRKS_REMOTE_IMAGE_PREFIX + encodeURIComponent(remote);
+        // site (CSP img-src 'self', #1351), and a fragment, which an image load never sends).
+        const hash = remote.indexOf('#');
+        return PRKS_REMOTE_IMAGE_PREFIX + encodeURIComponent(hash === -1 ? remote : remote.slice(0, hash));
     } catch (_err) {
         return '';
     }

@@ -335,6 +335,51 @@ async function run() {
         }
     }
 
+    /* ---- saved note figures: cached per scope; thumbnails never ---- */
+    {
+        const fig = '/api/remote-images?url=' + encodeURIComponent('https://figures.example/a.png') + '&figure=1';
+        const thumb = '/api/remote-images?url=' + encodeURIComponent('https://img.example/t.jpg');
+        assertEq('a note figure is a remote-figure request',
+            sw.isRemoteFigureRequest('/api/remote-images', fig.slice(fig.indexOf('?'))), true);
+        assertEq('a Work thumbnail is not',
+            sw.isRemoteFigureRequest('/api/remote-images', thumb.slice(thumb.indexOf('?'))), false);
+        assertEq('figure must be exactly 1',
+            sw.isRemoteFigureRequest('/api/remote-images', '?url=x&figure=1&figure=1'), false);
+        assertEq('another path is not', sw.isRemoteFigureRequest('/api/remote-imagesx', '?url=x&figure=1'), false);
+
+        const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+        const body = Buffer.from('WEBP-FIGURE');
+        const respond = (status, headers) => () => Promise.resolve(new Response(status === 200 ? body : null,
+            { status: status, headers: Object.assign({ 'Content-Type': 'image/webp' }, headers || {}) }));
+        const cacheStorage = makeFakeCacheStorage();
+        const req = fakeRequest({ url: 'https://prks.example' + fig });
+        const online = (fetchImpl, confirm) => sw.createHandlers({
+            pdfCacheName: scopedPdfCacheName, caches: cacheStorage, fetchImpl: fetchImpl,
+            confirmScope: confirm || sessionConfirmed,
+        });
+        await online(respond(200, {})).handleRemoteFigureRequest(req, fig, '');
+        await settle();
+        const cache = await cacheStorage.open(PDF_CACHE);
+        assert('an uncached copy (no ETag) is never stored', !(await cache.match(fig)));
+        await online(respond(200, { ETag: '"abc"' }), () => Promise.resolve(false)).handleRemoteFigureRequest(req, fig, '');
+        await settle();
+        assert('a copy is not stored when the session is no longer the scope', !(await cache.match(fig)));
+        await online(respond(200, { ETag: '"abc"' })).handleRemoteFigureRequest(req, fig, '');
+        await settle();
+        assert('a saved copy is stored in the scoped cache', !!(await cache.match(fig)));
+        const offline = sw.createHandlers({ pdfCacheName: scopedPdfCacheName, caches: cacheStorage,
+            fetchImpl: () => Promise.reject(new Error('offline')) });
+        const served = await offline.handleRemoteFigureRequest(req, fig, '');
+        assert('offline, the stored figure is served', Buffer.from(await served.arrayBuffer()).equals(body));
+        const missing = await offline.handleRemoteFigureRequest(req, fig + 'x', '');
+        assertEq('offline, a figure never stored is 503', missing.status, 503);
+        await online(respond(404)).handleRemoteFigureRequest(req, fig, '');
+        await settle();
+        assert('a 404 drops the stored figure', !(await cache.match(fig)));
+        const unscoped = sw.createHandlers({ caches: cacheStorage, fetchImpl: () => Promise.reject(new Error('offline')) });
+        assertEq('without a scope, offline is 503', (await unscoped.handleRemoteFigureRequest(req, fig, '')).status, 503);
+    }
+
     /* ---- handlePdfRequest: whole-file caching + offline Range slicing ---- */
     {
         const cacheStorage = makeFakeCacheStorage();

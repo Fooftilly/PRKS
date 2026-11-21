@@ -86,6 +86,11 @@
                 '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')
             );
             assertEq(
+                'a video thumb loads its saved copy without the fragment',
+                root.prksSafeWorkThumbSrc('https://img.example/thumb.jpg#t=1'),
+                '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')
+            );
+            assertEq(
                 'a saved-copy src maps to itself',
                 root.prksSafeWorkThumbSrc(
                     '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')),

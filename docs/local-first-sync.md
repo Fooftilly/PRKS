@@ -114,6 +114,9 @@ The coordinator names no family: adding one is a registration.
   checks it before the put. Without that confirmation (another account
   signed in, expiry, offline) the bytes are served or kept by the page but
   never cached. Offline reads of bytes already cached are unchanged.
+  A note figure's saved copy (`/api/remote-images?…&figure=1`, #1351) uses
+  the same cache and the same checks; only a saved copy (one with an `ETag`)
+  is stored, a 404 drops it, and a Work thumbnail is never cached.
 - **Auth hold.** The page re-reads the session
   (`prksBrowserScope.verify()`) before each send and on its own lifecycle
   (visible again, focus, online, page show, once a minute while visible), so

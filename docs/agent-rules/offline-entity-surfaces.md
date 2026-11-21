@@ -311,7 +311,10 @@ portrait (`/api/persons/:id/profile-image`) and passes `suppressThumbnail: true`
 to `PrksWorkCard` (`suppressThumbnail: true`), so a cached mount issues no PRKS media request and
 shows the ordinary no-photo/empty-thumb presentation rather than broken images.
 Portrait and thumbnail bytes are never cached — not in IndexedDB, not in the
-service worker. Media already loaded online is not torn down when connectivity
+service worker. Note figures are the one exception (#1351): a figure's saved
+copy (`/api/remote-images?url=…&figure=1`, which only the Markdown sanitizer
+emits) is kept in the page's scoped cache, as a managed PDF is, so a note read
+offline shows the figures it showed online. Media already loaded online is not torn down when connectivity
 drops, and re-hydrating it after reconnect is explicitly not required.
 
 `prksBindPersonOfflineState()` settles all of that live. Because the Person

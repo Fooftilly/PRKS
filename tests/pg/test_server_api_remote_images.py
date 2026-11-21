@@ -18,7 +18,7 @@ from urllib.parse import quote
 
 from backend.domain.maintenance import backup, restore
 from backend.person_image import PortraitImage, decode_and_transcode
-from backend.storage.objects import LocalFilesystemStorage
+from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 THUMB = "https://i.ytimg.example/vi/abc/hqdefault.jpg"
@@ -74,9 +74,22 @@ class RemoteImageRouteTests(ServerApiTestCase):
         self.assertEqual((unchanged.status, unchanged.raw), (304, b""))
         self.assertEqual(figure_missing.status, 404)
 
+    def test_a_url_with_a_fragment_is_saved_without_it(self) -> None:
+        with_fragment = "https://figures.example/chart.png#page=2"
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
+                 (f"![chart]({with_fragment})", self.work_id))
+        self.sql("UPDATE prks.assets SET thumb_url = %s WHERE work_id = %s", (THUMB + "#t=1", self.work_id))
+        with mock.patch(_FETCH, return_value=self.picture):
+            self.assertEqual(self.image("https://figures.example/chart.png").status, 200)
+            self.assertEqual(self.image(THUMB).status, 200)
+            self.assertEqual(self.image(with_fragment).status, 404)
+        self.assertEqual(self.saved(), {"https://figures.example/chart.png", THUMB})
+
     def test_a_figure_in_a_note_is_saved(self) -> None:
         with mock.patch(_FETCH, return_value=self.picture):
-            self.assertEqual(self.image(FIGURE).status, 200)
+            # The sanitizer's offline marker is ignored by the route.
+            marked = self.get("/api/remote-images?url=" + quote(FIGURE, safe="") + "&figure=1")
+            self.assertEqual(marked.status, 200)
         self.assertEqual(self.saved(), {FIGURE})
 
     def test_a_url_the_library_does_not_name_or_prks_never_fetches_is_404(self) -> None:
@@ -111,7 +124,10 @@ class RemoteImageRouteTests(ServerApiTestCase):
         objects = LocalFilesystemStorage.for_config(self.storage)
         archive = backup.write_backup(self.db.config.conninfo, objects, self.lib, out,
                                       prks_version="0.8.0-test").path
+        (locator,) = (row["locator"] for row in self.sql("SELECT locator FROM prks.remote_images"))
         self.sql("DELETE FROM prks.remote_images")
+        # The restore must write the bytes back from the archive.
+        objects.delete(StorageKey(NAMESPACE_REMOTE_IMAGES, locator))
         restore.restore_library(self.db.config.conninfo, objects, archive, self.lib,
                                 owner_user_id=self.owner, staging_dir=out)
         self.assertEqual(self.saved(), {THUMB})
