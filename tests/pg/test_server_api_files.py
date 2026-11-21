@@ -169,12 +169,15 @@ class ManagedPdfTests(ManagedPdfTestCase):
         pruning, replaced = threading.Event(), threading.Event()
         self.addCleanup(replaced.set)
         first = [True]
+        # The handler swallows errors from its prune, so the held call records
+        # what happened and the test asserts it outside the handler.
+        resumed: list[bool] = []
 
         def held(*args: Any, **kwargs: Any) -> None:
             if first[0]:
                 first[0] = False
                 pruning.set()
-                self.assertTrue(replaced.wait(10))
+                resumed.append(replaced.wait(10))
             original(*args, **kwargs)
 
         result: dict[str, Any] = {}
@@ -187,7 +190,9 @@ class ManagedPdfTests(ManagedPdfTestCase):
             self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
             replaced.set()
             viewer.join(20)
+            self.assertFalse(viewer.is_alive())
             self.assertEqual(result["res"].status, 200)
+        self.assertEqual(resumed, [True])  # the old prune ran, after the replace
         primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
         new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
         self.assertIn(f"{new_stem}.webp", self.thumb_names(work["id"]))
