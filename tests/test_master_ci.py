@@ -126,6 +126,24 @@ class RunWorkflowTests(unittest.TestCase):
         master_ci.run_workflow(first, "static-analysis.yml", sleep=_no_sleep)
         self.assertEqual(first.dispatched[0][1], {"ref": "master"})
 
+    def test_retrying_a_failed_static_check_keeps_the_last_passing_base(self):
+        # A passed, B failed on a new violation; B unchanged: the retry still diffs against A.
+        gh = FakeActions([_run(2, HEAD, conclusion="failure"), _run(1, OLD)])
+        master_ci.run_workflow(gh, "static-analysis.yml", sleep=_no_sleep)
+        self.assertEqual(gh.dispatched[0][1], {"ref": "master", "inputs": {"diff_base": OLD}})
+
+    def test_without_a_passing_static_check_the_first_checked_commit_stays_the_base(self):
+        first = "d" * 40
+        gh = FakeActions([_run(3, HEAD, conclusion="failure"), _run(2, OLD, conclusion="failure"),
+                          _run(1, first, conclusion="timed_out")])
+        master_ci.run_workflow(gh, "static-analysis.yml", sleep=_no_sleep)
+        self.assertEqual(gh.dispatched[0][1]["inputs"], {"diff_base": first})
+
+    def test_only_static_analysis_gets_a_diff_base(self):
+        gh = FakeActions([_run(1, OLD)])
+        master_ci.run_workflow(gh, "e2e-gate.yml", sleep=_no_sleep)
+        self.assertEqual(gh.dispatched[0][1], {"ref": "master"})
+
     def test_master_moving_during_the_dispatch_is_named(self):
         newer = "c" * 40
         gh = FakeActions([_run(1, OLD)], ran_on=newer)

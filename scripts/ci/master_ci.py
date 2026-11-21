@@ -84,12 +84,28 @@ def decide(run: dict[str, Any] | None, head: str) -> tuple[str, str]:
     return "start", f"retrying this commit after {run.get('conclusion')}"
 
 
-def dispatch_body(workflow: str, previous: dict[str, Any] | None) -> dict[str, Any]:
+def diff_base(runs: list[dict[str, Any]]) -> str | None:
+    """The commit static analysis last passed on, else the first one master CI checked.
+
+    Never the commit of a failed run: retrying a failed commit against
+    itself would show the diff-aware guards an empty diff and pass. Until
+    one run passes, every run keeps the first checked commit as its base.
+    """
+    for run in runs:  # newest first
+        if run.get("status") == "completed" and run.get("conclusion") == "success":
+            sha = run.get("head_sha")
+            if isinstance(sha, str) and _SHA.match(sha):
+                return sha
+    oldest = runs[-1].get("head_sha") if runs else None
+    return oldest if isinstance(oldest, str) and _SHA.match(oldest) else None
+
+
+def dispatch_body(workflow: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
     body: dict[str, Any] = {"ref": BRANCH}
-    previous_sha = (previous or {}).get("head_sha")
-    if workflow == "static-analysis.yml" and isinstance(previous_sha, str) and _SHA.match(previous_sha):
+    base = diff_base(runs) if workflow == "static-analysis.yml" else None
+    if base:
         # Its diff-aware guards then see everything merged since that check.
-        body["inputs"] = {"diff_base": previous_sha}
+        body["inputs"] = {"diff_base": base}
     return body
 
 
@@ -138,7 +154,7 @@ def run_workflow(client: Client, workflow: str, *, dry_run: bool = False,
     if dry_run or action == "done":
         return True, f"{workflow}: {'would ' + action if dry_run else 'skipped'} ({reason})"
     run = previous if action == "wait" and previous else start(
-        client, workflow, {r["id"] for r in runs}, dispatch_body(workflow, previous), sleep=sleep)
+        client, workflow, {r["id"] for r in runs}, dispatch_body(workflow, runs), sleep=sleep)
     print(f"{workflow}: {'waiting for' if action == 'wait' else 'started'} {run.get('html_url')} ({reason})",
           flush=True)
     run = wait(client, run, sleep=sleep)

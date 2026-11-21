@@ -93,7 +93,7 @@ Pull requests pass the full gates before they merge, so a merge does not rerun t
 - If that run tested the current head and passed, the job does nothing, so a night with no merges costs one short job per workflow.
 - If that run tested the current head and failed, timed out or was cancelled, the job starts the workflow again.
 
-The job waits for the run and fails when the run fails, so a failed night opens the issue "Scheduled check failing: Master CI after merges", and the failed job's name says which workflow failed. Fast Static Analysis gets the commit master CI last checked as `diff_base`, so its diff-aware guards see everything merged since. A person's own manual dispatch never counts as master CI's run (a person re-running one of master CI's runs does). To check `master` sooner, run "Master CI after merges" by hand from the Actions page.
+The job waits for the run and fails when the run fails, so a failed night opens the issue "Scheduled check failing: Master CI after merges", and the failed job's name says which workflow failed. Fast Static Analysis gets the commit of its last passing master CI run as `diff_base` (or, before any run has passed, the first commit it checked), so a failed night is checked again from the same base and its diff-aware guards see everything merged since. A person's own manual dispatch never counts as master CI's run (a person re-running one of master CI's runs does). To check `master` sooner, run "Master CI after merges" by hand from the Actions page.
 
 ## Scheduled results as issues
 
