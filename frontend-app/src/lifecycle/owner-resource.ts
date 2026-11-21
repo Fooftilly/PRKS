@@ -229,7 +229,7 @@ export function createOwnerResourceRegistry(host: OwnerResourceHost): OwnerResou
   }
 
   function kinds(): OwnerResourceKind[] {
-    return Array.from(slots.keys()).sort()
+    return Array.from(slots.keys()).sort((a, b) => Number(a > b) - Number(a < b))
   }
 
   return {

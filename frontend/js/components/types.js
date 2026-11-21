@@ -24,7 +24,7 @@ function prksTypesCatalogValues(counts) {
     if (typeof PRKS_DOC_TYPES !== 'undefined' && Array.isArray(PRKS_DOC_TYPES)) {
         return PRKS_DOC_TYPES.map((d) => d.value);
     }
-    return Object.keys(counts).sort();
+    return Object.keys(counts).sort((a, b) => a.localeCompare(b));
 }
 
 /**

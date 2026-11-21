@@ -66,7 +66,7 @@ class DocsOnlyVueGateTests(unittest.TestCase):
         self.assertIn("name: Vue typecheck, test, and build", job)
         self.assertIn("runs-on: ubuntu-latest", job)
         self.assertNotRegex(job, r"(?m)^    if:")
-        self.assertIn("on:\n  push:", workflow)
+        self.assertNotIn("  push:", workflow)  # master runs come from master-ci.yml
         self.assertIn("  pull_request:", workflow)
         self.assertIn("  workflow_dispatch:", workflow)
 

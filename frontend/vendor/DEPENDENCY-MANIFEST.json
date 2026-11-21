@@ -109,7 +109,7 @@
       "runtime_files": [
         {
           "path": "/js/owner-resource.js",
-          "sha256": "feda62089b92f28a1afebb0c6c700862a3772b14d091ebc7cf0d9334bdec4094"
+          "sha256": "8b08392ab4d035ce5dc25ae5d7a0cb4cb29e805e2adcfb701826ad124b7baf96"
         }
       ],
       "source_category": "frontend-app:owner-resource",
@@ -161,7 +161,7 @@
       "runtime_files": [
         {
           "path": "/js/tab-leave.js",
-          "sha256": "e0e4a62284ef23cd4cf1536bc9006063a1b1a10aedafc4ca606e713bb9c09985"
+          "sha256": "aa9c45411c3a5f6a9711242aa9294a2cae1fcb403a975f08d3eb79e288c84062"
         }
       ],
       "source_category": "frontend-app:tab-leave",

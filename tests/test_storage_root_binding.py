@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import unittest
 from dataclasses import replace
@@ -1029,7 +1030,7 @@ class TestFileLock(RootTestCase):
 class TestPairedOpen(RootTestCase):
     """``open_storage_root(paired=True)``: a web process paired with PostgreSQL (L-D-1 #630)."""
 
-    def test_a_new_root_is_bound_then_held_shared_with_the_content_lock(self):
+    def test_a_new_root_is_bound_then_held_shared(self):
         root = self.path("lib")
         bound = self.open(root, paired=True)
         self.assertTrue(bound.created)
@@ -1055,16 +1056,89 @@ class TestPairedOpen(RootTestCase):
         self.assertEqual(open(os.path.join(root, MARKER), "rb").read(), before)
         self.assertFalse(os.path.exists(os.path.join(root, MAINT, preflight.PREFLIGHT_DIRNAME)))
 
-    def test_a_second_paired_web_is_refused_by_the_content_lock(self):
+    def test_a_second_paired_web_opens_beside_the_first(self):
         root = self.path("lib")
         self.open(root).release()
-        first = self.open(root, paired=True)
-        with self.assertRaises(StorageRootInUse) as ctx:
-            self.open(root, paired=True)
-        self.assertEqual(ctx.exception.reason, "content_in_use")
-        # The refused open let go of its shared lease: nothing else is held.
+        first = self.open(root, paired=True, register=False)
+        second = self.open(root, paired=True, register=False)
+        self.assertTrue(first.shared and second.shared)
+        # Neither open kept the open lock: a third web opens at once.
+        root_binding.acquire_open_lock(root, timeout=0.0).release()
         first.release()
+        second.release()
         self.open(root).release()
+
+    def test_a_paired_open_waits_for_another_open_then_is_refused(self):
+        root = self.path("lib")
+        self.open(root).release()
+        opening = root_binding.acquire_open_lock(root)  # another web, mid-open
+        self.addCleanup(opening.release)
+        with self.assertRaises(StorageRootInUse) as ctx:
+            root_binding.acquire_open_lock(root, timeout=0.2)
+        self.assertEqual(ctx.exception.reason, "root_opening")
+        opening.release()
+        # The open that waited takes the lock once the other open ends.
+        self.open(root, paired=True).release()
+
+    def test_paired_opens_started_together_take_turns(self):
+        """A second open waits for the first one's preflight probes, which
+        share one directory, before it runs its own."""
+        root = self.path("lib")
+        self.open(root).release()
+        original = root_binding.run_preflight
+        events: list[str] = []
+        first_in, release_first = threading.Event(), threading.Event()
+        self.addCleanup(release_first.set)
+
+        def probes(*args, **kwargs):
+            first = not first_in.is_set()
+            events.append("enter")
+            if first:
+                first_in.set()
+                self.assertTrue(release_first.wait(10))
+            try:
+                return original(*args, **kwargs)
+            finally:
+                events.append("exit")
+
+        results: list[object] = []
+
+        def start() -> None:
+            try:
+                results.append(self.open(root, paired=True, register=False))
+            except Exception as exc:  # noqa: BLE001 - recorded for the assertion
+                results.append(exc)
+
+        real_acquire = root_binding.acquire_open_lock
+        second_asks = threading.Event()
+
+        def acquire(*args, **kwargs):
+            if first_in.is_set():
+                second_asks.set()  # the second open has reached the lock
+            return real_acquire(*args, **kwargs)
+
+        first = threading.Thread(target=start)
+        second = threading.Thread(target=start)
+        with patch.object(root_binding, "run_preflight", probes), \
+                patch.object(root_binding, "acquire_open_lock", acquire):
+            first.start()
+            try:
+                self.assertTrue(first_in.wait(10))
+                second.start()
+                self.assertTrue(second_asks.wait(10))
+                time.sleep(0.3)  # without the lock it would be in its probes by now
+                self.assertEqual(events, ["enter"])  # it waits behind the first open
+            finally:
+                release_first.set()
+                first.join(30)
+                if second.ident is not None:
+                    second.join(30)
+        self.assertEqual(events, ["enter", "exit", "enter", "exit"])
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(isinstance(r, root_binding.BoundRoot) for r in results), results)
+        for bound in results:
+            bound.release()  # type: ignore[union-attr]
+        self.assertFalse(os.path.exists(os.path.join(root, MAINT, preflight.PREFLIGHT_DIRNAME)))
 
     def test_an_exclusive_holder_refuses_a_paired_open(self):
         root = self.path("lib")
@@ -1073,7 +1147,7 @@ class TestPairedOpen(RootTestCase):
             self.open(root, paired=True)
         self.assertEqual(ctx.exception.reason, "root_in_use")
         held.release()
-        self.assertFalse(os.path.exists(os.path.join(root, MAINT, root_marker.CONTENT_LOCK_NAME)))
+        self.assertFalse(os.path.exists(os.path.join(root, MAINT, root_marker.OPEN_LOCK_NAME)))
 
     def test_release_lets_go_of_both_locks(self):
         root = self.path("lib")
@@ -1082,10 +1156,10 @@ class TestPairedOpen(RootTestCase):
         self.open(root).release()
         self.open(root, paired=True).release()
 
-    def test_a_lone_content_lock_is_scaffold(self):
+    def test_a_lone_open_lock_is_scaffold(self):
         root = self.path("lib")
         os.makedirs(os.path.join(root, MAINT))
-        open(os.path.join(root, MAINT, root_marker.CONTENT_LOCK_NAME), "w").close()
+        open(os.path.join(root, MAINT, root_marker.OPEN_LOCK_NAME), "w").close()
         self.assertEqual(
             root_binding.classify_unmarked_root(root, db_filename="prks_data.db"),
             root_binding.UNMARKED_EMPTY,

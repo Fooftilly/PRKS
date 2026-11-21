@@ -137,3 +137,192 @@ class TestSetupLogging(unittest.TestCase):
                     for handler in logging.getLogger().handlers:
                         self.assertIsInstance(handler.formatter, PrivacySafeFormatter)
 
+
+
+class SharedLogRotationTests(unittest.TestCase):
+    """Two processes' handlers on one error log (web processes beside each other)."""
+
+    def setUp(self):
+        from backend.log_config import _OwnerOnlyTimedRotatingFileHandler
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, "prks-errors.log")
+        self.handlers = [_OwnerOnlyTimedRotatingFileHandler(self.path, when="midnight", backupCount=7,
+                                                            encoding="utf-8") for _ in range(2)]
+        for handler in self.handlers:
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self.addCleanup(handler.close)
+
+    def write(self, handler, message):
+        handler.handle(logging.LogRecord("prks", logging.ERROR, __file__, 1, message, None, None))
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().split()
+
+    def dated(self):
+        return sorted(name for name in os.listdir(os.path.dirname(self.path))
+                      if name not in ("prks-errors.log", "prks-errors.log.rotate.lock"))
+
+    def test_a_day_is_rotated_once_and_every_process_follows_the_new_file(self):
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        for handler in self.handlers:
+            handler.rolloverAt = 0  # midnight passed for both
+        self.write(first, "a2")  # rotates
+        self.write(second, "b2")  # finds the day rotated: reopens, rotates nothing
+        self.write(first, "a3")
+        (dated,) = self.dated()
+        self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
+        self.assertEqual(self.read(self.path), ["a2", "b2", "a3"])
+        self.assertGreater(second.rolloverAt, 0)
+
+    def test_a_process_reopens_the_log_another_rotated_before_its_own_midnight(self):
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        first.rolloverAt = 0
+        self.write(first, "a2")
+        self.write(second, "b2")  # its own rollover is not due, but its file was rotated away
+        (dated,) = self.dated()
+        self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
+        self.assertEqual(self.read(self.path), ["a2", "b2"])
+
+    def test_rotations_due_for_different_days_keep_every_record_and_no_empty_archive(self):
+        import threading
+        import time
+        from unittest import mock
+
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        for day in ("2026-11-16", "2026-11-17"):  # two days already kept
+            with open(f"{self.path}.{day}", "w", encoding="utf-8") as handle:
+                handle.write(f"old-{day}\n")
+        first, second = self.handlers
+        for handler in self.handlers:
+            handler.backupCount = 2
+        self.write(first, "a1")
+        self.write(second, "b1")
+        # A quiet writer is still due for an earlier day than a busy one.
+        first.rolloverAt = int(time.mktime((2026, 11, 20, 0, 0, 0, 0, 0, -1)))  # archives 2026-11-19
+        second.rolloverAt = int(time.mktime((2026, 11, 21, 0, 0, 0, 0, 0, -1)))  # would archive 2026-11-20
+        real_link, real_acquire = os.link, log_config.ExclusiveFileLock.acquire
+        other = threading.Thread(target=self.write, args=(second, "b2"))
+        waiting, populated = threading.Event(), threading.Event()
+
+        def acquire(path, **kwargs):
+            if threading.current_thread() is other:
+                waiting.set()
+                # Its turn comes only once the first has rotated and written
+                # to the new log, so the new file is not empty: only the file
+                # identity tells the second that its own file is rotated.
+                self.assertTrue(populated.wait(5))
+            return real_acquire(path, **kwargs)
+
+        def link_then_let_the_other_rotate(src, dst):
+            real_link(src, dst)
+            if not other.is_alive() and not waiting.is_set():
+                # The other process asks to rotate while this one is between
+                # its link and its unlink: it waits for the lock, then takes it.
+                other.start()
+                self.assertTrue(waiting.wait(5))
+
+        with (mock.patch("backend.log_config.os.link", link_then_let_the_other_rotate),
+              mock.patch.object(log_config.ExclusiveFileLock, "acquire", acquire)):
+            try:
+                self.write(first, "a2")
+                self.assertEqual(self.read(self.path), ["a2"])
+            finally:
+                populated.set()
+                if other.is_alive() or waiting.is_set():
+                    other.join(10)
+        self.assertFalse(other.is_alive())
+        self.write(second, "b3")
+        # One archive for the day that had records; the older kept day is not
+        # pruned to make room for an empty one.
+        self.assertEqual(self.dated(), ["prks-errors.log.2026-11-17", "prks-errors.log.2026-11-19"])
+        self.assertEqual(self.read(os.path.join(folder, "prks-errors.log.2026-11-19")), ["a1", "b1"])
+        self.assertEqual(sorted(self.read(self.path)), ["a2", "b2", "b3"])
+
+    def test_a_failed_reopen_drops_one_record_and_the_next_one_reopens(self):
+        from unittest import mock
+
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        first.rolloverAt = 0
+        self.write(first, "a2")  # rotates: the second now holds the rotated file
+        import io
+
+        stderr = io.StringIO()
+        with (mock.patch.object(second, "_open", side_effect=OSError("/private/path gone")),
+              mock.patch("sys.stderr", stderr)):
+            self.write(second, "lost secret title")  # contained, not raised to the caller
+        # Reported by type only: neither the record nor the error text leaks.
+        self.assertEqual(stderr.getvalue(), "prks_log_file_write_failed error_type=OSError\n")
+        self.assertIsNone(second.stream)
+        self.write(second, "b2")
+        self.assertEqual(self.read(self.path), ["a2", "b2"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "/dev/stderr on a pipe is Linux behaviour")
+    def test_a_log_sent_to_piped_stderr_is_written_there(self):
+        import subprocess
+
+        script = (
+            "import logging\n"
+            "from backend.log_config import _OwnerOnlyTimedRotatingFileHandler as H\n"
+            "h = H('/dev/stderr', when='midnight', backupCount=7, encoding='utf-8')\n"
+            "h.setFormatter(logging.Formatter('%(message)s'))\n"
+            "h.handle(logging.LogRecord('prks', logging.ERROR, 'x', 1, 'on-the-pipe', None, None))\n"
+            "h.rolloverAt = 0\n"
+            "h.handle(logging.LogRecord('prks', logging.ERROR, 'x', 1, 'after-midnight', None, None))\n"
+            "h.close()\n"
+        )
+        done = subprocess.run([sys.executable, "-c", script], cwd=os.path.dirname(os.path.dirname(__file__)),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr.decode().split(), ["on-the-pipe", "after-midnight"])
+
+    def test_a_symlink_to_a_log_not_created_yet_resolves_to_its_target(self):
+        from unittest import mock
+
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        target = os.path.join(folder, "later.log")
+        link = os.path.join(folder, "link.log")
+        os.symlink(target, link)
+        real_stat, created = os.stat, []
+
+        def target_appears_after_the_check(path, *args, **kwargs):
+            try:
+                return real_stat(path, *args, **kwargs)
+            finally:
+                if not created:
+                    created.append(path)
+                    open(target, "w").close()  # another process creates it now
+
+        with mock.patch("backend.log_config.os.stat", target_appears_after_the_check):
+            self.assertEqual(log_config._log_target(link), os.path.realpath(target))
+
+    def test_a_symlinked_log_is_rotated_where_it_points_and_the_link_stays(self):
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        target = os.path.join(folder, "real", "errors.log")
+        os.makedirs(os.path.dirname(target))
+        link = os.path.join(folder, "current.log")
+        os.symlink(target, link)
+        handler = log_config._OwnerOnlyTimedRotatingFileHandler(link, when="midnight", backupCount=7, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.addCleanup(handler.close)
+        self.write(handler, "before")
+        handler.rolloverAt = 0
+        self.write(handler, "after")
+        self.assertTrue(os.path.islink(link))
+        self.assertEqual(self.read(link), ["after"])
+        (dated,) = [name for name in os.listdir(os.path.dirname(target)) if name not in ("errors.log", "errors.log.rotate.lock")]
+        self.assertEqual(self.read(os.path.join(os.path.dirname(target), dated)), ["before"])

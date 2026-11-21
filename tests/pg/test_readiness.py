@@ -194,7 +194,7 @@ class WebProcessTests(RootPairingTestCase):
         finally:
             self.stop(proc)
 
-    def test_a_worker_and_migrate_run_beside_web_on_the_shared_lease(self) -> None:
+    def test_a_worker_migrate_and_a_second_web_run_beside_web_on_the_shared_lease(self) -> None:
         name = self.migrated()
         root = self.new_root()
         self.bootstrapped(name, root)
@@ -217,11 +217,14 @@ class WebProcessTests(RootPairingTestCase):
             self.assertIn("start generation 4", migrate.stdout)
             # Every start elsewhere completed, so web stays ready.
             self.assertEqual(_wait_for(port, "/readyz", web), 200)
-            # A second web is refused: one web process serves the root's content.
-            second = self.web(name, root, _free_port())
-            _out, err = second.communicate(timeout=120)
-            self.assertEqual(second.returncode, 2, err)
-            self.assertIn("already served by another PRKS web process", err)
+            # A second web serves beside it, and its start leaves the first ready.
+            second_port = _free_port()
+            second = self.web(name, root, second_port)
+            try:
+                self.assertEqual(_wait_for(second_port, "/readyz", second), 200)
+                self.assertEqual(_wait_for(port, "/readyz", web), 200)
+            finally:
+                self.stop(second)
         finally:
             if worker is not None:
                 self.stop(worker)

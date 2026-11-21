@@ -67,8 +67,8 @@ from backend.storage.preflight import (
 )
 from backend.storage.root_marker import (
     CLAIM_LOCK_NAME,
-    CONTENT_LOCK_NAME,
     MAINTENANCE_DIRNAME,
+    OPEN_LOCK_NAME,
     MARKER_FILENAME,
     ROOT_LOCK_NAME,
     RootMarker,
@@ -122,7 +122,7 @@ def is_top_level_os_metadata(name: str) -> bool:
 # computed requirement in a later phase.
 LOW_FREE_SPACE_WARNING_BYTES = 1024 * 1024 * 1024
 # V9: filesystem types known with certainty to be network mounts, where the
-# root's file locks (root.lock, content.lock) and fsync ordering are not
+# root's file locks (root.lock, open.lock) and fsync ordering are not
 # reliable (§7.4). Linux names come from
 # /proc/mounts, macOS names from mount(8), and ``windows-remote`` is a UNC path
 # or a drive Windows reports as DRIVE_REMOTE.
@@ -153,7 +153,7 @@ OVERLAY_FILESYSTEM_TYPES = frozenset({"overlay", "overlayfs"})
 _NESTED_MARKER_SCAN_LIMIT = 2000
 
 # Lock files PRKS keeps in .prks-maintenance/; alone, each is scaffold.
-_LOCK_FILE_NAMES = frozenset({ROOT_LOCK_NAME, CLAIM_LOCK_NAME, CONTENT_LOCK_NAME})
+_LOCK_FILE_NAMES = frozenset({ROOT_LOCK_NAME, CLAIM_LOCK_NAME, OPEN_LOCK_NAME})
 
 UNMARKED_EMPTY = "empty"
 UNMARKED_PRKS = "prks"
@@ -165,8 +165,7 @@ class BoundRoot:
     """A storage root this process has opened and holds the lease on.
 
     A web process (``open_storage_root(paired=True)``) holds ``root.lock``
-    shared, beside its worker and ``migrate``, and holds the content lock
-    exclusive (``content_lock``).
+    shared, beside other web processes, its worker and ``migrate``.
     """
 
     root: str
@@ -176,7 +175,6 @@ class BoundRoot:
     lease: ExclusiveFileLock | SharedFileLock
     created: bool = False
     adopted: bool = False
-    content_lock: Optional[ExclusiveFileLock] = None
     # Warnings raised while opening, held back by ``defer_logs`` until
     # ``log_binding()`` runs with logging configured.
     deferred_records: list[logging.LogRecord] = field(default_factory=list, repr=False)
@@ -222,8 +220,6 @@ class BoundRoot:
         return isinstance(self.lease, SharedFileLock)
 
     def _release_locks(self) -> None:
-        if self.content_lock is not None:
-            self.content_lock.release()
         self.lease.release()
 
 
@@ -390,7 +386,7 @@ def _check_log_file_not_operational(
         os.path.join(root_real, MARKER_FILENAME),
         os.path.join(maintenance, ROOT_LOCK_NAME),
         os.path.join(maintenance, CLAIM_LOCK_NAME),
-        os.path.join(maintenance, CONTENT_LOCK_NAME),
+        os.path.join(maintenance, OPEN_LOCK_NAME),
     ]
     if config_file_path:
         config_real = os.path.realpath(config_file_path)
@@ -497,8 +493,8 @@ def _maintenance_is_scaffold(path: str) -> bool:
     """A ``.prks-maintenance/`` holding only lone lock files and/or preflight scaffold.
 
     The lock files are ``root.lock``, the claim lock ``root.claim``
-    (postgresql-architecture §11.1) and the interim content lock
-    ``content.lock``: each alone is scaffold, never content.
+    (postgresql-architecture §11.1) and the open lock ``open.lock``: each
+    alone is scaffold, never content.
     """
     st = _lstat(path)
     if st is None:
@@ -1071,25 +1067,32 @@ def acquire_shared_root_lease(root_real: str) -> SharedFileLock:
         ) from exc
 
 
-def acquire_content_lock(root_real: str) -> ExclusiveFileLock:
-    """Take ``content.lock`` exclusive, without waiting (L-D-1 #630).
+# How long a paired open waits for another web process that is opening the
+# same root. An open takes about as long as its preflight probes.
+OPEN_LOCK_WAIT_SECONDS = 60.0
 
-    The web process holds it for its whole run, so at most one web process
-    serves a root while ``root.lock`` is only held shared.
+
+def acquire_open_lock(root_real: str, *, timeout: float = OPEN_LOCK_WAIT_SECONDS) -> ExclusiveFileLock:
+    """Take ``open.lock`` exclusive for one paired open, waiting up to ``timeout``.
+
+    Web processes serve a root side by side under ``root.lock`` shared; this
+    lock only makes their opens take turns, so one run of the preflight
+    probes (which share ``.prks-maintenance/preflight/``) happens at a time. It is taken under ``root.lock`` shared, so it is never
+    created while another process holds the root exclusively, and released as
+    soon as the open ends.
     """
     maintenance = _ensure_maintenance_dir(root_real)
     try:
-        return ExclusiveFileLock.acquire(os.path.join(maintenance, CONTENT_LOCK_NAME), timeout=0.0)
+        return ExclusiveFileLock.acquire(os.path.join(maintenance, OPEN_LOCK_NAME), timeout=timeout)
     except LockBusy as exc:
         raise StorageRootInUse(
-            "content_in_use",
-            "This PRKS storage root is already served by another PRKS web process. "
-            "Until the PostgreSQL cutover one web process serves a storage root.",
+            "root_opening",
+            "Another PRKS web process is still opening this storage root.",
         ) from exc
     except LockUnavailable as exc:
         raise StorageRootRefused(
             exc.reason,
-            "The storage root lock file .prks-maintenance/content.lock is not usable.",
+            "The storage root lock file .prks-maintenance/open.lock is not usable.",
         ) from exc
 
 
@@ -1133,8 +1136,8 @@ def open_storage_root(
     """Validate, lease and mark ``config.root`` for this process.
 
     With ``paired`` (a web process paired with PostgreSQL, L-D-1 #630) the
-    root's ``root.lock`` is held **shared** and the interim content lock
-    exclusive, so ``worker`` and ``migrate`` run beside it, and the marker
+    root's ``root.lock`` is held **shared**, so other web processes,
+    ``worker`` and ``migrate`` run beside it, and the marker
     is never rewritten: its pairing fields belong to the start check
     (§11.1). A root without a marker is first bound as usual, under the
     exclusive lease, which is then turned shared.
@@ -1248,8 +1251,9 @@ def _open_storage_root(
             lease.release()
             raise
         if paired:
-            # The first bind of a paired web: with the marker written, take
-            # the content lock and turn the lease shared.
+            # The first bind of a paired web: with the marker written, turn
+            # the lease shared. Until then the exclusive lease keeps every
+            # other process out, so a second web started meanwhile is refused.
             _share(bound)
     if register:
         _register(bound)
@@ -1309,24 +1313,24 @@ def _create_new_root(root: str, root_real: str) -> None:
 
 
 def _share(bound: BoundRoot) -> None:
-    """Take ``bound``'s content lock, then turn its exclusive lease shared; release all on failure."""
+    """Turn ``bound``'s exclusive lease shared; release it on failure."""
     lease = bound.lease
     assert isinstance(lease, ExclusiveFileLock)
     try:
-        bound.content_lock = acquire_content_lock(bound.root_real)
-        try:
-            bound.lease = lease.downgrade()
-        except LockBusy as exc:
-            raise StorageRootInUse(
-                "root_in_use",
-                "Another PRKS process took this storage root exclusively while it was being opened.",
-            ) from exc
-        except LockUnavailable as exc:
-            raise StorageRootRefused(
-                exc.reason, "The storage root lock file .prks-maintenance/root.lock is not usable."
-            ) from exc
+        bound.lease = lease.downgrade()
+    except LockBusy as exc:
+        lease.release()
+        raise StorageRootInUse(
+            "root_in_use",
+            "Another PRKS process took this storage root exclusively while it was being opened.",
+        ) from exc
+    except LockUnavailable as exc:
+        lease.release()
+        raise StorageRootRefused(
+            exc.reason, "The storage root lock file .prks-maintenance/root.lock is not usable."
+        ) from exc
     except BaseException:
-        bound._release_locks()
+        lease.release()
         raise
 
 
@@ -1337,17 +1341,18 @@ def _open_paired(
     root_real: str,
     expected_storage_root_id: Optional[str],
 ) -> BoundRoot:
-    """Open a bound root for a paired web: ``root.lock`` shared, the content lock exclusive.
+    """Open a bound root for a paired web: ``root.lock`` shared.
 
     Nothing in the marker is written: under the shared lease only the root
     claim and the start check change it (§11.1). Everything else checked at
-    an exclusive open is checked here too, and the preflight probes run
-    under the content lock, which no other process running beside this one
-    takes.
+    an exclusive open is checked here too. The preflight probes run under
+    ``open.lock``, so two web processes starting together take turns; a
+    worker or ``migrate`` beside them never runs the probes.
     """
     lease = acquire_shared_root_lease(root_real)
     try:
-        content_lock = acquire_content_lock(root_real)
+        # Web processes open one at a time; each then serves beside the others.
+        opening = acquire_open_lock(root_real)
     except BaseException:
         lease.release()
         raise
@@ -1371,16 +1376,16 @@ def _open_paired(
         run_preflight(os.path.join(root_real, MAINTENANCE_DIRNAME), capabilities=need_capabilities)
         _startup_warnings(root_real)
     except BaseException:
-        content_lock.release()
         lease.release()
         raise
+    finally:
+        opening.release()
     return BoundRoot(
         root=root,
         root_real=root_real,
         source=getattr(config, "root_source", None),
         marker=marker,
         lease=lease,
-        content_lock=content_lock,
     )
 
 

@@ -181,7 +181,7 @@ export function createTabLeave(): TabLeaveApi {
   }
 
   function enqueue<T>(ownerIds: string[], job: () => T | Promise<T>): Promise<T> {
-    const ids = [...new Set(ownerIds.map((id) => String(id)))].sort()
+    const ids = [...new Set(ownerIds.map((id) => String(id)))].sort((a, b) => Number(a > b) - Number(a < b))
     const keys = ids.length ? ids : ['']
     const previous = keys.map((id) => slots.get(id)).filter((slot): slot is LockSlot => !!slot)
     const idle = previous.every((slot) => slot.done)
