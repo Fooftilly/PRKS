@@ -58,6 +58,7 @@ class CitationStyleRouteTests(ServerApiTestCase):
             dependent: "This is a dependent style: it only points to another style. Import that style instead.",
             style().replace("<bibliography><layout><text variable=\"title\"/></layout></bibliography>", ""):
                 "The style has no bibliography, so PRKS cannot format references with it.",
+            style(body="<macro name=\"m\"/>"): "The style has no citation layout, so it is not a complete CSL style.",
             style(title=" "): "The style has no title.",
             style(info="<!-- " + "x" * custom_citation_styles.MAX_CSL_BYTES + " -->"): "The style file is larger than 1 MB.",
         }

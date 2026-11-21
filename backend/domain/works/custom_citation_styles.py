@@ -119,7 +119,9 @@ def check_style(csl: Any) -> tuple[str, str]:
     info = _child(root, "info")
     if info is not None and any(link.get("rel") == "independent-parent" for link in info.iter(_CSL + "link")):
         raise StyleRefused("This is a dependent style: it only points to another style. Import that style instead.")
-    if not _has_layout(root, "citation") or not _has_layout(root, "bibliography"):
+    if not _has_layout(root, "citation"):
+        raise StyleRefused("The style has no citation layout, so it is not a complete CSL style.")
+    if not _has_layout(root, "bibliography"):
         raise StyleRefused("The style has no bibliography, so PRKS cannot format references with it.")
     title_element = _child(info, "title") if info is not None else None
     title = re.sub(r"\s+", " ", title_element.text or "").strip() if title_element is not None else ""
