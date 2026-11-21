@@ -1479,6 +1479,23 @@ class RuntimeLockTests(unittest.TestCase):
             )
             self.assertEqual(self._codes(root), ["runtime_lock_unused"])
 
+    def test_commented_hashed_install_does_not_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.0.0\n",
+                lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
+                docker=(
+                    "FROM python:3.12-slim\n"
+                    "# RUN pip install --require-hashes -r requirements-lock.txt\n"
+                    "RUN pip install -r requirements.txt \\\n"
+                    "    # --require-hashes -r requirements-lock.txt\n"
+                    "    --no-cache-dir\n"
+                ),
+            )
+            self.assertEqual(self._codes(root), ["runtime_lock_unused"])
+
     def test_live_lock_matches_requirements(self):
         result = validate_runtime_lock(_PROJECT)
         self.assertTrue(result.ok, [i.message for i in result.issues])

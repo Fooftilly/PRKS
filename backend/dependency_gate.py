@@ -1879,6 +1879,29 @@ def parse_runtime_lock(text: str, *, source: str = RUNTIME_LOCK_FILE) -> dict[st
     return entries
 
 
+def dockerfile_instructions(text: str) -> list[str]:
+    """Executable Dockerfile instructions, continuations joined, comments dropped.
+
+    Docker ignores a line whose first non-blank character is ``#``, also
+    inside a continued instruction, so a commented install never counts.
+    """
+    instructions: list[str] = []
+    current: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            current.append(line[:-1].strip())
+            continue
+        current.append(line)
+        instructions.append(" ".join(part for part in current if part))
+        current = []
+    if current:
+        instructions.append(" ".join(part for part in current if part))
+    return instructions
+
+
 def validate_runtime_lock(repo_root: Path | None = None) -> GateResult:
     """Fail closed when the Docker image's hashed lock drifts from requirements.txt.
 
@@ -1916,10 +1939,12 @@ def validate_runtime_lock(repo_root: Path | None = None) -> GateResult:
                 f"{RUNTIME_LOCK_FILE} locks {name}=={locked[0]} but requirements.txt pins {version}. {hint}",
                 str(lock),
             )
-    text = docker.read_text(encoding="utf-8")
-    if not re.search(
-        r"pip install[^\n]*(?:\\\n[^\n]*)*--require-hashes[^\n]*(?:\\\n[^\n]*)*-r " + re.escape(RUNTIME_LOCK_FILE),
-        text,
+    if not any(
+        instruction.startswith("RUN ")
+        and "pip install" in instruction
+        and "--require-hashes" in instruction.split()
+        and f"-r {RUNTIME_LOCK_FILE}" in instruction
+        for instruction in dockerfile_instructions(docker.read_text(encoding="utf-8"))
     ):
         result.fail(
             "runtime_lock_unused",
