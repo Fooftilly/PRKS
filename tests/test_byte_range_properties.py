@@ -1,4 +1,4 @@
-"""Fuzzing the PDF ``Range`` header parser (``backend.server.parse_byte_range``).
+"""Fuzzing the PDF ``Range`` header parser (``backend.byte_range.parse_byte_range``).
 
 The PDF routes stream Work and Processing bytes with ``Range`` support, so the
 header is attacker-chosen text read before any byte is sent. The contract,
@@ -21,7 +21,7 @@ import unittest
 
 from hypothesis import assume, example, given, strategies as st
 
-from backend.server import ByteRangeAnswer, parse_byte_range
+from backend.byte_range import ByteRangeAnswer, parse_byte_range
 from tests.hypothesis_profiles import FUZZ
 
 _SIZES = st.integers(min_value=0, max_value=4096)
@@ -96,6 +96,16 @@ class ByteRangeProperties(unittest.TestCase):
             with self.subTest(header=header):
                 self.assertEqual(parse_byte_range(header, 10), ByteRangeAnswer(200, 0, 9))
 
+    def test_only_spaces_and_tabs_are_optional_whitespace(self) -> None:
+        # RFC 9110 OWS is SP / HTAB. Other whitespace, or any other character
+        # around the unit or the range, makes the header malformed.
+        for header in ("\x0bbytes=0-4", "bytes=0-4\n", "bytes=0-4\r", "\fbytes=0-4", "bytes=\x0b0-4",
+                       "bytes=0-4\x0b,", "Xbytes=0-4", "bytes=0-4X", "bytes=X0-4,"):
+            with self.subTest(header=header):
+                self.assertEqual(parse_byte_range(header, 10), ByteRangeAnswer(200, 0, 9))
+        self.assertEqual(parse_byte_range("\t bytes=0-4 \t", 10), ByteRangeAnswer(206, 0, 4))
+        self.assertEqual(parse_byte_range("bytes=\t0-4\t ,", 10), ByteRangeAnswer(206, 0, 4))
+
     def test_examples(self) -> None:
         for header, size, answer in (
             ("bytes=0-4", 10, ByteRangeAnswer(206, 0, 4)),
@@ -110,6 +120,12 @@ class ByteRangeProperties(unittest.TestCase):
             ("bytes=0-", 0, ByteRangeAnswer(416)),
             ("bytes=" + "1" * 31 + "-" + "9" * 31, 10, ByteRangeAnswer(416)),
             ("bytes=0007-0008", 10, ByteRangeAnswer(206, 7, 8)),
+            # Leading zeros never count as digits when two positions are compared.
+            ("bytes=0007-8", 10, ByteRangeAnswer(206, 7, 8)),
+            ("bytes=2-0009", 10, ByteRangeAnswer(206, 2, 9)),
+            # A position past 30 digits counts as larger than any file, not as a small number.
+            ("bytes=1-" + "9" * 31, 1000, ByteRangeAnswer(206, 1, 999)),
+            ("bytes=-" + "9" * 31, 1000, ByteRangeAnswer(200, 0, 999)),
         ):
             with self.subTest(header=header, size=size):
                 self.assertEqual(parse_byte_range(header, size), answer)

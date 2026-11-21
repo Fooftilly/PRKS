@@ -41,6 +41,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Each leg sets only its own output, so the merged outputs hold every target.
     outputs:
+      result-byte-range: ${{ steps.run.outputs.result-byte-range }}
       result-docs-only-ci: ${{ steps.run.outputs.result-docs-only-ci }}
       result-research-markup: ${{ steps.run.outputs.result-research-markup }}
       result-sync-envelope: ${{ steps.run.outputs.result-sync-envelope }}
@@ -49,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [docs-only-ci, research-markup, sync-envelope, text-identity]
+        target: [byte-range, docs-only-ci, research-markup, sync-envelope, text-identity]
     steps:
       - name: Checkout PRKS
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
