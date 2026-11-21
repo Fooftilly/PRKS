@@ -432,7 +432,6 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/features/performance-diagnostics/PerformanceDiagnostics.vue",
             "frontend-app/src/features/performance-diagnostics/usePerformanceDiagnostics.ts",
             "frontend-app/src/api/performance-diagnostics.ts",
-            "frontend-app/src/api/performance-diagnostics.test.ts",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -451,7 +450,6 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/features/progress/session.ts",
             "frontend-app/src/features/progress/rows.ts",
             "frontend-app/src/features/progress/status.ts",
-            "frontend-app/src/features/progress/ProgressView.test.ts",
         )
         for path in paths:
             with self.subTest(path=path):
@@ -706,10 +704,8 @@ class AffectedMappingTests(unittest.TestCase):
     def test_shared_vue_transport_and_query_fail_closed(self):
         for path in (
             "frontend-app/src/api/http.ts",
-            "frontend-app/src/api/http.test.ts",
             "frontend-app/src/query/client.ts",
             "frontend-app/src/query/retry.ts",
-            "frontend-app/src/query/client.test.ts",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
@@ -722,6 +718,33 @@ class AffectedMappingTests(unittest.TestCase):
         for rule in policy.AFFECTED_RULES:
             for pattern in rule["paths"]:
                 self.assertNotEqual(pattern, "frontend-app/src/**")
+
+    def test_vitest_files_skip_the_browser_gate(self):
+        for path in (
+            "frontend-app/src/mount.test.ts",
+            "frontend-app/src/api/http.test.ts",
+            "frontend-app/src/query/client.test.ts",
+            "frontend-app/src/features/progress/ProgressView.test.ts",
+            "frontend-app/src/features/create-forms/keyboard.test.ts",
+            "frontend-app/src/features/progress/progress.spec.ts",
+            "frontend-app/src/components/Card.test.tsx",
+        ):
+            with self.subTest(path=path):
+                rule, feats, skip, _note = policy.match_affected_path(path)
+                self.assertEqual(rule, "frontend-unit-tests")
+                self.assertTrue(skip)
+                self.assertEqual(feats, ())
+                self.assertEqual(policy.plan_ci_e2e([path])["mode"], "skip")
+        # Beside production source the source's own rule decides; a test
+        # file never explains a rebuilt bundle.
+        source = "frontend-app/src/features/progress/ProgressView.vue"
+        test = "frontend-app/src/features/progress/ProgressView.test.ts"
+        self.assertEqual(policy.plan_ci_e2e([source, test])["features"], ["browse", "smoke"])
+        self.assertEqual(policy.plan_ci_e2e([test, "frontend/vue/prks-vue.js"])["mode"], "full")
+        # Helpers without a test/spec name and test-like names elsewhere keep the ordinary rules.
+        for path in ("frontend-app/src/test-utils/mount-helper.ts", "frontend/js/app.test.js"):
+            with self.subTest(path=path):
+                self.assertNotEqual(policy.match_affected_path(path)[0], "frontend-unit-tests")
 
     def test_unmapped_vue_screen_is_full_ci_even_with_bundle(self):
         screen = "frontend-app/src/components/Works.vue"

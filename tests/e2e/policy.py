@@ -440,7 +440,6 @@ AFFECTED_RULES = (
             "frontend-app/scripts/build.mjs",
             "frontend-app/src/main.ts",
             "frontend-app/src/mount.ts",
-            "frontend-app/src/mount.test.ts",
             "frontend-app/src/App.vue",
         ),
         "features": ("smoke",),
@@ -967,6 +966,22 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Storybook catalog only. Not production application source.",
     },
+    # Vitest unit and spec files never enter the Vue bundle, so no browser
+    # test can see them. This skip wins over feature and shared-core rules
+    # ("overrides"), which would otherwise claim a test file by its folder.
+    # Test helpers without a .test/.spec name stay on the ordinary rules.
+    {
+        "name": "frontend-unit-tests",
+        "paths": tuple(
+            f"frontend-app/**/*.{kind}.{ext}"
+            for kind in ("test", "spec")
+            for ext in ("ts", "tsx", "js", "jsx", "mjs", "vue")
+        ),
+        "features": (),
+        "skip": True,
+        "overrides": True,
+        "note": "Vitest unit/spec files only. Not in the Vue bundle → no browser E2E",
+    },
 )
 
 # Unknown production paths under these prefixes fall back to smoke (not full).
@@ -1110,7 +1125,8 @@ def classify_affected_path(rel: str) -> dict:
       rules (list[str]), features (list[str]), skip (bool), note (str),
       ci_full (bool), unmapped (bool)
 
-    Skip rules apply only when no non-skip rule matches. A rule with
+    Skip rules apply only when no non-skip rule matches, except a skip rule
+    marked ``overrides``, which wins outright. A rule with
     ``exclude_paths`` does not match those paths, so a story under a feature
     tree can fall through to ``storybook-catalog``. ``ci_mode: "full"`` on
     any matching take rule sets ``ci_full``.
@@ -1118,6 +1134,16 @@ def classify_affected_path(rel: str) -> dict:
     rel = _posix(rel)
     take_rules = []
     skip_rule = None
+    for rule in AFFECTED_RULES:
+        if rule.get("overrides") and any(_path_matches(rel, pattern) for pattern in rule["paths"]):
+            return {
+                "rules": [rule["name"]],
+                "features": [],
+                "skip": True,
+                "note": rule.get("note") or "",
+                "ci_full": False,
+                "unmapped": False,
+            }
     for rule in AFFECTED_RULES:
         if any(_path_matches(rel, pattern) for pattern in rule.get("exclude_paths") or ()):
             continue
