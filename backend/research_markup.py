@@ -229,8 +229,8 @@ def _close_inline_code(text: str, i: int) -> Optional[int]:
     while k < n and text[k] == "`":
         k += 1
     run = k - i
-    if run >= 3 and _at_line_start(text, i):
-        return None
+    # No line-start case: _live_mask opens a fence there first, and three or
+    # more backticks at a line start always open one.
     j = k
     while j < n:
         if text[j] == "`":
