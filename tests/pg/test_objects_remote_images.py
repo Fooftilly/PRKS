@@ -157,6 +157,10 @@ class SaveTests(RemoteImageTestCase):
         self.noted('<img src="https://example.org/chart.png?w=400&#38;label=O&#x27;Neil&amp;t=&quot;x&quot;">')
         self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=O'Neil&t=\"x\""))
 
+    def test_a_reference_without_its_semicolon_ends_where_html_ends_it(self) -> None:
+        self.noted('<img src="https://example.org/a.png?x=1&amp-y&amp=z&#x26width&#x26format">')
+        self.assertIsNotNone(self.save("https://example.org/a.png?x=1&-y&amp=z&width&#x26format"))
+
     def test_reference_names_are_case_sensitive(self) -> None:
         self.noted('<img src="https://example.org/chart.png?w=400&#38;label=&APOS;x&Amp;y">')
         self.assertIsNone(self.save("https://example.org/chart.png?w=400&label='x&y"))
