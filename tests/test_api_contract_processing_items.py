@@ -10,7 +10,6 @@ from pydantic import ValidationError
 
 from backend.api_contract.openapi import processing_items_openapi_document
 from backend.api_contract.processing_items import ProcessingImportRequest, ProcessingItem, ProcessingItemRefusal
-from backend.concurrency import request_access_mode
 from backend.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -71,11 +70,6 @@ class ProcessingItemsContractTests(unittest.TestCase):
         ):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), logged)
-
-    def test_an_upload_streams_under_the_read_gate(self):
-        self.assertEqual(request_access_mode("POST", "/api/processing-items"), "read")
-        self.assertEqual(request_access_mode("POST", "/api/processing-items/import"), "mutation")
-        self.assertEqual(request_access_mode("DELETE", f"/api/processing-items/{_ID}"), "mutation")
 
 
 if __name__ == "__main__":

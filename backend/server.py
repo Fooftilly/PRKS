@@ -11,7 +11,6 @@ import uuid
 import logging
 import ipaddress
 import itertools
-from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 from email.message import Message
@@ -91,7 +90,6 @@ from backend.domain.maintenance.upload import (
     stream_upload_to_file,
 )
 from backend.person_image import identify_cached_portrait_subtype
-from backend.concurrency import MODE_BACKUP, LibraryAccessGate, request_access_mode
 from backend.web.handler_base import HttpHandlerBase
 
 if TYPE_CHECKING:
@@ -846,22 +844,6 @@ class PRKSHandler(HttpHandlerBase):
         )
         self.send_json(status, {"error": error})
 
-    def _library_access(self, parsed_path):
-        mode = request_access_mode(
-            getattr(self, "command", "") or "GET",
-            parsed_path.path,
-            parsed_path.query,
-        )
-        if mode is None:
-            return nullcontext()
-        if mode == MODE_BACKUP:
-            # The worker writes a PostgreSQL backup from one snapshot; nothing
-            # here needs writes held off while the browser follows it.
-            return nullcontext()
-        gate = getattr(self.server, "prks_access_gate", None)
-        if gate is None:
-            return nullcontext()
-        return gate.scope(mode)
 
     def _validate_request_host(self) -> bool:
         hosts = self.headers.get_all("Host") or []
@@ -1160,8 +1142,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_get(parsed_path)
+            self.handle_api_get(parsed_path)
         else:
             self._serve_frontend(parsed_path)
 
@@ -1203,8 +1184,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_head(parsed_path)
+            self.handle_api_head(parsed_path)
         else:
             self._serve_frontend(parsed_path, head=True)
 
@@ -1220,32 +1200,27 @@ class PRKSHandler(HttpHandlerBase):
             if not self._prks_admit(parsed_path):
                 return
             if parsed_path.path.startswith(_BACKUP_ROUTE_PREFIX):
-                # A JSON body is read before the Library gate, as every other
-                # POST does: a client that stalls mid-body must not hold the
-                # restore's exclusive gate. ``stage`` streams its own body.
+                # ``stage`` streams its own body; the others read JSON first.
                 backup_body = None
                 if parsed_path.path != '/api/backups/stage':
                     backup_body = self._read_json_body()
                     if backup_body is _JSON_BODY_REJECTED:
                         return
-                with self._library_access(parsed_path):
-                    try:
-                        self._handle_postgres_backup_post(parsed_path.path, backup_body)
-                    except Exception as exc:
-                        self._send_internal_error(exc)
+                try:
+                    self._handle_postgres_backup_post(parsed_path.path, backup_body)
+                except Exception as exc:
+                    self._send_internal_error(exc)
                 return
             if upload:
-                with self._library_access(parsed_path):
-                    try:
-                        processing_api.handle_upload(self, db)
-                    except Exception as exc:
-                        self._send_internal_error(exc)
+                try:
+                    processing_api.handle_upload(self, db)
+                except Exception as exc:
+                    self._send_internal_error(exc)
                 return
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_post(parsed_path, data)
+            self.handle_api_post(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1259,8 +1234,7 @@ class PRKSHandler(HttpHandlerBase):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_patch(parsed_path, data)
+            self.handle_api_patch(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1312,8 +1286,7 @@ class PRKSHandler(HttpHandlerBase):
             data = self._read_json_body()
             if data is _JSON_BODY_REJECTED:
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_put(parsed_path, data)
+            self.handle_api_put(parsed_path, data)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -1342,8 +1315,7 @@ class PRKSHandler(HttpHandlerBase):
         if parsed_path.path.startswith('/api/'):
             if not self._prks_admit(parsed_path):
                 return
-            with self._library_access(parsed_path):
-                self.handle_api_delete(parsed_path)
+            self.handle_api_delete(parsed_path)
         else:
             self.send_error(405, "Method Not Allowed")
 
@@ -2184,7 +2156,7 @@ class PRKSHandler(HttpHandlerBase):
 
         ``stage`` is dispatched before its body is read and streams the
         archive itself; every earlier answer closes the connection. The other
-        routes' JSON ``data`` was read before the Library gate was taken. A
+        routes' JSON ``data`` is read before this is called. A
         restore replaces the PostgreSQL Library (``backend.api.maintenance``).
         """
         from backend.api import maintenance as maintenance_api
@@ -2200,9 +2172,8 @@ class PRKSHandler(HttpHandlerBase):
             if content_length is None:
                 return
 
-            # The upload holds the Library's read gate, which a restore waits
-            # out: read it with the Processing upload's idle timeout and
-            # deadline, so a stalled client cannot hold the gate.
+            # Read with the Processing upload's idle timeout and deadline, so
+            # a stalled client cannot hold a request thread.
             sock = self.connection
             previous_timeout = sock.gettimeout()
 
@@ -2360,7 +2331,6 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
     with make_server((host, port), http) as httpd:
         httpd.prks_bind_host = host
         httpd.prks_trusted_hosts = trusted_hosts
-        httpd.prks_access_gate = LibraryAccessGate()
         # Authentication (PRKS_AUTH, backend.domain.identity.web_start); None
         # only for test servers (prks_app always starts identity).
         httpd.prks_auth = auth

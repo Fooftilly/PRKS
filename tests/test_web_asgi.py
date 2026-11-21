@@ -126,7 +126,6 @@ class UvicornTransportTests(unittest.TestCase):
         )
         self.httpd.prks_bind_host = "127.0.0.1"
         self.httpd.prks_trusted_hosts = frozenset()
-        self.httpd.prks_access_gate = server_module.LibraryAccessGate()
         self.httpd.prks_auth = None  # every /api/ request answers 503
         self.httpd.prks_jobs = None
         self.httpd.prks_readiness = None
@@ -145,7 +144,6 @@ class UvicornTransportTests(unittest.TestCase):
         )
         httpd.prks_bind_host = "127.0.0.1"
         httpd.prks_trusted_hosts = frozenset()
-        httpd.prks_access_gate = server_module.LibraryAccessGate()
         httpd.prks_auth = None
         httpd.prks_jobs = None
         httpd.prks_readiness = None
@@ -375,7 +373,6 @@ class UvicornTransportTests(unittest.TestCase):
         )
         for name in ("prks_bind_host", "prks_trusted_hosts", "prks_auth", "prks_jobs", "prks_readiness"):
             setattr(httpd, name, getattr(self.httpd, name))
-        httpd.prks_access_gate = server_module.LibraryAccessGate()
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)
@@ -849,7 +846,6 @@ class TlsTransportTests(unittest.TestCase):
         )
         self.httpd.prks_bind_host = "127.0.0.1"
         self.httpd.prks_trusted_hosts = frozenset()
-        self.httpd.prks_access_gate = server_module.LibraryAccessGate()
         self.httpd.prks_auth = None
         self.httpd.prks_jobs = None
         self.httpd.prks_readiness = None
@@ -957,7 +953,6 @@ class ShutdownTests(unittest.TestCase):
         for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
                             ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
             setattr(httpd, name, value)
-        httpd.prks_access_gate = server_module.LibraryAccessGate()
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         port = httpd.server_address[1]
@@ -985,7 +980,6 @@ class ShutdownTests(unittest.TestCase):
         for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
                             ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
             setattr(httpd, name, value)
-        httpd.prks_access_gate = server_module.LibraryAccessGate()
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(httpd.server_close)

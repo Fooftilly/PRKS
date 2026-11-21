@@ -703,7 +703,6 @@ class UvicornServing:
 
     prks_bind_host: str
     prks_trusted_hosts: frozenset[str]
-    prks_access_gate: Any
     prks_auth: Any
     prks_jobs: Any
     prks_readiness: Any

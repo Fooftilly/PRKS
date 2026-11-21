@@ -312,7 +312,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         finally:
             conn.close()
 
-    def test_a_stalled_restore_body_does_not_hold_the_library_gate(self) -> None:
+    def test_a_stalled_restore_body_holds_nothing_back(self) -> None:
         with self.serving() as (_name, _root, port, headers):
             stalled = socket.create_connection(("127.0.0.1", port), timeout=30)
             try:
