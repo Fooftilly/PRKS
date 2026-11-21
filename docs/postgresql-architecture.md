@@ -283,8 +283,9 @@ admission, host and origin checks, request IDs, security headers, streamed
 bodies, client disconnects and static files. Starlette was planned for that
 layer and dropped on 2026-11-20, because it would replace little PRKS code for
 a new runtime dependency. PRKS code stays synchronous on a bounded thread pool,
-in one web process, with a graceful drain on stop. It is one process because
-the access gate and save-confirm tokens are still process-local (§7.5, #1331).
+in one web process, with a graceful drain on stop. The access gate and
+save-confirm tokens that tied it to one process were deleted in #1331 (§7.5);
+running more than one web process is not yet tested.
 Gunicorn, Cheroot and Waitress were evaluated and rejected. The stdlib server
 is deleted, with no fallback. Reverse-proxy exposure stays the recommended
 setup for the internet (§14, R9).
@@ -769,8 +770,8 @@ RETURNING op_id;
 
 | Item | Replacement |
 | --- | --- |
-| `LibraryAccessGate` | §7.4: the per-Library maintenance lock and committed maintenance flag replace the gate's backup and restore modes; ordinary writers no longer serialize with each other |
-| Save-confirm tokens | Removed. `save-confirm` answers from durable state: the Asset's current `content_sha256`/locator and the annotation set revision, which a client compares with the value its save returned |
+| `LibraryAccessGate` | Deleted (#1331). §7.4: the per-Library maintenance lock and committed maintenance flag replace the gate's backup and restore modes; ordinary writers no longer serialize with each other |
+| Save-confirm tokens | Deleted with `GET /api/works/:id/save-confirm` (#1331). Every save answers `200` only after its transaction committed, so the client's own answer is the confirmation; nothing is kept in process memory |
 | `_PDF_MATERIALIZATION_LOCKS`, `_PDF_PATH_LOCKS` | Row lock and advisory lock (§7.4) |
 | `_ready_backups` tokens | `backup_runs` rows with an opaque download token hash and expiry |
 | Bound root, index singletons | Bound once per process at startup; the database pairing record decides validity (§11.1); no hot rebind across processes (#311 §12) |

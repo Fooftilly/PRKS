@@ -163,9 +163,9 @@ Everything below was read from master 02845f1.
   - Processing upload (`POST /api/processing-items`, up to 2 GiB);
   - backup stage (`POST /api/backups/stage`, up to 64 GiB by default).
 
-  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline, because the upload holds the Library read gate that a restore waits for.
+  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline, so a stalled client cannot hold a request thread.
 - **Lifecycle.** `run_server` binds the server. The embedded job worker (`backend/jobs/embedded.py`) serves the server and stops it gracefully on SIGTERM or SIGINT. The web process holds the data root's lease shared and bumps the start generation once per process start (§7.5, §11.1).
-- **Process-local state** that correctness still depends on: `LibraryAccessGate` and the save-confirm tokens. #1331 retires them, as §7.5 requires.
+- **Process-local state**: none that correctness depends on. #1331 deleted the last of it, the `LibraryAccessGate` and the save-confirm tokens (§7.5).
 - **What the stdlib server lacks:**
   - socket timeouts (`StreamRequestHandler.timeout` is `None`, so an idle or half-sent request holds its thread forever);
   - a bound on thread count;
