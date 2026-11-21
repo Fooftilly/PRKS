@@ -88,14 +88,28 @@ jobs:
 
       - name: Record the shard's coverage
         id: tests
-        # Instrumentation changes timing, so an instrumented test can fail
-        # where the gate passes. The map keeps what such a test ran; a broken
-        # recorder still fails the build step below (no records).
-        continue-on-error: true
         env:
           PRKS_E2E_COVERAGE_MAP_DIR: ${{ runner.temp }}/prks-coverage-records
           SHARD: ${{ matrix.shard }}
-        run: python tests/e2e/run.py --jobs 1 --no-pointer-capture --shard "${SHARD}/8"
+        # Instrumentation changes timing, so an instrumented test can fail
+        # where the gate passes; the map keeps what such a test ran. Only a
+        # shard that reached its end with ordinary test failures (exit 1 and
+        # the runner's final summary line) passes with a warning. A watchdog
+        # or deadline exit, or any other failure, fails the job.
+        shell: bash
+        run: |
+          set -uo pipefail
+          log="${RUNNER_TEMP}/e2e-coverage-${SHARD}.log"
+          python tests/e2e/run.py --jobs 1 --no-pointer-capture --shard "${SHARD}/8" 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "$status" -eq 1 ]] && grep -Eq '^E2E workers=[0-9]+ tests=[0-9]+ failures=' "$log"; then
+            echo "::warning::Shard ${SHARD}: tests failed under instrumentation; the map keeps what they ran."
+            exit 0
+          fi
+          exit "$status"
 
       - name: Build the shard map
         # A failed test still recorded what it ran; the map keeps it.
