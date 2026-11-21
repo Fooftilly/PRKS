@@ -1887,6 +1887,158 @@ def validate_dockerfile(repo_root: Path | None = None) -> GateResult:
 
 
 # ---------------------------------------------------------------------------
+# Hash-locked runtime install (Docker image)
+# ---------------------------------------------------------------------------
+
+RUNTIME_LOCK_FILE = "requirements-lock.txt"
+RUNTIME_LOCK_COMMAND = "python scripts/lock_runtime_requirements.py"
+_LOCK_ENTRY_RE = re.compile(
+    r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)==([^\s;]+)\s*(?:;([^-]*?))?((?:\s*--hash=sha256:[0-9a-f]{64})+)\s*$"
+)
+_LOCK_HASH_RE = re.compile(r"--hash=sha256:([0-9a-f]{64})")
+
+
+def canonical_package_name(name: str) -> str:
+    """PEP 503 normalised name (``Pillow`` and ``pillow`` are one package)."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def parse_runtime_lock(
+    text: str, *, source: str = RUNTIME_LOCK_FILE
+) -> dict[str, tuple[str, tuple[str, ...], str]]:
+    """Parse a hashed lock: every entry is ``name==version`` with sha256 hashes.
+
+    Each value is ``(version, hashes, marker)``; ``marker`` is the environment
+    marker after ``;`` or ``""`` when the entry is unconditional.
+
+    Backslash continuations are joined and full-line comments skipped. Any
+    other line shape (range, include, option, missing hash) fails closed.
+    """
+    entries: dict[str, tuple[str, tuple[str, ...], str]] = {}
+    logical: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not buffer and (not line or line.startswith("#")):
+            continue
+        if line.endswith("\\"):
+            buffer += line[:-1].strip() + " "
+            continue
+        logical.append(buffer + line)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+    for entry in logical:
+        m = _LOCK_ENTRY_RE.match(entry)
+        if not m:
+            raise RequirementsPinError(
+                f"{source}: entry must be name==version with sha256 hashes; got {entry[:120]!r}"
+            )
+        name = canonical_package_name(m.group(1))
+        if name in entries:
+            raise RequirementsPinError(f"{source}: duplicate entry for {name!r}")
+        entries[name] = (m.group(2), tuple(_LOCK_HASH_RE.findall(m.group(4))), (m.group(3) or "").strip())
+    return entries
+
+
+def _requirement_files(instruction: str) -> list[str]:
+    """The exact ``-r``/``--requirement`` file arguments of a shell command."""
+    words = instruction.split()
+    files: list[str] = []
+    for i, word in enumerate(words):
+        if word in ("-r", "--requirement") and i + 1 < len(words):
+            files.append(words[i + 1])
+        elif word.startswith("--requirement="):
+            files.append(word.split("=", 1)[1])
+        elif word.startswith("-r") and len(word) > 2:
+            files.append(word[2:])
+    return files
+
+
+def dockerfile_instructions(text: str) -> list[str]:
+    """Executable Dockerfile instructions, continuations joined, comments dropped.
+
+    Docker ignores a line whose first non-blank character is ``#``, also
+    inside a continued instruction, so a commented install never counts.
+    """
+    instructions: list[str] = []
+    current: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            current.append(line[:-1].strip())
+            continue
+        current.append(line)
+        instructions.append(" ".join(part for part in current if part))
+        current = []
+    if current:
+        instructions.append(" ".join(part for part in current if part))
+    return instructions
+
+
+def validate_runtime_lock(repo_root: Path | None = None) -> GateResult:
+    """Fail closed when the Docker image's hashed lock drifts from requirements.txt.
+
+    Every requirements.txt pin must appear in the lock at the same version,
+    every lock entry must carry at least one sha256 hash, and the Dockerfile
+    must install from the lock with ``--require-hashes``.
+    """
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = GateResult(ok=True)
+    docker = root / "Dockerfile"
+    lock = root / RUNTIME_LOCK_FILE
+    if not docker.is_file():
+        return result
+    hint = f"Regenerate with: {RUNTIME_LOCK_COMMAND}"
+    if not lock.is_file():
+        result.fail("runtime_lock_missing", f"{RUNTIME_LOCK_FILE} missing. {hint}", str(lock))
+        return result
+    try:
+        entries = parse_runtime_lock(lock.read_text(encoding="utf-8"))
+        pins = read_requirements_pins(root / "requirements.txt")
+    except (OSError, RequirementsPinError) as exc:
+        result.fail("runtime_lock_invalid", f"{exc}. {hint}", str(lock))
+        return result
+    for name, version in sorted(pins.items()):
+        locked = entries.get(canonical_package_name(name))
+        if locked is None:
+            result.fail(
+                "runtime_lock_stale",
+                f"{name}=={version} from requirements.txt is not in {RUNTIME_LOCK_FILE}. {hint}",
+                str(lock),
+            )
+        elif locked[0] != version:
+            result.fail(
+                "runtime_lock_stale",
+                f"{RUNTIME_LOCK_FILE} locks {name}=={locked[0]} but requirements.txt pins {version}. {hint}",
+                str(lock),
+            )
+        elif locked[2]:
+            # A direct pin must install everywhere; a marker can switch it off
+            # in the Linux image (conditional transitive entries stay valid).
+            result.fail(
+                "runtime_lock_stale",
+                f"{RUNTIME_LOCK_FILE} locks direct pin {name} only when {locked[2]!r}. {hint}",
+                str(lock),
+            )
+    if not any(
+        instruction.split(maxsplit=1)[0].upper() == "RUN"
+        and "pip install" in instruction
+        and "--require-hashes" in instruction.split()
+        and RUNTIME_LOCK_FILE in _requirement_files(instruction)
+        for instruction in dockerfile_instructions(docker.read_text(encoding="utf-8"))
+    ):
+        result.fail(
+            "runtime_lock_unused",
+            f"Dockerfile must install Python packages with --require-hashes -r {RUNTIME_LOCK_FILE}",
+            str(docker),
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Inventory coverage
 # ---------------------------------------------------------------------------
 
@@ -2189,6 +2341,7 @@ def run_repo_gate(repo_root: Path | None = None) -> GateResult:
     result.extend(validate_frontend_vendor_island(root))
     result.extend(validate_inter_vendor(root))
     result.extend(validate_idb_vendor(root))
+    result.extend(validate_runtime_lock(root))
     result.extend(validate_csl_vendor(root))
     result.extend(validate_dependency_manifest(root))
     result.extend(validate_sw_revision(root))

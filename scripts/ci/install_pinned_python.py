@@ -29,6 +29,9 @@ DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "locust": ("locust",),
     # Mutation testing reruns the targets' unit tests, so it needs what they
     # import (Hypothesis, the docs validator's parser) beside mutmut itself.
+    # SonarCloud coverage (#1373) reruns the unit and PostgreSQL suites
+    # under coverage.py, so it needs what both import beside coverage itself.
+    "coverage": ("openapi-core", "hypothesis", "markdown-it-py", "mdurl", "requests", "coverage"),
     "mutation": ("hypothesis", "markdown-it-py", "mdurl", "mutmut", "pytest"),
     # PostgreSQL requirements are part of the runtime image (#630); the
     # PostgreSQL HTTP contract tests validate against the OpenAPI slice (#641).

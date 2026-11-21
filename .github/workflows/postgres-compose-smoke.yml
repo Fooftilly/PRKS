@@ -12,6 +12,7 @@ on:
       - .dockerignore
       - Dockerfile
       - requirements.txt
+      - requirements-lock.txt
       - prks_app.py
       - backend/process_roles.py
       - backend/readiness.py
@@ -32,6 +33,7 @@ on:
       - .dockerignore
       - Dockerfile
       - requirements.txt
+      - requirements-lock.txt
       - prks_app.py
       - backend/process_roles.py
       - backend/readiness.py
