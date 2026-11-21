@@ -153,15 +153,21 @@ class PlaylistsRouteSurfaceTests(unittest.TestCase):
                     };
                 };
                 const tag = { id: 'T1', name: 'Example', color: 'red;position:fixed;inset:0;z-index:9999' };
+                // The accent is a class's rule (prksCssVarClass: no inline style
+                // under the CSP), so it is read from the computed style.
                 const renderAccent = (html) => {
                     const host = document.createElement('div');
                     host.innerHTML = html;
+                    document.body.appendChild(host);
                     const chip = host.querySelector('.work-tag-chip');
-                    return {
-                        accent: chip.style.getPropertyValue('--tag-accent'),
-                        position: chip.style.position,
-                        inset: chip.style.inset,
+                    const computed = getComputedStyle(chip);
+                    const out = {
+                        accent: computed.getPropertyValue('--tag-accent').trim(),
+                        styleAttribute: chip.getAttribute('style'),
+                        position: computed.position,
                     };
+                    host.remove();
+                    return out;
                 };
                 return {
                     javascript: renderUrl('javascript:alert(1)'),
@@ -181,8 +187,8 @@ class PlaylistsRouteSurfaceTests(unittest.TestCase):
         self.assertEqual(observed["https"]["hrefs"], ["https://example.test/reference"])
         for kind in ("folder", "work"):
             self.assertEqual(observed[kind]["accent"], "#6d6cf7")
-            self.assertEqual(observed[kind]["position"], "")
-            self.assertEqual(observed[kind]["inset"], "")
+            self.assertIsNone(observed[kind]["styleAttribute"])
+            self.assertNotEqual(observed[kind]["position"], "fixed")
         self.assertEqual(observed["valid"]["accent"], "#123abc")
 
     def test_empty_index_offers_new_playlist_in_the_page(self):
