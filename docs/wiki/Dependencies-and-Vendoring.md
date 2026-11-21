@@ -58,7 +58,7 @@ Treat viewer source and built/vendor artifacts according to the repository guida
 
 ## Platform-aware instructions
 
-Installation/remediation commands shown to users should account for the platform/package-management context. In particular, PEP 668 distributions must not be instructed to bypass their package manager with unsafe global pip flags.
+Installation/remediation commands shown to users should account for the platform/package-management context. In particular, PEP 668 distributions must not be instructed to bypass their package manager with unsafe global pip flags, and an interpreter without pip must not be told to run `python -m pip`: the gate suggests `uv pip install --python <interpreter>` when `uv` is on `PATH`, otherwise `python -m ensurepip --upgrade` followed by pip, and when the interpreter has no ensurepip either, it points to installing uv.
 
 ## Maintainer dependency-update helpers
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import re
@@ -10,12 +12,16 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
+from unittest import mock
 
+from scripts.ci import check_docs_only, docs_only
 from scripts.ci.check_docs_only import _anchors, check_markdown
 from scripts.ci.docs_only import (
     AUDITED_DOC_FILES,
     AUDITED_CONFIG_FILES,
     POSTGRES_SCOPE,
+    _is_plain_relative,
     changed_documentation,
     is_approved_markdown,
     is_audited_config,
@@ -40,6 +46,30 @@ def _write(root: Path, path: str, content: str) -> None:
     target = root / path
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
+
+
+def _main_in(root: Path, main: Any, argv: list[str], event_head: str | None = None) -> tuple[int, str]:
+    """Run a CI entrypoint's ``main()`` in-process from ``root`` (so mutation testing sees it).
+
+    ``event_head`` writes a pull_request event naming that head SHA, as Actions does.
+    """
+    out = io.StringIO()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(contextlib.chdir(root))
+        stack.enter_context(mock.patch.object(sys, "argv", ["prog", *argv]))
+        env = stack.enter_context(mock.patch.dict(os.environ))
+        env.pop("GITHUB_EVENT_PATH", None)
+        if event_head is not None:
+            event = root.parent / f"{root.name}-event.json"
+            event.write_text(json.dumps({"pull_request": {"head": {"sha": event_head}}}), encoding="utf-8")
+            env["GITHUB_EVENT_PATH"] = str(event)
+        stack.enter_context(contextlib.redirect_stdout(out))
+        stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+        try:
+            code = main()
+        except SystemExit as exit_:
+            code = exit_.code if isinstance(exit_.code, int) else 1
+    return code, out.getvalue()
 
 
 def _repo(root: Path) -> str:
@@ -91,6 +121,14 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             with self.subTest(rejected=path):
                 self.assertFalse(is_approved_markdown(path))
 
+    def test_audited_docs_are_plain_paths_and_never_agent_guidance(self):
+        # is_approved_markdown is exact set membership, so the set itself must
+        # never hold an AGENTS.md or a path that escapes or aliases the tree.
+        for path in AUDITED_DOC_FILES | AUDITED_CONFIG_FILES:
+            with self.subTest(path=path):
+                self.assertTrue(_is_plain_relative(path))
+                self.assertNotEqual(path.rsplit("/", 1)[-1].lower(), "agents.md")
+
     def test_actual_git_changes_fail_closed(self):
         cases = (
             ("root docs test fixture", {"README.md": "# Changed\n"}, False),
@@ -129,8 +167,11 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                     _git(root, "add", ".")
                     _git(root, "commit", "-qm", "change")
                 result = changed_documentation(root, base)
-                self.assertEqual(result is not None, expected)
+                # An approved diff reports exactly its changed paths.
+                self.assertEqual(result, tuple(sorted(changes)) if expected else None)
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
+                # A well-formed SHA git does not have refuses, never raises.
+                self.assertIsNone(changed_documentation(root, "0" * 40))
 
     def test_audited_config_files_are_exact_root_paths(self):
         for path in (".codacy.yml", ".coderabbit.yaml", ".pr_agent.toml"):
@@ -177,7 +218,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 root_files = (
                     "run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore",
                     "docker-compose.yml", "docker-build.sh", "docker-entrypoint.sh",
-                    "eslint.config.mjs", "ruff.toml", "setup.cfg",
+                    "eslint.config.mjs", "ruff.toml",
                     "pyrightconfig.json", "pyrightconfig.typed-slice.json",
                 )
                 for script in root_files:
@@ -261,6 +302,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
         )
         rejected = (
             "", "/README.md", "../README.md", "docs/../backend/a.md",
+            "./README.md", "docs/./a.md",
             "docs//a.md", "docs\\a.md", "README.MD", "docs/a.markdown",
             "backend/db/schema/999_x.sql", "tests/pg/test_a.py",
             "tests/pg/search_ranking_baseline.json", "requirements.txt",
@@ -315,22 +357,32 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertIsNone(changed_documentation(root, base, POSTGRES_SCOPE))
 
     def test_cli_scope_defaults_narrow_and_rejects_unknown(self):
-        script = Path(__file__).resolve().parents[1] / "scripts/ci/docs_only.py"
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             base = _repo(root)
             _write(root, "AGENTS.md", "Changed\n")
             _git(root, "commit", "-qam", "change")
 
-            def run(*extra: str) -> subprocess.CompletedProcess[str]:
-                return subprocess.run(  # nosec B603 - fixed interpreter and script
-                    [sys.executable, str(script), "--base", base, *extra],
-                    cwd=root, capture_output=True, text=True, check=False,
-                )
+            def run(*extra: str) -> tuple[int, str]:
+                return _main_in(root, docs_only.main, ["--base", base, *extra])
 
-            self.assertEqual(run().stdout.strip(), "false")
-            self.assertEqual(run("--scope", "postgres").stdout.strip(), "true")
-            self.assertNotEqual(run("--scope", "everything").returncode, 0)
+            self.assertEqual(run(), (0, "false\n"))
+            self.assertEqual(run("--scope", "postgres"), (0, "true\n"))
+            self.assertEqual(run("--scope", "everything")[0], 2)
+
+    def test_the_entrypoints_run_as_scripts(self):
+        # The only subprocess test left: the in-process tests above cannot
+        # prove the files still start as scripts (mutation testing deselects this).
+        for argv in (
+            [str(ROOT / "scripts/ci/docs_only.py"), "--help"],
+            ["-m", "scripts.ci.check_docs_only", "--help"],
+        ):
+            with self.subTest(argv=argv):
+                result = subprocess.run(  # nosec B603 - fixed interpreter and script
+                    [sys.executable, *argv], cwd=ROOT, capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("--base", result.stdout)
 
     def stale_base_merge(self, root: Path, pr_files: dict[str, str]) -> tuple[str, str]:
         """GitHub's shape: the event base B0 is stale, master moved on with a code
@@ -352,16 +404,9 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
         return stale, head
 
     def run_cli(self, root: Path, base: str, head_sha: str | None, scope: str = "postgres") -> str:
-        script = Path(__file__).resolve().parents[1] / "scripts/ci/docs_only.py"
-        env = {k: v for k, v in os.environ.items() if k != "GITHUB_EVENT_PATH"}
-        if head_sha is not None:
-            event = root.parent / f"{root.name}-event.json"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": head_sha}}}), encoding="utf-8")
-            env["GITHUB_EVENT_PATH"] = str(event)
-        return subprocess.run(  # nosec B603 - fixed interpreter and script
-            [sys.executable, str(script), "--base", base, "--scope", scope],
-            cwd=root, capture_output=True, text=True, check=False, env=env,
-        ).stdout.strip()
+        code, out = _main_in(root, docs_only.main, ["--base", base, "--scope", scope], head_sha)
+        self.assertEqual(code, 0)
+        return out.strip()
 
     def test_a_stale_event_base_uses_the_merge_commits_first_parent(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -380,16 +425,9 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             root.mkdir()
             stale, head = self.stale_base_merge(root, {"docs/wiki/Glossary.md": "# Glossary\n\nChanged.\n"})
             self.assertEqual(self.run_cli(root, stale, head, scope="docs"), "true")
-            event = root.parent / "validator-event.json"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": head}}}), encoding="utf-8")
-            env = {k: v for k, v in os.environ.items() if k != "GITHUB_EVENT_PATH"}
-            env["GITHUB_EVENT_PATH"] = str(event)
-            env["PYTHONPATH"] = os.pathsep.join(p for p in (str(ROOT), env.get("PYTHONPATH")) if p)
-            validate = subprocess.run(  # nosec B603 - fixed interpreter and module
-                [sys.executable, "-m", "scripts.ci.check_docs_only", "--base", stale],
-                cwd=root, capture_output=True, text=True, check=False, env=env,
-            )
-            self.assertEqual(validate.returncode, 0, validate.stdout + validate.stderr)
+            code, out = _main_in(root, check_docs_only.main, ["--base", stale], head)
+            self.assertEqual(code, 0, out)
+            self.assertIn("Validated 1 changed Markdown files", out)
 
     def test_a_stale_base_merge_with_a_pr_code_change_still_runs_full_ci(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -412,6 +450,23 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             self.assertEqual(merge_base_parent(root, stale, head), _git(root, "rev-parse", "HEAD^1"))
             _git(root, "checkout", "-q", head)
             self.assertEqual(merge_base_parent(root, stale, head), stale)
+
+    def test_the_event_base_is_kept_when_git_cannot_answer(self):
+        # Not a repository, or a merge whose first parent is neither present
+        # nor fetchable: the immutable event base, never an error.
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(merge_base_parent(Path(folder), "a" * 40, "b" * 40), "a" * 40)
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            first = _git(root, "rev-parse", "HEAD^1")
+            merge = _git(root, "rev-parse", "HEAD")
+            shallow = Path(folder) / "shallow"
+            _git(Path(folder), "clone", "-q", "--depth=1", f"file://{root}", str(shallow))
+            _git(shallow, "remote", "remove", "origin")
+            self.assertEqual(_git(shallow, "rev-parse", "HEAD"), merge)
+            self.assertNotEqual(first, stale)
+            self.assertEqual(merge_base_parent(shallow, stale, head), stale)
 
     def test_deleted_or_renamed_markdown_is_not_safe_skip(self):
         for page in ("Glossary", "Getting-Started", "Offline-and-Sync"):
@@ -713,11 +768,66 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 "[anchor](../README.md#absent)\n"
                 f"{fence}python\nprint('no closing fence')\n"
             ))
-            errors = check_markdown(root, "docs/guide.md")
-            self.assertEqual(len(errors), 3)
-            self.assertTrue(any("missing relative target" in x for x in errors))
-            self.assertTrue(any("missing anchor" in x for x in errors))
-            self.assertTrue(any("unclosed" in x for x in errors))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                # Both links share one paragraph, which starts on line 1.
+                "docs/guide.md:1: missing relative target not-here.md",
+                "docs/guide.md:1: missing anchor #absent in ../README.md",
+                f"docs/guide.md: unclosed {fence} fence",
+            ])
+
+    def test_errors_name_the_line_of_every_link_kind(self):
+        # Markdown images, raw HTML blocks and inline HTML are all checked,
+        # and each error names its own source line.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "# Guide\n"
+                "![logo](missing.png)\n\n"
+                '<a href="block.md">block</a>\n\n'
+                'Text <img src="inline.png"> here.\n'
+                "[self](#nowhere)\n"
+            ))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:2: missing relative target missing.png",
+                "docs/guide.md:4: missing relative target block.md",
+                # Markdown links of a paragraph come before its inline HTML.
+                "docs/guide.md:6: missing anchor #nowhere in docs/guide.md",
+                "docs/guide.md:6: missing relative target inline.png",
+            ])
+
+    def test_external_protocol_relative_and_site_root_links_are_not_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "[a](https://example.org/x.md) [b](//example.org/x.md) "
+                "[c](/settings/x.md) [d](mailto:x@example.org)\n"
+            ))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [])
+
+    def test_an_unreadable_anchor_target_has_no_anchors(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "docs").mkdir()
+            (root / "docs/latin1.md").write_bytes(b"# Caf\xe9\n")
+            _write(root, "docs/guide.md", "[x](latin1.md#caf)\n")
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:1: missing anchor #caf in latin1.md",
+            ])
+
+    def test_heading_anchors_use_visible_text_breaks_and_repeat_suffixes(self):
+        tick = chr(96)
+        content = (
+            f"# Run {tick}prks{tick} now\n"
+            "## ![Logo](logo.png) Brand\n"
+            "Two\nlines\n===\n"
+            "Hard\\\nbreak\n---\n"
+            "## Same\n## Same\n## Same\n"
+            'Some <span id="inline-anchor">text</span>.\n'
+        )
+        self.assertEqual(_anchors(content), {
+            "run-prks-now", "logo-brand", "two-lines", "hard-break",
+            "same", "same-1", "same-2", "inline-anchor",
+        })
 
     def test_published_wiki_page_must_pass_publisher_link_check(self):
         # The skipped unit suite runs tests/test_wiki_source_links.py; a

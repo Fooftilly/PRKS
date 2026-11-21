@@ -12,9 +12,11 @@ import json
 import os
 import platform
 import re
+import shutil
 import sys
 import sysconfig
 from dataclasses import dataclass, field
+import importlib.util
 from importlib.metadata import PackageNotFoundError, version as dist_version
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -280,6 +282,20 @@ class PlatformContext:
     executable: str
     prefix: str
     base_prefix: str
+    # Installer availability for remediation hints. Many venvs (``uv venv``,
+    # ``python -m venv --without-pip``) have no pip, and distributions such as
+    # Arch Linux no longer expect pip to be used at all.
+    has_pip: bool
+    has_ensurepip: bool
+    uv_available: bool
+
+
+def module_available(name: str) -> bool:
+    """True when *name* can be imported by the running interpreter."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def detect_externally_managed(sysconfig_get_path: Callable[[str], str] | None = None) -> bool:
@@ -328,6 +344,9 @@ def detect_platform_context(
     system: str | None = None,
     environ: Mapping[str, str] | None = None,
     externally_managed: bool | None = None,
+    has_pip: bool | None = None,
+    has_ensurepip: bool | None = None,
+    uv_available: bool | None = None,
 ) -> PlatformContext:
     pref = sys.prefix if prefix is None else prefix
     base = sys.base_prefix if base_prefix is None else base_prefix
@@ -350,6 +369,17 @@ def detect_platform_context(
         executable=exe,
         prefix=pref,
         base_prefix=base,
+        has_pip=module_available("pip") if has_pip is None else bool(has_pip),
+        has_ensurepip=(
+            module_available("ensurepip")
+            if has_ensurepip is None
+            else bool(has_ensurepip)
+        ),
+        uv_available=(
+            shutil.which("uv") is not None
+            if uv_available is None
+            else bool(uv_available)
+        ),
     )
 
 
@@ -374,6 +404,51 @@ def format_pip_install_command(
     return f"{exe} -m pip install -r {req}"
 
 
+def format_uv_install_command(
+    executable: str,
+    requirements_file: str,
+    *,
+    is_windows: bool,
+) -> str:
+    exe = quote_shell_path(executable, is_windows=is_windows)
+    req = quote_shell_path(requirements_file, is_windows=is_windows)
+    return f"uv pip install --python {exe} -r {req}"
+
+
+def format_ensurepip_command(executable: str, *, is_windows: bool) -> str:
+    exe = quote_shell_path(executable, is_windows=is_windows)
+    return f"{exe} -m ensurepip --upgrade"
+
+
+def interpreter_install_lines(
+    ctx: PlatformContext, requirements_file: str
+) -> tuple[str, list[str]]:
+    """Intro line and commands that install *requirements_file* into ``ctx.executable``.
+
+    Picks an installer that exists: pip in the interpreter, else ``uv`` on
+    PATH, else bootstrapping pip with ``ensurepip``.
+    """
+    exe, win = ctx.executable, ctx.is_windows
+    pip_cmd = format_pip_install_command(exe, requirements_file, is_windows=win)
+    if ctx.has_pip:
+        return "Install the pinned dependencies with:", [pip_cmd]
+    if ctx.uv_available:
+        return (
+            "This Python has no pip. Install the pinned dependencies with uv:",
+            [format_uv_install_command(exe, requirements_file, is_windows=win)],
+        )
+    if ctx.has_ensurepip:
+        return (
+            "This Python has no pip. Bootstrap pip, then install the pinned dependencies:",
+            [format_ensurepip_command(exe, is_windows=win), pip_cmd],
+        )
+    return (
+        "This Python has neither pip nor ensurepip. Install uv"
+        " (https://docs.astral.sh/uv/, also packaged by most distributions), then run:",
+        [format_uv_install_command(exe, requirements_file, is_windows=win)],
+    )
+
+
 def default_venv_python_cmd(*, is_windows: bool) -> str:
     """Platform-appropriate interpreter name for remediation examples.
 
@@ -386,21 +461,53 @@ def format_venv_create_commands(
     *,
     is_windows: bool,
     python_cmd: str | None = None,
+    use_uv: bool = False,
+    python_min: Sequence[int] = (3, 12),
 ) -> list[str]:
+    venv_python = r".venv\Scripts\python.exe" if is_windows else "./.venv/bin/python"
+    if use_uv:
+        request = ">=" + ".".join(str(x) for x in python_min)
+        return [
+            # Double quotes keep ">" from being a redirect in sh, cmd and PowerShell.
+            f'uv venv --python "{request}" .venv',
+            f"uv pip install --python {venv_python} -r requirements.txt",
+        ]
     cmd = (
         python_cmd
         if python_cmd is not None
         else default_venv_python_cmd(is_windows=is_windows)
     )
-    if is_windows:
-        return [
-            f"{cmd} -m venv .venv",
-            r".venv\Scripts\python.exe -m pip install -r requirements.txt",
-        ]
     return [
         f"{cmd} -m venv .venv",
-        "./.venv/bin/python -m pip install -r requirements.txt",
+        f"{venv_python} -m pip install -r requirements.txt",
     ]
+
+
+def _venv_create_lines(ctx: PlatformContext) -> list[str]:
+    """Commands for a new project venv, using uv when ``python -m venv`` cannot add pip.
+
+    Without ensurepip, ``python -m venv`` fails (or yields a venv with no pip),
+    so the uv commands are the only ones printed, after a hint to install uv
+    when it is not on PATH.
+    """
+    use_uv = not ctx.has_ensurepip
+    try:
+        python_min: Sequence[int] = python_min_version()
+    except (OSError, ValueError):
+        python_min = (3, 12)
+    lines: list[str] = []
+    if use_uv and not ctx.uv_available:
+        lines.append(
+            "  # This Python has no ensurepip, so `-m venv` cannot add pip."
+            " Install uv (https://docs.astral.sh/uv/), then:"
+        )
+    lines.extend(
+        f"  {cmd}"
+        for cmd in format_venv_create_commands(
+            is_windows=ctx.is_windows, use_uv=use_uv, python_min=python_min
+        )
+    )
+    return lines
 
 
 def remediation_message(
@@ -413,7 +520,8 @@ def remediation_message(
 ) -> str:
     """Build an actionable, platform-aware remediation message.
 
-    Never recommends sudo pip or --break-system-packages.
+    Never recommends sudo pip or --break-system-packages, and never
+    recommends pip when the interpreter has none.
     """
     ctx = ctx or detect_platform_context()
     lines: list[str] = ["PRKS dependency check failed."]
@@ -449,15 +557,9 @@ def remediation_message(
         return "\n".join(lines)
 
     if ctx.in_venv:
-        cmd = format_pip_install_command(
-            ctx.executable, requirements_file, is_windows=ctx.is_windows
-        )
-        lines.extend(
-            [
-                "You are in a virtual environment. Install the pinned dependencies with:",
-                f"  {cmd}",
-            ]
-        )
+        intro, cmds = interpreter_install_lines(ctx, requirements_file)
+        lines.append("You are in a virtual environment. " + intro)
+        lines.extend(f"  {cmd}" for cmd in cmds)
         return "\n".join(lines)
 
     if ctx.externally_managed:
@@ -468,8 +570,7 @@ def remediation_message(
                 "Create a project-local virtual environment and install into it:",
             ]
         )
-        for cmd in format_venv_create_commands(is_windows=ctx.is_windows):
-            lines.append(f"  {cmd}")
+        lines.extend(_venv_create_lines(ctx))
         if ctx.is_windows:
             lines.append(r"Then run PRKS with: .venv\Scripts\python.exe prks_app.py")
         else:
@@ -477,23 +578,13 @@ def remediation_message(
         return "\n".join(lines)
 
     # Generic host Python (not venv, not PEP 668, not Docker).
-    lines.extend(
-        [
-            "Install into a project-local virtual environment (recommended):",
-        ]
-    )
-    for cmd in format_venv_create_commands(is_windows=ctx.is_windows):
-        lines.append(f"  {cmd}")
-    lines.extend(
-        [
-            "",
-            "Or, if this interpreter is already dedicated to PRKS:",
-            "  "
-            + format_pip_install_command(
-                ctx.executable, requirements_file, is_windows=ctx.is_windows
-            ),
-        ]
-    )
+    lines.append("Install into a project-local virtual environment (recommended):")
+    lines.extend(_venv_create_lines(ctx))
+    intro, cmds = interpreter_install_lines(ctx, requirements_file)
+    lines.extend(["", "Or, if this interpreter is already dedicated to PRKS:"])
+    if not ctx.has_pip:
+        lines.append("  # " + intro)
+    lines.extend(f"  {cmd}" for cmd in cmds)
     return "\n".join(lines)
 
 

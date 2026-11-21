@@ -44,6 +44,15 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 ./.venv/bin/python prks_app.py
 ```
 
+The venv needs pip for that second command. Some setups have none: `uv venv` and `python -m venv --without-pip` create venvs without it, and Arch Linux does not ship pip for its system Python. With [uv](https://docs.astral.sh/uv/) on `PATH`, use it instead:
+
+```bash
+uv venv --python ">=3.12" .venv
+uv pip install --python ./.venv/bin/python -r requirements.txt
+```
+
+The dependency gate checks which installer the interpreter has (pip, `uv` on `PATH`, or `ensurepip` to bootstrap pip) and prints a command that works.
+
 `prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** it touches the database, the storage root or the network. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI. It then applies the database schema, binds the data root (`data/` by default) and, on a first run, **waits for setup**. In a second terminal, with the same `PRKS_DATABASE_URL`, create the owner account and the Library ([admin bootstrap](docs/admin-bootstrap.md)):
 
 ```bash
@@ -230,6 +239,7 @@ Install runtime pins plus development/test tooling (includes `openapi-core` for 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+# without pip in the venv: uv pip install --python ./.venv/bin/python -r requirements.txt -r requirements-dev.txt
 ```
 
 Fast test suite (no Chromium):

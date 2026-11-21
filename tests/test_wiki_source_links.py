@@ -6,14 +6,17 @@ workflow runs on the published copy, so a bad link fails on the pull request.
 
 from __future__ import annotations
 
+import io
 import os
 import subprocess  # nosec B404 - fixed local test command
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
-from scripts.ci.wiki_links import publish_errors, rewrite_page, unresolved_links
+from scripts.ci.wiki_links import main, publish_errors, rewrite_page, unresolved_links
 
 ROOT = Path(__file__).resolve().parents[1]
 WIKI_DIR = ROOT / "docs" / "wiki"
@@ -70,13 +73,49 @@ class WikiLinkRuleTests(unittest.TestCase):
         self.assertEqual(rewrite_page(text, WIKI_BASE), text)
         self.assertEqual(unresolved_links(text), [])
 
+    def test_a_sibling_link_without_an_anchor_keeps_none(self) -> None:
+        self.assertEqual(
+            rewrite_page("[Testing](Testing.md)", WIKI_BASE),
+            f"[Testing]({WIKI_BASE}/Testing)",
+        )
+
+    def test_prose_after_a_closed_or_indented_fence_is_still_checked(self) -> None:
+        fence = "`" * 3
+        for text in (
+            f"{fence}\n[a](A.md)\n{fence}\n[bad](../x.md)\n",
+            f"   {fence}\n[a](A.md)\n   {fence}\n[bad](../x.md)\n",
+            "`one` and `two` then [bad](../x.md)\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(unresolved_links(text), ["](../x.md)"])
+
     def test_the_cli_rewrites_in_place_and_fails_on_a_bad_link(self) -> None:
+        # In-process, so mutation testing can judge main().
         with tempfile.TemporaryDirectory() as tmp:
             good = Path(tmp, "Good.md")
             good.write_text("[Testing](Testing.md)", encoding="utf-8")
             Path(tmp, "Bad.md").write_text(
                 "[guide](docs/admin-bootstrap.md)", encoding="utf-8"
             )
+            err = io.StringIO()
+            with mock.patch.dict(os.environ, {"WIKI_BASE_URL": WIKI_BASE}), redirect_stderr(err):
+                self.assertEqual(main(["wiki_links.py", tmp]), 1)
+                self.assertEqual(main(["wiki_links.py"]), 2)
+            self.assertIn("Bad.md: ](docs/admin-bootstrap.md)", err.getvalue())
+            self.assertIn("usage: wiki_links.py WIKI_DIR", err.getvalue())
+            self.assertEqual(
+                good.read_text(encoding="utf-8"), f"[Testing]({WIKI_BASE}/Testing)"
+            )
+            Path(tmp, "Bad.md").unlink()
+            with mock.patch.dict(os.environ, {"WIKI_BASE_URL": WIKI_BASE}), redirect_stderr(io.StringIO()):
+                self.assertEqual(main(["wiki_links.py", tmp]), 0)
+
+    def test_the_cli_runs_as_a_script(self) -> None:
+        # The only subprocess test: mutation testing deselects it.
+        # A bad link must fail the script, as Publish Wiki relies on: an
+        # empty folder would pass even if the script never called main().
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "Bad.md").write_text("[guide](docs/admin-bootstrap.md)", encoding="utf-8")
             result = subprocess.run(  # nosec B603 - fixed interpreter and script
                 [sys.executable, str(ROOT / "scripts" / "ci" / "wiki_links.py"), tmp],
                 capture_output=True,
@@ -84,11 +123,8 @@ class WikiLinkRuleTests(unittest.TestCase):
                 env={**os.environ, "WIKI_BASE_URL": WIKI_BASE},
                 check=False,
             )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("Bad.md: ](docs/admin-bootstrap.md)", result.stderr)
-            self.assertEqual(
-                good.read_text(encoding="utf-8"), f"[Testing]({WIKI_BASE}/Testing)"
-            )
 
 
 if __name__ == "__main__":
