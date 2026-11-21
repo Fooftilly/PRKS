@@ -58,8 +58,9 @@ _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
 _ERA = r"(?:\s*(BCE|BC|CE|AD))?"
 #: The whole Year field as a year, ``950`` or ``399 BCE``; anything else (``19th century``) is not a date.
 _YEAR_RE = re.compile(r"^\s*(\d{1,4})" + _ERA + r"\s*$", re.IGNORECASE)
-#: A Year field holding an ISO year-month or date (``2020-05``, ``2020-05-02``): two-digit month, real month.
-_ISO_MONTH_RE = re.compile(r"^\s*\d{4}-(?:0[1-9]|1[0-2])(?:-\d{2})?\s*$")
+#: A Year field holding a padded year-month (``2020-05``) or a full date (``2024-5-2``); the day
+#: makes a full date unambiguous without padding, while ``1998-9`` stays a range.
+_ISO_MONTH_RE = re.compile(r"^\s*\d{4}-(?:0[1-9]|1[0-2]|(?:0?[1-9]|1[0-2])-\d{1,2})\s*$")
 #: The whole Year field as a range of years: ``2020–2021``, ``1999–00``, ``950–951``, ``1914/1918``.
 _YEAR_RANGE_RE = re.compile(r"^\s*(\d{1,4})\s*[-–—/]\s*(\d{1,4})\s*$")
 

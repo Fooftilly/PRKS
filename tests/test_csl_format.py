@@ -74,6 +74,8 @@ class CslFormatTests(unittest.TestCase):
         self.assertEqual(item({"year": "2020-12-24"})["issued"], {"date-parts": [[2020, 12, 24]]})
         self.assertEqual(item({"year": "2020-21"})["issued"], {"date-parts": [[2020], [2021]]})
         self.assertEqual(item({"year": "1998-9"})["issued"], {"date-parts": [[1998], [1999]]})
+        self.assertEqual(item({"year": "2024-05-2"})["issued"], {"date-parts": [[2024, 5, 2]]})
+        self.assertEqual(item({"year": "2024-5-02"})["issued"], {"date-parts": [[2024, 5, 2]]})
         self.assertEqual(item({"year": "2020-02-30"})["issued"], {"date-parts": [[2020, 2]]})
         self.assertEqual(item({"published_date": "2024-02-29"})["issued"], {"date-parts": [[2024, 2, 29]]})
         self.assertEqual(item({"published_date": "2023-02-29"})["issued"], {"date-parts": [[2023, 2]]})
