@@ -5,6 +5,11 @@ on:
     branches:
       - master
   workflow_dispatch:
+    inputs:
+      diff_base:
+        description: "Commit the diff-aware guards compare against (master CI passes the last checked commit; empty: HEAD)"
+        type: string
+        default: ""
 
 concurrency:
   group: static-analysis-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -87,17 +92,25 @@ jobs:
         id: diff-base
         # Shared by the diff-aware guards below (#189, #190, #192).
         # PR base is the immutable event SHA (not the live base-branch tip).
-        # workflow_dispatch (master CI after merges) compares against HEAD so
-        # grandfathered historical waits stay grandfathered (the empty tree
-        # would fail the whole corpus).
+        # Master CI after merges passes the commit it last checked as
+        # diff_base, so everything merged since is diffed. Without one,
+        # workflow_dispatch compares against HEAD so grandfathered historical
+        # waits stay grandfathered (the empty tree would fail the whole corpus).
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PRKS_DISPATCH_BASE: ${{ inputs.diff_base }}
         run: |
           set -euo pipefail
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
             git fetch --no-tags --depth=1 origin "$base"
+          elif [[ -n "${PRKS_DISPATCH_BASE:-}" ]]; then
+            if [[ ! "$PRKS_DISPATCH_BASE" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "diff_base must be a full commit SHA" >&2
+              exit 1
+            fi
+            base="$(git rev-parse --verify --end-of-options "${PRKS_DISPATCH_BASE}^{commit}")"
           else
             # workflow_dispatch: no-new-change baseline so historical E2E
             # waits remain grandfathered.

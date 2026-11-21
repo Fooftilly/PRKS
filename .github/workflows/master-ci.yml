@@ -49,6 +49,5 @@ jobs:
       - name: Run the workflow if master's head needs it, and wait
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.sha }}
           WORKFLOW: ${{ matrix.workflow }}
-        run: python3 scripts/ci/master_ci.py --workflow "$WORKFLOW" --head "$HEAD_SHA"
+        run: python3 scripts/ci/master_ci.py --workflow "$WORKFLOW"

@@ -87,13 +87,13 @@ For each survivor, read the diff first. If it can change behaviour, add an asser
 
 ## Master CI after merges
 
-Pull requests pass the full gates before they merge, so a merge does not rerun them on `master`. Instead, [`master-ci.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/master-ci.yml) runs every night at 01:23 (Europe/Podgorica time). It has one job for each of the PRKS Full E2E Gate, PRKS Test Gate, Fast Static Analysis, CodeQL and zizmor. Each job ([`scripts/ci/master_ci.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/master_ci.py)) looks at the last run of its workflow that master CI started:
+Pull requests pass the full gates before they merge, so a merge does not rerun them on `master`. Instead, [`master-ci.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/master-ci.yml) runs every night at 01:23 (Europe/Podgorica time). It has one job for each of the PRKS Full E2E Gate, PRKS Test Gate, Fast Static Analysis, CodeQL and zizmor. Each job ([`scripts/ci/master_ci.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/master_ci.py)) reads master's current head and looks at the last run of its workflow that master CI started:
 
 - If that run tested an older commit, or there is no such run, the job starts the workflow on `master`.
 - If that run tested the current head and passed, the job does nothing, so a night with no merges costs one short job per workflow.
 - If that run tested the current head and failed, timed out or was cancelled, the job starts the workflow again.
 
-The job waits for the run and fails when the run fails, so a failed night opens the issue "Scheduled check failing: Master CI after merges", and the failed job's name says which workflow failed. A person's own manual dispatch never counts as master CI's run. To check `master` sooner, run "Master CI after merges" by hand from the Actions page.
+The job waits for the run and fails when the run fails, so a failed night opens the issue "Scheduled check failing: Master CI after merges", and the failed job's name says which workflow failed. Fast Static Analysis gets the commit master CI last checked as `diff_base`, so its diff-aware guards see everything merged since. A person's own manual dispatch never counts as master CI's run (a person re-running one of master CI's runs does). To check `master` sooner, run "Master CI after merges" by hand from the Actions page.
 
 ## Scheduled results as issues
 

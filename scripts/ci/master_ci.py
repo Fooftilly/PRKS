@@ -20,7 +20,7 @@ merges", naming the failed job, which names the workflow.
 
 Usage::
 
-    python scripts/ci/master_ci.py --workflow e2e-gate.yml --head SHA [--dry-run]
+    python scripts/ci/master_ci.py --workflow e2e-gate.yml [--dry-run]
 """
 from __future__ import annotations
 
@@ -57,8 +57,10 @@ _SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
 def _ours(run: dict[str, Any]) -> bool:
-    # A person's manual dispatch (a benchmark, say) is not one of ours.
-    return (run.get("triggering_actor") or run.get("actor") or {}).get("login") == DISPATCHER
+    # A person's manual dispatch (a benchmark, say) is not one of ours. The
+    # actor is whoever started the run; a person re-running ours changes only
+    # the triggering actor, so the run stays ours.
+    return (run.get("actor") or {}).get("login") == DISPATCHER
 
 
 def dispatched_runs(client: Client, workflow: str) -> list[dict[str, Any]]:
@@ -82,10 +84,26 @@ def decide(run: dict[str, Any] | None, head: str) -> tuple[str, str]:
     return "start", f"retrying this commit after {run.get('conclusion')}"
 
 
-def start(client: Client, workflow: str, known: set[int], *,
+def dispatch_body(workflow: str, previous: dict[str, Any] | None) -> dict[str, Any]:
+    body: dict[str, Any] = {"ref": BRANCH}
+    previous_sha = (previous or {}).get("head_sha")
+    if workflow == "static-analysis.yml" and isinstance(previous_sha, str) and _SHA.match(previous_sha):
+        # Its diff-aware guards then see everything merged since that check.
+        body["inputs"] = {"diff_base": previous_sha}
+    return body
+
+
+def master_head(client: Client) -> str:
+    sha = (client.request("GET", f"branches/{BRANCH}") or {}).get("commit", {}).get("sha", "")
+    if not isinstance(sha, str) or not _SHA.match(sha):
+        raise RuntimeError(f"unexpected {BRANCH} head: {sha!r}")
+    return sha
+
+
+def start(client: Client, workflow: str, known: set[int], body: dict[str, Any], *,
           sleep: Callable[[float], None] = time.sleep) -> dict[str, Any]:
     """Dispatch ``workflow`` on master and return the new run."""
-    client.request("POST", f"actions/workflows/{workflow}/dispatches", {"ref": BRANCH})
+    client.request("POST", f"actions/workflows/{workflow}/dispatches", body)
     waited = 0.0
     while True:
         for run in dispatched_runs(client, workflow):
@@ -105,34 +123,41 @@ def wait(client: Client, run: dict[str, Any], *,
     return run
 
 
-def run_workflow(client: Client, workflow: str, head: str, *, dry_run: bool = False,
+def run_workflow(client: Client, workflow: str, *, dry_run: bool = False,
                  sleep: Callable[[float], None] = time.sleep) -> tuple[bool, str]:
-    """Bring ``workflow`` up to date with ``head``. Returns (passed, message)."""
+    """Bring ``workflow`` up to date with master's head. Returns (passed, message).
+
+    The head is read live, not from the scheduled run's own commit, because
+    a dispatch always runs on the branch's current head: deciding and
+    dispatching on the same commit keeps every job of one night on it.
+    """
+    head = master_head(client)
     runs = dispatched_runs(client, workflow)
-    action, reason = decide(runs[0] if runs else None, head)
+    previous = runs[0] if runs else None
+    action, reason = decide(previous, head)
     if dry_run or action == "done":
         return True, f"{workflow}: {'would ' + action if dry_run else 'skipped'} ({reason})"
-    run = runs[0] if action == "wait" else start(client, workflow, {r["id"] for r in runs}, sleep=sleep)
+    run = previous if action == "wait" and previous else start(
+        client, workflow, {r["id"] for r in runs}, dispatch_body(workflow, previous), sleep=sleep)
     print(f"{workflow}: {'waiting for' if action == 'wait' else 'started'} {run.get('html_url')} ({reason})",
           flush=True)
     run = wait(client, run, sleep=sleep)
     conclusion = run.get("conclusion")
-    return conclusion == "success", f"{workflow}: {conclusion} at {str(run.get('head_sha'))[:8]} {run.get('html_url')}"
+    tested = str(run.get("head_sha"))
+    note = "" if tested == head else f" (master moved from {head[:8]} during the dispatch)"
+    return conclusion == "success", f"{workflow}: {conclusion} at {tested[:8]} {run.get('html_url')}{note}"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--workflow", required=True, choices=WORKFLOWS)
-    parser.add_argument("--head", required=True, help="master's head commit")
     parser.add_argument("--dry-run", action="store_true", help="print the decision, start nothing")
     args = parser.parse_args(argv)
-    if not _SHA.match(args.head):
-        parser.error("--head must be a full lowercase commit SHA")
     client = GitHubClient(
         os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"],
         os.environ.get("GITHUB_API_URL", "https://api.github.com"),
     )
-    passed, message = run_workflow(client, args.workflow, args.head, dry_run=args.dry_run)
+    passed, message = run_workflow(client, args.workflow, dry_run=args.dry_run)
     print(message)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
