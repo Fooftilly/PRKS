@@ -23,6 +23,7 @@ from scripts.ci.docs_only import (
     POSTGRES_SCOPE,
     _is_plain_relative,
     changed_documentation,
+    effective_base,
     is_approved_markdown,
     is_audited_config,
     is_postgres_irrelevant_markdown,
@@ -369,6 +370,40 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             self.assertEqual(run(), (0, "false\n"))
             self.assertEqual(run("--scope", "postgres"), (0, "true\n"))
             self.assertEqual(run("--scope", "everything")[0], 2)
+            # The default scope still accepts an audited file.
+            base = _git(root, "rev-parse", "HEAD")
+            _write(root, ".codacy.yml", "---\nexclude_paths: []\n")
+            _git(root, "commit", "-qam", "config")
+            self.assertEqual(run(), (0, "true\n"))
+            self.assertEqual(_main_in(root, docs_only.main, [])[0], 2)
+
+    def test_the_markdown_validator_cli_reports_each_outcome(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            base = _repo(root)
+
+            def check(*argv: str) -> tuple[int, str]:
+                return _main_in(root, check_docs_only.main, list(argv))
+
+            self.assertEqual(check()[0], 2)
+            _write(root, "backend/app.py", "print('changed')\n")
+            _git(root, "commit", "-qam", "code")
+            self.assertEqual(check("--base", base),
+                             (1, "Docs validation refused: not a verified docs-only PR\n"))
+            base = _git(root, "rev-parse", "HEAD")
+            _write(root, "docs/job-worker.md", "# Jobs\n[gone](gone.md)\n")
+            _git(root, "add", ".")
+            _git(root, "commit", "-qm", "broken link")
+            self.assertEqual(check("--base", base),
+                             (1, "docs/job-worker.md:2: missing relative target gone.md\n"))
+            base = _git(root, "rev-parse", "HEAD")
+            _write(root, "docs/job-worker.md", "# Jobs\n")
+            _write(root, ".codacy.yml", "---\nexclude_paths: []\n")
+            _git(root, "commit", "-qam", "fix and config")
+            self.assertEqual(check("--base", base), (0, (
+                "Validated 1 changed Markdown files (links, anchors, fences)\n"
+                "1 audited analysis-tool config file(s) changed; no CI suite reads them\n"
+            )))
 
     def test_the_entrypoints_run_as_scripts(self):
         # The only subprocess test left: the in-process tests above cannot
@@ -450,6 +485,52 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             self.assertEqual(merge_base_parent(root, stale, head), _git(root, "rev-parse", "HEAD^1"))
             _git(root, "checkout", "-q", head)
             self.assertEqual(merge_base_parent(root, stale, head), stale)
+
+    def test_an_event_head_that_is_not_a_sha_is_ignored(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            self.assertEqual(self.run_cli(root, stale, head), "true")
+            self.assertEqual(self.run_cli(root, stale, head[:12]), "false")
+            self.assertEqual(self.run_cli(root, stale, "main"), "false")
+
+    def test_a_base_that_is_not_a_sha_is_never_rewritten(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            _, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            event = Path(folder) / "event.json"
+            event.write_text(json.dumps({"pull_request": {"head": {"sha": head}}}), encoding="utf-8")
+            with mock.patch.dict(os.environ, {"GITHUB_EVENT_PATH": str(event)}):
+                self.assertEqual(effective_base(root, "master"), "master")
+
+    def test_a_missing_first_parent_is_fetched_shallow_without_tags(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            first = _git(root, "rev-parse", "HEAD^1")
+            shallow = Path(folder) / "shallow"
+            _git(Path(folder), "clone", "-q", "--depth=1", f"file://{root}", str(shallow))
+            missing = subprocess.run(  # nosec B603,B607 - fixture git, shell=False
+                ["git", "cat-file", "-e", f"{first}^{{commit}}"], cwd=shallow, capture_output=True, check=False)
+            self.assertNotEqual(missing.returncode, 0)
+            calls: list[tuple[str, ...]] = []
+            real_git = docs_only._git
+
+            def recording_git(where: Path, *args: str) -> Any:
+                calls.append(args)
+                return real_git(where, *args)
+
+            with mock.patch.object(docs_only, "_git", recording_git):
+                self.assertEqual(merge_base_parent(shallow, stale, head), first)
+            # Both flags matter only for cost (one commit, no tag refs), which
+            # the result cannot show, so the fetch command itself is pinned.
+            (fetch,) = [call for call in calls if call[0] == "fetch"]
+            self.assertEqual(fetch[-2:], ("origin", first))
+            self.assertTrue({"--no-tags", "--depth=1"}.issubset(fetch), fetch)
+            self.assertEqual(_git(shallow, "cat-file", "-t", first), "commit")
 
     def test_the_event_base_is_kept_when_git_cannot_answer(self):
         # Not a repository, or a merge whose first parent is neither present
@@ -667,6 +748,25 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             '<a class="menu" name="legacy">old</a>\n'
         )
         self.assertTrue({"part", "another", "legacy"}.issubset(anchors))
+
+    def test_html_blocks_are_validated(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", '<div>\n<a href="missing.md">Bad</a>\n</div>\n')
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:1: missing relative target missing.md",
+            ])
+
+    def test_html_inside_inline_code_is_text(self):
+        tick = chr(96)
+        content = f'Use {tick}<a id="fake"></a>{tick} here.\n\n[x](#fake)\n'
+        self.assertEqual(_anchors(content), set())
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", content)
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:3: missing anchor #fake in docs/guide.md",
+            ])
 
     def test_html_comments_do_not_create_anchors(self):
         content = '<!-- <div id="ghost"></div> -->\n<div id="real"></div>\n\n'
