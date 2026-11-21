@@ -57,18 +57,20 @@ Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run 
 
 ## Coverage map (shadow mode)
 
-`.github/workflows/e2e-coverage-map.yml` (weekly and manual) runs the full suite with `PRKS_E2E_COVERAGE_MAP_DIR` set. `tests/e2e/coverage_map.py` then records, per test, the Python lines its server ran (coverage.py) and the `frontend/js/**` lines its pages ran (Chromium precise coverage; a line counts when its innermost function ran). Each shard uploads `e2e-coverage-map-N.json.gz`.
+`.github/workflows/e2e-coverage-map.yml` (weekly and manual) runs the full suite with `PRKS_E2E_COVERAGE_MAP_DIR` set. `tests/e2e/coverage_map.py` then records, per test, the Python lines its server ran (coverage.py) the `frontend/js/**` lines its pages ran (Chromium precise coverage; a line counts when its innermost function ran), and the `frontend-app/src/**` lines behind the parts of the Vue bundle that ran. For the last, the job builds a hidden source map of the committed bundle and refuses it unless the rebuilt bundle is byte-identical. Each shard uploads `e2e-coverage-map-N.json.gz`.
 
 `python -m tests.e2e.coverage_map select MAP... --base B --head H` prints what a map-based selection would run for a diff:
 
-- each changed `backend/**`, `prks_app.py` or `frontend/js/**` line selects the tests that ran it (an insertion selects the tests that ran the lines on either side);
+- each changed `backend/**`, `prks_app.py`, `frontend/js/**` or `frontend-app/src/**` line selects the tests that ran it (an insertion selects the tests that ran the lines on either side; a Vue source line that produced no bundle code, such as a prop default, selects through the nearest lines that did);
+- a change inside a `.vue` file's `<style>` keeps the full suite, since CSS is not measured;
+- the rebuilt bundle and its manifests (`frontend/vue/**`, `frontend/vendor/DEPENDENCY-MANIFEST.json`, and `sw.js` when only its `DEPENDENCY_REVISION` line changed) are derived: Fast Static Analysis rebuilds and diffs them, so the source change selects instead;
 - lines changed on master since the map was recorded are translated back to the map's commit;
 - every other file keeps the planner's rule, and one that would run the full suite keeps the whole selection full;
 - smoke is always added.
 
 On every pull request, `.github/workflows/e2e-selection-shadow.yml` (advisory, not required) runs `scripts/ci/e2e_selection_shadow.py`: it takes the newest complete map recorded on master and writes both what the map would run and what the gate plan runs to the job summary, and to the `e2e-selection-shadow` artifact (kept 90 days) for later comparison with the gate's failures.
 
-The gate does not read the map. It is evidence for deciding whether it should. Not measured: the Vue bundle, vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
+The gate does not read the map. It is evidence for deciding whether it should. Not measured: vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
 
 ## Moving coverage out of the browser
 
