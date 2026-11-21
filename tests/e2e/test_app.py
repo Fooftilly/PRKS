@@ -14133,11 +14133,18 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
     def test_library_wide_setting_persists_via_server(self):
         _server, page, _collector = self._start_app()
         _open_settings(page)
-        page.fill("#annotation-author-input", "Persisted Author")
+        # The field saves after a debounce; wait for that PATCH to answer
+        # rather than guessing how long the debounce and the request take.
+        with page.expect_response(
+            lambda r: (
+                r.request.method == "PATCH" and urlparse(r.url).path == "/api/settings"
+            ),
+        ) as saved:
+            page.fill("#annotation-author-input", "Persisted Author")
+        self.assertTrue(saved.value.ok)
         page.wait_for_function(
             """() => window.__prksAnnotationAuthor === 'Persisted Author'"""
         )
-        page.wait_for_timeout(600)
         server_value = page.evaluate(
             """async () => {
                 const res = await prksRequest('/api/settings');

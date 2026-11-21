@@ -15,6 +15,9 @@ _RUNNER = os.path.join(_ROOT, "tests", "browser", "run_folder_hierarchy_nav_self
 _REFRESH_RUNNER = os.path.join(
     _ROOT, "tests", "browser", "run_folder_hierarchy_refresh_selftest.js"
 )
+_TAG_OPTIONS_RUNNER = os.path.join(
+    _ROOT, "tests", "browser", "run_folder_tag_options_selftest.js"
+)
 
 
 def _read(path: str) -> str:
@@ -183,6 +186,18 @@ class FrontendFolderHierarchyNavTests(unittest.TestCase):
         self.assertTrue(os.path.isfile(_REFRESH_RUNNER))
         proc = subprocess.run(
             ["node", _REFRESH_RUNNER],
+            cwd=_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            self.fail(proc.stdout + "\n" + proc.stderr)
+
+    def test_pending_create_folder_tag_options_are_local(self):
+        """A Folder not yet acknowledged has known, empty Tag options: no 404 read."""
+        proc = subprocess.run(
+            ["node", _TAG_OPTIONS_RUNNER],
             cwd=_ROOT,
             capture_output=True,
             text=True,

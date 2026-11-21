@@ -2356,6 +2356,11 @@ class OfflineFoundationTests(unittest.TestCase):
         work_a = server.ids["work_a"]
 
         snapshot_hits = {"n": 0}
+        # After the two failures, hold the snapshot until the test has seen
+        # the viewer waiting for its base. Unheld, the retry can land before
+        # the preview state is ever polled, and the test misses it.
+        held = []
+        holding = {"on": True}
 
         def fail_then_ok_snapshot(route):
             req = route.request
@@ -2369,13 +2374,27 @@ class OfflineFoundationTests(unittest.TestCase):
                         body='{"error":"temporary"}',
                     )
                     return
+                if holding["on"]:
+                    held.append(route)
+                    return
             route.fallback()
 
         page.route("**/api/works/**", fail_then_ok_snapshot)
+        snapshot_path = "/api/works/%s/annotations-snapshot" % work_a
+        snapshot_requests = {"n": 0}
+
+        def third_snapshot_request(request):
+            if request.method == "GET" and urlparse(request.url).path == snapshot_path:
+                snapshot_requests["n"] += 1
+            return snapshot_requests["n"] >= 3
+
         try:
             _wait_sw_active(page)
-            _open_work_from_home(page, WORK_A_TITLE)
-            _wait_pdf_viewer(page)
+            # The third snapshot read is the retry after both 503s; it is
+            # held below, so the viewer must still be waiting for its base.
+            with page.expect_request(third_snapshot_request, timeout=30000):
+                _open_work_from_home(page, WORK_A_TITLE)
+                _wait_pdf_viewer(page)
 
             page.wait_for_function(
                 """() => {
@@ -2386,9 +2405,13 @@ class OfflineFoundationTests(unittest.TestCase):
                 }""" % _FOCUSED_PDF,
                 timeout=15000,
             )
+            self.assertEqual(len(held), 1, "the snapshot retry was not held")
             self.assertEqual(_pdf_mode(page), "preview")
             self.assertFalse(_pdf_markup_tools_available(page))
 
+            holding["on"] = False
+            _continue_held_routes(held)
+            held.clear()
             page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=30000)
             page.wait_for_function(
                 """() => {
@@ -2404,6 +2427,8 @@ class OfflineFoundationTests(unittest.TestCase):
             _wait_pdf_markup_tools_settled(page, timeout=30000)
             self.assertTrue(_pdf_markup_tools_available(page))
         finally:
+            holding["on"] = False
+            _continue_held_routes(held)
             try:
                 page.unroute("**/api/works/**", fail_then_ok_snapshot)
             except Exception:

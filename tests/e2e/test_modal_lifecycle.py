@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from urllib.parse import urlparse
 
 from tests.e2e.fixtures import PERSON_DISPLAY, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
@@ -233,6 +234,54 @@ class ModalLifecycleTests(unittest.TestCase):
         self.assertEqual(page.locator("#person-birth-date").input_value(), "")
         page.keyboard.press("Escape")
         page.locator("#person-modal").wait_for(state="hidden")
+
+    def test_work_new_folder_opens_while_the_folder_catalogue_loads(self):
+        """New in a Work's folder editor works before the folder list arrives.
+
+        The button is on screen as soon as the editor opens; a click while the
+        catalogue read is still in flight must still open New Folder.
+        """
+        server = AppServer(seed_fn=seed_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin)
+        self.addCleanup(context.close)
+        self.addCleanup(collector.assert_clean)
+        page.wait_for_selector("#sidebar")
+        _open_work_from_home(page, server.ids["work_a_title"])
+        _open_details_drawer_if_tiled(page)
+
+        held = []
+
+        def hold_catalogue(route):
+            if route.request.method == "GET" and urlparse(route.request.url).path == "/api/folders":
+                held.append(route)
+                return
+            route.fallback()
+
+        page.route("**/api/folders*", hold_catalogue)
+        edit = page.locator("#prks-work-folder-edit-btn")
+        edit.wait_for(state="visible", timeout=10000)
+        with page.expect_request(
+            lambda r: r.method == "GET" and urlparse(r.url).path == "/api/folders",
+            timeout=10000,
+        ):
+            edit.click()
+        new_btn = page.locator("#prks-work-folder-new-btn")
+        new_btn.wait_for(state="visible", timeout=10000)
+        self.assertTrue(held, "the folder editor never read the catalogue")
+        try:
+            page.locator("#prks-work-folder-search").fill("Early Work Folder")
+            new_btn.click()
+            _wait_baseline(page, "folder-modal")
+            self.assertEqual(page.locator("#folder-title").input_value(), "Early Work Folder")
+            self.assertTrue(page.evaluate("() => !!window.__prksPendingWorkFolderAttach"))
+        finally:
+            page.unroute("**/api/folders*", hold_catalogue)
+            for route in held:
+                route.fallback()
+        page.keyboard.press("Escape")
+        page.locator("#folder-modal").wait_for(state="hidden")
 
     def test_cancelled_work_new_folder_does_not_claim_a_later_global_folder(self):
         """A Work's "New folder", cancelled, leaves no attach behind.
