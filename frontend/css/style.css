@@ -7348,6 +7348,19 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
 .prks-bibtex-export-reset {
     margin-top: 12px;
 }
+/* Settings → Export → Citation style: imported styles (#41). */
+.prks-imported-styles {
+    margin-top: 12px;
+}
+.prks-imported-styles .prks-settings-hint a {
+    color: var(--accent);
+}
+.prks-imported-styles__list {
+    margin: 8px 0 12px;
+}
+.prks-imported-styles__list > .prks-setting-row {
+    align-items: center;
+}
 .prks-backup-restore-heading {
     margin-top: 16px;
     font-weight: 600;
