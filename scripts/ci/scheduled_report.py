@@ -44,9 +44,11 @@ API_VERSION = "2022-11-28"
 FAILURE_LABEL = "scheduled-check"
 MUTATION_LABEL = "mutation-report"
 MUTATION_TITLE = "Mutation testing report"
+# The E2E selection accuracy report (scripts/ci/e2e_selection_accuracy.py).
+ACCURACY_LABEL = "e2e-selection-report"
 # Only the workflow token's own comments are state; anyone else's marker is ignored.
 REPORTER_LOGIN = "github-actions[bot]"
-_LABEL_COLORS = {FAILURE_LABEL: "d73a4a", MUTATION_LABEL: "fbca04"}
+_LABEL_COLORS = {FAILURE_LABEL: "d73a4a", MUTATION_LABEL: "fbca04", ACCURACY_LABEL: "0e8a16"}
 _FOOTER = "\n\n---\n_Posted by `scripts/ci/scheduled_report.py`._"
 _TARGET = re.compile(r"[a-z0-9-]{1,40}\Z")
 _STATE = re.compile(r"<!-- mutation-report:([a-z0-9-]+) survived=(\d+) -->")
