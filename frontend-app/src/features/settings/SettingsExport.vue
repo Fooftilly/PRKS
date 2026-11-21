@@ -4,6 +4,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
 import { CITATION_STYLES, libraryCitationStyle } from '../citations/styles'
 import { bibtexExportSummary } from './bibtex-summary'
+import { createSerialSave } from './serial-save'
 import SettingsSwitch from './SettingsSwitch.vue'
 
 interface ExportField {
@@ -18,22 +19,27 @@ let timer = 0
 const style = ref(libraryCitationStyle())
 const styleStatus = ref('')
 let styleDirty = false
+const styleSave = createSerialSave(style.value, {
+  save: (value) => window.prksPatchAppSettings?.({ citation_style: value }) ?? Promise.resolve(),
+  onFailed(saved) {
+    style.value = saved
+    window.prksSetCitationStyleCache?.(saved)
+    styleStatus.value = 'The citation style could not be saved. Try again when PRKS is reachable.'
+  },
+})
 
-async function onStyleChange(event: Event): Promise<void> {
+function onStyleChange(event: Event): void {
   const el = event.target
   if (!(el instanceof HTMLSelectElement)) return
-  const previous = style.value
   style.value = el.value
   styleDirty = true
   styleStatus.value = ''
   window.prksSetCitationStyleCache?.(el.value)
-  try {
-    await window.prksPatchAppSettings?.({ citation_style: el.value })
-  } catch {
-    style.value = previous
-    window.prksSetCitationStyleCache?.(previous)
-    styleStatus.value = 'The citation style could not be saved. Try again when PRKS is reachable.'
-  }
+  // One save at a time, newest last; a response for an older choice
+  // never leaves the cache behind the selector.
+  void styleSave.choose(el.value).then(() => {
+    if (style.value === styleSave.saved()) window.prksSetCitationStyleCache?.(style.value)
+  })
 }
 
 function fieldDefs(): Array<readonly [string, string]> {
@@ -98,7 +104,10 @@ onMounted(async () => {
   } catch {
     /* Toggles stay at the inclusive default. */
   }
-  if (!styleDirty) style.value = libraryCitationStyle()
+  if (!styleDirty) {
+    style.value = libraryCitationStyle()
+    styleSave.reset(style.value)
+  }
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})

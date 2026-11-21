@@ -5,6 +5,7 @@
  * classic `PRKS_CITATION_STYLE_IDS` (tests pin the three lists). Each id is
  * the Citation Style Language file name under `/vendor/csl/`.
  */
+import { ref } from 'vue'
 
 export interface CitationStyle {
   readonly id: string
@@ -33,8 +34,25 @@ export function citationStyleLabel(id: string): string {
   return CITATION_STYLES.find((style) => style.id === id)?.label ?? id
 }
 
-/** The Library's default style, as the classic settings client last read it. */
+/** Fired on `window` by the classic `prksSetCitationStyleCache` when the Library style changes. */
+export const CITATION_STYLE_EVENT = 'prks:citation-style-change'
+
+/**
+ * Bumped on each change, so a `computed`, `watch` or template that reads
+ * `libraryCitationStyle()` follows the Library style: a Settings change or
+ * the first `/api/settings` read updates an already mounted preview.
+ */
+const libraryStyleVersion = ref(0)
+
+if (typeof window !== 'undefined') {
+  window.addEventListener(CITATION_STYLE_EVENT, () => {
+    libraryStyleVersion.value += 1
+  })
+}
+
+/** The Library's default style, as the classic settings client last read it. Reactive. */
 export function libraryCitationStyle(): string {
+  void libraryStyleVersion.value
   const stored = (globalThis as { __prksCitationStyle?: unknown }).__prksCitationStyle
   return isCitationStyle(stored) ? stored : DEFAULT_CITATION_STYLE
 }

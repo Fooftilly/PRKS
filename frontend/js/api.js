@@ -438,7 +438,13 @@ function prksSetBibtexExportFieldsCache(obj) {
 
 /** The Library's default citation style id from GET/PATCH /api/settings (read by the Vue citation formatter). */
 function prksSetCitationStyleCache(style) {
-    window.__prksCitationStyle = typeof style === 'string' ? style : '';
+    const next = typeof style === 'string' ? style : '';
+    if (window.__prksCitationStyle === next) return;
+    window.__prksCitationStyle = next;
+    // Vue citation previews follow the Library style through this event.
+    if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+        window.dispatchEvent(new CustomEvent('prks:citation-style-change'));
+    }
 }
 
 /** Display name for new PDF annotations; empty → "You". Synced on the server for all devices. */

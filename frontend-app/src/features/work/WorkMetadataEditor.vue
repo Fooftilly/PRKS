@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
@@ -82,7 +82,7 @@ function onSelect(field: WorkMetaField, event: Event): void {
   if (target instanceof HTMLSelectElement) setField(field, target.value)
 }
 
-const libraryStyleLabel = citationStyleLabel(libraryCitationStyle())
+const libraryStyleLabel = computed(() => citationStyleLabel(libraryCitationStyle()))
 
 function chooseStatus(value: string): void {
   if (fieldOff('status')) return
