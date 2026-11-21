@@ -1,9 +1,6 @@
 name: PRKS Test Gate
 
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
@@ -15,8 +12,8 @@ on:
       timezone: Europe/Podgorica
 
 concurrency:
-  # Never let the nightly scan cancel an in-progress master push gate.
-  # Isolate scheduled runs so master pushes cannot cancel the scan either.
+  # Isolate scheduled runs so a master CI run cannot cancel the scan, nor
+  # the scan cancel it.
   # Mergify may re-run a previous PR Test Gate after a new commit. Without
   # isolating re-runs, that OLD SHA's retry cancels the current required gate,
   # leaving its check contexts pending forever (observed PR #1082 on Nov 1).
@@ -184,7 +181,7 @@ jobs:
         with:
           action: junit-process
           token: ${{ secrets.MERGIFY_TOKEN }}
-          # Single report on PR/push; three reports on the scheduled run.
+          # Single report on PR/dispatch; three reports on the scheduled run.
           report_path: 'test-reports/unit*.xml'
           test_step_outcome: ${{ steps.tests.outcome }}
 

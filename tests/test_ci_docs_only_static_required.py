@@ -96,7 +96,7 @@ def _classifier(job: str) -> str:
 class StaticDocsOnlyTests(unittest.TestCase):
     def test_required_jobs_and_all_heavy_steps_stay_present(self):
         workflow = STATIC.read_text(encoding="utf-8")
-        self.assertIn("on:\n  push:\n", workflow)
+        self.assertIn("on:\n  pull_request:\n", workflow)  # master runs come from master-ci.yml
         self.assertIn("  pull_request:\n", workflow)
         self.assertIn("  workflow_dispatch:\n", workflow)
         for job_id, heavy_names in HEAVY.items():
