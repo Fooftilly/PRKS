@@ -158,6 +158,19 @@ def _uploaded_by(artifact: dict[str, Any], job: dict[str, Any]) -> bool:
     return None not in (created, started, ended) and started <= created <= ended + _UPLOAD_SLACK  # type: ignore[operator]
 
 
+def _logged_ids(data: dict[str, Any] | None) -> list[str]:
+    """The E2E test IDs of one shard's failure log; none when the log is missing or malformed.
+
+    The log comes from a pull request's own runner, so its shape is checked
+    here: anything but a list of strings counts as no IDs (an incomplete result).
+    """
+    raw = (data or {}).get("test_ids")
+    if not isinstance(raw, list) or not all(isinstance(t, str) for t in raw):
+        return []
+    # Loader errors and other non-E2E names are not tests the gate selected.
+    return [t for t in raw if _TEST_ID.match(t)]
+
+
 def gate_failures(client: sr.Client, download: Download, run_id: int) -> tuple[set[str], bool]:
     """The test IDs a failed gate run's latest attempt reported, and whether that is every failure.
 
@@ -182,8 +195,7 @@ def gate_failures(client: sr.Client, download: Download, run_id: int) -> tuple[s
         found: list[str] = []
         for artifact in artifacts:
             if artifact.get("name") == log_name and _uploaded_by(artifact, job):
-                data = _member(download(int(artifact["id"])), "e2e-last-failed.json")
-                found = [t for t in (data or {}).get("test_ids", []) if isinstance(t, str) and _TEST_ID.match(t)]
+                found = _logged_ids(_member(download(int(artifact["id"])), "e2e-last-failed.json"))
                 break
         if not found:
             complete = False

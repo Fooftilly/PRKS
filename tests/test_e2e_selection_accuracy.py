@@ -156,6 +156,18 @@ class GateFailureTests(unittest.TestCase):
         self.assertEqual(ids, {A})
         self.assertFalse(complete)
 
+    def test_a_malformed_failure_log_leaves_the_result_incomplete(self):
+        api = _Api({
+            r"GET actions/runs/7/artifacts.*": {"artifacts": [
+                _artifact(1, "e2e-shard-2-of-8-log"), _artifact(2, "e2e-shard-3-of-8-log")]},
+            r"GET actions/runs/7/jobs.*": {"jobs": [_job("E2E (2/8)", "failure"), _job("E2E (3/8)", "failure")]},
+        })
+        for bad in (None, 123, "x", [A, 5], {"x": 1}):
+            blobs = {1: _zip("e2e-last-failed.json", {"test_ids": bad}),
+                     2: _zip("e2e-last-failed.json", {"test_ids": [B]})}
+            with self.subTest(bad=bad):
+                self.assertEqual(acc.gate_failures(api, blobs.__getitem__, 7), ({B}, False))
+
     def test_a_non_shard_failure_is_incomplete(self):
         api = _Api({r"GET actions/runs/7/artifacts.*": {"artifacts": []},
                     r"GET actions/runs/7/jobs.*": {"jobs": [_job("E2E plan", "failure")]}})
@@ -218,6 +230,25 @@ class CollectTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "unreadable shadow report (ValueError)")
         # No selection to compare with: the gate's failure logs are not fetched.
         self.assertFalse(any("actions/runs/7/" in path for _m, path, _b in api.calls))
+
+
+    def test_a_malformed_failure_log_is_one_incomplete_row(self):
+        api = _Api({
+            r"GET actions/workflows/e2e-selection-shadow\.yml/runs.*": {"workflow_runs": [
+                {"id": 50, "head_sha": "a" * 40}, {"id": 51, "head_sha": "b" * 40}]},
+            r"GET actions/workflows/e2e-gate\.yml/runs.*": {"workflow_runs": [
+                _run("failure"), {**_run("failure"), "id": 8, "head_sha": "b" * 40}]},
+            r"GET actions/runs/5[01]/artifacts.*": {"artifacts": [{"id": 5, "name": "e2e-selection-shadow"}]},
+            r"GET actions/runs/7/artifacts.*": {"artifacts": [_artifact(1, "e2e-shard-2-of-8-log")]},
+            r"GET actions/runs/8/artifacts.*": {"artifacts": [_artifact(2, "e2e-shard-2-of-8-log")]},
+            r"GET actions/runs/[78]/jobs.*": {"jobs": [_job("E2E (2/8)", "failure")]},
+        })
+        blobs = {5: _zip("e2e-selection-shadow.json", _raw("subset", [A])),
+                 1: _zip("e2e-last-failed.json", {"test_ids": None}),
+                 2: _zip("e2e-last-failed.json", {"test_ids": [A]})}
+        rows = acc.collect(api, blobs.__getitem__, 7, dt.datetime(2026, 11, 21, tzinfo=dt.timezone.utc))
+        self.assertEqual([(r["run_id"], r["status"]) for r in rows],
+                         [(7, "failed, test IDs incomplete"), (8, "ok")])
 
 
 class ReportTests(unittest.TestCase):
