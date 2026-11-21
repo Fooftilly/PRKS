@@ -486,6 +486,8 @@ class SourceMapTests(unittest.TestCase):
         self.assertEqual(cm.active_styles("<!-- open\n<style>a{}</style>\n"), [])
         self.assertEqual(cm.active_styles("<script>const s = '<style>a{}</style>'</script>\n"), [])
         self.assertEqual(cm.active_styles('<style scoped src="./a.css" />\n'), ['<style scoped src="./a.css" />'])
+        quoted = '<style data-x="a/>b">\n.c{}\n</style>'
+        self.assertEqual(cm.active_styles(quoted + "\n"), [quoted])
 
     def test_only_the_bundle_url_is_the_bundle(self):
         self.assertTrue(cm._is_vue_bundle("http://127.0.0.1:8123/vue/prks-vue.js?v=1"))
