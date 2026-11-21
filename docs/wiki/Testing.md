@@ -9,6 +9,7 @@ Install runtime pins **and** development/test tooling before the fast suite. `py
 ```bash
 python3 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+# without pip in the venv: uv pip install --python ./.venv/bin/python -r requirements.txt -r requirements-dev.txt
 ```
 
 A runtime-only install is enough to run the app, not enough to run the unit suite.
