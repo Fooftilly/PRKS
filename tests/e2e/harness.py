@@ -6,6 +6,7 @@ assertions fail.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
@@ -17,9 +18,10 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
@@ -730,9 +732,15 @@ _LIVE_SERVERS = []
 def stop_all_servers() -> int:
     """Stop every still-running AppServer. Never raises. Returns how many."""
     stopped = 0
+    try:
+        # A background teardown owns its server: let it finish first.
+        finish_pending_teardown()
+    except Exception:
+        pass
     for server in list(_LIVE_SERVERS):
         try:
-            server.stop()
+            # Synchronous: callers exit the process right after this.
+            server._finish_stop()
             stopped += 1
         except Exception:
             pass
@@ -1141,46 +1149,135 @@ class AppServer:
         )
 
     def stop(self):
+        """Stop the server, drop its database and delete its storage, then return."""
         started = time.perf_counter()
         try:
-            if self.proc is not None:
-                with profile_e2e_phase("server_stop_process"):
-                    _terminate(self.proc)
-                    if self.proc.poll() is None:
-                        raise RuntimeError("PRKS E2E server process did not exit")
-        finally:
             try:
-                for handle in (self._stdout, self._stderr):
-                    if handle is not None:
-                        try:
-                            handle.close()
-                        except OSError:
-                            pass
-                self._stdout = None
-                self._stderr = None
-                self.proc = None
-                try:
-                    _LIVE_SERVERS.remove(self)
-                except ValueError:
-                    pass
+                with profile_e2e_phase("server_stop_process"):
+                    self._finish_stop(drop=False)
+            finally:
                 try:
                     self._drop_library()
                 finally:
                     with profile_e2e_phase("server_stop_temp_cleanup"):
                         self._tmpdir.cleanup()
-            finally:
-                _profile_phase("server_stop", time.perf_counter() - started)
+            finish_pending_teardown()
+        finally:
+            _profile_phase("server_stop", time.perf_counter() - started)
 
+    def stop_later(self):
+        """stop(), with the waiting moved off this test: the cleanup browser tests register.
 
-    def _drop_library(self):
+        Sends SIGTERM and leaves the process exit (about 0.4 s on CI), the
+        database drop and the temp cleanup to a background thread, so they
+        overlap the next test. Isolation is unchanged: the next server has
+        its own port, database and storage. One teardown runs at a time; a
+        failed one is raised by the next stop or by the module cleanup that
+        drains it, naming the test it belonged to.
+        """
+        started = time.perf_counter()
+        try:
+            finish_pending_teardown()
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+            _start_teardown(self, get_e2e_heartbeat().get("test_id") or "")
+        finally:
+            _profile_phase("server_stop", time.perf_counter() - started)
+
+    def _finish_stop(self, *, drop=True):
+        """End the process and close its logs; with ``drop``, also drop the database and storage.
+
+        Records no profile phases itself: from stop_later() it runs while
+        another test is active.
+        """
+        try:
+            if self.proc is not None:
+                _terminate(self.proc)
+                if self.proc.poll() is None:
+                    raise RuntimeError("PRKS E2E server process did not exit")
+        finally:
+            for handle in (self._stdout, self._stderr):
+                if handle is not None:
+                    try:
+                        handle.close()
+                    except OSError:
+                        pass
+            self._stdout = None
+            self._stderr = None
+            self.proc = None
+            try:
+                _LIVE_SERVERS.remove(self)
+            except ValueError:
+                pass
+            if drop:
+                try:
+                    self._drop_library(profiled=False)
+                finally:
+                    self._tmpdir.cleanup()
+
+    def _drop_library(self, *, profiled=True):
         store, self._library_store = self._library_store, None
         if store is not None:
             store.close()  # its pool would hold the database open
         # Cleared only once dropped, so a failed drop can be retried by stop().
         if self.library is not None:
-            with profile_e2e_phase("postgres_drop"):
+            with profile_e2e_phase("postgres_drop") if profiled else nullcontext():
                 self.library.drop()
             self.library = None
+
+
+# The one background teardown in flight: (thread, server, test id, error box).
+_TEARDOWN_LOCK = threading.Lock()
+_PENDING_TEARDOWN = None
+_TEARDOWN_CLEANUP_REGISTERED = False
+
+
+def _start_teardown(server, test_id):
+    global _PENDING_TEARDOWN, _TEARDOWN_CLEANUP_REGISTERED
+    failure = []
+
+    def run():
+        try:
+            server._finish_stop()
+        except BaseException as exc:  # noqa: BLE001 - re-raised by finish_pending_teardown
+            failure.append(exc)
+
+    thread = threading.Thread(target=run, name="prks-e2e-teardown", daemon=True)
+    with _TEARDOWN_LOCK:
+        _PENDING_TEARDOWN = (thread, test_id, failure)
+        thread.start()
+        if not _TEARDOWN_CLEANUP_REGISTERED:
+            # Drains the last teardown when the module ends, and reports a
+            # failure there as a module error. Registered once per module.
+            unittest.addModuleCleanup(_drain_teardown_for_module)
+            _TEARDOWN_CLEANUP_REGISTERED = True
+
+
+def _drain_teardown_for_module():
+    global _TEARDOWN_CLEANUP_REGISTERED
+    with _TEARDOWN_LOCK:
+        _TEARDOWN_CLEANUP_REGISTERED = False
+    finish_pending_teardown()
+
+
+def finish_pending_teardown():
+    """Wait for the background teardown; raise its failure, naming its test."""
+    global _PENDING_TEARDOWN
+    with _TEARDOWN_LOCK:
+        pending, _PENDING_TEARDOWN = _PENDING_TEARDOWN, None
+    if pending is None:
+        return
+    thread, test_id, failure = pending
+    # _terminate waits STOP_TIMEOUT_S, kills, and waits again; the drop and
+    # cleanup are quick. A thread still alive after that is itself a failure.
+    thread.join(timeout=4 * STOP_TIMEOUT_S)
+    if thread.is_alive():
+        raise RuntimeError("PRKS E2E teardown of %s did not finish" % (test_id or "a server"))
+    if failure:
+        raise RuntimeError("PRKS E2E teardown of %s failed" % (test_id or "a server")) from failure[0]
+
+
+atexit.register(lambda: finish_pending_teardown() if _PENDING_TEARDOWN is not None else None)
 
 
 class FixtureServer:

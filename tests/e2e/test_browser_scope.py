@@ -144,7 +144,7 @@ def _now():
 class BrowserScopeTests(unittest.TestCase):
     def setUp(self):
         self.server = AppServer(seed_fn=seed_folders_library, auth="session", members=(READER,))
-        self.addCleanup(self.server.stop)
+        self.addCleanup(self.server.stop_later)
         self.server.start()
         self.work_id = self.server.ids["work_a"]
         self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900}, service_workers="block")
@@ -736,7 +736,7 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
 
     def setUp(self):
         self.server = AppServer(seed_fn=seed_library, auth="session", members=(READER,))
-        self.addCleanup(self.server.stop)
+        self.addCleanup(self.server.stop_later)
         self.server.start()
         self.pdf_path = "/api/pdfs/%s" % self.server.ids["pdf_name"]
         self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900})

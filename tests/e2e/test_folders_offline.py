@@ -40,7 +40,7 @@ def tearDownModule():
 class FoldersOfflineTests(unittest.TestCase):
     def start(self, seed=seed_folders_library):
         server = AppServer(seed_fn=seed)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin, service_workers='allow')
         self.addCleanup(context.close)
