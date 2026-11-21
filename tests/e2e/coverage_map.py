@@ -293,8 +293,7 @@ class BundleMap:
                 rel = (map_dir / str(raw)).resolve().relative_to(repo.resolve()).as_posix()
             except (ValueError, OSError):
                 rel = None
-            shipped = rel is not None and rel.startswith(_VUE_ROOT) and rel.endswith(_VUE_EXTENSIONS)
-            names.append(rel if shipped and not rel.endswith(_NOT_SHIPPED) else None)
+            names.append(rel if rel is not None and is_vue_source(rel) else None)
         self.offsets: list[int] = []
         self.targets: list[tuple[str | None, int]] = []
         self.code_lines: dict[str, set[int]] = {}
