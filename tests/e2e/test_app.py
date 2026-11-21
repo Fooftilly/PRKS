@@ -229,7 +229,7 @@ def tearDownModule():
 class _BrowserE2E(unittest.TestCase):
     def _start_app(self, seed_fn=seed_library, *, install_clock=False):
         server = AppServer(seed_fn=seed_fn)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(
             _BROWSER, server.origin, install_clock=install_clock,

@@ -59,7 +59,7 @@ def _active_matches(page, expression):
 class ModalLifecycleTests(unittest.TestCase):
     def _start(self):
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin)
         self.addCleanup(context.close)
@@ -242,7 +242,7 @@ class ModalLifecycleTests(unittest.TestCase):
         catalogue read is still in flight must still open New Folder.
         """
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin)
         self.addCleanup(context.close)
@@ -290,7 +290,7 @@ class ModalLifecycleTests(unittest.TestCase):
         creation: it opens the new Folder and leaves the Work where it was.
         """
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin)
         self.addCleanup(context.close)

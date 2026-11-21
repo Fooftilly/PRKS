@@ -6,6 +6,7 @@ assertions fail.
 """
 from __future__ import annotations
 
+import atexit
 import json
 import math
 import os
@@ -17,9 +18,10 @@ import sys
 import tempfile
 import threading
 import time
+import unittest
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any
@@ -709,15 +711,16 @@ def wait_http(url: str, timeout: float = READY_TIMEOUT_S) -> None:
     raise RuntimeError("server did not become ready at %s: %s" % (url, last))
 
 
-def _terminate(proc: subprocess.Popen) -> None:
+def _terminate(proc: subprocess.Popen, timeout: float = STOP_TIMEOUT_S) -> None:
+    """SIGTERM, wait ``timeout``, then SIGKILL and wait ``timeout`` again."""
     if proc.poll() is not None:
         return
     proc.terminate()
     try:
-        proc.wait(timeout=STOP_TIMEOUT_S)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=STOP_TIMEOUT_S)
+        proc.wait(timeout=timeout)
 
 
 # Every AppServer that has started and not yet stopped, in this process. A
@@ -727,16 +730,83 @@ def _terminate(proc: subprocess.Popen) -> None:
 _LIVE_SERVERS = []
 
 
-def stop_all_servers() -> int:
-    """Stop every still-running AppServer. Never raises. Returns how many."""
-    stopped = 0
+# run.py's parent gives a worker WORKER_STOP_TIMEOUT_S (20 s) to exit after
+# SIGTERM before it kills it. stop_all_servers() spends at most this much, so
+# the worker still exits on its own and runs its last cleanups.
+SHUTDOWN_BUDGET_S = 15.0
+
+
+def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
+    """Stop every still-running AppServer within ``budget_s``. Never raises.
+
+    Returns how many servers this call stopped or saw stopped by their
+    teardown. Every live process gets SIGTERM first, so all of them exit in
+    parallel. A server whose background teardown is still running stays
+    that teardown's: this call never runs a second _finish_stop on it (two
+    threads would drop the same database and delete the same storage). If
+    the teardown is still running when the budget is spent, its process is
+    killed outright so no PRKS server outlives the worker; the teardown's
+    database drop is then lost with the process, which beats a worker the
+    parent has to kill.
+    """
+    deadline = time.monotonic() + max(0.0, budget_s)
+
+    def remaining() -> float:
+        return max(0.0, deadline - time.monotonic())
+
+    live = list(_LIVE_SERVERS)
+    for server in live:
+        proc = server.proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+    records = [record for record in _teardown_records() if not _claim_unstarted(record)]
+    for record in records:
+        record[0].join(timeout=remaining())
+    # Decided after the joins, from the teardowns as they are now: one that
+    # started meanwhile (the watchdog thread runs this beside the tests)
+    # owns its server too.
+    owned = _owned_servers()
+    _forget_finished_teardowns()
+    stopped = sum(1 for server in live if server not in _LIVE_SERVERS)
     for server in list(_LIVE_SERVERS):
+        if id(server) in owned:
+            proc = server.proc
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+            continue
         try:
-            server.stop()
+            # Half the time left for SIGTERM, half for SIGKILL (_terminate).
+            server._finish_stop(timeout=remaining() / 2, drop=False)
             stopped += 1
         except Exception:
-            pass
+            continue
+        # Its process is gone. The drop and storage delete get what is left
+        # of the budget; past it they are left behind rather than overrunning
+        # the parent's stop timeout.
+        _run_bounded(server._drop_data, remaining())
     return stopped
+
+
+def _run_bounded(fn, timeout):
+    """Run ``fn`` on a daemon thread for at most ``timeout`` seconds; ignore its errors."""
+    if timeout <= 0:
+        return
+
+    def run():
+        try:
+            fn()
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=run, name="prks-e2e-shutdown-drop", daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
 
 
 def _address_in_use(text: str) -> bool:
@@ -1141,46 +1211,247 @@ class AppServer:
         )
 
     def stop(self):
+        """Stop the server, drop its database and delete its storage, then return."""
         started = time.perf_counter()
         try:
-            if self.proc is not None:
-                with profile_e2e_phase("server_stop_process"):
-                    _terminate(self.proc)
-                    if self.proc.poll() is None:
-                        raise RuntimeError("PRKS E2E server process did not exit")
+            with profile_e2e_phase("server_stop_process"):
+                self._finish_stop(drop=False)
+            # Reached only once the process has exited: a live server keeps
+            # its database and storage, and stays listed for stop_all_servers.
+            try:
+                self._drop_library()
+            finally:
+                with profile_e2e_phase("server_stop_temp_cleanup"):
+                    self._tmpdir.cleanup()
         finally:
             try:
-                for handle in (self._stdout, self._stderr):
-                    if handle is not None:
-                        try:
-                            handle.close()
-                        except OSError:
-                            pass
-                self._stdout = None
-                self._stderr = None
-                self.proc = None
-                try:
-                    _LIVE_SERVERS.remove(self)
-                except ValueError:
-                    pass
-                try:
-                    self._drop_library()
-                finally:
-                    with profile_e2e_phase("server_stop_temp_cleanup"):
-                        self._tmpdir.cleanup()
+                finish_pending_teardown()
             finally:
                 _profile_phase("server_stop", time.perf_counter() - started)
 
+    def stop_later(self):
+        """stop(), with the waiting moved off this test: the cleanup browser tests register.
 
-    def _drop_library(self):
+        Sends SIGTERM and leaves the process exit (about 0.4 s on CI), the
+        database drop and the temp cleanup to a background thread, so they
+        overlap the next test. Isolation is unchanged: the next server has
+        its own port, database and storage. One teardown runs at a time; a
+        failed one is raised by the next stop or by the module cleanup that
+        drains it, naming the test it belonged to.
+        """
+        started = time.perf_counter()
+        try:
+            previous_failure = None
+            try:
+                finish_pending_teardown()
+            except RuntimeError as exc:
+                # Still stop this server; report the earlier failure after.
+                previous_failure = exc
+            if self.proc is not None and self.proc.poll() is None:
+                self.proc.terminate()
+            _start_teardown(self, get_e2e_heartbeat().get("test_id") or "")
+            if previous_failure is not None:
+                raise previous_failure
+        finally:
+            _profile_phase("server_stop", time.perf_counter() - started)
+
+    def _finish_stop(self, *, drop=True, timeout=STOP_TIMEOUT_S):
+        """End the process and close its logs; with ``drop``, also drop the database and storage.
+
+        Records no profile phases itself: from stop_later() it runs while
+        another test is active. If the process does not exit, raises and
+        keeps everything (process, logs, database, storage, the
+        _LIVE_SERVERS entry) so stop_all_servers() can try again.
+        """
+        if self.proc is not None:
+            _terminate(self.proc, timeout)
+            if self.proc.poll() is None:
+                raise RuntimeError("PRKS E2E server process did not exit")
+        for handle in (self._stdout, self._stderr):
+            if handle is not None:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+        self._stdout = None
+        self._stderr = None
+        self.proc = None
+        try:
+            _LIVE_SERVERS.remove(self)
+        except ValueError:
+            pass
+        if drop:
+            self._drop_data()
+
+    def _drop_data(self):
+        """Drop the database and delete the storage of a server whose process has exited."""
+        try:
+            self._drop_library(profiled=False)
+        finally:
+            self._tmpdir.cleanup()
+
+    def _drop_library(self, *, profiled=True):
         store, self._library_store = self._library_store, None
         if store is not None:
             store.close()  # its pool would hold the database open
         # Cleared only once dropped, so a failed drop can be retried by stop().
         if self.library is not None:
-            with profile_e2e_phase("postgres_drop"):
+            with profile_e2e_phase("postgres_drop") if profiled else nullcontext():
                 self.library.drop()
             self.library = None
+
+
+# The one background teardown in flight: (thread, test id, error box, server). The
+# lock is re-entrant and only guards the reference: run.py's SIGTERM handler
+# calls stop_all_servers() on the main thread, possibly while that thread is
+# inside one of these functions.
+_TEARDOWN_LOCK = threading.RLock()
+_PENDING_TEARDOWN = None
+_TEARDOWN_CLEANUP_REGISTERED = False
+_EXIT_DRAIN_REGISTERED = [False]
+# Teardowns already reported as not finishing: their threads may still be
+# running, so stop_all_servers() and the atexit drain wait for them too.
+_STUCK_TEARDOWNS = []
+
+
+def _start_teardown(server, test_id):
+    global _PENDING_TEARDOWN, _TEARDOWN_CLEANUP_REGISTERED
+    failure = []
+    # "published" until the thread takes the server, or stop_all_servers()
+    # claims it first (a signal between publishing and thread.start()).
+    state = ["published"]
+
+    def run():
+        with _TEARDOWN_LOCK:
+            if state[0] == "claimed":
+                return  # shutdown stopped this server itself
+            state[0] = "running"
+        try:
+            server._finish_stop()
+        except BaseException as exc:  # noqa: BLE001 - re-raised by finish_pending_teardown
+            failure.append(exc)
+
+    thread = threading.Thread(target=run, name="prks-e2e-teardown", daemon=True)
+    with _TEARDOWN_LOCK:
+        _PENDING_TEARDOWN = (thread, test_id, failure, server, state)
+        register = not _TEARDOWN_CLEANUP_REGISTERED
+        _TEARDOWN_CLEANUP_REGISTERED = True
+        register_exit = not _EXIT_DRAIN_REGISTERED[0]
+        _EXIT_DRAIN_REGISTERED[0] = True
+    if register_exit:
+        # Registered here, after tests.pg.harness registered drop_all() for
+        # this server's database: exit handlers run last-in first-out, so
+        # the drain finishes the teardowns before that sweep drops what is left.
+        atexit.register(_drain_teardowns_at_exit)
+    thread.start()
+    if register:
+        # Drains the last teardown when the module ends, and reports a
+        # failure there as a module error. Registered once per module.
+        unittest.addModuleCleanup(_drain_teardown_for_module)
+
+
+def _drain_teardown_for_module():
+    global _TEARDOWN_CLEANUP_REGISTERED
+    with _TEARDOWN_LOCK:
+        _TEARDOWN_CLEANUP_REGISTERED = False
+    finish_pending_teardown()
+
+
+def finish_pending_teardown():
+    """Wait for the background teardown; raise its failure, naming its test.
+
+    The record stays visible while it is joined, so a signal handler or the
+    atexit drain arriving meanwhile still finds and waits for it; it is
+    cleared once, by whichever caller sees the thread finish.
+    """
+    global _PENDING_TEARDOWN
+    with _TEARDOWN_LOCK:
+        pending = _PENDING_TEARDOWN
+    if pending is None:
+        return
+    thread, test_id, failure, _server, _state = pending
+    # _terminate waits STOP_TIMEOUT_S, kills, and waits again; the drop and
+    # cleanup are quick. A thread still alive after that is itself a failure.
+    thread.join(timeout=4 * STOP_TIMEOUT_S)
+    alive = thread.is_alive()
+    with _TEARDOWN_LOCK:
+        if _PENDING_TEARDOWN is not pending:
+            return  # another caller already reported it
+        # Listed as stuck before it stops being pending, so a signal handler
+        # re-entering this lock always finds it in one of the two.
+        if alive:
+            _STUCK_TEARDOWNS.append(pending)
+        _PENDING_TEARDOWN = None
+    if alive:
+        raise RuntimeError("PRKS E2E teardown of %s did not finish" % (test_id or "a server"))
+    if failure:
+        raise RuntimeError("PRKS E2E teardown of %s failed" % (test_id or "a server")) from failure[0]
+
+
+def _join_stuck_teardowns(timeout):
+    """Give teardowns that outlived their join one more wait, ``timeout`` in all.
+
+    One shared deadline, not one per teardown: run.py's parent kills a
+    worker that does not exit within its own shutdown budget.
+    """
+    with _TEARDOWN_LOCK:
+        stuck = list(_STUCK_TEARDOWNS)
+    deadline = time.monotonic() + timeout
+    for record in stuck:
+        record[0].join(timeout=max(0.0, deadline - time.monotonic()))
+        if not record[0].is_alive():
+            with _TEARDOWN_LOCK:
+                if record in _STUCK_TEARDOWNS:
+                    _STUCK_TEARDOWNS.remove(record)
+
+
+def _teardown_records():
+    """The pending teardown and the stuck ones: every thread that may still own a server."""
+    with _TEARDOWN_LOCK:
+        # The pending one first: it is the newest, and the likeliest to finish
+        # within the budget. finish_pending_teardown() moves a record to the
+        # stuck list before it clears the pending slot; a signal in between
+        # must still see it once.
+        pending = _PENDING_TEARDOWN
+        if pending is None:
+            return list(_STUCK_TEARDOWNS)
+        return [pending] + [r for r in _STUCK_TEARDOWNS if r is not pending]
+
+
+def _owned_servers():
+    """ids of the servers a started teardown still holds (unstarted ones are claimed)."""
+    with _TEARDOWN_LOCK:
+        return {id(record[3]) for record in _teardown_records()
+                if not _claim_unstarted(record) and record[0].is_alive()}
+
+
+def _claim_unstarted(record):
+    """Take a published teardown's server from a thread that has not started.
+
+    Joining an unstarted thread raises, and once claimed the thread exits
+    without touching the server, so shutdown can stop it itself.
+    """
+    with _TEARDOWN_LOCK:
+        state = record[4]
+        if state[0] == "published":
+            state[0] = "claimed"
+        return state[0] == "claimed"
+
+
+def _forget_finished_teardowns():
+    """Drop the teardowns that have finished (shutdown only: their failures are not reported)."""
+    global _PENDING_TEARDOWN
+    with _TEARDOWN_LOCK:
+        _STUCK_TEARDOWNS[:] = [record for record in _STUCK_TEARDOWNS if record[0].is_alive()]
+        if _PENDING_TEARDOWN is not None and not _PENDING_TEARDOWN[0].is_alive():
+            _PENDING_TEARDOWN = None
+
+
+def _drain_teardowns_at_exit():
+    try:
+        finish_pending_teardown()
+    finally:
+        _join_stuck_teardowns(STOP_TIMEOUT_S)
 
 
 class FixtureServer:

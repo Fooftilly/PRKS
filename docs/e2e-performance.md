@@ -10,11 +10,11 @@ Each browser test:
 2. launches a fresh `prks_app.py --testing` process and polls it until ready;
 3. opens a fresh browser context, installs the `PageCollector` (console, failed requests, and a `page.route("**/*")` guard that blocks external HTTP);
 4. loads `/#/folders` and waits for the real shell (`#sidebar`, `.prks-folder-library`, the canonical hash);
-5. runs the scenario, then closes the context, stops the server and drops the database.
+5. runs the scenario, then closes the context and stops the server with `AppServer.stop_later()`: it sends SIGTERM and leaves the process exit, the database drop and the temp cleanup to a background thread, so they overlap the next test (normally one teardown at a time, though one that outlives its join can overlap the next; a failed one is raised by the next stop or the module cleanup, naming its test, and `--last-failed` reruns that test too). On a signal or a parent exit, `stop_all_servers()` sends SIGTERM to every live server, then waits for the background teardowns and stops the rest within one 15 s budget, under the parent's 20 s. A server whose teardown is still running stays that teardown's: it is killed, never stopped a second time from another thread.
 
 Chromium is reused per module. Per-test storage, database, server and context isolation is deliberate and stays: it prevents order dependence and cross-test leaks.
 
-Measured costs that drove past decisions: server start and app readiness dominate fixed per-test cost; request interception is real but a same-origin routing fast path gave no wall-time gain (left off); bundling classic scripts cut app readiness by about 7% (shipped as the classic bundle).
+Measured costs that drove past decisions: server start, server stop and app readiness dominate fixed per-test cost (CI profile of all 861 tests, November 2026: 4.6 s per test, of which app readiness 0.68 s, server start 0.38 s, server stop 0.38 s, database provision, seed and drop 0.22 s; moving the stop off the test cut a local 21-test run by 16%); request interception is real but a same-origin routing fast path gave no wall-time gain (left off); bundling classic scripts cut app readiness by about 7% (shipped as the classic bundle).
 
 ## Timing baseline
 

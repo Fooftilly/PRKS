@@ -41,7 +41,7 @@ def tearDownModule():
 class AxeAccessibilityPilotTests(unittest.TestCase):
     def test_advisory_scans_five_real_fixture_surfaces_and_keyboard_focus(self):
         server = AppServer(seed_fn=seed_library)
-        self.addCleanup(server.stop)
+        self.addCleanup(server.stop_later)
         server.start()
         page, context, collector = open_app_page(_BROWSER, server.origin)
         self.addCleanup(context.close)

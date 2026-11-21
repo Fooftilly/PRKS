@@ -74,7 +74,7 @@ def seed_queue_library(storage_root: str) -> dict:
 
 def _start(test, seed_fn, service_workers="block", extra_env=None):
     server = AppServer(seed_fn=seed_fn, extra_env=extra_env)
-    test.addCleanup(server.stop)
+    test.addCleanup(server.stop_later)
     server.start()
     page, context, collector = open_app_page(_BROWSER, server.origin, service_workers=service_workers)
     test.addCleanup(context.close)
