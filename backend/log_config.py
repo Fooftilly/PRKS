@@ -1,5 +1,6 @@
 import logging
 import os
+import stat
 import time
 from logging.handlers import TimedRotatingFileHandler
 
@@ -53,6 +54,19 @@ def _chmod_owner_only(path: str, *, report: bool = False) -> None:
         LOGGER.error("log_file_mode_insecure")
 
 
+def _log_target(filename) -> str:
+    """The file a configured log path writes to: a symlink to a log file, or
+    one not created yet, resolves to it; anything else keeps the configured
+    path. ``/dev/stderr`` on a pipe resolves to a ``pipe:[...]`` label no
+    name can open, so it is opened by the configured path, as before.
+    """
+    configured = os.path.abspath(os.fspath(filename))
+    resolved = os.path.realpath(configured)
+    if os.path.isfile(resolved) or not os.path.exists(configured):
+        return resolved
+    return configured
+
+
 class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
     """The error log: owner-only, rotated at midnight, shared by processes.
 
@@ -69,7 +83,7 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
     """
 
     def __init__(self, filename, *args, **kwargs):
-        super().__init__(os.path.realpath(os.path.abspath(os.fspath(filename))), *args, **kwargs)
+        super().__init__(_log_target(filename), *args, **kwargs)
 
     def emit(self, record):
         self._reopen_if_moved()
@@ -145,8 +159,8 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
                 return False  # gone: another process is between its rotation and its reopen
             if held is not None and not os.path.samestat(held, current):
                 return False  # another process rotated the file this one was writing
-            if current.st_size == 0:
-                return False  # nothing to archive
+            if not stat.S_ISREG(current.st_mode) or current.st_size == 0:
+                return False  # nothing to archive, or not a file (``/dev/stderr``)
             if os.path.exists(dated):
                 return False  # this day is rotated already, by another process
             try:

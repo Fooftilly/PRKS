@@ -211,11 +211,15 @@ class SharedLogRotationTests(unittest.TestCase):
         second.rolloverAt = int(time.mktime((2026, 11, 21, 0, 0, 0, 0, 0, -1)))  # would archive 2026-11-20
         real_link, real_acquire = os.link, log_config.ExclusiveFileLock.acquire
         other = threading.Thread(target=self.write, args=(second, "b2"))
-        waiting = threading.Event()
+        waiting, populated = threading.Event(), threading.Event()
 
         def acquire(path, **kwargs):
             if threading.current_thread() is other:
                 waiting.set()
+                # Its turn comes only once the first has rotated and written
+                # to the new log, so the new file is not empty: only the file
+                # identity tells the second that its own file is rotated.
+                self.assertTrue(populated.wait(5))
             return real_acquire(path, **kwargs)
 
         def link_then_let_the_other_rotate(src, dst):
@@ -230,7 +234,9 @@ class SharedLogRotationTests(unittest.TestCase):
               mock.patch.object(log_config.ExclusiveFileLock, "acquire", acquire)):
             try:
                 self.write(first, "a2")
+                self.assertEqual(self.read(self.path), ["a2"])
             finally:
+                populated.set()
                 if other.is_alive() or waiting.is_set():
                     other.join(10)
         self.assertFalse(other.is_alive())
@@ -240,6 +246,25 @@ class SharedLogRotationTests(unittest.TestCase):
         self.assertEqual(self.dated(), ["prks-errors.log.2026-11-17", "prks-errors.log.2026-11-19"])
         self.assertEqual(self.read(os.path.join(folder, "prks-errors.log.2026-11-19")), ["a1", "b1"])
         self.assertEqual(sorted(self.read(self.path)), ["a2", "b2", "b3"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "/dev/stderr on a pipe is Linux behaviour")
+    def test_a_log_sent_to_piped_stderr_is_written_there(self):
+        import subprocess
+
+        script = (
+            "import logging\n"
+            "from backend.log_config import _OwnerOnlyTimedRotatingFileHandler as H\n"
+            "h = H('/dev/stderr', when='midnight', backupCount=7, encoding='utf-8')\n"
+            "h.setFormatter(logging.Formatter('%(message)s'))\n"
+            "h.handle(logging.LogRecord('prks', logging.ERROR, 'x', 1, 'on-the-pipe', None, None))\n"
+            "h.rolloverAt = 0\n"
+            "h.handle(logging.LogRecord('prks', logging.ERROR, 'x', 1, 'after-midnight', None, None))\n"
+            "h.close()\n"
+        )
+        done = subprocess.run([sys.executable, "-c", script], cwd=os.path.dirname(os.path.dirname(__file__)),
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stderr.decode().split(), ["on-the-pipe", "after-midnight"])
 
     def test_a_symlinked_log_is_rotated_where_it_points_and_the_link_stays(self):
         from backend import log_config
