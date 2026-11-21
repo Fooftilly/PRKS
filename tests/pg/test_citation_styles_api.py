@@ -84,6 +84,15 @@ class CitationStyleRouteTests(ServerApiTestCase):
         plain = style("Plain")
         self.assertEqual(self.ok(self.get(f"/api/citation-styles/{self.imported(plain)['id']}"))["csl"], plain)
 
+    def test_a_style_that_outgrows_the_cap_when_stored_for_citeproc_is_refused(self) -> None:
+        grows = style("Grows", body="<citation><layout><text value=\"it&apos;s\"/>" + "<group/>" * 200
+                      + "</layout></citation>")
+        original = custom_citation_styles.MAX_CSL_BYTES
+        custom_citation_styles.MAX_CSL_BYTES = len(grows.encode("utf-8"))
+        self.addCleanup(setattr, custom_citation_styles, "MAX_CSL_BYTES", original)
+        self.assertEqual(self.refused(self.send("POST", "/api/citation-styles", {"csl": grows}), 400)["error"],
+                         "The style file is larger than 1 MB.")
+
     def test_a_library_holds_a_bounded_number_of_styles(self) -> None:
         with self.subTest("the limit is checked inside the import"):
             original = custom_citation_styles.MAX_STYLES

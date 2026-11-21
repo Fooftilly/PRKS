@@ -127,7 +127,11 @@ def check_style(csl: Any) -> tuple[str, str]:
     title = re.sub(r"\s+", " ", title_element.text or "").strip() if title_element is not None else ""
     if not title:
         raise StyleRefused("The style has no title.")
-    return title[:MAX_TITLE_CHARS], _for_citeproc(csl, root)
+    stored = _for_citeproc(csl, root)
+    # Re-serializing can lengthen a file just under the cap (``<x/>`` becomes ``<x />``).
+    if len(stored.encode("utf-8")) > MAX_CSL_BYTES:
+        raise StyleRefused("The style file is larger than 1 MB.")
+    return title[:MAX_TITLE_CHARS], stored
 
 
 def _for_citeproc(csl: str, root: ElementTree.Element) -> str:
