@@ -239,6 +239,8 @@ def _start(page) -> None:
     except Exception:  # noqa: BLE001 - not Chromium: nothing to record
         return
     _SESSIONS[page] = session
+    # A crashed page never answers CDP again: a later take would hang.
+    page.on("crash", lambda crashed: _SESSIONS.pop(crashed, None))
 
 
 _INSTALLED = False

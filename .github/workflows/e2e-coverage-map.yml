@@ -88,6 +88,10 @@ jobs:
 
       - name: Record the shard's coverage
         id: tests
+        # Instrumentation changes timing, so an instrumented test can fail
+        # where the gate passes. The map keeps what such a test ran; a broken
+        # recorder still fails the build step below (no records).
+        continue-on-error: true
         env:
           PRKS_E2E_COVERAGE_MAP_DIR: ${{ runner.temp }}/prks-coverage-records
           SHARD: ${{ matrix.shard }}
