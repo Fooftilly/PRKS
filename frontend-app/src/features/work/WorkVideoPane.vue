@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import {
   resolveWorkVideoEmbed,
   VIDEO_IFRAME_ALLOW,
+  VIDEO_IFRAME_REFERRER_POLICY,
   VIDEO_IFRAME_TITLE,
   type WorkVideoSource,
 } from './video-embed'
@@ -27,6 +28,7 @@ const lead = computed(() =>
       <iframe
         :src="embedSrc"
         :allow="VIDEO_IFRAME_ALLOW"
+        :referrerpolicy="VIDEO_IFRAME_REFERRER_POLICY"
         :title="VIDEO_IFRAME_TITLE"
         allowfullscreen
       ></iframe>

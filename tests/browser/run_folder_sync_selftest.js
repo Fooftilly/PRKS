@@ -97,6 +97,18 @@ async function aFolderIsAValidDestinationImmediately() {
     assert.equal((await store.listOperations()).length, 0, "and both retire");
 }
 
+async function aFolderCreatedHereIsTaggedAfterItExists() {
+    const store = newStore();
+    const created = await store.createFolder({ title: "Tagged early" });
+    const tagged = await store.coalesceFolderTag(created.entity_id, "T-1", true, false, 0,
+        { id: "T-1", name: "Reading", color: null, aliases: [] });
+    assert.deepEqual(tagged.depends_on, [created.op_id],
+        "the server cannot tag a folder it has never heard of");
+    const known = await store.coalesceFolderTag("F-KNOWN", "T-1", true, false, 0,
+        { id: "T-1", name: "Reading", color: null, aliases: [] });
+    assert.deepEqual(known.depends_on, [], "an acknowledged folder waits for nothing");
+}
+
 async function refusedCreateStaysInDiagnosticsButNotTheFolderLibrary() {
     const store = newStore();
     const created = await store.createFolder({ title: "Already taken" });
@@ -538,6 +550,7 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
 
 async function main() {
     await aFolderIsAValidDestinationImmediately();
+    await aFolderCreatedHereIsTaggedAfterItExists();
     await refusedCreateStaysInDiagnosticsButNotTheFolderLibrary();
     await aRefusedFolderCreateDoesNotStrandTheWorksFolderProjection();
     await failedDependencyWriteRecoversWithoutResendingCreate();

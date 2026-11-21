@@ -480,7 +480,7 @@ _ASYNC_WAIT_POLL_MS = 50
 # apply Python-like truthiness to the RESOLVED value, and sleep between polls
 # without crossing the Python↔Playwright bridge each tick.
 _WAIT_FOR_ASYNC_IN_PAGE = """
-async ({ expression, arg, timeoutMs, pollMs }) => {
+async ({ arg, timeoutMs, pollMs }) => {
     const isPyTruthy = (v) => {
         if (v === null || v === undefined) {
             return false;
@@ -508,13 +508,16 @@ async ({ expression, arg, timeoutMs, pollMs }) => {
     // Function-shaped predicates are compiled once. Non-function expressions
     // (e.g. `window.__ready`) are re-evaluated every poll — same as the old
     // Python `page.evaluate(expression)` loop — so a later truthy value is seen.
-    const compiled = eval('(' + expression + ')');
+    // The expression is spliced into this source in Python, not eval'd in the
+    // page: the app's CSP refuses eval (#1305), and DevTools compiles this.
+    const thunk = () => (__PRKS_WAIT_EXPRESSION__);
+    const compiled = thunk();
     const predicateIsFunction = typeof compiled === 'function';
     const invoke = (pollArg) => {
         if (predicateIsFunction) {
             return compiled(pollArg);
         }
-        return eval('(' + expression + ')');
+        return thunk();
     };
 
     const deadline = Date.now() + timeoutMs;
@@ -608,9 +611,8 @@ def wait_for_async(page, expression, arg=None, timeout: float = 15000, message: 
     last = None
     try:
         result = page.evaluate(
-            _WAIT_FOR_ASYNC_IN_PAGE,
+            _WAIT_FOR_ASYNC_IN_PAGE.replace("__PRKS_WAIT_EXPRESSION__", expression),
             {
-                "expression": expression,
                 "arg": arg,
                 "timeoutMs": float(timeout),
                 "pollMs": _ASYNC_WAIT_POLL_MS,

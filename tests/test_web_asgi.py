@@ -905,7 +905,7 @@ class TlsTransportTests(unittest.TestCase):
         self.assertTrue(head.startswith(b"http/1.1 400"), received[:40])
         self.assertNotIn(b"strict-transport-security", head)
 
-    def test_the_busy_answer_over_tls_carries_hsts(self):
+    def test_the_busy_answer_carries_the_security_headers_and_hsts_over_tls(self):
         for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
             sent = []
 
@@ -917,6 +917,8 @@ class TlsTransportTests(unittest.TestCase):
             with self.subTest(https=https):
                 self.assertEqual(sent[0]["status"], 503)
                 self.assertEqual(headers.get(b"strict-transport-security"), expected)
+                for name, value in server_module.SECURITY_HEADERS:
+                    self.assertEqual(headers.get(name.lower().encode("ascii")), value.encode("ascii"))
 
     def test_the_client_sees_the_configured_certificate(self):
         conn = http.client.HTTPSConnection(
@@ -1058,7 +1060,9 @@ class ShutdownTests(unittest.TestCase):
         def request_threads():
             return [t for t in threading.enumerate() if t.name == "prks-http"]
 
-        before = len(request_threads())
+        # Threads an earlier test left winding down may exit meanwhile, so
+        # count only the ones this test's servers started.
+        before = set(request_threads())
         for _ in range(3):
             httpd, thread = self._serving()
             port = httpd.server_address[1]
@@ -1080,10 +1084,13 @@ class ShutdownTests(unittest.TestCase):
                 conn.close()
             httpd.shutdown()
             thread.join(5)
+        def started_here():
+            return [t for t in request_threads() if t not in before]
+
         deadline = time.monotonic() + 5
-        while len(request_threads()) > before and time.monotonic() < deadline:
+        while started_here() and time.monotonic() < deadline:
             time.sleep(0.05)
-        self.assertEqual(len(request_threads()), before, "request threads outlived their server")
+        self.assertEqual(started_here(), [], "request threads outlived their server")
 
 if __name__ == "__main__":
     unittest.main()

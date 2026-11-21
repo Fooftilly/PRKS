@@ -127,12 +127,12 @@ class FoldersOfflineTests(unittest.TestCase):
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'offline'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'offline'")
 
     def online(self, page, context):
         context.set_offline(False)
         page.evaluate("async () => { await prksRequest('/api/settings'); }")
-        page.wait_for_function("prksOfflineRuntimeState() === 'online'")
+        page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def watch(self, page, methods, fragment='/api/folders'):
         """Records every canonical Folder request of the given methods."""

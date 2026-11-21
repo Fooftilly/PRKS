@@ -17,6 +17,7 @@ import base64
 from collections.abc import Callable
 from typing import Any, Optional
 
+from backend import server as server_module
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -328,12 +329,37 @@ class OpenEventTests(FreshnessTestCase):
 
 
 class ShellTests(FreshnessTestCase):
-    def test_every_response_forbids_mime_sniffing(self) -> None:
-        self.create_work("<html><body>sniffable</body></html>")
-        for path in ("/api/works", "/", "/index.html", "/api/no-such-endpoint"):
-            res = self.get(path)
-            self.assertIn(res.status, (200, 304, 404), path)
-            self.assertEqual(res.header("X-Content-Type-Options"), ["nosniff"], path)
+    def test_every_kind_of_response_carries_the_security_headers(self) -> None:
+        work_id = self.create_work(
+            "<html><body>sniffable</body></html>", **self.upload_fields("framed", "framed.pdf")
+        )["id"]
+        file_path = self.ok(self.get(f"/api/works/{work_id}"))["file_path"]
+        cases = (
+            ("shell", "/", [], 200),
+            ("shell file", "/index.html", [], 200),
+            ("json", "/api/works", [], 200),
+            ("error", "/api/no-such-endpoint", [], 404),
+            ("static", "/vue/prks-vue.js", [], 200),
+            ("file", file_path, [], 200),
+            ("range", file_path, [("Range", "bytes=0-9")], 206),
+        )
+        for label, path, headers, status in cases:
+            with self.subTest(label):
+                res = self.get(path, headers)
+                self.assertEqual(res.status, status, label)
+                for name, value in server_module.SECURITY_HEADERS:
+                    self.assertEqual(res.header(name), [value], f"{label}: {name}")
+        policy = server_module.CONTENT_SECURITY_POLICY
+        script_src = next(part for part in policy.split("; ") if part.startswith("script-src "))
+        self.assertNotIn("'unsafe-inline'", script_src)
+        self.assertNotIn("'unsafe-eval'", script_src)
+        self.assertIn("frame-ancestors 'none'", policy)
+        directives = {name: value for name, _, value in (part.partition(" ") for part in policy.split("; "))}
+        # The YouTube player and its oEmbed lookup are the only other site.
+        self.assertEqual(directives["frame-src"], "https://www.youtube.com")
+        self.assertIn("https://www.youtube.com", directives["connect-src"].split())
+        # Research Notes figures and video thumbnails are remote images.
+        self.assertEqual(directives["img-src"].split()[0], "*")
 
     def test_the_vue_bundle_is_served_with_the_shell(self) -> None:
         bundle = self.get("/vue/prks-vue.js")

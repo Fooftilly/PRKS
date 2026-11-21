@@ -807,6 +807,29 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
     const newBtn = document.getElementById('prks-work-folder-new-btn');
     if (!input || !hidden || !results || !setBtn || !clearBtn || !newBtn) return;
 
+    // Wired before the catalog read: New needs no catalog, and a click that
+    // lands while it loads must still open the dialog.
+    newBtn.onclick = () => {
+        window.__prksPendingWorkFolderAttach = {
+            workId: wid,
+            tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
+            generation: generation,
+        };
+        const titleEl = document.getElementById('folder-title');
+        const descEl = document.getElementById('folder-description');
+        const parentInputEl = document.getElementById('folder-parent-search');
+        const parentHiddenEl = document.getElementById('folder-parent-id');
+        const pre = String(input.value || '').trim();
+        if (titleEl) titleEl.value = pre;
+        if (descEl) descEl.value = '';
+        if (parentInputEl) parentInputEl.value = '';
+        if (parentHiddenEl) parentHiddenEl.value = '';
+        if (typeof openModal === 'function') openModal('folder-modal');
+        if (typeof window.prksRefreshFolderModalValidation === 'function') {
+            void window.prksRefreshFolderModalValidation();
+        }
+    };
+
     let folderRows = await fetchFolders();
     if (typeof prksApplyOwnedWorkEntity === 'function' && !prksApplyOwnedWorkEntity(ctx, wid)) return;
     if (!Array.isArray(folderRows)) folderRows = [];
@@ -901,27 +924,6 @@ async function mountFolderAttachControlsForWork(work, ownerCtx) {
             results.classList.remove('hidden');
         }
     }
-
-    newBtn.onclick = () => {
-        window.__prksPendingWorkFolderAttach = {
-            workId: wid,
-            tabId: ctx && ctx.tabId != null ? String(ctx.tabId) : '',
-            generation: generation,
-        };
-        const titleEl = document.getElementById('folder-title');
-        const descEl = document.getElementById('folder-description');
-        const parentInputEl = document.getElementById('folder-parent-search');
-        const parentHiddenEl = document.getElementById('folder-parent-id');
-        const pre = String(input.value || '').trim();
-        if (titleEl) titleEl.value = pre;
-        if (descEl) descEl.value = '';
-        if (parentInputEl) parentInputEl.value = '';
-        if (parentHiddenEl) parentHiddenEl.value = '';
-        if (typeof openModal === 'function') openModal('folder-modal');
-        if (typeof window.prksRefreshFolderModalValidation === 'function') {
-            void window.prksRefreshFolderModalValidation();
-        }
-    };
 
     input.onfocus = () => renderDropdown();
     input.oninput = () => {

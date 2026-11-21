@@ -53,7 +53,7 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertIn('id="prks-restore-confirm-submit"', confirm)
         self.assertNotIn("getElementById('prks-restore-confirm", _read(os.path.join(_SETTINGS, "SettingsBackup.vue")))
         self.assertIn('id="prks-settings-root"', shell)
-        self.assertIn("requestModalClose", shell)
+        self.assertIn('data-prks-action="modal-close"', shell)
         self.assertNotIn('id="prks-settings-tab-general"', shell)
         self.assertNotIn('id="annotation-author-input"', shell)
         vue = _vue_settings()

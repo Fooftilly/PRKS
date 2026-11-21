@@ -147,7 +147,7 @@ class FrontendResearchGraphTests(unittest.TestCase):
         self.assertIn("Edit using template", sidebar)
         self.assertIn("person-sidebar__advanced", sidebar)
         self.assertNotIn("Edit works", sidebar)
-        self.assertIn("openPersonProfileEdit()", sidebar)
+        self.assertIn('data-prks-action="person-edit-open"', sidebar)
         self.assertIn("prks-person-view-graph", sidebar)
         detail = people.split("function prksPersonViewRecord", 1)[1].split(
             "function prksRefreshPersonDetailMain", 1
