@@ -833,6 +833,7 @@ root.prksWorkSelectionSubmitPayload({
     };
     await root.prksWorkSelectionOpenSheet('cite');
     const citeSheet = document.getElementById('prks-bulk-sheet');
+    if (!citeSheet) throw new Error('the bulk sheet fixture is missing');
     const citeBody = citeSheet.querySelector('.prks-bulk-sheet__body');
     const citeConfirm = citeSheet.querySelector('.prks-bulk-sheet__confirm');
     const citeErrorEl = citeSheet.querySelector('.prks-bulk-sheet__error');
