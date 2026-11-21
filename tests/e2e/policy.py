@@ -375,6 +375,21 @@ FEATURES = {
 # rules win only when no non-skip rule matches. Features from all changed
 # paths are then unioned into the final selection.
 
+# Mirrors ``test.include`` in frontend-app/vite.config.ts (checked by
+# tests/test_e2e_policy.py).
+FRONTEND_UNIT_TEST_PATHS = (
+    "frontend-app/src/**/*.test.ts",
+    "frontend-app/css-inject.integration.test.mjs",
+    "frontend-app/openapi-types.integration.test.mjs",
+)
+
+
+def is_frontend_unit_test(rel: str) -> bool:
+    """A file Vitest runs: never in the Vue bundle, so never a browser change."""
+    rel = _posix(rel)
+    return any(_path_matches(rel, pattern) for pattern in FRONTEND_UNIT_TEST_PATHS)
+
+
 AFFECTED_RULES = (
     # E2E framework itself → smoke + runner unit coverage signal locally;
     # CI high-risk → always full (see ci_mode).
@@ -966,17 +981,15 @@ AFFECTED_RULES = (
         "skip": True,
         "note": "Storybook catalog only. Not production application source.",
     },
-    # Vitest unit and spec files never enter the Vue bundle, so no browser
-    # test can see them. This skip wins over feature and shared-core rules
-    # ("overrides"), which would otherwise claim a test file by its folder.
-    # Test helpers without a .test/.spec name stay on the ordinary rules.
+    # The files Vitest runs (frontend-app/vite.config.ts ``test.include``)
+    # never enter the Vue bundle, so no browser test can see them. This skip
+    # wins over feature and shared-core rules ("overrides"), which would
+    # otherwise claim a test file by its folder. Keep it equal to the Vitest
+    # include list: a name Vitest does not run stays on the ordinary rules,
+    # and so do test helpers.
     {
         "name": "frontend-unit-tests",
-        "paths": tuple(
-            f"frontend-app/**/*.{kind}.{ext}"
-            for kind in ("test", "spec")
-            for ext in ("ts", "tsx", "js", "jsx", "mjs", "vue")
-        ),
+        "paths": FRONTEND_UNIT_TEST_PATHS,
         "features": (),
         "skip": True,
         "overrides": True,
@@ -1545,6 +1558,8 @@ def frontend_browser_change_requires_full_ci(changed_paths) -> bool:
             return True
         if rel.startswith("frontend-app/"):
             if rel.startswith(("frontend-app/.storybook/", "frontend-app/storybook-static/")):
+                continue
+            if is_frontend_unit_test(rel):
                 continue
             if any(
                 name.endswith(f".{kind}.{ext}")

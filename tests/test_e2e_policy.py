@@ -7,6 +7,7 @@ import fnmatch
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -726,8 +727,8 @@ class AffectedMappingTests(unittest.TestCase):
             "frontend-app/src/query/client.test.ts",
             "frontend-app/src/features/progress/ProgressView.test.ts",
             "frontend-app/src/features/create-forms/keyboard.test.ts",
-            "frontend-app/src/features/progress/progress.spec.ts",
-            "frontend-app/src/components/Card.test.tsx",
+            "frontend-app/css-inject.integration.test.mjs",
+            "frontend-app/openapi-types.integration.test.mjs",
         ):
             with self.subTest(path=path):
                 rule, feats, skip, _note = policy.match_affected_path(path)
@@ -735,16 +736,30 @@ class AffectedMappingTests(unittest.TestCase):
                 self.assertTrue(skip)
                 self.assertEqual(feats, ())
                 self.assertEqual(policy.plan_ci_e2e([path])["mode"], "skip")
+                self.assertFalse(policy.frontend_browser_change_requires_full_ci([path]))
         # Beside production source the source's own rule decides; a test
         # file never explains a rebuilt bundle.
         source = "frontend-app/src/features/progress/ProgressView.vue"
         test = "frontend-app/src/features/progress/ProgressView.test.ts"
         self.assertEqual(policy.plan_ci_e2e([source, test])["features"], ["browse", "smoke"])
         self.assertEqual(policy.plan_ci_e2e([test, "frontend/vue/prks-vue.js"])["mode"], "full")
-        # Helpers without a test/spec name and test-like names elsewhere keep the ordinary rules.
-        for path in ("frontend-app/src/test-utils/mount-helper.ts", "frontend/js/app.test.js"):
+        # Names Vitest does not run, helpers, and test-like names elsewhere keep the ordinary rules.
+        for path in (
+            "frontend-app/src/features/progress/progress.spec.ts",
+            "frontend-app/src/components/Card.test.tsx",
+            "frontend-app/src/test-utils/mount-helper.ts",
+            "frontend-app/other.test.mjs",
+            "frontend/js/app.test.js",
+        ):
             with self.subTest(path=path):
                 self.assertNotEqual(policy.match_affected_path(path)[0], "frontend-unit-tests")
+
+    def test_frontend_unit_test_paths_mirror_the_vitest_include_list(self):
+        config = Path(__file__).resolve().parents[1] / "frontend-app" / "vite.config.ts"
+        include = require(re.search(r"include:\s*\[([^\]]*)\]", config.read_text(encoding="utf-8")))
+        globs = re.findall(r"'([^']+)'", include.group(1))
+        self.assertTrue(globs)
+        self.assertEqual(sorted(policy.FRONTEND_UNIT_TEST_PATHS), sorted("frontend-app/" + g for g in globs))
 
     def test_unmapped_vue_screen_is_full_ci_even_with_bundle(self):
         screen = "frontend-app/src/components/Works.vue"
