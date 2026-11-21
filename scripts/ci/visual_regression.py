@@ -60,21 +60,21 @@ def capture(page, name: str, output: Path, selector: str | None = None) -> dict:
         }""",
         STYLE,
     )
-    try:
-        if selector:
-            target = page.locator(selector)
-            target.wait_for(state="visible", timeout=15000)
-            png = target.screenshot(animations="disabled", caret="hide")
-        else:
-            png = page.screenshot(animations="disabled", caret="hide")
-    finally:
-        page.evaluate(
-            """() => {
-                const sheet = window.__prksVisualSheet;
-                delete window.__prksVisualSheet;
-                document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
-            }"""
-        )
+    if selector:
+        target = page.locator(selector)
+        target.wait_for(state="visible", timeout=15000)
+        png = target.screenshot(animations="disabled", caret="hide")
+    else:
+        png = page.screenshot(animations="disabled", caret="hide")
+    # Removed only after a capture succeeds, so a failed screenshot reports
+    # its own error; the page is not reused after a failure.
+    page.evaluate(
+        """() => {
+            const sheet = window.__prksVisualSheet;
+            delete window.__prksVisualSheet;
+            document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+        }"""
+    )
     (output / f"prks-visual-{name}.png").write_bytes(png)
     return fingerprint(png)
 
