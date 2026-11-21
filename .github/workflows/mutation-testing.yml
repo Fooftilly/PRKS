@@ -20,6 +20,8 @@ on:
       - "scripts/ci/mutation_testing.py"
       - "tests/hypothesis_profiles.py"
       - "scripts/ci/scheduled_report.py"
+      - "scripts/ci/install_pinned_python.py"
+      - "requirements.txt"
       # The mutmut and pytest pins: a bump must prove the runner still works.
       - "requirements-dev.txt"
 
@@ -92,7 +94,7 @@ jobs:
       - name: Run mutants against the target's unit tests
         env:
           TARGET: ${{ matrix.target }}
-        run: python scripts/ci/mutation_testing.py run "$TARGET" --json-out "$RUNNER_TEMP/mutation.json"
+        run: python scripts/ci/mutation_testing.py run "$TARGET" --json
 
       - name: Update this target's comment on the report issue
         if: ${{ !cancelled() && needs.report-issue.outputs.issue != '' }}
@@ -100,4 +102,4 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           ISSUE: ${{ needs.report-issue.outputs.issue }}
           RUN_ID: ${{ github.run_id }}
-        run: python scripts/ci/scheduled_report.py mutation --issue "$ISSUE" --result "$RUNNER_TEMP/mutation.json" --run-id "$RUN_ID"
+        run: python scripts/ci/scheduled_report.py mutation --issue "$ISSUE" --run-id "$RUN_ID"

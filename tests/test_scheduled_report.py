@@ -236,8 +236,15 @@ class WorkflowWiringTests(unittest.TestCase):
     def test_mutation_targets_report_to_the_standing_issue(self):
         text = self._text("mutation-testing.yml")
         self.assertIn("scripts/ci/scheduled_report.py ensure-mutation-issue", text)
-        self.assertIn('--json-out "$RUNNER_TEMP/mutation.json"', text)
+        self.assertIn('mutation_testing.py run "$TARGET" --json', text)
+        self.assertNotIn("--result", text)
         self.assertIn("needs.report-issue.outputs.issue != ''", text)
+
+    def test_both_scripts_agree_on_the_result_file(self):
+        from scripts.ci import mutation_testing
+
+        self.assertEqual(report.RESULT_FILE, mutation_testing.RESULT_FILE)
+        self.assertEqual(report.RESULT_FILE.relative_to(ROOT).as_posix(), ".tests/mutation-result.json")
 
     def test_the_workflow_token_is_the_only_trusted_commenter(self):
         self.assertEqual(report.REPORTER_LOGIN, "github-actions[bot]")

@@ -23,7 +23,7 @@ Usage::
 
     python scripts/ci/scheduled_report.py failure --workflow NAME --run-id ID --conclusion failure
     python scripts/ci/scheduled_report.py ensure-mutation-issue
-    python scripts/ci/scheduled_report.py mutation --issue N --result FILE --run-id ID
+    python scripts/ci/scheduled_report.py mutation --issue N --run-id ID
 """
 from __future__ import annotations
 
@@ -48,6 +48,8 @@ REPORTER_LOGIN = "github-actions[bot]"
 _LABEL_COLORS = {FAILURE_LABEL: "d73a4a", MUTATION_LABEL: "fbca04"}
 _FOOTER = "\n\n---\n_Posted by `scripts/ci/scheduled_report.py`._"
 _TARGET = re.compile(r"[a-z0-9-]{1,40}\Z")
+# Written by ``mutation_testing.py run --json`` (kept in step with RESULT_FILE there).
+RESULT_FILE = Path(__file__).resolve().parents[2] / ".tests" / "mutation-result.json"
 _STATE = re.compile(r"<!-- mutation-report:([a-z0-9-]+) survived=(\d+) -->")
 
 
@@ -267,7 +269,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("ensure-mutation-issue")
     mutation = sub.add_parser("mutation")
     mutation.add_argument("--issue", type=int, required=True)
-    mutation.add_argument("--result", type=Path, required=True)
     mutation.add_argument("--run-id", type=int, required=True)
     args = parser.parse_args(argv)
 
@@ -286,11 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "failure":
         print(report_failure(client, args.workflow, args.run_id, run_url, args.conclusion))
         return 0
-    if not args.result.is_file():
+    if not RESULT_FILE.is_file():
         # The run was incomplete; the workflow's failure issue reports that.
         print("no mutation result to report")
         return 0
-    print(report_mutation(client, args.issue, load_result(args.result), run_url))
+    print(report_mutation(client, args.issue, load_result(RESULT_FILE), run_url))
     return 0
 
 
