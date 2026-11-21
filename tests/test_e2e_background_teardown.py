@@ -212,6 +212,17 @@ class ShutdownTests(unittest.TestCase):
         self.assertEqual(server.finish_timeouts, [])
         self.assertIn("kill pending", self.clock.events)
 
+    def test_a_signal_while_a_teardown_moves_to_stuck_waits_for_it_once(self):
+        # finish_pending_teardown() appends to the stuck list, then clears the
+        # pending slot: a signal between the two sees the same record twice.
+        server, record = self._owned("moving")
+        harness._STUCK_TEARDOWNS.append(record)
+        harness._PENDING_TEARDOWN = record
+        harness.stop_all_servers(budget_s=4.0)
+        self.assertEqual(record[0].timeouts, [4.0])  # one wait, not a repeated one
+        self.assertEqual(server.finish_timeouts, [])  # still the teardown's server
+        self.assertEqual(self.clock.events, ["terminate moving", "join moving", "kill moving"])
+
     def test_every_wait_shares_one_budget(self):
         owners = [self._owned(name) for name in ("a", "b", "c")]
         harness._STUCK_TEARDOWNS.extend(record for _server, record in owners)

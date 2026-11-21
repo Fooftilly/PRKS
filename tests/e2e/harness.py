@@ -1366,8 +1366,12 @@ def _join_stuck_teardowns(timeout):
 def _teardown_records():
     """The pending teardown and the stuck ones: every thread that may still own a server."""
     with _TEARDOWN_LOCK:
-        pending = [_PENDING_TEARDOWN] if _PENDING_TEARDOWN is not None else []
-        return pending + list(_STUCK_TEARDOWNS)
+        records = list(_STUCK_TEARDOWNS)
+        # finish_pending_teardown() moves a record to the stuck list before it
+        # clears the pending slot; a signal in between sees it twice.
+        if _PENDING_TEARDOWN is not None and not any(r is _PENDING_TEARDOWN for r in records):
+            records.insert(0, _PENDING_TEARDOWN)
+        return records
 
 
 def _forget_finished_teardowns():
