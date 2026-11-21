@@ -29,7 +29,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +53,10 @@ WORKFLOWS = (
 POLL_SECONDS = 60
 # How long a dispatched run may take to appear in the run list.
 APPEAR_SECONDS = 300
+# diff_base() reads the whole run history: nightly runs fill 100 pages of
+# 100 in about 27 years, and a history longer than that is an error.
+HISTORY_PER_PAGE = 100
+HISTORY_PAGES = 100
 _SHA = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -84,25 +88,42 @@ def decide(run: dict[str, Any] | None, head: str) -> tuple[str, str]:
     return "start", f"retrying this commit after {run.get('conclusion')}"
 
 
-def diff_base(runs: list[dict[str, Any]]) -> str | None:
+def _all_dispatched_runs(client: Client, workflow: str) -> Iterator[dict[str, Any]]:
+    """Every one of this script's master runs of ``workflow``, newest first, page by page."""
+    for page in range(1, HISTORY_PAGES + 1):
+        runs = (client.request(
+            "GET", f"actions/workflows/{workflow}/runs?branch={BRANCH}&event=workflow_dispatch"
+                   f"&per_page={HISTORY_PER_PAGE}&page={page}",
+        ) or {}).get("workflow_runs", [])
+        yield from (run for run in runs if _ours(run))
+        if len(runs) < HISTORY_PER_PAGE:
+            return
+    raise RuntimeError(f"{workflow}: no end to the run history after {HISTORY_PAGES} pages")
+
+
+def diff_base(client: Client, workflow: str) -> str | None:
     """The commit static analysis last passed on, else the first one master CI checked.
 
     Never the commit of a failed run: retrying a failed commit against
     itself would show the diff-aware guards an empty diff and pass. Until
     one run passes, every run keeps the first checked commit as its base.
+    The whole history is read, so a long run of failures cannot push the
+    last pass out of view.
     """
-    for run in runs:  # newest first
+    oldest = None
+    for run in _all_dispatched_runs(client, workflow):
+        sha = run.get("head_sha")
+        if not isinstance(sha, str) or not _SHA.match(sha):
+            continue
         if run.get("status") == "completed" and run.get("conclusion") == "success":
-            sha = run.get("head_sha")
-            if isinstance(sha, str) and _SHA.match(sha):
-                return sha
-    oldest = runs[-1].get("head_sha") if runs else None
-    return oldest if isinstance(oldest, str) and _SHA.match(oldest) else None
+            return sha
+        oldest = sha
+    return oldest
 
 
-def dispatch_body(workflow: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
+def dispatch_body(client: Client, workflow: str) -> dict[str, Any]:
     body: dict[str, Any] = {"ref": BRANCH}
-    base = diff_base(runs) if workflow == "static-analysis.yml" else None
+    base = diff_base(client, workflow) if workflow == "static-analysis.yml" else None
     if base:
         # Its diff-aware guards then see everything merged since that check.
         body["inputs"] = {"diff_base": base}
@@ -154,7 +175,7 @@ def run_workflow(client: Client, workflow: str, *, dry_run: bool = False,
     if dry_run or action == "done":
         return True, f"{workflow}: {'would ' + action if dry_run else 'skipped'} ({reason})"
     run = previous if action == "wait" and previous else start(
-        client, workflow, {r["id"] for r in runs}, dispatch_body(workflow, runs), sleep=sleep)
+        client, workflow, {r["id"] for r in runs}, dispatch_body(client, workflow), sleep=sleep)
     print(f"{workflow}: {'waiting for' if action == 'wait' else 'started'} {run.get('html_url')} ({reason})",
           flush=True)
     run = wait(client, run, sleep=sleep)
