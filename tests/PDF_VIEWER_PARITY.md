@@ -50,7 +50,7 @@ Comma-separated tokens are allowed. Future viewer changes that keep, drop, or re
 | Last-page memory | KEEP | manual:last-page-memory |
 | Save modified PDF | KEEP | browser:save-copy |
 | Annotation metadata persistence | KEEP | browser:annotation-delete-reload, manual:annotation-persistence |
-| Save-confirm handshake | KEEP | manual:save-confirm |
+| Save confirmation | KEEP | manual:save-confirm |
 | Coarse-pointer selection lifecycle | KEEP | playwright:selection-outside-release, playwright:pan-outside-release, playwright:no-native-drag, manual:touch-selection |
 | Word snapping on coarse pointer | PRKS_REPLACEMENT | python:touch-selection-api-probe |
 | Selection adjustment handles | PRKS_REPLACEMENT | python:touch-selection-api-probe |
@@ -111,7 +111,7 @@ deleteAnnotation()
 → POST PDF
 → getAnnotations()
 → POST metadata
-→ save-confirm
+→ each POST answers only after its commit
 ```
 
 There is no metadata-only delete path and no new backend PDF endpoint.

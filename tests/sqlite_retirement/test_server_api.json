@@ -172,13 +172,13 @@
     },
     "TestServerAPI.test_22c4_annotations_only_never_marks_materialization": {
       "replaced_by": [
-        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_an_annotation_save_never_marks_even_with_a_leftover_pdf_token"
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_an_annotation_save_never_marks_the_bytes"
       ],
       "note": "A plain replace on PostgreSQL reports what its new bytes embed (the empty set when there are no annotations)."
     },
     "TestServerAPI.test_22c5_same_token_replay_does_not_mark_new_generation": {
       "replaced_by": [
-        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_replayed_token_never_marks_a_later_set_and_a_stale_claim_is_refused"
+        "tests/pg/test_server_api_annotations.py::MaterializationClaimTests.test_a_later_set_is_never_marked_and_a_stale_claim_is_refused"
       ]
     },
     "TestServerAPI.test_22c6_intervening_annotations_reject_stale_pdf_claim": {
@@ -215,9 +215,7 @@
       "note": "A viewer id belongs to each file on PostgreSQL, so another Work's id is no conflict (tests/pg/test_annotations.py::PersistenceTests.test_one_viewer_id_on_two_assets_is_two_annotations)."
     },
     "TestServerAPI.test_22d_annotation_save_token_only_after_success": {
-      "replaced_by": [
-        "tests/pg/test_server_api_annotations.py::LegacyReplaceTests.test_a_save_token_is_recorded_only_after_a_save"
-      ]
+      "obsolete": "Save tokens and GET save-confirm were deleted in #1331: a save's own 200 is sent only after its commit, so it is the confirmation."
     },
     "TestServerAPI.test_23_static_path_traversal_blocked": {
       "replaced_by": [

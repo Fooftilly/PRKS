@@ -2529,7 +2529,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         return true;
     }
 
-    async function exportAndPersistPdfCopy(saveToken, materializeRevision) {
+    async function exportAndPersistPdfCopy(materializeRevision) {
         if (!stillLive()) return;
         const activeViewer = liveAnnotationViewer();
         if (!activeViewer || typeof activeViewer.saveCopy !== 'function') return;
@@ -2538,7 +2538,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         if (!buffer || !buffer.byteLength) return;
         const b64 = arrayBufferToBase64(buffer);
         if (!stillLive()) return;
-        const body = { file_b64: b64, save_token: saveToken };
+        const body = { file_b64: b64 };
         if (Number.isSafeInteger(materializeRevision) && materializeRevision >= 0) {
             body.materialized_annotation_set_revision = materializeRevision;
         }
@@ -2740,7 +2740,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
     }
 
-    async function runWorkAnnotationAndPdfPersistencePass(saveToken) {
+    async function runWorkAnnotationAndPdfPersistencePass() {
         if (!stillLive()) return;
         // Slice F: PDF bytes are a materialized artifact of an *acknowledged*
         // annotation-set generation. Durable path only exports when a claimed
@@ -2833,7 +2833,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         return;
                     }
                 }
-                const persisted = await exportAndPersistPdfCopy(saveToken, claimed);
+                const persisted = await exportAndPersistPdfCopy(claimed);
                 if (!stillLive()) return;
                 if (persisted !== true) {
                     // No bytes were written (viewer detached / empty copy):
@@ -2906,8 +2906,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         }
         // Legacy (online_legacy): annotations metadata first, then PDF bytes
         // claiming that exact replace generation. If PDF fails, canonical >
-        // materialized is correct. Never PDF-first with a reusable save_token
-        // as proof of which metadata the bytes embed.
+        // materialized is correct. Never PDF-first: the claimed generation is
+        // the proof of which metadata the bytes embed.
         const legacyViewer = liveAnnotationViewer();
         const itemsFound = prksViewerAnnotationObjects(legacyViewer).filter(isLikelyAnnotationObject);
         renderAnnotationFallbackList(
@@ -2927,7 +2927,6 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 annotations_json: serialized,
-                save_token: saveToken,
                 canonical_annotation_set_revision: baseSetRev,
             }),
         }, {
@@ -2963,43 +2962,8 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             prksOfflineMarkEntityChanged('work', workId);
         }
         if (!stillLive()) return;
-        const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);
+        const persisted = await exportAndPersistPdfCopy(replaceGen);
         return persisted === true;
-    }
-
-    // PRKS may go offline mid-confirmation-loop (the persistence worker
-    // pauses itself, but this poll loop only checked stillLive() before) --
-    // this must stop issuing /save-confirm requests the instant that
-    // happens, both before starting a new attempt and before continuing
-    // through a backoff delay, and leave pendingChanges/lastConfirmedToken
-    // untouched so the outer queue naturally resumes once reconnected.
-    function pausedOffline() {
-        return !!(worker && worker.paused);
-    }
-
-    async function confirmPersistedToken(saveToken) {
-        const tries = 8;
-        for (let attempt = 0; attempt < tries; attempt++) {
-            if (!stillLive() || pausedOffline()) return false;
-            try {
-                const probe = await prksRequest(
-                    `/api/works/${workId}/save-confirm?token=${encodeURIComponent(saveToken)}&t=${Date.now()}`,
-                    { cache: 'no-store' },
-                    { dedupe: false, retry: false, freshForMs: 0 }
-                );
-                if (!stillLive() || pausedOffline()) return false;
-                if (probe.ok) {
-                    const body = await probe.json().catch(() => ({}));
-                    if (body && body.saved === true) return true;
-                }
-            } catch (_e) {}
-            if (!stillLive() || pausedOffline()) return false;
-            const wait = attempt < 2 ? 250 : attempt < 5 ? 450 : 800;
-            await new Promise((resolve) => {
-                setTimeout(resolve, wait);
-            });
-        }
-        return false;
     }
 
     let queueRequested = false;
@@ -3052,15 +3016,14 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 // `true` only when PDF bytes were persisted. A durable pass with
                 // no claimed generation exports nothing and must not refresh
                 // the "Saved · PDF updated <time>" stamp (#401).
-                const persisted = await runWorkAnnotationAndPdfPersistencePass(saveToken);
+                const persisted = await runWorkAnnotationAndPdfPersistencePass();
                 if (!stillLive()) break;
-                // Durable path: PDF POST alone materializes; metadata already
-                // lives in the sync family. save-confirm still requires both
-                // legacy tokens, so skip that dual handshake when durable.
-                if (!runtime.annotationMutationDurable) {
-                    const confirmed = await confirmPersistedToken(saveToken);
-                    if (!stillLive()) break;
-                    if (!confirmed) throw new Error('Server confirmation timeout');
+                // Each POST answers 200 only after its commit, so the answers
+                // are the confirmation (#1331). Durable path: the PDF POST alone
+                // materializes; metadata already lives in the sync family. A
+                // legacy pass is saved only once both its POSTs succeeded.
+                if (!runtime.annotationMutationDurable && persisted !== true) {
+                    throw new Error('PDF save not written');
                 }
                 if (persisted === true) {
                     syncState.lastConfirmedToken = saveToken;

@@ -188,7 +188,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         """#401: "Saved · PDF updated <time>" only after bytes were persisted."""
         src = _read(_WORKS_PDF)
         drain = src[src.index("async function drainFlushQueue"):src.index("function requestFlush(")]
-        self.assertIn("const persisted = await runWorkAnnotationAndPdfPersistencePass(saveToken);", drain)
+        self.assertIn("const persisted = await runWorkAnnotationAndPdfPersistencePass();", drain)
         guard = drain.index("if (persisted === true) {")
         self.assertLess(guard, drain.index("syncState.lastSuccessAt = Date.now();"))
 
@@ -199,7 +199,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertTrue(export.rstrip().endswith("return true;\n    }"))
         self.assertEqual(export.count("return true;"), 1)
         pass_src = src[src.index("async function runWorkAnnotationAndPdfPersistencePass"):src.index("async function drainFlushQueue")]
-        durable = pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);")
+        durable = pass_src.index("const persisted = await exportAndPersistPdfCopy(claimed);")
         no_bytes = pass_src.index("if (persisted !== true) {", durable)
         self.assertLess(no_bytes, pass_src.index("runtime.materializedPdfAnnotationRevision = claimed;"))
         # Nothing else is guaranteed to come back for a retained claim.
@@ -209,7 +209,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         # cancels the retry timer) asks for it again.
         drain = src[src.index("async function drainFlushQueue"):]
         self.assertIn("syncState.pendingChanges = queueRequested || persisted === PDF_PASS_NOT_WRITTEN;", drain)
-        self.assertIn("const persisted = await exportAndPersistPdfCopy(saveToken, replaceGen);\n        return persisted === true;", pass_src)
+        self.assertIn("const persisted = await exportAndPersistPdfCopy(replaceGen);\n        return persisted === true;", pass_src)
 
     def test_a_failed_local_edit_is_kept_until_saved_or_abandoned(self):
         """#401: no flush (durable or legacy) clears 'local_save_failed'; the
@@ -229,7 +229,7 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         gate = pass_src.index("prksBeginAnnotationMaterializationGate(runtime)")
         held = pass_src.index("if (viewerHoldsUnsavedAnnotation()) {")
         self.assertLess(gate, held)
-        self.assertLess(held, pass_src.index("const persisted = await exportAndPersistPdfCopy(saveToken, claimed);"))
+        self.assertLess(held, pass_src.index("const persisted = await exportAndPersistPdfCopy(claimed);"))
         self.assertIn("releaseHeldMaterialization();", src[src.index("function forgetLocalSaveFailureId("):src.index("function forgetLocalSaveFailure(annId)")])
         runtime_src = _read(os.path.join(_FRONTEND, "js", "pdf-work-runtime.js"))
         close = runtime_src[runtime_src.index("runtime.closeAnnotationPopup = function"):runtime_src.index("runtime.captureAnnotationPopupTicket")]
@@ -453,15 +453,14 @@ class FrontendOfflinePdfViewerTests(unittest.TestCase):
         self.assertIn("online_awaiting_bridge", body)
         self.assertIn("annotationMutationDurable === true", body)
 
-    def test_confirm_persisted_token_stops_when_worker_paused(self):
+    def test_a_save_is_confirmed_by_its_answers_alone(self):
+        """No save-confirm poll (#1331): each POST answers after its commit,
+        and a legacy pass counts as saved only once its PDF POST succeeded."""
         src = _read(_WORKS_PDF)
-        start = src.index("async function confirmPersistedToken")
-        end = src.index("\n    }\n", start)
-        body = src[start:end]
-        self.assertIn("pausedOffline()", body)
-        # Checked before the first attempt, after the network probe, and
-        # before the backoff delay -- i.e. at least 3 occurrences.
-        self.assertGreaterEqual(body.count("pausedOffline()"), 3)
+        self.assertNotIn("save-confirm", src)
+        self.assertNotIn("save_token", src)
+        drain = src[src.index("async function drainFlushQueue"):]
+        self.assertIn("if (!runtime.annotationMutationDurable && persisted !== true) {", drain)
 
 
 if __name__ == "__main__":

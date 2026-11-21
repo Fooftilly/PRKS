@@ -4,8 +4,8 @@ A role is added, credited, re-credited and removed. The legacy full-list
 annotation route replaces a PDF Work's annotations against the acknowledged
 set revision and never marks the PDF materialized; only ``POST /pdf`` with a
 current ``materialized_annotation_set_revision`` does, and a stale claim is a
-409 that changes nothing. A save token is recorded only after a save
-succeeded. Byte-only markup is adopted and links are skipped. On PostgreSQL a
+409 that changes nothing. A save is confirmed by its own answer; there is
+no save-confirm route (#1331). Byte-only markup is adopted and links are skipped. On PostgreSQL a
 Work without a managed PDF has no annotations to store, a viewer id belongs to
 each file (no cross-Work conflict), and a plain replace reports what its new
 bytes embed.
@@ -56,9 +56,6 @@ class AnnotationHttpTestCase(ServerApiTestCase):
         body = {"file_b64": base64.b64encode(pdf_bytes(text)).decode("ascii"), **extra}
         return self.send("POST", f"/api/works/{work_id}/pdf", body)
 
-    def save_confirm(self, work_id: str, token: str) -> dict[str, Any]:
-        return self.ok(self.get(f"/api/works/{work_id}/save-confirm?{urlencode({'token': token})}"))
-
 
 class RoleTests(AnnotationHttpTestCase):
     def person(self, first: str, last: str) -> str:
@@ -101,7 +98,7 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
         self.save(work_id, [{"id": "keep", "type": "note", "contents": "hello", "pageIndex": 0}])
         self.assertEqual(self.annotations(work_id)[0]["contents"], "hello")
         cases = [
-            {"save_token": "no-list"},
+            {"title": "no-list"},
             {"annotations_json": "{"},
             {"annotations_json": json.dumps({"id": "a"})},
             {"annotations_json": json.dumps("x")},
@@ -167,14 +164,13 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
         self.refused(self.send("POST", f"/api/works/{work_id}/annotations",
                                {"annotations_json": json.dumps([row("stale-a", "x")])}), 400)
 
-    def test_a_save_token_is_recorded_only_after_a_save(self) -> None:
+    def test_a_refused_save_changes_nothing_and_save_confirm_is_gone(self) -> None:
+        """A save's own 200 confirms it (#1331): there is no save-confirm route."""
         work_id = self.pdf_work("Ann Token")
-        self.save(work_id, [{"id": "tok", "contents": "ok", "pageIndex": 0}], save_token="token-ok")
-        self.assertTrue(self.save_confirm(work_id, "token-ok")["annotations_saved"])
-        self.refused(self.post_annotations(work_id, {"annotations_json": "{", "save_token": "token-bad"}), 400)
-        self.assertFalse(self.save_confirm(work_id, "token-bad")["annotations_saved"])
-        self.assertTrue(self.save_confirm(work_id, "token-ok")["annotations_saved"])
+        self.save(work_id, [{"id": "tok", "contents": "ok", "pageIndex": 0}])
+        self.refused(self.post_annotations(work_id, {"annotations_json": "{"}), 400)
         self.assertEqual(self.annotations(work_id)[0]["id"], "tok")
+        self.assertEqual(self.get(f"/api/works/{work_id}/save-confirm?token=x").status, 404)
 
     def test_byte_only_markup_is_adopted_and_links_are_skipped(self) -> None:
         work_id = self.pdf_work("Ann Adopt")
@@ -203,7 +199,7 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
 class MaterializationClaimTests(AnnotationHttpTestCase):
     def test_only_a_pdf_claim_marks_the_bytes_materialized(self) -> None:
         work_id = self.pdf_work("Legacy Mat Order")
-        body = self.save(work_id, [row("legacy-ann-1", "hi")], save_token="legacy-handshake")
+        body = self.save(work_id, [row("legacy-ann-1", "hi")])
         tip = body["canonical_annotation_set_revision"]
         self.assertIsInstance(tip, int)
         self.assertGreaterEqual(tip, 1)
@@ -211,28 +207,28 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         middle = self.materialization(work_id)
         self.assertTrue(middle["stale"])
         self.assertEqual(middle["canonical_annotation_set_revision"], tip)
-        pdf = self.ok(self.post_pdf(work_id, "legacy mark order v2", save_token="legacy-handshake",
+        pdf = self.ok(self.post_pdf(work_id, "legacy mark order v2",
                                     materialized_annotation_set_revision=tip))
         self.assertEqual((pdf.get("materialized_pdf_annotation_revision"), pdf.get("canonical_annotation_set_revision"),
                           bool(pdf.get("stale"))), (tip, tip, False))
         done = self.materialization(work_id)
         self.assertEqual(done["canonical_annotation_set_revision"], done["materialized_pdf_annotation_revision"])
         self.assertFalse(done["stale"])
-        after = self.save(work_id, [row("legacy-ann-1", "changed")], save_token="another-token")
+        after = self.save(work_id, [row("legacy-ann-1", "changed")])
         self.assertNotIn("materialized_pdf_annotation_revision", after)
         lagging = self.materialization(work_id)
         self.assertTrue(lagging["stale"])
         self.assertGreater(lagging["canonical_annotation_set_revision"], lagging["materialized_pdf_annotation_revision"])
 
-    def test_an_annotation_save_never_marks_even_with_a_leftover_pdf_token(self) -> None:
+    def test_an_annotation_save_never_marks_the_bytes(self) -> None:
         work_id = self.pdf_work("Ann Only No Mark")
-        pdf = self.ok(self.post_pdf(work_id, "token plant", save_token="leftover-pdf-token"))
+        pdf = self.ok(self.post_pdf(work_id, "token plant"))
         # A plain replace reports what the new bytes hold: with no annotations
         # yet, the empty set is embedded, so the Work is not stale.
         self.assertEqual((pdf.get("canonical_annotation_set_revision"),
                           pdf.get("materialized_pdf_annotation_revision"), pdf.get("stale")), (1, 1, False))
         before = self.materialization(work_id)
-        body = self.save(work_id, [row("only-ann", "x")], save_token="leftover-pdf-token")
+        body = self.save(work_id, [row("only-ann", "x")])
         self.assertIn("canonical_annotation_set_revision", body)
         self.assertNotIn("materialized_pdf_annotation_revision", body)
         self.assertNotIn("stale", body)
@@ -241,20 +237,19 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         self.assertGreater(after["canonical_annotation_set_revision"], after["materialized_pdf_annotation_revision"])
         self.assertTrue(after["stale"])
 
-    def test_a_replayed_token_never_marks_a_later_set_and_a_stale_claim_is_refused(self) -> None:
+    def test_a_later_set_is_never_marked_and_a_stale_claim_is_refused(self) -> None:
         work_id = self.pdf_work("Legacy Token Replay")
-        token = "replay-token-A"
-        gen_a = self.save(work_id, [row("a1", "first")], save_token=token)["canonical_annotation_set_revision"]
-        self.ok(self.post_pdf(work_id, "replay token A bytes", save_token=token,
+        gen_a = self.save(work_id, [row("a1", "first")])["canonical_annotation_set_revision"]
+        self.ok(self.post_pdf(work_id, "replay token A bytes",
                               materialized_annotation_set_revision=gen_a))
-        body_b = self.save(work_id, [row("a1", "second-B")], save_token=token)
+        body_b = self.save(work_id, [row("a1", "second-B")])
         gen_b = body_b["canonical_annotation_set_revision"]
         self.assertGreater(gen_b, gen_a)
         self.assertNotIn("materialized_pdf_annotation_revision", body_b)
         state = self.materialization(work_id)
         self.assertEqual((state["materialized_pdf_annotation_revision"], state["canonical_annotation_set_revision"],
                           state["stale"]), (gen_a, gen_b, True))
-        refused = self.refused(self.post_pdf(work_id, "stale claim A", save_token=token,
+        refused = self.refused(self.post_pdf(work_id, "stale claim A",
                                              materialized_annotation_set_revision=gen_a), 409)
         self.assertEqual(refused.get("code"), "ANNOTATION_MATERIALIZATION_STALE")
         state = self.materialization(work_id)
@@ -266,13 +261,13 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         gen_a = self.save(work_id, [row("r1", "A")])["canonical_annotation_set_revision"]
         gen_b = self.save(work_id, [row("r1", "B")])["canonical_annotation_set_revision"]
         self.assertGreater(gen_b, gen_a)
-        self.refused(self.post_pdf(work_id, "bytes for A", save_token="tab-a",
+        self.refused(self.post_pdf(work_id, "bytes for A",
                                    materialized_annotation_set_revision=gen_a), 409)
         state = self.materialization(work_id)
         self.assertTrue(state["stale"])
         self.assertEqual(state["canonical_annotation_set_revision"], gen_b)
         self.assertLess(state["materialized_pdf_annotation_revision"], gen_b)
-        body = self.ok(self.post_pdf(work_id, "bytes for B", save_token="tab-b",
+        body = self.ok(self.post_pdf(work_id, "bytes for B",
                                      materialized_annotation_set_revision=gen_b))
         self.assertEqual(body.get("materialized_pdf_annotation_revision"), gen_b)
         state = self.materialization(work_id)
@@ -282,11 +277,10 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         work_id = self.create_work("No Managed PDF")["id"]
         self.assertEqual(self.ok(self.get(f"/api/works/{work_id}"))["file_path"], "")
         before = self.materialization(work_id)
-        res = self.post_pdf(work_id, "orphan bytes", save_token="no-pdf-token",
+        res = self.post_pdf(work_id, "orphan bytes",
                             materialized_annotation_set_revision=max(1, int(before["canonical_annotation_set_revision"])))
         self.assertEqual(res.status, 404, res.raw)
-        self.assertFalse(self.save_confirm(work_id, "no-pdf-token").get("pdf_saved"))
         after = self.materialization(work_id)
         for key in ("materialized_pdf_annotation_revision", "canonical_annotation_set_revision"):
             self.assertEqual(after.get(key), before.get(key))
-        self.assertEqual(self.post_pdf("W-missing-pdf-lock-probe", "lock probe", save_token="lock-probe").status, 404)
+        self.assertEqual(self.post_pdf("W-missing-pdf-lock-probe", "lock probe").status, 404)
