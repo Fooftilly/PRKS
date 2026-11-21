@@ -28,6 +28,7 @@ import { registerFolderPrivateNotesRecoveryBridge } from './features/folder-deta
 import { registerWorkDetailBridge } from './features/work/session'
 import { registerWorkPdfAnnotationPopupBridge } from './features/work/pdf-annotation-popup'
 import { registerWorkPdfAnnotationDrawerBridge } from './features/work/pdf-annotation-drawer'
+import { registerCitationsBridge } from './features/citations/session'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
@@ -63,3 +64,4 @@ registerFolderPrivateNotesRecoveryBridge(window)
 registerWorkDetailBridge(window)
 registerWorkPdfAnnotationPopupBridge(window)
 registerWorkPdfAnnotationDrawerBridge(window)
+registerCitationsBridge(window)

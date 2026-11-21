@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
@@ -144,6 +145,91 @@ def bibtex(db: Database, ctx: RequestContext, work_id: str) -> str:
     record, roles, profile = inputs
     # The projection's "video" means the target's primary Asset is a stream.
     return format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
+
+
+#: The formats ``POST /api/citations`` answers in.
+CITATION_FORMATS = ("csl-json", "bibtex")
+
+
+_BIBTEX_KEY_RE = re.compile(r"^(@[^{]*\{)([^,\n]*)(,)")
+
+
+def _unique_bibtex_keys(entries: list[str]) -> list[str]:
+    """Entries whose citation keys are unique in one export.
+
+    Each entry's key comes from its first author and year (``Doe2024``), so
+    two Works can share one, and BibTeX drops the later entry. The first
+    keeps its key; later ones take the first free suffix ``a``, ``b``, …
+    ``z``, ``aa``, …, as BibTeX styles do, checked against every key taken.
+    """
+    keys = [m.group(2) if (m := _BIBTEX_KEY_RE.match(entry)) else "" for entry in entries]
+    taken = set(keys)
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry, key in zip(entries, keys):
+        if not key or key not in seen:
+            seen.add(key)
+            out.append(entry)
+            continue
+        n = 0
+        while True:
+            n += 1
+            suffix, value = "", n
+            while value:
+                value, rest = divmod(value - 1, 26)
+                suffix = chr(ord("a") + rest) + suffix
+            if key + suffix not in taken:
+                break
+        unique = key + suffix
+        taken.add(unique)
+        seen.add(unique)
+        match = _BIBTEX_KEY_RE.match(entry)
+        assert match is not None  # the key was read from this entry
+        out.append(match.group(1) + unique + entry[match.end(2):])
+    return out
+
+
+def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
+    """``POST /api/citations``: the selected Works' citations in one format, read in one snapshot.
+
+    ``data`` is ``{"work_ids": [...], "format": "csl-json" | "bibtex"}``.
+    The ids are validated as a bulk selection (at most
+    ``PRKS_BULK_WORK_MAX``, deduplicated, in request order) before the
+    database is read. ``csl-json`` answers ``items``, one CSL-JSON item per
+    Work (``csl_format.format_csl``); ``bibtex`` answers ``text``, the
+    entries ``bibtex`` gives one Work each, separated by a blank line. Ids
+    this Library has no Work for are listed in ``missing`` and left out, so
+    a selection made before another tab deleted a Work still exports the
+    rest. Raises ``BulkWorkError`` (400) for a malformed body.
+    """
+    from backend.domain.works import citation
+    from backend.domain.works.bibtex_format import format_bibtex
+    from backend.domain.works.csl_format import format_csl
+    from backend.domain.works.rules import BulkWorkError, _normalize_bulk_ids
+
+    if not isinstance(data, dict):
+        raise BulkWorkError("JSON object body required")
+    fmt = data.get("format")
+    if fmt not in CITATION_FORMATS:
+        raise BulkWorkError("Unknown citation format.")
+    work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
+
+    def read(scope: LibraryScope) -> tuple[list[tuple[str, Any]], dict[str, bool]]:
+        found = [(work_id, None if "\x00" in work_id else citation.citation_inputs(scope, work_id))
+                 for work_id in work_ids]
+        return found, (citation.bibtex_profile(scope) if fmt == "bibtex" else {})
+
+    found, profile = library_query(db, ctx, read)
+    missing = [work_id for work_id, inputs in found if inputs is None]
+    present = [(work_id, inputs) for work_id, inputs in found if inputs is not None]
+    if fmt == "csl-json":
+        items = [format_csl(work_id, record, roles, video=record["source_kind"] == "video")
+                 for work_id, (record, roles) in present]
+        return {"format": fmt, "items": items, "missing": missing}
+    entries = _unique_bibtex_keys([
+        format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
+        for _work_id, (record, roles) in present])
+    return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
 
 
 def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
@@ -346,7 +432,7 @@ METADATA_FIELDS = frozenset({
     "title", "status", "abstract", "published_date", "author_text", "year", "publisher", "location",
     "edition", "journal", "volume", "issue", "pages", "isbn", "doi", "text_content", "doc_type",
     "private_notes", "thumb_page", "source_kind", "source_url", "source_mime", "thumb_url", "provider",
-    "provider_id", "urldate", "file_path", "hide_pdf_link_annotations",
+    "provider_id", "urldate", "file_path", "hide_pdf_link_annotations", "citation_style",
 })
 
 

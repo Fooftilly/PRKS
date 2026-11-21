@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
+import { CITATION_STYLES, citationStyleLabel, libraryCitationStyle } from '../citations/styles'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
 
@@ -75,6 +76,13 @@ function onInput(field: WorkMetaField, event: Event): void {
   if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return
   setField(field, target.value)
 }
+
+function onSelect(field: WorkMetaField, event: Event): void {
+  const target = event.target
+  if (target instanceof HTMLSelectElement) setField(field, target.value)
+}
+
+const libraryStyleLabel = computed(() => citationStyleLabel(libraryCitationStyle()))
 
 function chooseStatus(value: string): void {
   if (fieldOff('status')) return
@@ -465,6 +473,29 @@ watch(() => props.draft.doc_type, () => {
       >
       </PrksField>
       </template>
+
+      <PrksField
+        v-slot="{ labelledBy, describedBy }"
+        label="Citation style"
+        for-id="meta-citation-style"
+        help="How this file is cited when you copy a formatted citation. The library default is set in Settings."
+      >
+      <select
+        id="meta-citation-style"
+        data-prks-work-field="citation_style"
+        :value="draft.citation_style"
+        :disabled="fieldOff('citation_style')"
+        :title="fieldTitle('citation_style')"
+        :aria-labelledby="labelledBy"
+        :aria-describedby="describedBy"
+        @change="onSelect('citation_style', $event)"
+        @focus="onFocus('citation_style')"
+        @blur="onBlur('citation_style')"
+      >
+        <option value="">Library default ({{ libraryStyleLabel }})</option>
+        <option v-for="style in CITATION_STYLES" :key="style.id" :value="style.id">{{ style.label }}</option>
+      </select>
+      </PrksField>
 
       <div class="prks-form-actions form-actions">
         <PrksButton id="save-work-bib-btn" :disabled="saveDisabled('bib')" @click="saveGroup('bib')">{{ isVideo ? 'Save channel name' : 'Save bibliographic details' }}</PrksButton>

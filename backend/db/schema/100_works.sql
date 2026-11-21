@@ -51,6 +51,8 @@ CREATE TABLE prks.works (
              CHECK (status IN ('Planned', 'In Progress', 'Completed', 'Paused', 'Not Started')),
   author_text text,                        -- free-text credit (search, cards, video channel)
   hide_pdf_link_annotations boolean NOT NULL DEFAULT false,
+  -- '' = the Library's default citation style (backend/domain/works/citation_styles.py)
+  citation_style text NOT NULL DEFAULT '',
   last_opened_at timestamptz,              -- a max-register (MARK_WORK_OPENED)
   primary_manifestation_id  text NOT NULL, -- deferred FK below
   citation_manifestation_id text,          -- NULL = cite the primary; deferred FK below

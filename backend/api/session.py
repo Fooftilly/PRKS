@@ -118,6 +118,7 @@ def _fills_derived_cache(method: str, path: str) -> bool:
 
 _NON_LIBRARY_MUTATIONS = {
     "/api/client-errors": Capability.READ_LIBRARY,  # a browser error report, logged only
+    "/api/citations": Capability.READ_LIBRARY,  # a read sent as POST: a selection does not fit a URL
     "/api/diagnostics/performance/reset": Capability.ADMIN_LIBRARY,  # process counters
 }
 

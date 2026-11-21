@@ -93,6 +93,41 @@ class IsolationTests(BibtexTestCase):
         self.assertEqual(found, (None, None, [], None))
 
 
+class CitationExportTests(BibtexTestCase):
+    """``work_commands.citations`` (``POST /api/citations``, #41) on PostgreSQL."""
+
+    def cite(self, ctx: Any, work_ids: list[str], fmt: str) -> dict[str, Any]:
+        from backend.domain.works import work_commands
+
+        return work_commands.citations(self.db, ctx, {"work_ids": work_ids, "format": fmt})
+
+    def test_a_reader_exports(self) -> None:
+        work_id = self.book()
+        out = self.cite(self.reader_context(), [work_id], "bibtex")
+        self.assertEqual(out, {"format": "bibtex", "text": _ENTRY, "missing": []})
+
+    def test_another_librarys_work_is_missing_in_both_formats(self) -> None:
+        mine = self.book()
+        other = self.other_actor()
+        for fmt in ("csl-json", "bibtex"):
+            with self.subTest(fmt=fmt):
+                out = self.cite(other.context, [mine], fmt)
+                self.assertEqual(out["missing"], [mine])
+                self.assertEqual(out.get("items", []), [])
+                self.assertEqual(out.get("text", ""), "")
+                self.assertNotIn("Notes", repr(out))
+
+    def test_works_that_share_a_citation_key_get_distinct_keys(self) -> None:
+        first, second, third = self.book(), self.book(), self.book()
+        untitled = [self.library.add_work("No credit"), self.library.add_work("No credit either")]
+        text = self.cite(self.actor.context, [first, second, third, *untitled], "bibtex")["text"]
+        keys = [line.split("{", 1)[1].rstrip(",") for line in text.splitlines() if line.startswith("@")]
+        self.assertEqual(keys, ["Lovelace1843", "Lovelace1843a", "Lovelace1843b",
+                                "UnknownUnknownYear", "UnknownUnknownYeara"])
+        # One Work alone keeps its plain key.
+        self.assertEqual(self.cite(self.actor.context, [second], "bibtex")["text"], _ENTRY)
+
+
 class MissingTests(BibtexTestCase):
     def test_missing_deleted_and_unstorable_ids_export_nothing(self) -> None:
         deleted = self.book()

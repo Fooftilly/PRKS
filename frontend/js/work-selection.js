@@ -114,6 +114,7 @@
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-open="tags">Tags</button>' +
             '</div>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm prks-bulk-toolbar__organize" data-bulk-open="organize">Organize…</button>' +
+            '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-open="cite">Cite…</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-select-all>Select all visible</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm" data-bulk-clear>Clear</button>' +
             '<button type="button" class="prks-btn prks-btn--secondary prks-btn--sm prks-bulk-toolbar__exit" data-bulk-exit aria-label="Exit selection">&times;</button>';
@@ -188,7 +189,7 @@
             if (clear) clear.disabled = n === 0 || state.submitting;
         }
         const apply = document.querySelector('#prks-bulk-sheet [data-bulk-apply]');
-        if (apply && state.sheetKind && state.sheetKind !== 'organize') {
+        if (apply && state.sheetKind && state.sheetKind !== 'organize' && state.sheetKind !== 'cite') {
             apply.disabled = !canApplySheet() || state.submitting;
         }
     }
@@ -701,6 +702,72 @@
         );
     }
 
+    /* Citation export (#41). The Vue citations module owns the request, the
+     * formatting and the clipboard or download (`window.prksCitations`); this
+     * sheet only offers the four actions for the current selection. */
+    const CITE_ACTIONS = [
+        ['formatted', 'Copy bibliography'],
+        ['bibtex', 'Copy BibTeX'],
+        ['bib-file', 'Download .bib'],
+        ['csl-json-file', 'Download CSL-JSON'],
+    ];
+
+    function renderCiteBody() {
+        const api = root.prksCitations;
+        const style = api && typeof api.libraryStyleLabel === 'function' ? api.libraryStyleLabel() : '';
+        return (
+            '<div class="prks-bulk-cite-actions">' +
+            CITE_ACTIONS.map(function (pair) {
+                return '<button type="button" class="prks-btn prks-btn--secondary" data-bulk-cite="' +
+                    pair[0] + '">' + esc(pair[1]) + '</button>';
+            }).join('') +
+            '</div>' +
+            (style ? '<p class="meta-row">Bibliography style: ' + esc(style) +
+                ' (the library default, set in Settings).</p>' : '')
+        );
+    }
+
+    function citeDoneText(kind, result) {
+        const n = result.cited;
+        const what = n + ' ' + filesWord(n);
+        let text = kind === 'bib-file' || kind === 'csl-json-file'
+            ? 'Downloaded citations for ' + what + '.'
+            : (kind === 'bibtex' ? 'Copied BibTeX for ' + what + '.' : 'Copied the bibliography of ' + what + '.');
+        if (result.missing) {
+            text += ' ' + result.missing + ' selected ' + filesWord(result.missing) +
+                (result.missing === 1 ? ' no longer exists.' : ' no longer exist.');
+        }
+        return text;
+    }
+
+    async function runCite(button) {
+        const kind = button.getAttribute('data-bulk-cite');
+        const api = root.prksCitations;
+        const parts = sheetParts();
+        if (!kind || state.submitting || !parts.confirm) return;
+        setSheetError('');
+        parts.confirm.textContent = '';
+        if (!api || typeof api.exportSelection !== 'function') {
+            setSheetError('Citations are not available yet. Try again in a moment.');
+            return;
+        }
+        state.submitting = true;
+        if (typeof root.prksSetButtonBusy === 'function') root.prksSetButtonBusy(button, true, { busyLabel: 'Working…' });
+        try {
+            const result = await api.exportSelection(selectedIds(), kind);
+            if (state.sheetKind === 'cite') parts.confirm.textContent = citeDoneText(kind, result);
+        } catch (e) {
+            if (state.sheetKind === 'cite') {
+                setSheetError(e && e.name === 'CitationExportError' && e.message
+                    ? e.message
+                    : 'Could not cite the selected files. Citations need a connection to PRKS.');
+            }
+        } finally {
+            state.submitting = false;
+            if (typeof root.prksSetButtonBusy === 'function') root.prksSetButtonBusy(button, false);
+        }
+    }
+
     async function openSheet(kind) {
         if (!state.active) return;
         if (kind !== 'organize' && state.ids.size === 0) return;
@@ -715,6 +782,14 @@
         if (kind === 'organize') {
             parts.title.textContent = 'Organize';
             parts.body.innerHTML = renderOrganizeBody();
+            if (parts.apply) parts.apply.hidden = true;
+            parts.confirm.textContent = '';
+            return;
+        }
+        if (kind === 'cite') {
+            const n = state.ids.size;
+            parts.title.textContent = 'Cite ' + n + ' ' + filesWord(n);
+            parts.body.innerHTML = renderCiteBody();
             if (parts.apply) parts.apply.hidden = true;
             parts.confirm.textContent = '';
             return;
@@ -769,6 +844,11 @@
         const retry = t.closest('[data-bulk-retry]');
         if (retry) {
             if (!state.submitting) void openSheet(retry.getAttribute('data-bulk-retry'));
+            return;
+        }
+        const cite = t.closest('[data-bulk-cite]');
+        if (cite && state.sheetKind === 'cite') {
+            void runCite(cite);
             return;
         }
         const openKind = t.closest('[data-bulk-open]');

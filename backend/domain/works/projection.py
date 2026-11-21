@@ -74,7 +74,7 @@ WORK_DETAIL_COLUMNS: tuple[str, ...] = (
     "source_kind", "source_url", "source_mime", "thumb_url", "provider", "provider_id",
     "urldate", "thumb_page", "author_text", "year", "publisher", "location", "edition",
     "journal", "volume", "issue", "pages", "isbn", "doi", "doc_type", "private_notes",
-    "hide_pdf_link_annotations", "canonical_annotation_set_revision",
+    "hide_pdf_link_annotations", "citation_style", "canonical_annotation_set_revision",
     "materialized_pdf_annotation_revision", "last_opened_at", "created_at", "updated_at",
     "primary_manifestation_id",
 )
@@ -102,6 +102,7 @@ SELECT
   w.status,
   w.author_text,
   w.hide_pdf_link_annotations,
+  w.citation_style,
   to_char(w.last_opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS') AS last_opened_at,
   to_char(w.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
   to_char(w.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at,
@@ -220,6 +221,7 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
             _asset_value(row, "materialized_pdf_annotation_revision", 0)
         ),
         "hide_pdf_link_annotations": 1 if row["hide_pdf_link_annotations"] else 0,
+        "citation_style": row["citation_style"],
         "last_opened_at": row["last_opened_at"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],

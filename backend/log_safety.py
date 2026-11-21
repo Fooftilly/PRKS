@@ -68,6 +68,7 @@ _STATIC_API_PATHS = frozenset(
     {
         "/api/works",
         "/api/works/bulk",
+        "/api/citations",
         "/api/works/reindex-pdf-text",
         "/api/works/linearize-existing-pdfs",
         "/api/playlists",
@@ -101,6 +102,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/openapi/positions.json",
         "/api/openapi/performance-diagnostics.json",
         "/api/openapi/job-diagnostics.json",
+        "/api/openapi/citations.json",
         "/api/openapi/publishers.json",
         "/api/openapi/saved-views.json",
         "/api/openapi/processing-items.json",

@@ -25,7 +25,7 @@ from tests.pg.facade_context import provision_actor
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 
 _ALL_ON = {field: True for field in PRKS_BIBTEX_EXPORT_FIELD_IDS}
-_DEFAULTS = {"annotation_author": "", "bibtex_export_fields": _ALL_ON}
+_DEFAULTS = {"annotation_author": "", "bibtex_export_fields": _ALL_ON, "citation_style": "apa"}
 
 
 class SettingsTestCase(PeopleFacadeTestCase):
@@ -120,10 +120,21 @@ class ReadAndPatchTests(SettingsTestCase):
             ({"bibtex_export_fields": {"not_a_field": False}}, "unknown bibtex_export_fields key: not_a_field"),
             ({"bibtex_export_fields": {"isbn": "no"}}, "bibtex_export_fields.isbn must be boolean"),
             ({"bibtex_export_fields": {"isbn": 0}}, "bibtex_export_fields.isbn must be boolean"),
+            ({"citation_style": "harvard1"}, "Unknown citation style."),
+            ({"citation_style": None}, "Unknown citation style."),
         ):
             with self.subTest(data=str(data)[:40]):
                 self.refused(message, data)
         self.assertEqual(self.stored(), {})
+
+
+class CitationStyleTests(SettingsTestCase):
+    def test_the_style_is_stored_and_a_style_no_longer_shipped_reads_as_the_default(self) -> None:
+        self.library.patch_app_settings({"citation_style": "modern-language-association"})
+        self.assertEqual(self.stored(), {"citation_style": "modern-language-association"})
+        self.assertEqual(self.response()["citation_style"], "modern-language-association")
+        self.sql("UPDATE prks.library_settings SET value = 'retired-style' WHERE key = 'citation_style'")
+        self.assertEqual(self.response()["citation_style"], "apa")
 
 
 class AtomicityTests(SettingsTestCase):
@@ -162,7 +173,7 @@ class IsolationAndAccessTests(SettingsTestCase):
         self.assertEqual(self.library.get_app_settings_map(), {})
         self.library.patch_app_settings({"annotation_author": "Mine"})
         with facade_context.acting_as(other.context):
-            self.assertEqual(self.response(), {"annotation_author": "Theirs",
+            self.assertEqual(self.response(), {**_DEFAULTS, "annotation_author": "Theirs",
                                                "bibtex_export_fields": {**_ALL_ON, "doi": False}})
             self.assertEqual(set(self.library.get_app_settings_map()), {"annotation_author", "bibtex_export_fields"})
 

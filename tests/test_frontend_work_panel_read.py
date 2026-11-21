@@ -114,6 +114,7 @@ class WorkPanelReadContractTests(unittest.TestCase):
         self.assertIn("Manage relationships", shell)
         self.assertIn("Manage tags", shell)
         self.assertIn("copy-bibtex-btn", shell)
+        self.assertIn('data-prks-role="work-panel-citation"', shell)
         self.assertIn("delete-work-btn", shell)
         self.assertIn('data-prks-role="work-panel-read-anchor"', _UI)
         self.assertIn('data-prks-role="work-folder-read"', (_PROJECT / "frontend/js/components/folders.js").read_text(encoding="utf-8"))

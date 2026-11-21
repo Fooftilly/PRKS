@@ -25,6 +25,11 @@
       "name": "positions",
       "artifact": "docs/api/openapi-positions.json",
       "output": "frontend-app/src/api/generated/positions.ts"
+    },
+    {
+      "name": "citations",
+      "artifact": "docs/api/openapi-citations.json",
+      "output": "frontend-app/src/api/generated/citations.ts"
     }
   ]
 }

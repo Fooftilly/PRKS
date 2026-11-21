@@ -131,7 +131,7 @@ def _updates(sql: str) -> list[tuple[str, set[str]]]:
 class RegistryTests(unittest.TestCase):
     def test_the_synchronized_fields(self) -> None:
         self.assertEqual(sorted(meta.SYNCED_FIELDS),
-                         ["abstract", "author_text", "doc_type", "doi", "edition", "isbn",
+                         ["abstract", "author_text", "citation_style", "doc_type", "doi", "edition", "isbn",
                           "issue", "journal", "location", "pages", "published_date",
                           "publisher", "source_url", "status", "thumb_page", "title",
                           "volume", "year"])

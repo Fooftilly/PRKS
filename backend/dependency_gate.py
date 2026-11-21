@@ -83,6 +83,17 @@ NPM_ISLANDS = (
     },
 )
 
+#: The Citation Style Language files the citation formatter loads, under
+#: ``frontend/vendor/`` (raw vendor, CC BY-SA 3.0), with their VERSION hash keys.
+CSL_VENDOR_FILES = tuple(
+    f"csl/{name}.csl"
+    for name in (
+        "apa", "chicago-author-date", "chicago-notes-bibliography", "modern-language-association",
+        "harvard-cite-them-right", "ieee", "nlm-citation-sequence",
+    )
+) + ("csl/locales-en-US.xml",)
+
+
 # Runtime vendor files that must appear in DEPENDENCY-MANIFEST and on disk.
 REGISTERED_VENDOR_RUNTIME_FILES = (
     "inter/inter.css",
@@ -96,6 +107,8 @@ REGISTERED_VENDOR_RUNTIME_FILES = (
     "lucide/lucide.min.js",
     "cytoscape/cytoscape.min.js",
     "idb/idb.min.js",
+    "citeproc/citeproc.js",
+    *CSL_VENDOR_FILES,
     "prks-pdf-viewer/prks-pdf-viewer.js",
     "prks-pdf-viewer/prks-pdf-viewer.css",
     "prks-pdf-viewer/pdfium.wasm",
@@ -118,6 +131,7 @@ _INVENTORY_STRUCTURAL_NAMES = frozenset(
     {
         "inter",
         "idb",
+        "csl",
         "python",
     }
 )
@@ -1128,6 +1142,7 @@ def validate_frontend_vendor_island(repo_root: Path | None = None) -> GateResult
         ("easymde", "easymde", ["easymde.min.js", "easymde.min.css"], None),
         ("codemirror", "codemirror", ["codemirror.js", "show-hint.js", "show-hint.css"], None),
         ("lucide", "lucide", ["lucide.min.js"], "sha256"),
+        ("citeproc", "citeproc", ["citeproc.js"], "sha256"),
     ]
     for dep_name, folder, files, primary_sha_key in checks:
         want = deps.get(dep_name)
@@ -1189,6 +1204,37 @@ def validate_frontend_vendor_island(repo_root: Path | None = None) -> GateResult
                         f"{folder}/VERSION missing sha256 for {filename}",
                         str(version_path),
                     )
+    return result
+
+
+def _csl_sha_key(rel: str) -> str:
+    """``csl/apa.csl`` -> ``sha256-apa-csl`` (VERSION keys are read lower-cased)."""
+    return "sha256-" + rel.split("/", 1)[1].replace(".", "-").lower()
+
+
+def validate_csl_vendor(repo_root: Path | None = None) -> GateResult:
+    """Raw-vendor pin for the APA style and en-US locale: VERSION hashes match the files."""
+    root = Path(repo_root) if repo_root is not None else REPO_ROOT
+    result = GateResult(ok=True)
+    version_path = root / "frontend" / "vendor" / "csl" / "VERSION"
+    if not version_path.is_file():
+        result.fail("missing_version", "csl VERSION missing", str(version_path))
+        return result
+    text = version_path.read_text(encoding="utf-8")
+    if "fetched:" in text.lower():
+        result.fail("nondeterministic_fetched", "csl VERSION must not contain fetched:", str(version_path))
+    meta = parse_version_file(text)
+    if not meta.get("version"):
+        result.fail("csl_missing_version", "csl VERSION missing version", str(version_path))
+    for rel in CSL_VENDOR_FILES:
+        path = root / "frontend" / "vendor" / rel
+        recorded = meta.get(_csl_sha_key(rel))
+        if not path.is_file():
+            result.fail("missing_asset", f"missing {rel}", str(path))
+        elif not recorded:
+            result.fail("csl_missing_sha", f"csl VERSION missing {_csl_sha_key(rel)}", str(version_path))
+        elif recorded != sha256_file(path):
+            result.fail("csl_sha_mismatch", f"{rel} sha256 {sha256_file(path)} != VERSION {recorded}", str(path))
     return result
 
 
@@ -1305,6 +1351,7 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
         "npm:tools/frontend-vendor",
     )
     add("lucide", fv["lucide"], ["lucide/lucide.min.js"], "npm:tools/frontend-vendor")
+    add("citeproc", fv["citeproc"], ["citeproc/citeproc.js"], "npm:tools/frontend-vendor")
 
     cy = load_json(root / "tools" / "research-graph" / "package.json")["dependencies"]["cytoscape"]
     add("cytoscape", cy, ["cytoscape/cytoscape.min.js"], "npm:tools/research-graph")
@@ -1326,6 +1373,16 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
         "idb",
         idb_meta.get("version", ""),
         ["idb/idb.min.js"],
+        "raw-vendor",
+    )
+
+    csl_meta = parse_version_file(
+        (root / "frontend" / "vendor" / "csl" / "VERSION").read_text(encoding="utf-8")
+    )
+    add(
+        "csl",
+        csl_meta.get("version", ""),
+        list(CSL_VENDOR_FILES),
         "raw-vendor",
     )
 
@@ -2132,6 +2189,7 @@ def run_repo_gate(repo_root: Path | None = None) -> GateResult:
     result.extend(validate_frontend_vendor_island(root))
     result.extend(validate_inter_vendor(root))
     result.extend(validate_idb_vendor(root))
+    result.extend(validate_csl_vendor(root))
     result.extend(validate_dependency_manifest(root))
     result.extend(validate_sw_revision(root))
     result.extend(validate_vendor_registration(root))

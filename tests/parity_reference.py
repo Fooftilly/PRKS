@@ -311,7 +311,7 @@ class Reference:
                                  % (self._test_id, position, json.dumps(recorded), json.dumps(call)))
         if "raises" in step:
             raise _rebuild_error(step["raises"], show)
-        return _decode(step["result"], show)
+        return _since_sqlite(_decode(step["result"], show))
 
     def close(self) -> None:
         """Every recorded step must have been replayed."""
@@ -322,6 +322,36 @@ class Reference:
         if position != len(steps):
             raise AssertionError("%s: %d recorded calls were not replayed"
                                  % (self._test_id, len(steps) - position))
+
+
+def _since_sqlite(value: Any) -> Any:
+    """A recorded result with the fields PRKS added after SQLite was deleted, at their defaults.
+
+    The recordings cannot be made again, so a field a later change adds to
+    every Work row or to the settings is added here, as the value a new
+    Library holds, and parity keeps checking everything else. Each entry
+    names its change; a field that is not at its default in a parity test
+    belongs in ``tests/pg/`` instead.
+
+    - ``citation_style`` (Citation V1, #41): a Work row's own style and its
+      metadata field state (``''``, the Library default, never revised) and
+      the Library's default style in the settings response (``apa``).
+    """
+    if isinstance(value, list):
+        return [_since_sqlite(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_since_sqlite(item) for item in value)
+    if not isinstance(value, dict):
+        return value
+    out = {key: _since_sqlite(item) for key, item in value.items()}
+    if "hide_pdf_link_annotations" in out:  # a Work row
+        out.setdefault("citation_style", "")
+    fields = out.get("fields")
+    if isinstance(fields, dict) and isinstance(fields.get("doc_type"), dict) and "revision" in fields["doc_type"]:
+        fields.setdefault("citation_style", {"revision": 0, "value": ""})  # a Work's metadata field state
+    if isinstance(out.get("bibtex_export_fields"), dict) and "annotation_author" in out:
+        out.setdefault("citation_style", "apa")  # the settings response; the stored map has no default
+    return out
 
 
 def _moments(call: dict[str, Any]) -> str:

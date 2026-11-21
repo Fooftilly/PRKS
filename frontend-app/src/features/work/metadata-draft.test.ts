@@ -76,8 +76,9 @@ describe('work metadata draft', () => {
     expect(workMetaSessionStill({ ...open, mode: 'view' }, 'A', 2)).toBe(false)
   })
 
-  it('keeps video bibliographic saves to the channel field', () => {
-    expect(workMetaGroupFields('bib', 'video')).toEqual(['author_text'])
+  it('keeps video bibliographic saves to the channel field and the citation style', () => {
+    expect(workMetaGroupFields('bib', 'video')).toEqual(['author_text', 'citation_style'])
+    expect(workMetaGroupFields('bib', 'pdf')).toContain('citation_style')
     expect(workMetaGroupFields('bib', 'pdf')).toContain('abstract')
     expect(workMetaGroupFields('bib', 'pdf')).toContain('source_url')
     expect(workMetaGroupFields('identity', 'pdf')).toEqual(['title', 'doc_type'])

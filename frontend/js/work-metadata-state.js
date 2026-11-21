@@ -32,8 +32,15 @@
     'use strict';
     const FIELDS = Object.freeze(['title', 'status', 'doc_type', 'thumb_page',
         'author_text', 'year', 'published_date', 'abstract', 'publisher', 'location',
-        'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url']);
+        'edition', 'journal', 'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url',
+        'citation_style']);
     const FIELD_SET = new Set(FIELDS);
+    /* Mirrors `backend/domain/works/citation_styles.CITATION_STYLES`: the
+     * styles PRKS ships. A Work's `citation_style` is one of them, or '' for
+     * the Library's default. */
+    const CITATION_STYLE_IDS = Object.freeze(['apa', 'chicago-author-date',
+        'chicago-notes-bibliography', 'modern-language-association',
+        'harvard-cite-them-right', 'ieee', 'nlm-citation-sequence']);
     /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
      * value outside it is not "too long", it is not a status at all. */
@@ -63,6 +70,7 @@
             const allowed = allowedDocTypes();
             return allowed ? allowed.has(value) : false;
         } },
+        citation_style: { has: value => value === '' || CITATION_STYLE_IDS.includes(value) },
     });
     const LABELS = Object.freeze({
         title: 'Title', status: 'Progress', doc_type: 'Document type',
@@ -72,6 +80,7 @@
         publisher: 'Publisher', location: 'Location', edition: 'Edition',
         journal: 'Journal', volume: 'Volume', issue: 'Issue',
         pages: 'Pages', isbn: 'ISBN', doi: 'DOI', source_url: 'Original URL',
+        citation_style: 'Citation style',
     });
     /* Cached projections other than the Work that carry a synchronized field.
      * Mirrors `work_metadata_sync.FIELD_PROJECTIONS`; the parity is pinned by
@@ -904,6 +913,7 @@
         prksDurableWorkMetaSaveSessionStill: durableSaveSessionStill,
         prksCommitDurableWorkMetaBaseline: commitDurableWorkMetaBaseline,
         PRKS_SYNCED_WORK_FIELDS: FIELDS,
+        PRKS_CITATION_STYLE_IDS: CITATION_STYLE_IDS,
         PRKS_ABSTRACT_EXCERPT_CODE_POINTS: EXCERPT_CODE_POINTS,
         prksAbstractExcerpt: abstractExcerpt,
         PRKS_SYNCED_WORK_FIELD_PROJECTIONS: FIELD_PROJECTIONS,

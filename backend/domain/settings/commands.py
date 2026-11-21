@@ -20,7 +20,7 @@ from backend.domain.settings import app_settings
 
 
 def response(db: Database, ctx: RequestContext) -> dict[str, Any]:
-    """The ``/api/settings`` body: ``annotation_author`` and the BibTeX export profile."""
+    """The ``/api/settings`` body: ``annotation_author``, the BibTeX export profile and the citation style."""
     return library_query(db, ctx, app_settings.settings_response)
 
 

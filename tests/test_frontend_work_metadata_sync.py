@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
 SYNCED = ('title', 'status', 'doc_type', 'thumb_page', 'author_text', 'year',
           'published_date', 'abstract', 'publisher', 'location', 'edition', 'journal',
-          'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url')
+          'volume', 'issue', 'pages', 'isbn', 'doi', 'source_url', 'citation_style')
 # Nothing user-editable remains outside the registry. `provider`, `provider_id`
 # and `source_kind` are canonical VIDEO IDENTITY, which is an aggregate rather
 # than a set of field-scoped scalars -- see work-source-identity.md.
@@ -17,6 +17,7 @@ require(process.argv[1] + '/frontend/js/date-format.js');
 require(process.argv[1] + '/frontend/js/work-metadata-state.js');
 process.stdout.write(JSON.stringify({
     fields: globalThis.PRKS_SYNCED_WORK_FIELDS,
+    citationStyles: globalThis.PRKS_CITATION_STYLE_IDS,
     projections: globalThis.PRKS_SYNCED_WORK_FIELD_PROJECTIONS,
     summary: globalThis.PRKS_WORK_SUMMARY_FIELDS,
     byteLimited: Array.from(globalThis.PRKS_BYTE_LIMITED_WORK_FIELDS),
@@ -55,6 +56,10 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertEqual(sorted(client_registries()['fields']),
                          sorted(work_metadata_sync.SYNCED_FIELDS))
         self.assertEqual(sorted(work_metadata_sync.SYNCED_FIELDS), sorted(SYNCED))
+
+    def test_client_and_server_agree_on_the_citation_styles(self):
+        from backend.domain.works.citation_styles import CITATION_STYLES
+        self.assertEqual(client_registries()['citationStyles'], list(CITATION_STYLES))
 
     def test_no_user_editable_work_metadata_saves_over_http_any_more(self):
         """The end state of the local-first metadata program.
