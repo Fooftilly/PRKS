@@ -75,7 +75,7 @@ AUDITED_CONFIG_FILES = frozenset({
     ".codacy.yml",
     ".coderabbit.yaml",
     ".pr_agent.toml",
-    ".sonarcloud.properties",
+    "sonar-project.properties",
 })
 DEFAULT_SCOPE = "docs"
 POSTGRES_SCOPE = "postgres"
