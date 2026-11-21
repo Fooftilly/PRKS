@@ -100,6 +100,20 @@ class AuthorizationTests(AdmissionTestCase):
         self.assert_refused(self.call("GET", "/api/session", cookies=cookies), 401, "not_authenticated")
         self.assert_refused(self.add_tag(cookies, epoch=1), 401, "not_authenticated")
 
+    def test_a_reader_exports_citations_without_an_epoch(self) -> None:
+        """``POST /api/citations`` is a read: a reader may send it, and it is not epoch-fenced (#41)."""
+        self.user("Reader", library=self.lib, role="reader")
+        reader = self.session_cookie("Reader")
+        before = self.library_epoch()
+        res = self.call("POST", "/api/citations", body={"work_ids": ["W-NONE"], "format": "csl-json"},
+                        cookies=reader, epoch=None)
+        self.assertEqual(res.status, 200, res.raw)
+        self.assertEqual(res.body, {"format": "csl-json", "items": [], "missing": ["W-NONE"]})
+        self.assertEqual(self.library_epoch(), before)
+        self.assert_refused(
+            self.call("POST", "/api/citations", body={"work_ids": [], "format": "csl-json"}, cookies=None),
+            401, "not_authenticated")
+
     def test_a_valid_session_is_not_authorization(self) -> None:
         cookies = self.session_cookie()
         # The membership row is what authorizes: a reader role refuses the write
@@ -356,6 +370,13 @@ class CsrfTests(AdmissionTestCase):
             with self.subTest(origin=origin, headers=headers):
                 self.assert_refused(self.tag(origin, headers), 403, "origin_not_allowed")
         self.assertEqual(self.tags(), before)
+
+    def test_the_citation_read_keeps_the_origin_check(self) -> None:
+        body = {"work_ids": ["W-NONE"], "format": "csl-json"}
+        self.assert_refused(
+            self.call("POST", "/api/citations", body=body, cookies=self.cookies, origin="http://evil.example"),
+            403, "origin_not_allowed")
+        self.assertEqual(self.call("POST", "/api/citations", body=body, cookies=self.cookies).status, 200)
 
     def test_identity_routes_are_protected_too(self) -> None:
         attempts = self.attempts()

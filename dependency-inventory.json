@@ -384,6 +384,20 @@
       "dependabot_monitored": true
     },
     {
+      "name": "citeproc",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.citeproc",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/citeproc/citeproc.js",
+        "frontend/vendor/citeproc/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/citeproc/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
       "name": "vue",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> dependencies.vue",
@@ -594,7 +608,8 @@
         "frontend-app/src/api/generated/publishers.ts",
         "frontend-app/src/api/generated/saved-views.ts",
         "frontend-app/src/api/generated/performance-diagnostics.ts",
-        "frontend-app/src/api/generated/positions.ts"
+        "frontend-app/src/api/generated/positions.ts",
+        "frontend-app/src/api/generated/citations.ts"
       ],
       "version_metadata": null,
       "exact_installed_version_check": false,
@@ -723,6 +738,28 @@
       "exact_installed_version_check": false,
       "dependabot_monitored": false,
       "freshness": "raw-vendor: pinned idb@8.0.3 UMD build (jakearchibald/idb); #181 PoC for disposable offline-store Promise plumbing"
+    },
+    {
+      "name": "csl",
+      "scope": "vendor",
+      "authoritative_source": "frontend/vendor/csl/VERSION",
+      "manifest": "frontend/vendor/csl/VERSION",
+      "lockfile": null,
+      "generated_assets": [
+        "frontend/vendor/csl/apa.csl",
+        "frontend/vendor/csl/chicago-author-date.csl",
+        "frontend/vendor/csl/chicago-notes-bibliography.csl",
+        "frontend/vendor/csl/modern-language-association.csl",
+        "frontend/vendor/csl/harvard-cite-them-right.csl",
+        "frontend/vendor/csl/ieee.csl",
+        "frontend/vendor/csl/nlm-citation-sequence.csl",
+        "frontend/vendor/csl/locales-en-US.xml",
+        "frontend/vendor/csl/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/csl/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": false,
+      "freshness": "raw-vendor: seven citation styles (APA, Chicago author-date and notes, MLA, Harvard Cite Them Right, IEEE, NLM/Vancouver) and the en-US locale from the Citation Style Language styles and locales repositories, pinned by commit (CC BY-SA 3.0); loaded on demand by the citation formatter (#41)"
     },
     {
       "name": "python",

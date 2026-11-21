@@ -2,7 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
+import { CITATION_STYLES, libraryCitationStyle } from '../citations/styles'
 import { bibtexExportSummary } from './bibtex-summary'
+import { createSerialSave } from './serial-save'
 import SettingsSwitch from './SettingsSwitch.vue'
 
 interface ExportField {
@@ -14,6 +16,39 @@ interface ExportField {
 const fields = ref<ExportField[]>([])
 let dirty = false
 let timer = 0
+const style = ref(libraryCitationStyle())
+const styleStatus = ref('')
+let styleDirty = false
+const styleSave = createSerialSave(style.value, {
+  save: (value) => window.prksPatchAppSettings?.({ citation_style: value }) ?? Promise.resolve(),
+  onFailed(saved) {
+    style.value = saved
+    window.prksSetCitationStyleCache?.(saved)
+    styleStatus.value = 'The citation style could not be saved. Try again when PRKS is reachable.'
+  },
+})
+
+function onStyleChange(event: Event): void {
+  const el = event.target
+  if (!(el instanceof HTMLSelectElement)) return
+  style.value = el.value
+  styleDirty = true
+  styleStatus.value = ''
+  window.prksSetCitationStyleCache?.(el.value)
+  // One save at a time, newest last, so the last response is the newest
+  // choice's. prksPatchAppSettings sets the cache from each response; once
+  // the queue is idle the selector shows what PRKS saved, even when another
+  // session saved a style in between.
+  const chosen = el.value
+  void styleSave.choose(chosen).then(() => {
+    if (style.value !== chosen || styleSave.saved() !== chosen) return
+    // What PRKS answered may be another session's newer style; take it as
+    // saved too, so choosing ours again sends it.
+    const confirmed = libraryCitationStyle()
+    styleSave.reset(confirmed)
+    style.value = confirmed
+  })
+}
 
 function fieldDefs(): Array<readonly [string, string]> {
   const defs = window.PRKS_BIBTEX_EXPORT_FIELD_DEFS
@@ -77,6 +112,10 @@ onMounted(async () => {
   } catch {
     /* Toggles stay at the inclusive default. */
   }
+  if (!styleDirty) {
+    style.value = libraryCitationStyle()
+    styleSave.reset(style.value)
+  }
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
@@ -89,6 +128,17 @@ onBeforeUnmount(() => {
 
 <template>
   <h4 class="prks-settings-panel__title">Export</h4>
+  <section class="prks-settings-section" aria-labelledby="prks-settings-citation-heading">
+    <PrksSectionHeader id="prks-settings-citation-heading">
+      Citation style <span class="prks-settings-scope">Library-wide</span>
+    </PrksSectionHeader>
+    <label for="prks-citation-style" class="prks-sr-only">Default citation style</label>
+    <select id="prks-citation-style" class="prks-settings-text-input" :value="style" @change="onStyleChange">
+      <option v-for="option in CITATION_STYLES" :key="option.id" :value="option.id">{{ option.label }}</option>
+    </select>
+    <p class="prks-settings-hint">Used when you copy a formatted citation or bibliography. A file can use its own style instead (Edit metadata).</p>
+    <p v-if="styleStatus" class="prks-settings-hint prks-inline-message--error" role="alert">{{ styleStatus }}</p>
+  </section>
   <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
     <PrksSectionHeader id="prks-settings-bibtex-heading">
       BibTeX / BibLaTeX export <span class="prks-settings-scope">Library-wide</span>

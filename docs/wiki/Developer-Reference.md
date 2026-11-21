@@ -11,10 +11,11 @@ adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fo
 for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
 Live fragment: `GET /api/openapi.json`. Checked-in artifact:
 `docs/api/openapi-positions.json`. Publishers, Saved Views, Files for
-Processing, and performance diagnostics follow the same pattern
+Processing, citation export, and performance diagnostics follow the same pattern
 (`GET /api/openapi/publishers.json`, `docs/api/openapi-publishers.json`;
 `GET /api/openapi/saved-views.json`, `docs/api/openapi-saved-views.json`;
-`GET /api/openapi/processing-files.json`, `docs/api/openapi-processing-files.json`;
+`GET /api/openapi/processing-items.json`, `docs/api/openapi-processing-items.json`;
+`GET /api/openapi/citations.json`, `docs/api/openapi-citations.json`;
 `GET /api/openapi/performance-diagnostics.json`,
 `docs/api/openapi-performance-diagnostics.json`). `npm run openapi:types`
 reads those checked-in artifacts and writes compile-time modules under

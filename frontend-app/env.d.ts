@@ -68,11 +68,15 @@ interface Window {
   prksPatchAppSettings?: (partial: {
     annotation_author?: string
     bibtex_export_fields?: Record<string, boolean>
+    citation_style?: string
   }) => Promise<unknown>
   prksSetAnnotationAuthorCache?: (value: string) => void
   prksSetBibtexExportFieldsCache?: (value: Record<string, boolean>) => void
   __prksAnnotationAuthor?: string
   __prksBibtexExportFields?: Record<string, boolean> | null
+  prksSetCitationStyleCache?: (style: string) => void
+  /** The Library's default citation style id (`/api/settings` `citation_style`). */
+  __prksCitationStyle?: string
   prksLoadOfflineCacheStatus?: () => Promise<void> | void
   prksOfflineClearCache?: () => Promise<void>
   prksStartBackupProgress?: (signal: AbortSignal) => Promise<ReadableStreamDefaultReader<Uint8Array>>
@@ -195,6 +199,8 @@ interface Window {
   prksOpenSavedViewModal?: (options?: import('./src/features/saved-views/editor').SavedViewOpening) => void
   /** Saved View records for classic callers (coordinator, modal, palette). Owned by frontend-app. */
   prksSavedViewRecords?: import('./src/features/saved-views/records').SavedViewRecords
+  /** Citation copy and export for the selection toolbar. Owned by frontend-app (#41). */
+  prksCitations?: import('./src/features/citations/session').CitationsBridge
   prksOpenCommandPalette?: (options?: {
     scope?: 'all' | 'create'
     navigationTarget?: 'current' | 'new-tab' | 'tile'

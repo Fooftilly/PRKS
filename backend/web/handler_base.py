@@ -44,6 +44,8 @@ STATIC_CONTENT_TYPES = {
     ".webp": "image/webp",
     ".ico": "image/vnd.microsoft.icon",
     ".woff2": "font/woff2",
+    ".csl": "application/vnd.citationstyles.style+xml",
+    ".xml": "application/xml",
     ".txt": "text/plain",
     ".gz": "application/gzip",
 }

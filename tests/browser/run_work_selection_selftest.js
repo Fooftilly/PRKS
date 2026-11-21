@@ -814,6 +814,60 @@ root.prksWorkSelectionSubmitPayload({
     assert('non-strict Tags transport failure keeps the source envelope',
         received.source === 'unavailable' && received.rows.length === 0);
 
+    // Cite sheet (#41): the four actions call the citations bridge with the
+    // selection, report what was cited, and never offer Apply.
+    root.prksWorkSelectionResetForTests();
+    root.prksWorkSelectionEnter();
+    root.prksWorkSelectionToggle('W-1');
+    root.prksWorkSelectionToggle('W-2');
+    const citeCalls = [];
+    let citeResult = { cited: 2, missing: 0 };
+    let citeError = null;
+    root.prksCitations = {
+        exportSelection: async (ids, kind) => {
+            citeCalls.push([ids.slice().sort(), kind]);
+            if (citeError) throw citeError;
+            return citeResult;
+        },
+        libraryStyleLabel: () => 'APA (7th edition)',
+    };
+    await root.prksWorkSelectionOpenSheet('cite');
+    const citeSheet = document.getElementById('prks-bulk-sheet');
+    if (!citeSheet) throw new Error('the bulk sheet fixture is missing');
+    const citeBody = citeSheet.querySelector('.prks-bulk-sheet__body');
+    const citeConfirm = citeSheet.querySelector('.prks-bulk-sheet__confirm');
+    const citeErrorEl = citeSheet.querySelector('.prks-bulk-sheet__error');
+    const citeApply = citeSheet.querySelector('[data-bulk-apply]');
+    assert('Cite sheet offers the four citation actions',
+        ['formatted', 'bibtex', 'bib-file', 'csl-json-file'].every(k =>
+            citeBody.innerHTML.includes('data-bulk-cite="' + k + '"')));
+    assert('Cite sheet names the library style', citeBody.innerHTML.includes('APA (7th edition)'));
+    assert('Cite sheet hides Apply', !!citeApply.hidden);
+    const citeButton = kind => ({
+        closest: sel => (sel === '[data-bulk-cite]' ? citeButton(kind) : null),
+        getAttribute: name => (name === 'data-bulk-cite' ? kind : null),
+    });
+    const citeClick = async kind => {
+        citeSheet.listeners.find(x => x.type === 'click').fn({ target: citeButton(kind) });
+        for (let i = 0; i < 5; i++) await Promise.resolve();
+    };
+    await citeClick('bibtex');
+    assert('Cite sends the selection and the kind',
+        JSON.stringify(citeCalls[0]) === JSON.stringify([['W-1', 'W-2'], 'bibtex']));
+    assertEq('Cite reports what was copied', citeConfirm.textContent, 'Copied BibTeX for 2 files.');
+    citeResult = { cited: 1, missing: 1 };
+    await citeClick('bib-file');
+    assertEq('Cite names a missing file', citeConfirm.textContent,
+        'Downloaded citations for 1 file. 1 selected file no longer exists.');
+    citeError = Object.assign(new Error('None of the selected files exist any more.'), { name: 'CitationExportError' });
+    await citeClick('formatted');
+    assertEq('Cite shows the export error', citeErrorEl.textContent, 'None of the selected files exist any more.');
+    citeError = new Error('HTTP 500');
+    await citeClick('csl-json-file');
+    assert('Cite hides a transport error behind a plain message',
+        citeErrorEl.textContent.includes('Citations need a connection to PRKS.'));
+    delete root.prksCitations;
+
     const storeKeys = Object.keys(sandbox.localStorage.store);
     assert('no localStorage selection', storeKeys.every(function (k) { return k.indexOf('select') < 0; }));
 

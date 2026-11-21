@@ -66,6 +66,8 @@ export interface WorkPanelDisplay {
   readonly thumbPage: string
   readonly sourceUrl: string
   readonly sourceUrlHref: string
+  /** The Work's own citation style id, or '' for the Library's default. */
+  readonly citationStyle: string
   readonly showOriginalUrl: boolean
   readonly hasBibliographicText: boolean
   readonly people: readonly WorkPanelPerson[]
@@ -117,6 +119,7 @@ export const WORK_PANEL_EDITOR_FIELDS = [
   'abstract',
   'thumb_page',
   'author_text',
+  'citation_style',
 ] as const
 
 const BIB_FIELDS = [
@@ -306,6 +309,7 @@ export function projectWorkPanelRead(input: WorkPanelReadInput): WorkPanelReadMo
     thumbPage,
     sourceUrl,
     sourceUrlHref: safeHttpUrl(sourceUrl),
+    citationStyle: text(effective?.citation_style).trim(),
     showOriginalUrl,
     hasBibliographicText,
     people: Object.freeze(people),
@@ -394,6 +398,7 @@ function displayRecord(current: WorkPanelReadModel): Record<string, unknown> {
     author_text: display.authorText,
     thumb_page: display.thumbPage,
     source_url: display.sourceUrl,
+    citation_style: display.citationStyle,
     roles: current.display.people.map(personToRole),
   }
 }

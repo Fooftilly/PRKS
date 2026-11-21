@@ -82,6 +82,13 @@ the server — not a claim that the rest of PRKS is read-only offline.
   approximate search over browse cards.
 * **Tag aliases.** Add/remove alternate Tag names stays server-backed; guarded
   offline. Identity transform for names is `MERGE_TAG`.
+* **Formatted citations and citation export (#41).** `POST /api/citations`
+  serves the Work panel citation, the selection bar's Cite… sheet (copy a
+  bibliography or BibTeX, download .bib or CSL-JSON) and reads the saved
+  record, so each shows a plain "needs a connection to PRKS" message while
+  PRKS is unreachable. The Library citation style is a server setting. A Work's
+  own `citation_style` is a synced metadata field like the others, so changing
+  it offline is durable.
 * **Publishers vocabulary.** `#/publishers` create/delete/aliases are
   connection-required; the route refuses offline.
 * **Bulk Organize.** `POST /api/works/bulk` (status / folder / tags) stays

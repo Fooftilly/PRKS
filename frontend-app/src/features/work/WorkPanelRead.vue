@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import WorkCitation from '../citations/WorkCitation.vue'
 import { workPanelBibFields, type WorkPanelPerson, type WorkPanelReadModel } from './panel-read'
 
 const props = defineProps<{
@@ -14,8 +15,19 @@ const props = defineProps<{
     tags: boolean
     folder: boolean
     playlist: boolean
+    citation: boolean
   }
 }>()
+
+/* What the formatted citation is built from; a change re-reads it. */
+const citationRevision = computed(() => {
+  const d = props.model.display
+  return JSON.stringify([
+    d.title, d.docType.value, d.year, d.publishedDisplay, d.publisher, d.location, d.edition, d.journal,
+    d.volume, d.issue, d.pages, d.isbn, d.doi, d.sourceUrl, d.authorText,
+    d.people.map((person) => [person.personId, person.roleType, person.displayName]),
+  ])
+})
 
 const summaryParts = computed(() => {
   const display = props.model.display
@@ -145,6 +157,10 @@ function publisherHref(value: string): string {
     >
       No metadata available.
     </p>
+  </Teleport>
+
+  <Teleport v-if="slots.citation" to="[data-prks-role='work-panel-citation']">
+    <WorkCitation :work-id="model.workId" :work-style="model.display.citationStyle" :revision="citationRevision" />
   </Teleport>
 
   <Teleport v-if="slots.people" to="[data-prks-role='work-people-read']">

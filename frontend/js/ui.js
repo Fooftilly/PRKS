@@ -5064,6 +5064,7 @@ function prksWorkPanelViewShellHtml(work, parts) {
             <div data-prks-role="work-panel-dates">${yearRow}${publishedRow}</div>
             <div id="work-bib-rows" data-prks-role="work-bib-rows">${prksWorkBibRowsHtml(work)}</div>
             <div data-prks-role="work-panel-source">${originalUrl}${abstractRow}${emptyRow}</div>
+            <div data-prks-role="work-panel-citation"></div>
             <button type="button" class="prks-btn prks-btn--secondary prks-btn--sm copy-bibtex-btn" aria-live="polite">${typeof prksIcon === 'function' ? prksIcon('copy', { size: 'sm' }) : ''} Copy BibTeX</button>
             </div>
         </details>

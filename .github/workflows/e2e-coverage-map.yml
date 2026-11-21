@@ -1,0 +1,135 @@
+name: E2E coverage map (advisory)
+
+# Records which browser tests execute which source lines
+# (tests/e2e/coverage_map.py): the PRKS server runs under coverage.py and each
+# page records Chromium precise coverage. Each shard uploads its own map;
+# together they are the shadow-mode input for choosing a PR's E2E tests. The
+# E2E gate does not read them. Instrumented runs never train timing history.
+on:
+  workflow_dispatch:
+  # A change to the recorder proves itself on the pull request.
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-coverage-map.yml"
+      - "tests/e2e/coverage_map.py"
+  schedule:
+    - cron: "41 2 * * 0"
+      timezone: Europe/Podgorica
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-coverage-map-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  record:
+    name: Record E2E coverage (${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_INITDB_ARGS: --locale-provider=builtin --builtin-locale=C.UTF-8
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      PRKS_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .playwright-browsers
+          key: >-
+            playwright-${{ runner.os }}-${{ hashFiles('requirements-dev.txt',
+            'tests/e2e/install_browser.py') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install runtime and E2E dependencies
+        run: python scripts/ci/install_pinned_python.py e2e
+
+      - name: Install pinned coverage.py
+        # The same pin as the Python coverage pilot.
+        run: >-
+          python -m pip install --isolated --disable-pip-version-check
+          "--only-binary=:all:" "coverage==7.16.2"
+
+      - name: Ensure Chromium in repo cache
+        run: python tests/e2e/install_browser.py
+
+      - name: Record the shard's coverage
+        id: tests
+        env:
+          PRKS_E2E_COVERAGE_MAP_DIR: ${{ runner.temp }}/prks-coverage-records
+          SHARD: ${{ matrix.shard }}
+        # Instrumentation changes timing, so an instrumented test can fail
+        # where the gate passes; the map keeps what such a test ran. A failed
+        # run passes with a warning only when its run status shows every
+        # selected test ran, none was skipped unexpectedly, and only tests
+        # failed (coverage_map check-run). A watchdog or deadline exit leaves
+        # no status and fails the job, as does any other failure.
+        shell: bash
+        run: |
+          set -u
+          set +e
+          python tests/e2e/run.py --jobs 1 --no-pointer-capture --shard "${SHARD}/8"
+          status=$?
+          set -e
+          if [[ "$status" -eq 0 ]]; then
+            exit 0
+          fi
+          if [[ "$status" -eq 1 ]] && why="$(python -m tests.e2e.coverage_map check-run "$PRKS_E2E_COVERAGE_MAP_DIR")"; then
+            echo "::warning::Shard ${SHARD}: ${why}; the map keeps what they ran."
+            exit 0
+          fi
+          echo "::error::Shard ${SHARD} did not finish cleanly (exit ${status}): ${why:-}"
+          exit "$status"
+
+      - name: Build the shard map
+        # A failed test still recorded what it ran; the map keeps it.
+        if: ${{ !cancelled() }}
+        env:
+          RECORDS: ${{ runner.temp }}/prks-coverage-records
+          COMMIT: ${{ github.sha }}
+          SHARD: ${{ matrix.shard }}
+        run: >-
+          python -m tests.e2e.coverage_map build "$RECORDS" --commit "$COMMIT"
+          --output "e2e-coverage-map-${SHARD}.json.gz"
+
+      - name: Upload the shard map
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-coverage-map-${{ matrix.shard }}
+          path: e2e-coverage-map-${{ matrix.shard }}.json.gz
+          if-no-files-found: error
+          retention-days: 30

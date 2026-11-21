@@ -128,6 +128,36 @@ function tryCopyLicense(pkgName, destDir) {
   console.log("vendored lucide", version, hash);
 }
 
+// --- citeproc-js ---
+// The npm package ships only a CommonJS build whose last statement is
+// `module.exports = CSL`. In a browser that statement throws after the
+// top-level `var CSL` has already been declared, so the vendored copy is
+// the same file with that one statement removed. Loaded on demand by the
+// citation formatter (frontend-app/src/features/citations/engine.ts).
+{
+  const version = pkg.dependencies.citeproc;
+  const dest = join(vendorRoot, "citeproc");
+  const src = join(root, "node_modules", "citeproc", "citeproc_commonjs.js");
+  const text = readFileSync(src, "utf8");
+  const exportLine = /\nmodule\.exports = CSL;?\s*$/;
+  if (!exportLine.test(text)) {
+    throw new Error("citeproc_commonjs.js no longer ends with `module.exports = CSL`");
+  }
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, "citeproc.js"), text.replace(exportLine, "\n"));
+  tryCopyLicense("citeproc", dest);
+  const hash = sha256(readFileSync(join(dest, "citeproc.js")));
+  writeVersion(dest, [
+    version,
+    "source: https://github.com/Juris-M/citeproc-js",
+    "npm: citeproc@" + version,
+    "asset: node_modules/citeproc/citeproc_commonjs.js (trailing `module.exports = CSL` removed)",
+    "sha256: " + hash,
+    "license: CPAL-1.0 OR AGPL-3.0-or-later",
+  ]);
+  console.log("vendored citeproc", version, hash);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

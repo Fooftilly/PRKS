@@ -158,7 +158,7 @@ assert.throws(() => renderLicenseInventory(source, pkg, future), /Unreviewed SPD
             self.assertIn(exception, dockerignore)
     def test_vendor_notices_remain_present(self):
         for name in (
-            "codemirror", "cytoscape", "dompurify", "easymde",
+            "citeproc", "codemirror", "csl", "cytoscape", "dompurify", "easymde",
             "idb", "inter", "lucide",
         ):
             with self.subTest(vendor=name):
