@@ -255,10 +255,14 @@ class SharedLogRotationTests(unittest.TestCase):
         self.write(second, "b1")
         first.rolloverAt = 0
         self.write(first, "a2")  # rotates: the second now holds the rotated file
-        with (mock.patch.object(second, "_open", side_effect=OSError("disk gone")),
-              mock.patch.object(second, "handleError") as handled):
-            self.write(second, "lost")  # contained, not raised to the caller
-        handled.assert_called_once()
+        import io
+
+        stderr = io.StringIO()
+        with (mock.patch.object(second, "_open", side_effect=OSError("/private/path gone")),
+              mock.patch("sys.stderr", stderr)):
+            self.write(second, "lost secret title")  # contained, not raised to the caller
+        # Reported by type only: neither the record nor the error text leaks.
+        self.assertEqual(stderr.getvalue(), "prks_log_file_write_failed error_type=OSError\n")
         self.assertIsNone(second.stream)
         self.write(second, "b2")
         self.assertEqual(self.read(self.path), ["a2", "b2"])

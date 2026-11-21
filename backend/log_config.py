@@ -1,6 +1,7 @@
 import logging
 import os
 import stat
+import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
 
@@ -94,6 +95,19 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             self.handleError(record)
             return
         super().emit(record)
+
+    def handleError(self, record):
+        """Report a failed log write without the record or its traceback.
+
+        The stdlib default prints both to stderr, which would bypass
+        ``PrivacySafeFormatter``; only the exception type is reported here.
+        """
+        if not logging.raiseExceptions:
+            return
+        try:
+            sys.stderr.write(f"prks_log_file_write_failed error_type={safe_error_type(sys.exc_info()[1])}\n")
+        except Exception:
+            pass  # stderr itself is gone: nothing left to report to
 
     def _reopen_if_moved(self) -> None:
         """Reopen when another process rotated the file this handler holds."""
