@@ -1,9 +1,6 @@
 name: Fast Static Analysis
 
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
@@ -30,7 +27,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Need the PR base (or push before SHA) so the E2E wait_for_timeout
+          # Need the PR base so the E2E wait_for_timeout
           # guard can diff only *new* call sites (#189).
           fetch-depth: 0
           persist-credentials: false
@@ -90,32 +87,20 @@ jobs:
         id: diff-base
         # Shared by the diff-aware guards below (#189, #190, #192).
         # PR base is the immutable event SHA (not the live base-branch tip).
-        # Zero-before pushes (new/recreated branch) use the empty tree so the
-        # full tip is scanned — do not merge-base with origin/master after a
-        # master push (that ref can equal HEAD and skip newly pushed history).
-        # workflow_dispatch compares against HEAD so grandfathered historical
-        # waits stay grandfathered (empty tree would fail the whole corpus).
+        # workflow_dispatch (master CI after merges) compares against HEAD so
+        # grandfathered historical waits stay grandfathered (the empty tree
+        # would fail the whole corpus).
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PRKS_PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
-          empty_tree="4b825dc642cb6eb9a060e54bf8d6927f8d2765b5"
-          zero_sha="0000000000000000000000000000000000000000"
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             base="${PRKS_PR_BASE_SHA:?missing pull_request.base.sha}"
             git fetch --no-tags --depth=1 origin "$base"
-          elif [[ "${{ github.event_name }}" == "push" ]]; then
-            if [[ -n "${PRKS_PUSH_BEFORE:-}" && "${PRKS_PUSH_BEFORE}" != "$zero_sha" ]]; then
-              base="$(git rev-parse --verify --end-of-options "${PRKS_PUSH_BEFORE}")"
-            else
-              # Parentless / new-branch push: scan full tip vs empty tree.
-              base="$empty_tree"
-            fi
           else
-            # workflow_dispatch (and any other non-PR/non-push event): no-new-
-            # change baseline so historical E2E waits remain grandfathered.
+            # workflow_dispatch: no-new-change baseline so historical E2E
+            # waits remain grandfathered.
             base="$(git rev-parse --verify --end-of-options HEAD)"
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
@@ -381,9 +366,8 @@ jobs:
             exit 1
           fi
 
-      # Storybook is maintainer-only. pull_request and push build only
-      # after a successful diff against a defined baseline (PR base, or a
-      # fetched nonzero push before SHA) that touches frontend-app/ or this
+      # Storybook is maintainer-only. pull_request builds only after a
+      # successful diff against the PR base that touches frontend-app/ or this
       # workflow. A missing baseline, a failed fetch, or a failed diff fails
       # the step. A readable diff with no matching path is the only skip.
       # workflow_dispatch builds with no diff and does not invent a baseline.
@@ -392,11 +376,9 @@ jobs:
         shell: bash
         env:
           PRKS_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PRKS_PUSH_BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
           pattern='^(frontend-app/|\.github/workflows/static-analysis\.yml$)'
-          zero_sha="0000000000000000000000000000000000000000"
           event_name="${{ github.event_name }}"
           run_storybook=false
 
@@ -447,13 +429,6 @@ jobs:
             fi
             fetch_baseline "${PRKS_PR_BASE_SHA}"
             apply_successful_diff "${PRKS_PR_BASE_SHA}"
-          elif [[ "$event_name" == "push" ]]; then
-            if [[ -z "${PRKS_PUSH_BEFORE:-}" || "${PRKS_PUSH_BEFORE}" == "$zero_sha" ]]; then
-              echo "Push before SHA is missing or zero; cannot resolve Storybook diff." >&2
-              exit 1
-            fi
-            fetch_baseline "${PRKS_PUSH_BEFORE}"
-            apply_successful_diff "${PRKS_PUSH_BEFORE}"
           elif [[ "$event_name" == "workflow_dispatch" ]]; then
             echo "Manual Fast Static Analysis run; building Storybook."
             run_storybook=true

@@ -9,7 +9,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[1]
 _WORKFLOW = _ROOT / ".github" / "workflows" / "static-analysis.yml"
-_DECLARED = ("push", "pull_request", "workflow_dispatch")
+_DECLARED = ("pull_request", "workflow_dispatch")
 
 
 def _workflow_text():
@@ -55,7 +55,7 @@ def _branch_body(script, event):
     return "\n".join(body)
 
 
-def _run_gate(script, event, *, base="", before=""):
+def _run_gate(script, event, *, base=""):
     completed = subprocess.run(
         ["bash", "-c", script],
         cwd=_ROOT,
@@ -64,7 +64,6 @@ def _run_gate(script, event, *, base="", before=""):
         env={
             "EVENT_NAME": event,
             "PRKS_PR_BASE_SHA": base,
-            "PRKS_PUSH_BEFORE": before,
             "PATH": "/usr/bin:/bin",
         },
     )
@@ -94,7 +93,7 @@ class StorybookEventGateTests(unittest.TestCase):
         self.assertNotIn("Skipping Storybook", output)
         self.assertNotIn("No Storybook diff baseline", output)
 
-    def test_pull_request_and_push_stay_fail_closed(self):
+    def test_pull_request_stays_fail_closed(self):
         script = _storybook_script(_workflow_text())
         self.assertIn("git diff -z --name-only", script)
         self.assertIn("grep -zEq", script)
@@ -102,12 +101,10 @@ class StorybookEventGateTests(unittest.TestCase):
         self.assertNotEqual(missing_base, 0, missing_out)
         self.assertIn("no base SHA", missing_out)
         self.assertNotIn("WOULD_BUILD", missing_out)
-        zero = "0000000000000000000000000000000000000000"
-        zero_status, zero_out = _run_gate(script, "push", before=zero)
-        self.assertNotEqual(zero_status, 0, zero_out)
-        self.assertIn("missing or zero", zero_out)
-        self.assertNotIn("WOULD_BUILD", zero_out)
-        self.assertNotIn("Skipping Storybook", zero_out)
+        # push is no longer a trigger, so it fails like any undeclared event.
+        push_status, push_out = _run_gate(script, "push")
+        self.assertNotEqual(push_status, 0, push_out)
+        self.assertIn("No Storybook diff baseline for event push", push_out)
 
     def test_undeclared_event_fails(self):
         script = _storybook_script(_workflow_text())

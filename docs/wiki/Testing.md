@@ -85,11 +85,21 @@ python scripts/ci/mutation_testing.py show docs-only-ci scripts.ci.wiki_links.x_
 
 For each survivor, read the diff first. If it can change behaviour, add an assertion that fails on it. Some survivors are equivalent (they cannot change behaviour, such as `fence = None` for `fence = ""` in a truthiness test): leave those, or delete the redundant code that made them possible. `no_tests` mutants are in functions the selected tests never call, such as the ledger code in `backend/sync/protocol.py`, which needs PostgreSQL. A test that runs a module as a subprocess cannot judge a mutant, because mutmut's switch between mutants only works in-process; a target lists such tests under `deselect`.
 
+## Master CI after merges
+
+Pull requests pass the full gates before they merge, so a merge does not rerun them on `master`. Instead, [`master-ci.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/master-ci.yml) runs every night at 01:23 (Europe/Podgorica time). It has one job for each of the PRKS Full E2E Gate, PRKS Test Gate, Fast Static Analysis, CodeQL and zizmor. Each job ([`scripts/ci/master_ci.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/master_ci.py)) looks at the last run of its workflow that master CI started:
+
+- If that run tested an older commit, or there is no such run, the job starts the workflow on `master`.
+- If that run tested the current head and passed, the job does nothing, so a night with no merges costs one short job per workflow.
+- If that run tested the current head and failed, timed out or was cancelled, the job starts the workflow again.
+
+The job waits for the run and fails when the run fails, so a failed night opens the issue "Scheduled check failing: Master CI after merges", and the failed job's name says which workflow failed. A person's own manual dispatch never counts as master CI's run. To check `master` sooner, run "Master CI after merges" by hand from the Actions page.
+
 ## Scheduled results as issues
 
 Scheduled runs report to issues, so nobody has to read the Actions page ([`scripts/ci/scheduled_report.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/scheduled_report.py)).
 
-- **Failures.** [`scheduled-report.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/scheduled-report.yml) watches the scheduled runs of the PRKS Test Gate (nightly unit repeat), nightly property fuzzing and mutation testing. A failed run opens the issue "Scheduled check failing: &lt;workflow&gt;" (label `scheduled-check`) with the run link and failed jobs. A repeat failure comments on that issue, the next passing run closes it, and a later failure reopens it. Cancelled runs report nothing.
+- **Failures.** [`scheduled-report.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/scheduled-report.yml) watches the scheduled runs of the PRKS Test Gate (nightly unit repeat), master CI after merges, nightly property fuzzing and mutation testing. A failed run opens the issue "Scheduled check failing: &lt;workflow&gt;" (label `scheduled-check`) with the run link and failed jobs. A repeat failure comments on that issue, the next passing run closes it, and a later failure reopens it. Cancelled runs report nothing.
 - **Mutation survivors.** The weekly mutation run keeps one comment per target on the standing issue "Mutation testing report" (label `mutation-report`), edited in place, which sends no notification. A new comment, which does notify, appears only when a target has more survivors than its last report. The matrix jobs hold no issue token: each hands its result to one report job that never runs for a pull request, and pull requests run a dry check of that hand-over instead.
 
 A new scheduled test workflow must be added to the `workflow_run` list, or named in `NOT_TEST_RUNS` in `tests/test_scheduled_report.py` when it is not a test run.
