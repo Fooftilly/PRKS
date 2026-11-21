@@ -162,7 +162,8 @@ class SharedLogRotationTests(unittest.TestCase):
             return handle.read().split()
 
     def dated(self):
-        return [name for name in os.listdir(os.path.dirname(self.path)) if name != "prks-errors.log"]
+        return sorted(name for name in os.listdir(os.path.dirname(self.path))
+                      if name not in ("prks-errors.log", "prks-errors.log.rotate.lock"))
 
     def test_a_day_is_rotated_once_and_every_process_follows_the_new_file(self):
         first, second = self.handlers
@@ -189,31 +190,72 @@ class SharedLogRotationTests(unittest.TestCase):
         self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
         self.assertEqual(self.read(self.path), ["a2", "b2"])
 
-    def test_rotations_due_for_different_days_keep_every_record(self):
+    def test_rotations_due_for_different_days_keep_every_record_and_no_empty_archive(self):
+        import threading
+        import time
+        from unittest import mock
+
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        for day in ("2026-11-16", "2026-11-17"):  # two days already kept
+            with open(f"{self.path}.{day}", "w", encoding="utf-8") as handle:
+                handle.write(f"old-{day}\n")
         first, second = self.handlers
+        for handler in self.handlers:
+            handler.backupCount = 2
         self.write(first, "a1")
         self.write(second, "b1")
         # A quiet writer is still due for an earlier day than a busy one.
-        first.rolloverAt = 0
-        second.rolloverAt = 86400
-        real_link = os.link
-        interleaved = []
+        first.rolloverAt = int(time.mktime((2026, 11, 20, 0, 0, 0, 0, 0, -1)))  # archives 2026-11-19
+        second.rolloverAt = int(time.mktime((2026, 11, 21, 0, 0, 0, 0, 0, -1)))  # would archive 2026-11-20
+        real_link, real_acquire = os.link, log_config.ExclusiveFileLock.acquire
+        other = threading.Thread(target=self.write, args=(second, "b2"))
+        waiting = threading.Event()
+
+        def acquire(path, **kwargs):
+            if threading.current_thread() is other:
+                waiting.set()
+            return real_acquire(path, **kwargs)
 
         def link_then_let_the_other_rotate(src, dst):
             real_link(src, dst)
-            if not interleaved:
-                interleaved.append(dst)
-                # The other process rotates while this one is between its
-                # link and its unlink; it must wait for the lock instead.
-                self.write(second, "b2")
-
-        from unittest import mock
+            if not other.is_alive() and not waiting.is_set():
+                # The other process asks to rotate while this one is between
+                # its link and its unlink: it waits for the lock, then takes it.
+                other.start()
+                self.assertTrue(waiting.wait(5))
 
         with (mock.patch("backend.log_config.os.link", link_then_let_the_other_rotate),
-              mock.patch("backend.log_config._ROTATE_LOCK_WAIT_SECONDS", 0.1)):
-            self.write(first, "a2")
+              mock.patch.object(log_config.ExclusiveFileLock, "acquire", acquire)):
+            try:
+                self.write(first, "a2")
+            finally:
+                if other.is_alive() or waiting.is_set():
+                    other.join(10)
+        self.assertFalse(other.is_alive())
         self.write(second, "b3")
-        records = []
-        for name in os.listdir(os.path.dirname(self.path)):
-            records += self.read(os.path.join(os.path.dirname(self.path), name))
-        self.assertEqual(sorted(records), ["a1", "a2", "b1", "b2", "b3"])
+        # One archive for the day that had records; the older kept day is not
+        # pruned to make room for an empty one.
+        self.assertEqual(self.dated(), ["prks-errors.log.2026-11-17", "prks-errors.log.2026-11-19"])
+        self.assertEqual(self.read(os.path.join(folder, "prks-errors.log.2026-11-19")), ["a1", "b1"])
+        self.assertEqual(sorted(self.read(self.path)), ["a2", "b2", "b3"])
+
+    def test_a_symlinked_log_is_rotated_where_it_points_and_the_link_stays(self):
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        target = os.path.join(folder, "real", "errors.log")
+        os.makedirs(os.path.dirname(target))
+        link = os.path.join(folder, "current.log")
+        os.symlink(target, link)
+        handler = log_config._OwnerOnlyTimedRotatingFileHandler(link, when="midnight", backupCount=7, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.addCleanup(handler.close)
+        self.write(handler, "before")
+        handler.rolloverAt = 0
+        self.write(handler, "after")
+        self.assertTrue(os.path.islink(link))
+        self.assertEqual(self.read(link), ["after"])
+        (dated,) = [name for name in os.listdir(os.path.dirname(target)) if name not in ("errors.log", "errors.log.rotate.lock")]
+        self.assertEqual(self.read(os.path.join(os.path.dirname(target), dated)), ["before"])

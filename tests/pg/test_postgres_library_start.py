@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from typing import Any, Iterator, Optional
 
@@ -420,26 +421,33 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             writer = threading.Thread(target=write, daemon=True)
             writer.start()
             try:
-                # The backup starts only once the other process is writing.
+                # The backup starts only once the other process is writing,
+                # and that process keeps writing until a few Works have been
+                # committed after the backup is ready.
                 self.assertTrue(writing.wait(30))
+                before_backup = len(written)
                 ready = self.ndjson(port_a, "/api/backups/progress", headers_a)[-1]
+                when_ready = len(written)
+                deadline = time.monotonic() + 30
+                while len(written) < when_ready + 3 and time.monotonic() < deadline:
+                    time.sleep(0.05)
             finally:
                 stop.set()
                 writer.join(30)
-            # One more Work once the backup is ready: never in its snapshot.
-            status, _body, _headers = self.call(port_b, "POST", "/api/works", {"title": "After"}, headers_b)
-            self.assertIn(status, (200, 201))
+            self.assertFalse(writer.is_alive())
             self.assertEqual(ready["phase"], "ready")
             self.assertTrue(written and all(status in (200, 201) for status in written), written)
+            self.assertGreaterEqual(len(written), when_ready + 3, written)
             archive = self.raw(port_a, "GET", "/api/backups/download?token=" + ready["token"])
             staged = self.raw_json(port_b, "/api/backups/stage", archive, headers_b)
-            # One snapshot, verified: every Work from before it, and none the
-            # other process committed after it.
-            total = len(self.call(port_b, "GET", "/api/works")[1])
-            self.assertEqual(total, 3 + len(written) + 1)
             self.assertTrue(staged["verified"], staged)
-            self.assertGreaterEqual(staged["summary"]["works"], 3)
-            self.assertLess(staged["summary"]["works"], total)
+            self.assertEqual(len(self.call(port_b, "GET", "/api/works")[1]), 3 + len(written))
+            # One snapshot: every Work committed before the backup was asked
+            # for, none answered after it was ready (one write may have been
+            # in flight then: committed before the snapshot, answered after).
+            in_archive = staged["summary"]["works"] - 3
+            self.assertGreaterEqual(in_archive, before_backup)
+            self.assertLessEqual(in_archive, when_ready + 1)
 
     def test_one_field_edited_from_two_web_processes_is_acknowledged_once(self) -> None:
         with (self.serving() as (name, root, port_a, headers_a),

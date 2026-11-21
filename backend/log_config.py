@@ -14,6 +14,7 @@ _DEFAULT_RETENTION_DAYS = 7
 _OWNER_ONLY_MODE = 0o600
 # How long a rollover waits for another process that is rotating the same log.
 _ROTATE_LOCK_WAIT_SECONDS = 5.0
+_ROTATE_LOCK_SUFFIX = ".rotate.lock"
 LOGGER = logging.getLogger("prks.log_config")
 
 
@@ -62,7 +63,13 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
     on every record. Here a rollover hard-links the file to its dated name,
     which only one process can do for a given day, and every process reopens
     the log when the name no longer points at the file it holds.
+
+    A configured symlink is resolved once, here: opening, rotating and
+    pruning all act on the file it names, so the link itself stays in place.
     """
+
+    def __init__(self, filename, *args, **kwargs):
+        super().__init__(os.path.realpath(os.path.abspath(os.fspath(filename))), *args, **kwargs)
 
     def emit(self, record):
         self._reopen_if_moved()
@@ -95,10 +102,15 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             if dst_now != time_tuple[-1]:
                 time_tuple = time.localtime(t + (3600 if dst_now else -3600))
         dated = self.rotation_filename(self.baseFilename + "." + time.strftime(self.suffix, time_tuple))
+        held = None
         if self.stream:
+            try:
+                held = os.fstat(self.stream.fileno())
+            except (OSError, ValueError):
+                held = None
             self.stream.close()
             self.stream = None
-        if self._rotate_once(dated) and self.backupCount > 0:
+        if self._rotate_once(dated, held) and self.backupCount > 0:
             for old in self.getFilesToDelete():
                 try:
                     os.remove(old)
@@ -109,20 +121,32 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
         self.rolloverAt = self.computeRollover(current)
         _chmod_owner_only(self.baseFilename, report=True)
 
-    def _rotate_once(self, dated: str) -> bool:
-        """Give the current log its dated name, under a lock on that file; True when this process did.
+    def _rotate_once(self, dated: str, held: "os.stat_result | None") -> bool:
+        """Give the current log its dated name, under a rotation lock; True when this process did.
 
-        The lock is an OS lock on the log file itself, and ``acquire`` holds
-        it only while the name still points at the locked file (it retries
-        otherwise), so two processes rotating at
-        once (due for the same day or for different ones) take turns on the
-        same file, and the second finds it already rotated.
+        The lock is an OS lock on a file beside the log (``<log>.rotate.lock``),
+        never on the log itself, so taking it creates no empty log. Two
+        processes rotating at once, due for the same day or for different
+        ones, take turns. A process rotates only the file it was writing
+        (``held``): the second finds that file already renamed, or the log
+        gone or empty, and archives nothing. So records written since the
+        first rotation are never archived under another day, no empty
+        archive is kept, and no retained archive is pruned for either.
         """
         try:
-            lock = ExclusiveFileLock.acquire(self.baseFilename, timeout=_ROTATE_LOCK_WAIT_SECONDS)
+            lock = ExclusiveFileLock.acquire(self.baseFilename + _ROTATE_LOCK_SUFFIX,
+                                             timeout=_ROTATE_LOCK_WAIT_SECONDS)
         except (LockBusy, LockUnavailable):
             return False  # another process is rotating it, or it cannot be locked
         try:
+            try:
+                current = os.stat(self.baseFilename)
+            except OSError:
+                return False  # gone: another process is between its rotation and its reopen
+            if held is not None and not os.path.samestat(held, current):
+                return False  # another process rotated the file this one was writing
+            if current.st_size == 0:
+                return False  # nothing to archive
             if os.path.exists(dated):
                 return False  # this day is rotated already, by another process
             try:
