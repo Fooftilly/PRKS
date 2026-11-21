@@ -49,6 +49,7 @@ from tests.e2e.harness import (
     start_test_profile,
     stop_all_servers,
 )
+from tests.e2e import coverage_map
 from tests.e2e.install_browser import ensure_chromium_installed
 from tests.e2e.ci_gate_summary import format_e2e_gate_summary
 from tests.e2e.policy import (
@@ -1833,6 +1834,17 @@ def run_serial(
         % (result.testsRun, len(result.failures), len(result.errors), len(result.skipped), wall)
     )
     success = result.wasSuccessful()
+    if coverage_map.enabled():
+        # The recording workflow tolerates instrumented test failures only in
+        # a shard that ran every selected test with no unexpected skip.
+        coverage_map.write_run_status(
+            selected=len(test_ids),
+            ran=result.testsRun,
+            failures=len(result.failures),
+            errors=len(result.errors),
+            count_error=_execution_count_error(test_ids, result.testsRun),
+            skip_error=_unexpected_skips_error(result.skipped),
+        )
     if success:
         count_error = _execution_count_error(test_ids, result.testsRun)
         if count_error:

@@ -70,6 +70,39 @@ def _write(test_id: str, kind: str, files: Mapping[str, Iterable[int]]) -> None:
             fh.write(line + "\n")
 
 
+RUN_STATUS = "run-status.json"
+
+
+def write_run_status(*, selected: int, ran: int, failures: int, errors: int,
+                     count_error: str | None, skip_error: str | None) -> None:
+    """What the recording run finished with, for ``check-run`` (tests/e2e/run.py writes it last)."""
+    status = {
+        "selected": selected, "ran": ran, "failures": failures, "errors": errors,
+        "count_error": count_error or "", "skip_error": skip_error or "",
+    }
+    (_out_dir() / RUN_STATUS).write_text(json.dumps(status, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def check_run(records: Path) -> tuple[bool, str]:
+    """Whether a failed recording run may still pass: it ran every selected
+    test, skipped none unexpectedly, and failed only through test failures
+    or errors. No status (a watchdog or deadline exit) never passes."""
+    try:
+        status = json.loads((records / RUN_STATUS).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, "no run status: the shard did not reach its end"
+    if status.get("count_error"):
+        return False, str(status["count_error"])
+    if status.get("skip_error"):
+        return False, str(status["skip_error"])
+    if status.get("ran") != status.get("selected"):
+        return False, "ran %s of %s selected tests" % (status.get("ran"), status.get("selected"))
+    if not (status.get("failures") or status.get("errors")):
+        return False, "the run failed without a test failure"
+    return True, "%s failures and %s errors under instrumentation; all %s tests ran" % (
+        status["failures"], status["errors"], status["ran"])
+
+
 # --- Python (the PRKS server) ----------------------------------------------
 
 
@@ -513,7 +546,13 @@ def main(argv: list[str] | None = None) -> int:
     select.add_argument("maps", type=Path, nargs="+", help="the shard maps of one recording run")
     select.add_argument("--base", required=True)
     select.add_argument("--head", default="HEAD")
+    check = sub.add_parser("check-run", help="whether a failed recording run still counts (exit 0) or not")
+    check.add_argument("records", type=Path, help="the recording directory")
     args = parser.parse_args(argv)
+    if args.command == "check-run":
+        ok, why = check_run(args.records)
+        print(why)
+        return 0 if ok else 1
     if args.command == "select":
         maps = []
         for path in args.maps:

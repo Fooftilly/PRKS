@@ -131,6 +131,61 @@ def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
+class CheckRunTests(unittest.TestCase):
+    """A failed recording shard still counts only when it ran to its end."""
+
+    def _status(self, folder, **fields):
+        status = {"selected": 3, "ran": 3, "failures": 1, "errors": 0, "count_error": None, "skip_error": None}
+        status.update(fields)
+        with mock.patch.dict("os.environ", {cm.ENV: folder}):
+            cm.write_run_status(**status)
+        return cm.check_run(Path(folder))
+
+    def test_only_test_failures_in_a_complete_shard_pass(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, why = self._status(folder)
+        self.assertTrue(ok, why)
+        self.assertIn("all 3 tests ran", why)
+
+    def test_a_count_mismatch_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, why = self._status(folder, ran=2, failures=0, count_error="selected 3 tests but 2 ran")
+        self.assertFalse(ok)
+        self.assertIn("2 ran", why)
+
+    def test_an_unexpected_skip_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, why = self._status(folder, failures=0, skip_error="unexpected skip: t.a")
+        self.assertFalse(ok)
+        self.assertIn("unexpected skip", why)
+
+    def test_fewer_tests_than_selected_fails_even_without_a_count_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, _why = self._status(folder, ran=2)
+        self.assertFalse(ok)
+
+    def test_a_failure_with_no_failed_test_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, why = self._status(folder, failures=0, errors=0)
+        self.assertFalse(ok)
+        self.assertIn("without a test failure", why)
+
+    def test_no_status_means_the_shard_did_not_finish(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ok, why = cm.check_run(Path(folder))
+            self.assertEqual(cm.main(["check-run", folder]), 1)
+        self.assertFalse(ok)
+        self.assertIn("did not reach its end", why)
+
+    def test_the_workflow_reads_the_status_instead_of_grepping_the_log(self):
+        text = (Path(cm.REPO) / ".github" / "workflows" / "e2e-coverage-map.yml").read_text(encoding="utf-8")
+        step = text.split("      - name: Record the shard's coverage", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("python -m tests.e2e.coverage_map check-run", step)
+        self.assertIn("set +e", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertNotIn("| tee", step)
+
+
 class SelectForDiffTests(unittest.TestCase):
     IDS = ["tests.e2e.test_a.T.test_one", "tests.e2e.test_b.T.test_two"]
 
