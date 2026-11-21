@@ -1940,7 +1940,7 @@ def validate_runtime_lock(repo_root: Path | None = None) -> GateResult:
                 str(lock),
             )
     if not any(
-        instruction.startswith("RUN ")
+        instruction.split(maxsplit=1)[0].upper() == "RUN"
         and "pip install" in instruction
         and "--require-hashes" in instruction.split()
         and f"-r {RUNTIME_LOCK_FILE}" in instruction

@@ -1479,6 +1479,18 @@ class RuntimeLockTests(unittest.TestCase):
             )
             self.assertEqual(self._codes(root), ["runtime_lock_unused"])
 
+    def test_lowercase_or_tab_separated_run_counts(self):
+        for run in ("run ", "RUN\t"):
+            with self.subTest(run=run), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._repo(
+                    root,
+                    requirements="Pillow==13.0.0\n",
+                    lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
+                    docker=f"FROM python:3.12-slim\n{run}pip install --require-hashes -r requirements-lock.txt\n",
+                )
+                self.assertEqual(self._codes(root), [])
+
     def test_commented_hashed_install_does_not_count(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
