@@ -35,10 +35,13 @@ function onStyleChange(event: Event): void {
   styleDirty = true
   styleStatus.value = ''
   window.prksSetCitationStyleCache?.(el.value)
-  // One save at a time, newest last; a response for an older choice
-  // never leaves the cache behind the selector.
-  void styleSave.choose(el.value).then(() => {
-    if (style.value === styleSave.saved()) window.prksSetCitationStyleCache?.(style.value)
+  // One save at a time, newest last, so the last response is the newest
+  // choice's. prksPatchAppSettings sets the cache from each response; once
+  // the queue is idle the selector shows what PRKS saved, even when another
+  // session saved a style in between.
+  const chosen = el.value
+  void styleSave.choose(chosen).then(() => {
+    if (style.value === chosen && styleSave.saved() === chosen) style.value = libraryCitationStyle()
   })
 }
 
