@@ -17,6 +17,7 @@ on:
       - Master CI after merges
       - Nightly property fuzzing (advisory)
       - Mutation testing (advisory)
+      - E2E coverage map (advisory)
     types: [completed]
 
 permissions:
