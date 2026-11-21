@@ -41,7 +41,12 @@ function onStyleChange(event: Event): void {
   // session saved a style in between.
   const chosen = el.value
   void styleSave.choose(chosen).then(() => {
-    if (style.value === chosen && styleSave.saved() === chosen) style.value = libraryCitationStyle()
+    if (style.value !== chosen || styleSave.saved() !== chosen) return
+    // What PRKS answered may be another session's newer style; take it as
+    // saved too, so choosing ours again sends it.
+    const confirmed = libraryCitationStyle()
+    styleSave.reset(confirmed)
+    style.value = confirmed
   })
 }
 

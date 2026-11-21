@@ -64,8 +64,14 @@ class CslFormatTests(unittest.TestCase):
         self.assertEqual(item({"published_date": "spring", "year": "c. 1900"}).get("issued"), None)
         # A standalone year may have fewer than four digits; a date may not.
         self.assertEqual(item({"year": "950"})["issued"], {"date-parts": [[950]]})
-        self.assertEqual(item({"year": "2020–2021"})["issued"], {"date-parts": [[2020]]})
-        self.assertEqual(item({"year": "12345"}).get("issued"), None)
+        self.assertEqual(item({"year": "2020–2021"})["issued"], {"date-parts": [[2020], [2021]]})
+        self.assertEqual(item({"year": "1998-99"})["issued"], {"date-parts": [[1998], [1999]]})
+        self.assertEqual(item({"year": "399 BCE"})["issued"], {"date-parts": [[-399]]})
+        self.assertEqual(item({"year": "44 bc"})["issued"], {"date-parts": [[-44]]})
+        self.assertEqual(item({"year": "800 AD"})["issued"], {"date-parts": [[800]]})
+        for unparsed in ("12345", "19th century", "c. 1900", "2021–2020", "1990s"):
+            with self.subTest(year=unparsed):
+                self.assertEqual(item({"year": unparsed}).get("issued"), None)
         self.assertEqual(item({"published_date": "950-01-01"}).get("issued"), None)
 
     def test_fields_map_and_empty_ones_are_left_out(self):

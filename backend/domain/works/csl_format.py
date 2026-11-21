@@ -54,8 +54,11 @@ CSL_TYPES: dict[str, str] = {
 _GENRES = {"mastersthesis": "Master's thesis", "phdthesis": "PhD thesis"}
 _ROLE_VARIABLES = (("Author", "author"), ("Editor", "editor"), ("Translator", "translator"))
 _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
-#: The leading year of the Year field: one to four digits (``950``, ``2020`` of ``2020–2021``).
-_YEAR_RE = re.compile(r"^\s*(\d{1,4})(?!\d)")
+_ERA = r"(?:\s*(BCE|BC|CE|AD))?"
+#: The whole Year field as a year, ``950`` or ``399 BCE``; anything else (``19th century``) is not a date.
+_YEAR_RE = re.compile(r"^\s*(\d{1,4})" + _ERA + r"\s*$", re.IGNORECASE)
+#: The whole Year field as a range of years: ``2020–2021``, ``1998-99``, ``1914/1918``.
+_YEAR_RANGE_RE = re.compile(r"^\s*(\d{4})\s*[-–—/]\s*(\d{2}|\d{4})\s*$")
 
 
 def _text(value: Any) -> str:
@@ -90,17 +93,37 @@ def _role_name(role: dict[str, Any]) -> Optional[dict[str, str]]:
     return _name(_text(role.get("last_name")), _text(role.get("first_name")))
 
 
-def _issued(work: dict[str, Any]) -> Optional[dict[str, Any]]:
-    for raw, pattern in ((work.get("published_date"), _DATE_RE), (work.get("year"), _YEAR_RE)):
-        match = pattern.match(_text(raw))
-        if match:
-            parts = [int(part) for part in match.groups() if part]
-            if len(parts) > 1 and not 1 <= parts[1] <= 12:
-                parts = parts[:1]
-            if len(parts) > 2 and not 1 <= parts[2] <= 31:
-                parts = parts[:2]
-            return {"date-parts": [parts]}
+def _year(value: str, era: Optional[str]) -> int:
+    """CSL counts years before the common era as negative (399 BCE is -399)."""
+    return -int(value) if era and era.upper() in ("BCE", "BC") else int(value)
+
+
+def _year_field(raw: Any) -> Optional[dict[str, Any]]:
+    """The Year field as CSL date parts, only when the whole value is a year or a range of years."""
+    text = _text(raw)
+    match = _YEAR_RE.match(text)
+    if match:
+        return {"date-parts": [[_year(match.group(1), match.group(2))]]}
+    match = _YEAR_RANGE_RE.match(text)
+    if match:
+        start, end = match.group(1), match.group(2)
+        if len(end) == 2:  # 1998-99
+            end = start[:2] + end
+        if int(end) > int(start):
+            return {"date-parts": [[int(start)], [int(end)]]}
     return None
+
+
+def _issued(work: dict[str, Any]) -> Optional[dict[str, Any]]:
+    match = _DATE_RE.match(_text(work.get("published_date")))
+    if match:
+        parts = [int(part) for part in match.groups() if part]
+        if len(parts) > 1 and not 1 <= parts[1] <= 12:
+            parts = parts[:1]
+        if len(parts) > 2 and not 1 <= parts[2] <= 31:
+            parts = parts[:2]
+        return {"date-parts": [parts]}
+    return _year_field(work.get("year"))
 
 
 def format_csl(work_id: str, work: dict[str, Any], roles: list[dict[str, Any]], *,

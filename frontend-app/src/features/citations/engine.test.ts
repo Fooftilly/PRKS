@@ -79,6 +79,15 @@ describe('formatCitations', () => {
     await expect(formatCitations([article], 'apa')).resolves.toMatchObject({ entries: [{}] })
   })
 
+  it('prints a year before the common era and a range of years', async () => {
+    const ancient: CslItem = { id: 'W-3', type: 'book', title: 'Republic', author: [{ family: 'Plato' }], issued: { 'date-parts': [[-375]] } }
+    const span: CslItem = { id: 'W-4', type: 'book', title: 'Diaries', author: [{ family: 'Woolf' }], issued: { 'date-parts': [[1915], [1941]] } }
+    const { entries } = await formatCitations([ancient, span], 'apa')
+    const texts = entries.map((entry) => entry.text)
+    expect(texts.find((text) => text.includes('Republic'))).toMatch(/375 B\.C\.E\./)
+    expect(texts.find((text) => text.includes('Diaries'))).toMatch(/1915.1941/)
+  })
+
   it('answers an empty bibliography for no items', async () => {
     await expect(formatCitations([], 'apa')).resolves.toEqual({ entries: [], html: '', text: '' })
   })

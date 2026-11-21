@@ -76,6 +76,19 @@ describe('serial setting save', () => {
     expect(saver.saved()).toBe('ieee')
   })
 
+  it('sends a choice again after reset to what the server answered', async () => {
+    const { saver, sent } = harness()
+    const done = saver.choose('ieee')
+    sent[0].resolve()
+    await done
+    // Another session saved Chicago; the server answered with it.
+    saver.reset('chicago-author-date')
+    const again = saver.choose('ieee')
+    sent[1]?.resolve()
+    await again
+    expect(sent.map((s) => s.value)).toEqual(['ieee', 'ieee'])
+  })
+
   it('choosing the saved value again sends nothing', async () => {
     const { saver, sent } = harness()
     await saver.choose('apa')
