@@ -131,6 +131,10 @@ class RemoteImageRouteTests(ServerApiTestCase):
         restore.restore_library(self.db.config.conninfo, objects, archive, self.lib,
                                 owner_user_id=self.owner, staging_dir=out)
         self.assertEqual(self.saved(), {THUMB})
+        # The restore cancelled the queued prune and enqueued one due now.
+        prunes = self.sql("SELECT state, run_after <= now() AS due FROM prks.jobs WHERE kind = 'remote_images.prune'"
+                          " ORDER BY created_at")
+        self.assertEqual(prunes[-1], {"state": "queued", "due": True})
         with mock.patch(_FETCH, side_effect=AssertionError("must use the restored copy")):
             served = self.image(THUMB)
         self.assertEqual((served.status, served.raw), (200, self.picture.body))

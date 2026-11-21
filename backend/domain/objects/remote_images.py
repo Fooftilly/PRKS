@@ -28,8 +28,8 @@ Library and source URL:
 A reader never writes (§9.4): the route serves it a fetched copy uncached,
 as it does when a restore fenced the fill. A copy the Library stops naming
 is dropped by the ``remote_images.prune`` Library job (:func:`prune`), which
-a save schedules :data:`PRUNE_EVERY` later and which schedules itself again
-while copies remain; it deletes the rows no content names any more (saved
+a save schedules :data:`PRUNE_EVERY` later, a restore runs at once, and which
+schedules itself again while copies remain; it deletes the rows no content names any more (saved
 at least :data:`PRUNE_GRACE` ago) and claims their keys. The schema owns the reference check
 (``lifecycle.references``), backups (``domain/maintenance/tables.py``) and
 restore's key list.
@@ -38,6 +38,7 @@ restore's key list.
 from __future__ import annotations
 
 import hashlib
+import html
 import re
 import uuid
 from dataclasses import dataclass
@@ -91,7 +92,8 @@ SUFFIXES = {"webp": ".webp", "jpeg": ".jpg"}
 # The Markdown renderer percent-encodes what the text left raw (a space,
 # non-ASCII) and keeps the escapes it found, so a figure's text holds the
 # URL, its decoded form, or the form with only non-ASCII decoded (text that
-# mixes raw non-ASCII with escapes such as ``%20``).
+# mixes raw non-ASCII with escapes such as ``%20``), or its HTML-escaped form
+# (an inline ``<img src="...&amp;...">``).
 _NAMED: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.assets
                WHERE library_id = %(library_id)s
@@ -99,19 +101,19 @@ SELECT EXISTS (SELECT 1 FROM prks.assets
     OR EXISTS (SELECT 1 FROM prks.work_notes
                WHERE library_id = %(library_id)s
                  AND (strpos(body, %(url)s) > 0 OR strpos(body, %(decoded)s) > 0
-                      OR strpos(body, %(mixed)s) > 0))
+                      OR strpos(body, %(mixed)s) > 0 OR strpos(body, %(escaped)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.concepts
                WHERE library_id = %(library_id)s
                  AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0))
+                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.positions
                WHERE library_id = %(library_id)s
                  AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0))
+                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.arguments
                WHERE library_id = %(library_id)s
                  AND (strpos(main_text, %(url)s) > 0 OR strpos(main_text, %(decoded)s) > 0
-                      OR strpos(main_text, %(mixed)s) > 0)) AS named
+                      OR strpos(main_text, %(mixed)s) > 0 OR strpos(main_text, %(escaped)s) > 0)) AS named
 """
 _SAVED: LiteralString = """
 SELECT locator, sha256, byte_size FROM prks.remote_images
@@ -209,7 +211,9 @@ def store(storage: StorageBackend, image: PortraitImage) -> StoredObject:
 def named(scope: LibraryScope, url: str) -> bool:
     """Whether the Library's own content names ``url``; reads only."""
     mixed = _NON_ASCII_ESCAPES.sub(lambda match: unquote(match.group(0)), url)
-    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url), "mixed": mixed}).fetchone()
+    escaped = html.escape(url, quote=True)
+    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url), "mixed": mixed,
+                                 "escaped": escaped}).fetchone()
     return bool(row is not None and row["named"])
 
 
@@ -290,6 +294,18 @@ def prune_page(scope: LibraryScope, after: str, *, limit: Optional[int] = None,
     return (str(rows[-1]["source_url"]) if rows else None), len(dropped)
 
 
+def enqueue_prune_for_host(tx: Any, library_id: str, epoch: int) -> None:
+    """A prune now, from host maintenance (a restore's commit: it cancelled the queued one).
+
+    Only when the Library holds saved copies.
+    """
+    row = tx.execute(_ANY_SAVED, {"library_id": library_id}).fetchone()
+    if row is None or not row["any"]:
+        return
+    key = f"{PRUNE_KIND}:{library_id}"
+    queue.enqueue_library_job_for_host(tx, library_id, epoch, PRUNE_KIND, dedupe_key=key, singleton_key=key)
+
+
 def _finish_prune(scope: LibraryScope) -> None:
     if scope.execute(_ANY_SAVED).fetchone()["any"]:
         schedule_prune(scope)
@@ -297,11 +313,17 @@ def _finish_prune(scope: LibraryScope) -> None:
 
 @handler(PRUNE_KIND)
 def prune(run: JobRun) -> int:
-    """The ``remote_images.prune`` job: every page, then the next prune while copies remain."""
+    """The ``remote_images.prune`` job: every page, then the next prune while copies remain.
+
+    Each page holds the Library row for update, so no content command (a
+    note save naming a URL again) commits between a page's checks and its
+    deletes.
+    """
     after, total = "", 0
     while True:
         last, dropped = run.library_command(Capability.EDIT_LIBRARY,
-                                            lambda scope, start=after: prune_page(scope, start))
+                                            lambda scope, start=after: prune_page(scope, start),
+                                            updates_library=True)
         total += dropped
         if last is None:
             break

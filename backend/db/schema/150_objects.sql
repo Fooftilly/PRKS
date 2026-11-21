@@ -101,9 +101,9 @@ CREATE INDEX persons_portrait_locator ON prks.persons (portrait_locator)
 -- and transcoded like a portrait (backend/person_image.py) and served from
 -- PRKS itself, so the page loads no image from another site (CSP `img-src
 -- 'self'`, #1351). One row per Library and source URL; the bytes are an
--- immutable object (backend/domain/objects/remote_images.py). The copy
--- outlives the site that served it; a weekly `remote_images.prune` job drops
--- the rows the Library's content no longer names and claims their keys.
+-- immutable object (backend/domain/objects/remote_images.py). The row is kept
+-- when the Work or note stops naming the URL, so a copy outlives the site
+-- that served it.
 CREATE TABLE prks.remote_images (
   library_id text NOT NULL REFERENCES prks.libraries,
   source_url text NOT NULL CHECK (source_url ~* '^https?://' AND octet_length(source_url) <= 2048),

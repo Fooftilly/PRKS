@@ -141,6 +141,11 @@ class SaveTests(RemoteImageTestCase):
         self.noted("![x](https://example.org/caf\u00e9%20plot.png)")
         self.assertIsNotNone(self.save("https://example.org/caf%C3%A9%20plot.png"))
 
+    def test_an_html_escaped_figure_matches(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        self.noted('<img src="https://example.org/chart.png?w=400&amp;format=png">')
+        self.assertIsNotNone(self.save(url))
+
     def test_an_uppercase_scheme_is_saved(self) -> None:
         url = "HTTPS://example.org/figures/Graph.png"
         self.noted(f"![x]({url})")

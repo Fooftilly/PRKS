@@ -802,9 +802,27 @@
          * (200 with an ETag, its hash) is stored only while the session is
          * still that cache's scope, before and after the fetch; an uncached
          * copy (no ETag) is never stored, and a 404 (the Library no longer
-         * names the URL) drops the entry. Offline, the stored copy or a 503.
+         * names the URL) drops the entry. Offline or on a 502-504, the stored
+         * copy (else a 503, or the gateway's answer). `waitUntil` keeps the
+         * worker alive until a cache write or delete settles.
          */
-        async function handleRemoteFigureRequest(request, key, clientId) {
+        // Per cache and key, the generation of the newest figure answer: a put
+        // whose answer is no longer the newest (a later 200 or 404 for the
+        // same key arrived while its session checks ran) is skipped, so an
+        // older copy never comes back after a 404 dropped it.
+        const figureGenerations = new Map();
+        function nextFigureGeneration(cacheName, key) {
+            const id = cacheName + '\n' + key;
+            const next = (figureGenerations.get(id) || 0) + 1;
+            figureGenerations.set(id, next);
+            return next;
+        }
+        function isNewestFigure(cacheName, key, generation) {
+            return figureGenerations.get(cacheName + '\n' + key) === generation;
+        }
+
+        async function handleRemoteFigureRequest(request, key, clientId, waitUntil) {
+            const keepAlive = typeof waitUntil === 'function' ? waitUntil : function () {};
             const cacheName = await pdfCacheName(clientId || '', false);
             if (!cacheName) {
                 try {
@@ -818,9 +836,17 @@
                 const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
                 const res = await fetchImpl(request);
                 const etag = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('ETag') : null;
+                if (res && res.status >= 502 && res.status <= 504) {
+                    // An unreachable server (a proxy's answer), as browser-scope.js reads it.
+                    const stored = await cache.match(key);
+                    if (stored) return stored;
+                    return res;
+                }
                 if (res && res.status === 404) {
-                    cache.delete(key).catch(function () {});
+                    nextFigureGeneration(cacheName, key);
+                    keepAlive(cache.delete(key).catch(function () {}));
                 } else if (etag && isCacheableStaticResponse(res)) {
+                    const generation = nextFigureGeneration(cacheName, key);
                     let cloned = null;
                     try {
                         cloned = res.clone();
@@ -828,10 +854,11 @@
                         cloned = null;
                     }
                     if (cloned) {
-                        Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
+                        keepAlive(Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
                             if (!checks[0] || !checks[1]) return false;
+                            if (!isNewestFigure(cacheName, key, generation)) return false;
                             return cache.put(key, cloned);
-                        }).catch(function () {});
+                        }).catch(function () {}));
                     }
                 }
                 return res;
@@ -1089,7 +1116,8 @@
             }
             const search = searchOf(url, origin);
             if (isRemoteFigureRequest(pathname, search)) {
-                event.respondWith(handlers.handleRemoteFigureRequest(request, pathname + search, event.clientId || ''));
+                const keepAlive = typeof event.waitUntil === 'function' ? event.waitUntil.bind(event) : null;
+                event.respondWith(handlers.handleRemoteFigureRequest(request, pathname + search, event.clientId || '', keepAlive));
                 return;
             }
             if (pathname === '/' || pathname === '/index.html' || isNavigationRequest(request)) {

@@ -376,6 +376,36 @@ async function run() {
         await online(respond(404)).handleRemoteFigureRequest(req, fig, '');
         await settle();
         assert('a 404 drops the stored figure', !(await cache.match(fig)));
+        await online(respond(200, { ETag: '"abc"' })).handleRemoteFigureRequest(req, fig, '');
+        await settle();
+        const kept = [];
+        await online(respond(200, { ETag: '"abc"' })).handleRemoteFigureRequest(req, fig, '', (p) => kept.push(p));
+        assertEq('the cache write is handed to waitUntil', kept.length, 1);
+        await Promise.all(kept);
+        const gateway = await online(respond(504)).handleRemoteFigureRequest(req, fig, '');
+        assert('a 504 serves the stored figure', Buffer.from(await gateway.arrayBuffer()).equals(body));
+        const gatewayMiss = await online(respond(502)).handleRemoteFigureRequest(req, fig + 'y', '');
+        assertEq('a 502 with nothing stored passes through', gatewayMiss.status, 502);
+        {
+            // A 200 whose session checks are still running, then a 404 for the same key:
+            // the older 200 must not put its copy back.
+            const raceStorage = makeFakeCacheStorage();
+            let releaseA;
+            const slow = new Promise((resolve) => { releaseA = resolve; });
+            let calls = 0;
+            const racing = sw.createHandlers({
+                pdfCacheName: scopedPdfCacheName, caches: raceStorage,
+                fetchImpl: () => { calls += 1; return calls === 1 ? respond(200, { ETag: '"a"' })() : respond(404)(); },
+                confirmScope: () => (calls === 1 ? slow : Promise.resolve(true)),
+            });
+            const kept = [];
+            await racing.handleRemoteFigureRequest(req, fig, '', (p) => kept.push(p));
+            await racing.handleRemoteFigureRequest(req, fig, '', (p) => kept.push(p));
+            releaseA(true);
+            await Promise.all(kept);
+            const raceCache = await raceStorage.open(PDF_CACHE);
+            assert('a 404 after a pending older 200 leaves the figure absent', !(await raceCache.match(fig)));
+        }
         const unscoped = sw.createHandlers({ caches: cacheStorage, fetchImpl: () => Promise.reject(new Error('offline')) });
         assertEq('without a scope, offline is 503', (await unscoped.handleRemoteFigureRequest(req, fig, '')).status, 503);
     }
