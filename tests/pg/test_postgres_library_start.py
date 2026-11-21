@@ -407,7 +407,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
               self.started(name, root) as (port_b, headers_b)):
             for n in range(3):
                 self.call(port_a, "POST", "/api/works", {"title": f"Before {n}"}, headers_a)
-            stop = threading.Event()
+            stop, writing = threading.Event(), threading.Event()
             written: list[int] = []
 
             def write() -> None:
@@ -415,9 +415,12 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                     status, _body, _headers = self.call(port_b, "POST", "/api/works",
                                                         {"title": f"During {len(written)}"}, headers_b)
                     written.append(status)
+                    writing.set()
 
             writer = threading.Thread(target=write, daemon=True)
             writer.start()
+            # The backup starts only once the other process is writing.
+            self.assertTrue(writing.wait(30))
             try:
                 ready = self.ndjson(port_a, "/api/backups/progress", headers_a)[-1]
             finally:

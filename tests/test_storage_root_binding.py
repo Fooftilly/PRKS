@@ -1081,23 +1081,46 @@ class TestPairedOpen(RootTestCase):
         self.open(root, paired=True).release()
 
     def test_paired_opens_started_together_take_turns(self):
+        """A second open waits for the first one's preflight probes, which
+        share one directory, before it runs its own."""
         root = self.path("lib")
         self.open(root).release()
+        original = root_binding.run_preflight
+        events: list[str] = []
+        first_in, release_first = threading.Event(), threading.Event()
+        self.addCleanup(release_first.set)
+
+        def probes(*args, **kwargs):
+            first = not first_in.is_set()
+            events.append("enter")
+            if first:
+                first_in.set()
+                self.assertTrue(release_first.wait(10))
+            try:
+                return original(*args, **kwargs)
+            finally:
+                events.append("exit")
+
         results: list[object] = []
-        barrier = threading.Barrier(2)
 
         def start() -> None:
-            barrier.wait()
             try:
                 results.append(self.open(root, paired=True, register=False))
             except Exception as exc:  # noqa: BLE001 - recorded for the assertion
                 results.append(exc)
 
-        threads = [threading.Thread(target=start) for _ in range(2)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(30)
+        with patch.object(root_binding, "run_preflight", probes):
+            first = threading.Thread(target=start)
+            first.start()
+            self.assertTrue(first_in.wait(10))
+            second = threading.Thread(target=start)
+            second.start()
+            time.sleep(0.3)  # time enough for the second open to reach its probes
+            self.assertEqual(events, ["enter"])  # it waits behind the first open
+            release_first.set()
+            first.join(30)
+            second.join(30)
+        self.assertEqual(events, ["enter", "exit", "enter", "exit"])
         self.assertEqual(len(results), 2)
         self.assertTrue(all(isinstance(r, root_binding.BoundRoot) for r in results), results)
         for bound in results:
