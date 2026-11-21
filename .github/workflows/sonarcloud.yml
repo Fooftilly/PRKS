@@ -172,7 +172,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm exec -- vitest run \
+          ./node_modules/.bin/vitest run \
             --coverage.enabled \
             --coverage.provider=v8 \
             --coverage.include='src/**/*.{ts,vue}' \
