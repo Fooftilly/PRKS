@@ -66,7 +66,9 @@ class SonarCloudWorkflowTests(unittest.TestCase):
         ini = COVERAGE_INI.read_text(encoding="utf-8")
         self.assertRegex(ini, r"(?m)^parallel = True$")
         self.assertRegex(ini, r"(?m)^branch = True$")
-        self.assertRegex(ini, r"(?ms)^source =\n    backend\n    prks_app\n")
+        self.assertRegex(ini, r"(?m)^source_dirs = backend$")
+        self.assertRegex(ini, r"(?m)^source_pkgs = prks_app$")
+        self.assertNotRegex(ini, r"(?m)^source =")
         # A root .coveragerc would change the bounded coverage pilots.
         self.assertFalse((ROOT / ".coveragerc").exists())
 

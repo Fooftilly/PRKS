@@ -120,7 +120,6 @@ jobs:
           # Volatile isolated data; no host-mounted database or persistent secrets.
           # Publish only to loopback on the isolated GitHub-hosted runner.
           docker run -d --name "$container" --network "$network" --publish 127.0.0.1:18080:8080 \
-            --user 1000:1000 \
             --tmpfs /data:rw,size=128m,uid=1000,gid=1000 \
             --env PRKS_STORAGE=/data --env PRKS_PDF_LINEARIZE=1 \
             --env PRKS_DATABASE_URL="postgresql://prks:${db_secret}@db:5432/prks" \

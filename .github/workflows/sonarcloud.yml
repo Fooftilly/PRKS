@@ -5,7 +5,8 @@ name: SonarCloud
 # run_tests.py`, `scripts/test-postgres`, Vitest) under coverage.py / V8, in
 # parallel with the Test Gate, so the required gate keeps its speed and its
 # pinned commands. Only the final scan job sees SONAR_TOKEN; test code never
-# runs with it. Fork PRs have no secret, so the scan is skipped there.
+# runs with it. Fork and Dependabot PRs have no Actions secrets, so the scan
+# is skipped there.
 on:
   pull_request:
     branches:
@@ -28,8 +29,9 @@ jobs:
   python-unit-coverage:
     name: Coverage - unit, API, structural tests
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -77,8 +79,9 @@ jobs:
   postgres-coverage:
     name: Coverage - PostgreSQL helpers (${{ matrix.shard }}/4)
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -147,8 +150,9 @@ jobs:
   vitest-coverage:
     name: Coverage - Vitest
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -214,9 +218,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned coverage.py
-        run: >-
-          python -m pip install --isolated --disable-pip-version-check
-          --no-input "--only-binary=:all:" "coverage==7.16.2"
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same pin as the coverage jobs; requirements-dev.txt is the only copy.
+          pin="$(grep -E '^coverage==' requirements-dev.txt)"
+          python -m pip install --isolated --disable-pip-version-check \
+            --no-input "--only-binary=:all:" "$pin"
 
       - name: Download coverage data
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
