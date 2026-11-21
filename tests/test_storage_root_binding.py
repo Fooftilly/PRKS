@@ -1109,17 +1109,30 @@ class TestPairedOpen(RootTestCase):
             except Exception as exc:  # noqa: BLE001 - recorded for the assertion
                 results.append(exc)
 
-        with patch.object(root_binding, "run_preflight", probes):
-            first = threading.Thread(target=start)
+        real_acquire = root_binding.acquire_open_lock
+        second_asks = threading.Event()
+
+        def acquire(*args, **kwargs):
+            if first_in.is_set():
+                second_asks.set()  # the second open has reached the lock
+            return real_acquire(*args, **kwargs)
+
+        first = threading.Thread(target=start)
+        second = threading.Thread(target=start)
+        with patch.object(root_binding, "run_preflight", probes), \
+                patch.object(root_binding, "acquire_open_lock", acquire):
             first.start()
-            self.assertTrue(first_in.wait(10))
-            second = threading.Thread(target=start)
-            second.start()
-            time.sleep(0.3)  # time enough for the second open to reach its probes
-            self.assertEqual(events, ["enter"])  # it waits behind the first open
-            release_first.set()
-            first.join(30)
-            second.join(30)
+            try:
+                self.assertTrue(first_in.wait(10))
+                second.start()
+                self.assertTrue(second_asks.wait(10))
+                time.sleep(0.3)  # without the lock it would be in its probes by now
+                self.assertEqual(events, ["enter"])  # it waits behind the first open
+            finally:
+                release_first.set()
+                first.join(30)
+                if second.ident is not None:
+                    second.join(30)
         self.assertEqual(events, ["enter", "exit", "enter", "exit"])
         self.assertEqual(len(results), 2)
         self.assertTrue(all(isinstance(r, root_binding.BoundRoot) for r in results), results)

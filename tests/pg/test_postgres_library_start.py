@@ -419,21 +419,24 @@ class PostgresLibraryStartTests(RootPairingTestCase):
 
             writer = threading.Thread(target=write, daemon=True)
             writer.start()
-            # The backup starts only once the other process is writing.
-            self.assertTrue(writing.wait(30))
             try:
+                # The backup starts only once the other process is writing.
+                self.assertTrue(writing.wait(30))
                 ready = self.ndjson(port_a, "/api/backups/progress", headers_a)[-1]
             finally:
                 stop.set()
                 writer.join(30)
+            # One more Work once the backup is ready: never in its snapshot.
+            status, _body, _headers = self.call(port_b, "POST", "/api/works", {"title": "After"}, headers_b)
+            self.assertIn(status, (200, 201))
             self.assertEqual(ready["phase"], "ready")
             self.assertTrue(written and all(status in (200, 201) for status in written), written)
             archive = self.raw(port_a, "GET", "/api/backups/download?token=" + ready["token"])
             staged = self.raw_json(port_b, "/api/backups/stage", archive, headers_b)
-            # One snapshot, verified: every Work from before it, and not the
-            # ones the other process committed after it while the backup ran.
+            # One snapshot, verified: every Work from before it, and none the
+            # other process committed after it.
             total = len(self.call(port_b, "GET", "/api/works")[1])
-            self.assertEqual(total, 3 + len(written))
+            self.assertEqual(total, 3 + len(written) + 1)
             self.assertTrue(staged["verified"], staged)
             self.assertGreaterEqual(staged["summary"]["works"], 3)
             self.assertLess(staged["summary"]["works"], total)
