@@ -527,7 +527,9 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 self.assertEqual(merge_base_parent(shallow, stale, head), first)
             # Both flags matter only for cost (one commit, no tag refs), which
             # the result cannot show, so the fetch command itself is pinned.
-            self.assertIn(("fetch", "--no-tags", "--quiet", "--depth=1", "origin", first), calls)
+            (fetch,) = [call for call in calls if call[0] == "fetch"]
+            self.assertEqual(fetch[-2:], ("origin", first))
+            self.assertTrue({"--no-tags", "--depth=1"}.issubset(fetch), fetch)
             self.assertEqual(_git(shallow, "cat-file", "-t", first), "commit")
 
     def test_the_event_base_is_kept_when_git_cannot_answer(self):
