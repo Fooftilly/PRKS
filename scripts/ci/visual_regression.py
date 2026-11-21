@@ -48,12 +48,33 @@ def capture(page, name: str, output: Path, selector: str | None = None) -> dict:
     if name not in SCENES:
         raise AssertionError("unknown visual scene")
     page.evaluate("async () => { await document.fonts.ready; }")
-    if selector:
-        target = page.locator(selector)
-        target.wait_for(state="visible", timeout=15000)
-        png = target.screenshot(animations="disabled", caret="hide", style=STYLE)
-    else:
-        png = page.screenshot(animations="disabled", caret="hide", style=STYLE)
+    # Playwright's screenshot(style=) injects a <style> element, which PRKS's
+    # CSP refuses (style-src 'self'); adopt the same rules through CSSOM for
+    # the capture only.
+    page.evaluate(
+        """(css) => {
+            const sheet = new CSSStyleSheet();
+            sheet.replaceSync(css);
+            window.__prksVisualSheet = sheet;
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+        }""",
+        STYLE,
+    )
+    try:
+        if selector:
+            target = page.locator(selector)
+            target.wait_for(state="visible", timeout=15000)
+            png = target.screenshot(animations="disabled", caret="hide")
+        else:
+            png = page.screenshot(animations="disabled", caret="hide")
+    finally:
+        page.evaluate(
+            """() => {
+                const sheet = window.__prksVisualSheet;
+                delete window.__prksVisualSheet;
+                document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+            }"""
+        )
     (output / f"prks-visual-{name}.png").write_bytes(png)
     return fingerprint(png)
 

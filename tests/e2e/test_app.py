@@ -8111,13 +8111,14 @@ class WorkspaceTilingTests(_BrowserE2E):
                 main.root.style.minHeight = '4000px';
                 secondary.root.style.minHeight = '5000px';
                 const localSelector = '.prks-folder-library__pane:not(.is-hidden) .prks-folder-library__scroll, .prks-people-library__scroll:not(.prks-people-library__scroll--embedded), .prks-group-library__scroll';
-                const style = document.createElement('style');
+                // CSSOM, not a <style> element: the CSP refuses inline style.
+                const style = new CSSStyleSheet();
                 const rootSelector = '#' + CSS.escape(secondary.root.id);
-                style.textContent = rootSelector + ' .prks-people-library__scroll::after,' +
+                style.replaceSync(rootSelector + ' .prks-people-library__scroll::after,' +
                     rootSelector + ' .prks-group-library__scroll::after,' +
                     rootSelector + ' .prks-folder-library__scroll::after' +
-                    "{content:'';display:block;height:5000px}";
-                document.head.appendChild(style);
+                    "{content:'';display:block;height:5000px}");
+                document.adoptedStyleSheets = [...document.adoptedStyleSheets, style];
                 const mainScroll = main.root.closest('.prks-tile__body');
                 const secondaryScroll = secondary.root.querySelector(localSelector) || secondary.root.closest('.prks-tile__body');
                 mainScroll.scrollTop = 41;

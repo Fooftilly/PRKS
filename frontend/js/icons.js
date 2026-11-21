@@ -184,10 +184,31 @@
             'stroke-width': 2,
             'aria-hidden': 'true',
         };
-        if (nodes.length) {
-            lucide.createIcons({ nodes, attrs });
-        } else {
-            lucide.createIcons({ attrs });
+        /* Lucide copies every placeholder attribute onto the new <svg> with
+         * setAttribute, and the CSP refuses a style attribute set that way.
+         * A style the app gave the placeholder through CSSOM (a folder's
+         * colour, say) is carried across through CSSOM instead. */
+        // Lucide scans its root (the document), not `nodes`, so look there.
+        const carried = [];
+        document.querySelectorAll('[data-lucide][style]').forEach(function (el) {
+            el.setAttribute('data-prks-icon-style', String(carried.length));
+            carried.push(el.style.cssText);
+            el.removeAttribute('style');
+        });
+        try {
+            if (nodes.length) {
+                lucide.createIcons({ nodes, attrs });
+            } else {
+                lucide.createIcons({ attrs });
+            }
+        } finally {
+            if (carried.length) {
+                document.querySelectorAll('[data-prks-icon-style]').forEach(function (el) {
+                    const css = carried[Number(el.getAttribute('data-prks-icon-style'))];
+                    el.removeAttribute('data-prks-icon-style');
+                    if (css) el.style.cssText = css;
+                });
+            }
         }
     }
 
