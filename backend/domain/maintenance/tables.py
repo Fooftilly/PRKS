@@ -84,6 +84,7 @@ BACKUP_CONTENT_TABLES: tuple[str, ...] = (
     "prks.playlist_items",
     "prks.saved_views",
     "prks.library_settings",
+    "prks.citation_styles",
     # Research (130_research.sql).
     "prks.concepts",
     "prks.concept_aliases",

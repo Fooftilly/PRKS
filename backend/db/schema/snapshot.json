@@ -1011,6 +1011,51 @@
         "bootstrap_tokens_token_sha256_key": "CREATE UNIQUE INDEX bootstrap_tokens_token_sha256_key ON prks.bootstrap_tokens USING btree (token_sha256)"
       }
     },
+    "prks.citation_styles": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "title",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "csl",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "default": "now()",
+          "name": "created_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "citation_styles_created_at_not_null": "NOT NULL created_at",
+        "citation_styles_csl_check": "CHECK (octet_length(csl) <= 1048576)",
+        "citation_styles_csl_not_null": "NOT NULL csl",
+        "citation_styles_id_check": "CHECK (id ~ '^custom-[0-9a-f]{32}$'::text)",
+        "citation_styles_id_not_null": "NOT NULL id",
+        "citation_styles_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "citation_styles_library_id_not_null": "NOT NULL library_id",
+        "citation_styles_pkey": "PRIMARY KEY (library_id, id)",
+        "citation_styles_title_check": "CHECK (char_length(title) >= 1 AND char_length(title) <= 300)",
+        "citation_styles_title_not_null": "NOT NULL title"
+      },
+      "indexes": {
+        "citation_styles_pkey": "CREATE UNIQUE INDEX citation_styles_pkey ON prks.citation_styles USING btree (library_id, id)"
+      }
+    },
     "prks.concept_aliases": {
       "columns": [
         {

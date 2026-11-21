@@ -41,6 +41,7 @@ from backend.api import remote_images as remote_images_api
 from backend.api import search as search_api
 from backend.api import publishers as publishers_api
 from backend.api import settings as settings_api
+from backend.api import citation_styles as citation_styles_api
 from backend.api import tags as tags_api
 from backend.api import work_roles as work_roles_api
 from backend.api import works as works_api
@@ -1263,6 +1264,8 @@ class PRKSHandler(HttpHandlerBase):
                 return
             elif saved_views_api.handle_delete(self, db, path):
                 return
+            elif citation_styles_api.handle_delete(self, db, path):
+                return
             elif processing_api.handle_delete(self, db, path):
                 return
             elif concepts_api.handle_delete(self, db, path):
@@ -1731,6 +1734,8 @@ class PRKSHandler(HttpHandlerBase):
                 return
             elif settings_api.handle_get(self, db, path):
                 return
+            elif citation_styles_api.handle_get(self, db, path):
+                return
             elif path == '/api/backups/download':
                 self._handle_postgres_backup_download((query.get('token') or [''])[0])
             elif path.startswith(_BACKUP_ROUTE_PREFIX):
@@ -1791,6 +1796,8 @@ class PRKSHandler(HttpHandlerBase):
             elif works_api.handle_bulk(self, db, path, data):
                 return
             elif works_api.handle_citations(self, db, path, data):
+                return
+            elif citation_styles_api.handle_post(self, db, path, data):
                 return
             elif path == '/api/works/reindex-pdf-text':
                 # ``force`` is accepted and asks for nothing more: a text

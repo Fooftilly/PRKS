@@ -36,6 +36,7 @@ from backend.domain.settings.rules import (
     _prks_parse_bibtex_export_fields_json,
 )
 from backend.domain.identity.library_scope import LibraryScope
+from backend.domain.works import custom_citation_styles
 from backend.domain.works.citation_styles import CITATION_STYLE_SET, DEFAULT_CITATION_STYLE
 
 ANNOTATION_AUTHOR = "annotation_author"
@@ -70,14 +71,16 @@ def settings_map(scope: LibraryScope) -> dict[str, str]:
 def settings_response(scope: LibraryScope) -> dict[str, Any]:
     """``get_app_settings_response``: the keys the API has, with their defaults.
 
-    A stored citation style PRKS no longer ships reads as the default.
+    A stored citation style PRKS no longer ships, or an imported one that
+    is gone, reads as the default.
     """
     stored = settings_map(scope)
     style = stored.get(CITATION_STYLE, "")
+    known = style in CITATION_STYLE_SET or custom_citation_styles.exists(scope, style)
     return {
         ANNOTATION_AUTHOR: stored.get(ANNOTATION_AUTHOR, ""),
         BIBTEX_EXPORT_FIELDS: _prks_parse_bibtex_export_fields_json(stored.get(BIBTEX_EXPORT_FIELDS, "")),
-        CITATION_STYLE: style if style in CITATION_STYLE_SET else DEFAULT_CITATION_STYLE,
+        CITATION_STYLE: style if known else DEFAULT_CITATION_STYLE,
     }
 
 
@@ -90,8 +93,9 @@ def _author(raw: Any) -> str:
     return value
 
 
-def _style(raw: Any) -> str:
-    if not isinstance(raw, str) or raw not in CITATION_STYLE_SET:
+def _style(scope: LibraryScope, raw: Any) -> str:
+    """A shipped style, or one this Library imported."""
+    if not isinstance(raw, str) or not (raw in CITATION_STYLE_SET or custom_citation_styles.exists(scope, raw)):
         raise ValueError("Unknown citation style.")
     return raw
 
@@ -110,7 +114,7 @@ def patch(scope: LibraryScope, data: Any) -> None:
         raise ValueError("invalid body")
     author = _author(data.get(ANNOTATION_AUTHOR)) if ANNOTATION_AUTHOR in data else None
     profile = _profile_patch(data.get(BIBTEX_EXPORT_FIELDS)) if BIBTEX_EXPORT_FIELDS in data else None
-    style = _style(data.get(CITATION_STYLE)) if CITATION_STYLE in data else None
+    style = _style(scope, data.get(CITATION_STYLE)) if CITATION_STYLE in data else None
     if author is not None:
         scope.execute(_UPSERT_SQL, {"key": ANNOTATION_AUTHOR, "value": author})
     if style is not None:
