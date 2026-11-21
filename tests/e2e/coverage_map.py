@@ -570,22 +570,18 @@ def with_code_neighbours(wanted: Iterable[int], code: Iterable[Sequence[int]]) -
     return out
 
 
-_STYLE_OPEN = re.compile(r"^\s*<style\b")
-_STYLE_CLOSE = re.compile(r"</style>")
+# Top-level blocks of a single-file component, in the order Vue's parser meets them:
+# a script is skipped whole, a comment hides what it wraps (to the end of the file
+# when unterminated), and a style block is live CSS.
+_SFC_BLOCK = re.compile(
+    r"<script\b.*?</script\s*>|<!--(?:.*?-->|.*\Z)|(<style\b.*?</style\s*>)",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
-def style_lines(text: str) -> set[int]:
-    """The 1-based lines of a single-file component's ``<style>`` blocks, tags included."""
-    found: set[int] = set()
-    inside = False
-    for number, line in enumerate(text.splitlines(), start=1):
-        if not inside and _STYLE_OPEN.match(line):
-            inside = True
-        if inside:
-            found.add(number)
-            if _STYLE_CLOSE.search(line):
-                inside = False
-    return found
+def active_styles(text: str) -> list[str]:
+    """The live ``<style>`` blocks of a single-file component, tags included."""
+    return [m.group(1) for m in _SFC_BLOCK.finditer(text) if m.group(1)]
 
 
 def _sw_only_revision(diff_text: str) -> bool:
@@ -671,17 +667,10 @@ def _show(repo: Path, rev: str, rel: str) -> str:
         return ""  # added or deleted on that side
 
 
-def _touches_style(repo: Path, rel: str, old_rev: str, new_rev: str,
-                   hunks: Iterable[tuple[int, int, int, int]]) -> bool:
-    hunks = list(hunks)
-    old_style, new_style = style_lines(_show(repo, old_rev, rel)), style_lines(_show(repo, new_rev, rel))
-    for old_start, old_count, new_start, new_count in hunks:
-        if old_style & set(range(old_start, old_start + old_count)):
-            return True
-        if new_style & set(range(new_start, new_start + new_count)):
-            return True
-    # An insertion next to a style block, outside it, touches no CSS.
-    return False
+def _touches_style(repo: Path, rel: str, old_rev: str, new_rev: str) -> bool:
+    # Compare the live CSS itself, so wrapping a block in a comment (or removing
+    # one) counts, and a comment or insertion outside every block does not.
+    return active_styles(_show(repo, old_rev, rel)) != active_styles(_show(repo, new_rev, rel))
 
 
 def select_for_diff(
@@ -726,7 +715,7 @@ def select_for_diff(
         if is_mapped_kind(rel) and any(rel in m["files"] for m in maps):
             pr_hunks = parse_hunks(_git(repo, "diff", "-U0", f"{base}...{head}", "--", rel))
             wanted = touched_old_lines(pr_hunks)
-            if rel.endswith(".vue") and _touches_style(repo, rel, merge_base, head, pr_hunks):
+            if rel.endswith(".vue") and _touches_style(repo, rel, merge_base, head):
                 # The map does not measure CSS: a style change keeps the planner's full run.
                 files[rel] = {"rule": "full", "why": "vue-style"}
                 fallback.append(rel)

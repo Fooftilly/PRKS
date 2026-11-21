@@ -357,6 +357,13 @@ class SelectForDiffTests(unittest.TestCase):
         self._commit()
         self.assertEqual(self._select(**overrides)["files"][VUE]["rule"], "coverage-map")
 
+    def test_commenting_out_a_style_block_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("<style scoped>\n", "<!--\n<style scoped>\n")
+                                     .replace("</style>\n", "</style>\n-->\n"))
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
+
     def test_any_other_sw_change_is_not_derived(self):
         overrides = self._vue_repo()
         sw = self.repo / "frontend" / "sw.js"
@@ -443,12 +450,14 @@ class SourceMapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             out = Path(raw) / "out"
             out.mkdir()
-            # Line 0: col 0 -> Card line 2, col 5 unmapped. Line 1 (offset 20) has no mapping at all.
-            source_map = {"sources": ["../frontend-app/src/components/Card.vue"], "mappings": "AACA,K;"}
+            # Line 0: col 0 -> Card line 2, col 5 unmapped, col 10 -> Card line 3 (the line ends mapped).
+            # Line 1 (offset 20) has no mapping at all, so nothing carries over the newline.
+            source_map = {"sources": ["../frontend-app/src/components/Card.vue"], "mappings": "AACA,K,KACA;"}
             bundle = cm.BundleMap(source_map, out, [0, 20], repo=Path(raw))
         self.assertEqual(bundle.lines([(6, 9, 1)]), {})
         self.assertEqual(bundle.lines([(21, 25, 1)]), {})
         self.assertEqual(bundle.lines([(0, 4, 1)]), {VUE: {2}})
+        self.assertEqual(bundle.lines([(11, 15, 1)]), {VUE: {3}})
 
     def test_the_map_lists_code_lines_when_built_with_a_bundle(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -464,9 +473,12 @@ class SourceMapTests(unittest.TestCase):
         self.assertEqual(cm.with_code_neighbours({6, 12}, [[2, 2], [6, 6], [9, 9]]), {6, 9})
         self.assertEqual(cm.with_code_neighbours({1}, []), {1})
 
-    def test_style_blocks_are_found(self):
-        self.assertEqual(cm.style_lines(CARD), {11, 12, 13})
-        self.assertEqual(cm.style_lines("<style>a{}</style>\n<template/>\n"), {1})
+    def test_live_style_blocks_are_found(self):
+        self.assertEqual(cm.active_styles(CARD), ["<style scoped>\n.card { color: red }\n</style>"])
+        self.assertEqual(cm.active_styles("<style>a{}</style>\n<template/>\n"), ["<style>a{}</style>"])
+        self.assertEqual(cm.active_styles("<!--\n<style>a{}</style>\n-->\n"), [])
+        self.assertEqual(cm.active_styles("<!-- open\n<style>a{}</style>\n"), [])
+        self.assertEqual(cm.active_styles("<script>const s = '<style>a{}</style>'</script>\n"), [])
 
     def test_only_the_bundle_url_is_the_bundle(self):
         self.assertTrue(cm._is_vue_bundle("http://127.0.0.1:8123/vue/prks-vue.js?v=1"))
