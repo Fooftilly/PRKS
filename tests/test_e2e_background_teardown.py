@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -78,15 +79,58 @@ class BackgroundTeardownTests(unittest.TestCase):
         release = threading.Event()
         server = _FakeServer(release)
         self._stop_later(server)
-        waiter = threading.Thread(target=harness.finish_pending_teardown)
-        waiter.start()
-        # The first waiter is joining; a second (a signal handler, atexit)
-        # must also wait instead of finding nothing pending.
-        threading.Timer(0.05, release.set).start()
-        harness.finish_pending_teardown()
+        pending = harness._PENDING_TEARDOWN
+        assert pending is not None
+        thread = pending[0]
+        join = thread.join
+        entered: list[str] = []
+        both_joining = threading.Event()
+
+        def instrumented_join(timeout=None):
+            entered.append(threading.current_thread().name)
+            if len(entered) == 2:
+                both_joining.set()
+            join(timeout)
+
+        thread.join = instrumented_join  # type: ignore[method-assign]
+        # Two callers (a test's stop and a signal handler or atexit): the
+        # second must join too instead of finding nothing pending.
+        waiters = [threading.Thread(target=harness.finish_pending_teardown, name="waiter-%d" % i) for i in (1, 2)]
+        for waiter in waiters:
+            waiter.start()
+        joined = both_joining.wait(5)
+        release.set()
+        for waiter in waiters:
+            waiter.join(5)
+        self.assertTrue(joined, "only %s reached join()" % entered)
         self.assertTrue(server.finished.is_set())
-        waiter.join(5)
         self.assertIsNone(harness._PENDING_TEARDOWN)
+
+    def test_a_signal_at_the_move_to_stuck_still_finds_the_teardown(self):
+        # finish_pending_teardown() lists a timed-out teardown as stuck, then
+        # clears the pending slot. A shutdown sweep re-entering at that
+        # boundary must still find it, and still leave its server to it.
+        release = threading.Event()
+        self.addCleanup(release.set)
+        server = _FakeServer(release)
+        self._stop_later(server)
+        pending = harness._PENDING_TEARDOWN
+        seen: list[tuple[bool, bool]] = []
+
+        class _Stuck(list):
+            def append(self, record):
+                # The sweep's view just before the record lands in the stuck list.
+                seen.append((record in harness._teardown_records(), id(server) in harness._owned_servers()))
+                super().append(record)
+
+        with mock.patch.object(harness, "_STUCK_TEARDOWNS", _Stuck()), \
+                mock.patch.object(harness, "STOP_TIMEOUT_S", 0.01):
+            with self.assertRaisesRegex(RuntimeError, "did not finish"):
+                harness.finish_pending_teardown()
+            self.assertEqual(seen, [(True, True)])
+            self.assertEqual(harness._STUCK_TEARDOWNS, [pending])
+            release.set()
+            harness._join_stuck_teardowns(5)
 
     def test_a_teardown_that_outlives_its_join_stays_awaited(self):
         release = threading.Event()
@@ -250,6 +294,44 @@ class ShutdownTests(unittest.TestCase):
         thread.start()
         thread.join(timeout=5)
         self.assertEqual(server.finish_timeouts, [2.0])
+
+    def test_a_teardown_started_during_the_joins_owns_its_server(self):
+        # The watchdog thread runs shutdown while the test thread can still
+        # call stop_later(): ownership is decided after the joins.
+        _first, record = self._owned("first")
+        late, late_record = self._owned("late")
+        thread = record[0]
+        join = thread.join
+
+        def join_then_publish(timeout=None):
+            join(timeout)
+            harness._PENDING_TEARDOWN = late_record
+
+        thread.join = join_then_publish
+        harness._STUCK_TEARDOWNS.append(record)
+        harness.stop_all_servers(budget_s=2.0)
+        self.assertEqual(late.finish_timeouts, [])  # left to its own teardown
+        self.assertIn("kill late", self.clock.events)
+
+    def test_a_slow_drop_is_cut_off_at_the_budget(self):
+        stuck = threading.Event()
+        self.addCleanup(stuck.set)
+        started = time.perf_counter()  # time.monotonic is the fake clock here
+        harness._run_bounded(lambda: stuck.wait(10), 0.05)
+        self.assertLess(time.perf_counter() - started, 2.0)
+        harness._run_bounded(lambda: self.fail("no time left: must not run"), 0.0)
+
+    def test_the_exit_drain_is_registered_after_the_first_database(self):
+        # atexit runs last-in first-out: registered at the first teardown, so
+        # after tests.pg.harness registered drop_all(), the drain runs first.
+        server = _ShutdownServer(self.clock, "exit", self.live)
+        with mock.patch.object(harness.atexit, "register") as register, \
+                mock.patch.object(harness, "_EXIT_DRAIN_REGISTERED", [False]), \
+                mock.patch.object(harness, "_TEARDOWN_CLEANUP_REGISTERED", True), \
+                mock.patch.object(harness.threading.Thread, "start"):
+            harness._start_teardown(server, "tests.e2e.test_x.T.one")
+            harness._start_teardown(server, "tests.e2e.test_x.T.two")
+        register.assert_called_once_with(harness._drain_teardowns_at_exit)
 
     def test_every_wait_shares_one_budget(self):
         owners = [self._owned(name) for name in ("a", "b", "c")]

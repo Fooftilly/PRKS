@@ -767,7 +767,10 @@ def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
     records = [record for record in _teardown_records() if not _claim_unstarted(record)]
     for record in records:
         record[0].join(timeout=remaining())
-    owned = {id(record[3]) for record in records if record[0].is_alive()}
+    # Decided after the joins, from the teardowns as they are now: one that
+    # started meanwhile (the watchdog thread runs this beside the tests)
+    # owns its server too.
+    owned = _owned_servers()
     _forget_finished_teardowns()
     stopped = sum(1 for server in live if server not in _LIVE_SERVERS)
     for server in list(_LIVE_SERVERS):
@@ -785,15 +788,27 @@ def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
             stopped += 1
         except Exception:
             continue
-        if remaining() <= 0:
-            # Its process is gone; its database and storage are left behind
-            # rather than overrunning the parent's stop timeout.
-            continue
+        # Its process is gone. The drop and storage delete get what is left
+        # of the budget; past it they are left behind rather than overrunning
+        # the parent's stop timeout.
+        _run_bounded(server._drop_data, remaining())
+    return stopped
+
+
+def _run_bounded(fn, timeout):
+    """Run ``fn`` on a daemon thread for at most ``timeout`` seconds; ignore its errors."""
+    if timeout <= 0:
+        return
+
+    def run():
         try:
-            server._drop_data()
+            fn()
         except Exception:
             pass
-    return stopped
+
+    thread = threading.Thread(target=run, name="prks-e2e-shutdown-drop", daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
 
 
 def _address_in_use(text: str) -> bool:
@@ -1310,6 +1325,7 @@ class AppServer:
 _TEARDOWN_LOCK = threading.RLock()
 _PENDING_TEARDOWN = None
 _TEARDOWN_CLEANUP_REGISTERED = False
+_EXIT_DRAIN_REGISTERED = [False]
 # Teardowns already reported as not finishing: their threads may still be
 # running, so stop_all_servers() and the atexit drain wait for them too.
 _STUCK_TEARDOWNS = []
@@ -1337,6 +1353,13 @@ def _start_teardown(server, test_id):
         _PENDING_TEARDOWN = (thread, test_id, failure, server, state)
         register = not _TEARDOWN_CLEANUP_REGISTERED
         _TEARDOWN_CLEANUP_REGISTERED = True
+        register_exit = not _EXIT_DRAIN_REGISTERED[0]
+        _EXIT_DRAIN_REGISTERED[0] = True
+    if register_exit:
+        # Registered here, after tests.pg.harness registered drop_all() for
+        # this server's database: exit handlers run last-in first-out, so
+        # the drain finishes the teardowns before that sweep drops what is left.
+        atexit.register(_drain_teardowns_at_exit)
     thread.start()
     if register:
         # Drains the last teardown when the module ends, and reports a
@@ -1402,12 +1425,21 @@ def _join_stuck_teardowns(timeout):
 def _teardown_records():
     """The pending teardown and the stuck ones: every thread that may still own a server."""
     with _TEARDOWN_LOCK:
-        records = list(_STUCK_TEARDOWNS)
-        # finish_pending_teardown() moves a record to the stuck list before it
-        # clears the pending slot; a signal in between sees it twice.
-        if _PENDING_TEARDOWN is not None and not any(r is _PENDING_TEARDOWN for r in records):
-            records.insert(0, _PENDING_TEARDOWN)
-        return records
+        # The pending one first: it is the newest, and the likeliest to finish
+        # within the budget. finish_pending_teardown() moves a record to the
+        # stuck list before it clears the pending slot; a signal in between
+        # must still see it once.
+        pending = _PENDING_TEARDOWN
+        if pending is None:
+            return list(_STUCK_TEARDOWNS)
+        return [pending] + [r for r in _STUCK_TEARDOWNS if r is not pending]
+
+
+def _owned_servers():
+    """ids of the servers a started teardown still holds (unstarted ones are claimed)."""
+    with _TEARDOWN_LOCK:
+        return {id(record[3]) for record in _teardown_records()
+                if not _claim_unstarted(record) and record[0].is_alive()}
 
 
 def _claim_unstarted(record):
@@ -1437,9 +1469,6 @@ def _drain_teardowns_at_exit():
         finish_pending_teardown()
     finally:
         _join_stuck_teardowns(STOP_TIMEOUT_S)
-
-
-atexit.register(_drain_teardowns_at_exit)
 
 
 class FixtureServer:
