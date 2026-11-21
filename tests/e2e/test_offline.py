@@ -2380,10 +2380,21 @@ class OfflineFoundationTests(unittest.TestCase):
             route.fallback()
 
         page.route("**/api/works/**", fail_then_ok_snapshot)
+        snapshot_path = "/api/works/%s/annotations-snapshot" % work_a
+        snapshot_requests = {"n": 0}
+
+        def third_snapshot_request(request):
+            if request.method == "GET" and urlparse(request.url).path == snapshot_path:
+                snapshot_requests["n"] += 1
+            return snapshot_requests["n"] >= 3
+
         try:
             _wait_sw_active(page)
-            _open_work_from_home(page, WORK_A_TITLE)
-            _wait_pdf_viewer(page)
+            # The third snapshot read is the retry after both 503s; it is
+            # held below, so the viewer must still be waiting for its base.
+            with page.expect_request(third_snapshot_request, timeout=30000):
+                _open_work_from_home(page, WORK_A_TITLE)
+                _wait_pdf_viewer(page)
 
             page.wait_for_function(
                 """() => {
@@ -2394,6 +2405,7 @@ class OfflineFoundationTests(unittest.TestCase):
                 }""" % _FOCUSED_PDF,
                 timeout=15000,
             )
+            self.assertEqual(len(held), 1, "the snapshot retry was not held")
             self.assertEqual(_pdf_mode(page), "preview")
             self.assertFalse(_pdf_markup_tools_available(page))
 
