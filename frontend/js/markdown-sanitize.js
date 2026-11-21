@@ -90,13 +90,29 @@
      * PRKS serves every image itself (CSP img-src 'self'): an http(s) image is
      * loaded as the Library's saved copy (GET /api/remote-images, #1351), never
      * from the other site. Returns that route for a public-looking http(s)
-     * URL, else ''. The server decides what it fetches.
+     * URL, the URL itself when it is this page's own origin, else ''. The
+     * server decides what it fetches.
      */
     var PRKS_REMOTE_IMAGE_ROUTE = '/api/remote-images?url=';
 
+    // The server bounds a source URL in UTF-8 bytes, not UTF-16 units.
+    function prksUtf8Length(text) {
+        if (typeof TextEncoder === 'function') return new TextEncoder().encode(text).length;
+        return unescape(encodeURIComponent(text)).length;
+    }
+
+    function prksPageOrigin() {
+        try {
+            var loc = typeof window !== 'undefined' && window.location;
+            return loc && loc.origin && loc.origin !== 'null' ? loc.origin : '';
+        } catch (_err) {
+            return '';
+        }
+    }
+
     function prksRemoteImageSrc(value) {
         var trimmed = prksTrimUriControls(value);
-        if (!trimmed || trimmed.length > 2048) return '';
+        if (!trimmed || prksUtf8Length(trimmed) > 2048) return '';
         var parsed;
         try {
             parsed = new URL(trimmed);
@@ -105,6 +121,7 @@
         }
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
         if (parsed.username || parsed.password || !parsed.hostname) return '';
+        if (prksPageOrigin() && parsed.origin === prksPageOrigin()) return trimmed;
         return PRKS_REMOTE_IMAGE_ROUTE + encodeURIComponent(trimmed);
     }
 

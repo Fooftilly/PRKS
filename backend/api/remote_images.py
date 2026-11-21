@@ -25,8 +25,10 @@ from backend.person_image import fetch_and_prepare
 LOGGER = logging.getLogger("prks.server")
 
 PATH = "/api/remote-images"
-# A saved copy never changes for its URL, so the browser may keep it a long time.
-SAVED_MAX_AGE = 30 * 86400
+# A saved copy is revalidated on each use against its hash (``ETag``), so a
+# restore or a repaired copy that names other bytes for the URL is seen at
+# once; an unchanged copy costs a 304.
+SAVED_CACHE_CONTROL = "private, no-cache"
 # An uncached copy (a reader, a fenced fill) is fetched again after an hour.
 UNCACHED_MAX_AGE = 3600
 
@@ -61,6 +63,19 @@ def _unavailable(handler: Any) -> None:
     handler.send_json(404, {"error": "Image not available", "code": "IMAGE_NOT_AVAILABLE"})
 
 
+def _send_saved(handler: Any, copy: Mapping[str, Any]) -> None:
+    """A saved copy, validated by its hash: a 304 when the browser holds those bytes."""
+    etag = '"%s"' % copy["sha256"]
+    if handler._prks_if_none_match(etag):
+        handler.send_response(304)
+        handler.send_header("ETag", etag)
+        handler.send_header("Cache-Control", SAVED_CACHE_CONTROL)
+        handler.end_headers()
+        return
+    handler._send_person_profile_image_bytes(copy["body"], copy["subtype"],
+                                             cache_control=SAVED_CACHE_CONTROL, etag=etag)
+
+
 def handle_get(handler: Any, db: Any, path: str, query: Mapping[str, Sequence[str]]) -> bool:
     if path != PATH:
         return False
@@ -79,9 +94,8 @@ def handle_get(handler: Any, db: Any, path: str, query: Mapping[str, Sequence[st
     objects = _objects(db)
     cached = module.saved(database, ctx, objects, url)
     if cached is not None:
-        handler._send_person_profile_image_bytes(cached["body"], cached["subtype"], max_age=SAVED_MAX_AGE)
+        _send_saved(handler, cached)
         return True
-    max_age = SAVED_MAX_AGE
     try:
         fresh = module.save(database, ctx, objects, url, _prepare)
     except AccessRefused as exc:
@@ -89,14 +103,16 @@ def handle_get(handler: Any, db: Any, path: str, query: Mapping[str, Sequence[st
         # save: either way a URL the Library names is served uncached.
         if exc.refusal not in (Refusal.FORBIDDEN, Refusal.LIBRARY_EPOCH_CHANGED):
             raise
-        fresh, max_age = None, UNCACHED_MAX_AGE
-        if module.is_named(database, ctx, url):
-            prepared = _prepare(url)
-            if prepared is not None:
-                fresh = {"body": prepared.body, "subtype": prepared.subtype}
+        prepared = _prepare(url) if module.is_named(database, ctx, url) else None
+        if prepared is None:
+            LOGGER.info("remote_image_unavailable request_id=%s", safe_log_id(handler._prks_request_id))
+            _unavailable(handler)
+            return True
+        handler._send_person_profile_image_bytes(prepared.body, prepared.subtype, max_age=UNCACHED_MAX_AGE)
+        return True
     if fresh is None:
         LOGGER.info("remote_image_unavailable request_id=%s", safe_log_id(handler._prks_request_id))
         _unavailable(handler)
         return True
-    handler._send_person_profile_image_bytes(fresh["body"], fresh["subtype"], max_age=max_age)
+    _send_saved(handler, fresh)
     return True

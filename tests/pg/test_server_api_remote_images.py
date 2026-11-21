@@ -60,13 +60,18 @@ class RemoteImageRouteTests(ServerApiTestCase):
             first = self.image(THUMB)
         self.assertEqual((first.status, first.raw), (200, self.picture.body))
         self.assertIn("image/webp", first.header("Content-Type")[0])
-        self.assertIn("private", first.header("Cache-Control")[0])
+        self.assertEqual(first.header("Cache-Control"), ["private, no-cache"])
+        etag = first.header("ETag")[0]
         self.assertEqual(fetch.call_args.args[0], THUMB)
         self.assertEqual(self.saved(), {THUMB})
         with mock.patch(_FETCH, side_effect=AssertionError("must use the saved copy")):
             again = self.image(THUMB)
             figure_missing = self.image(FIGURE + "?not=named")
+            unchanged = self.call("GET", "/api/remote-images?url=" + quote(THUMB, safe=""),
+                                  cookies=self.cookies, headers=[("If-None-Match", etag)])
         self.assertEqual((again.status, again.raw), (200, self.picture.body))
+        self.assertEqual(again.header("ETag"), [etag])
+        self.assertEqual((unchanged.status, unchanged.raw), (304, b""))
         self.assertEqual(figure_missing.status, 404)
 
     def test_a_figure_in_a_note_is_saved(self) -> None:

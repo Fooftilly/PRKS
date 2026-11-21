@@ -14,6 +14,7 @@ import hashlib
 import time
 from datetime import timedelta
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from backend.db.errors import ConstraintViolationError
@@ -95,7 +96,8 @@ class SaveTests(RemoteImageTestCase):
         self.video()
         picture = image()
         done = self.save(THUMB, picture)
-        self.assertEqual(done, {"body": picture.body, "subtype": "webp"})
+        self.assertEqual(done, {"body": picture.body, "subtype": "webp",
+                                "sha256": hashlib.sha256(picture.body).hexdigest()})
         self.assertEqual(self.fetched, [THUMB])
         locator = self.rows()[THUMB]
         self.assertTrue(locator.endswith(".webp"))
@@ -128,6 +130,39 @@ class SaveTests(RemoteImageTestCase):
     def test_a_percent_encoded_figure_matches_the_raw_text(self) -> None:
         self.noted(f"![x]({SPACED})")
         self.assertIsNotNone(self.save(SPACED.replace(" ", "%20")))
+
+    def test_a_figure_mixing_raw_non_ascii_and_escapes_matches(self) -> None:
+        # The renderer encodes the raw "é" and keeps the "%20" it found.
+        self.noted("![x](https://example.org/caf\u00e9%20plot.png)")
+        self.assertIsNotNone(self.save("https://example.org/caf%C3%A9%20plot.png"))
+
+    def test_an_uppercase_scheme_is_saved(self) -> None:
+        url = "HTTPS://example.org/figures/Graph.png"
+        self.noted(f"![x]({url})")
+        self.assertIsNotNone(self.save(url))
+        self.assertEqual(set(self.rows()), {url})
+
+    def test_a_lost_or_damaged_copy_is_replaced_and_its_key_claimed(self) -> None:
+        self.video()
+        for damage in ("missing", "corrupt"):
+            with self.subTest(damage=damage):
+                self.save(THUMB)
+                old = self.rows()[THUMB]
+                with self.objects.local_path(StorageKey(NAMESPACE_REMOTE_IMAGES, old)) as local:
+                    path = Path(local)
+                if damage == "missing":
+                    path.unlink()
+                else:
+                    path.write_bytes(b"\0" * path.stat().st_size)
+                self.assertIsNone(self.saved(THUMB))
+                fresh = self.save(THUMB, image((10, 200, 10)))
+                self.assertIsNotNone(fresh)
+                new = self.rows()[THUMB]
+                self.assertNotEqual(new, old)
+                self.assertIn(old, self.claims())
+                self.assertEqual(self.saved(THUMB), fresh)
+                refs = self.sql(object_references("prks"), {"library_id": self.actor.library_id})
+                self.assertNotIn(old, {ref["name"] for ref in refs})
 
     def test_a_url_the_library_does_not_name_is_never_fetched(self) -> None:
         self.video()

@@ -1508,7 +1508,8 @@ class PRKSHandler(HttpHandlerBase):
         self.end_headers()
 
     def _send_person_profile_image_bytes(
-        self, body: bytes, subtype: str, max_age: int = 86400
+        self, body: bytes, subtype: str, max_age: int = 86400,
+        cache_control: str | None = None, etag: str | None = None,
     ) -> None:
         actual = identify_cached_portrait_subtype(body) or subtype
         if actual == "webp":
@@ -1519,7 +1520,9 @@ class PRKSHandler(HttpHandlerBase):
             mime = "image/jpeg"
         self.send_response(200)
         self.send_header("Content-Type", mime)
-        self.send_header("Cache-Control", f"private, max-age={max_age}")
+        self.send_header("Cache-Control", cache_control or f"private, max-age={max_age}")
+        if etag:
+            self.send_header("ETag", etag)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)

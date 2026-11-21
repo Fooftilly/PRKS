@@ -209,6 +209,9 @@
             imgOk.querySelector('img').getAttribute('src') === '/api/remote-images?url=' + encodeURIComponent('https://example.com/image.png'));
         var relImg = asDom(sanitize('<img src="/logo.svg" alt="n">'));
         assert('keeps a same-origin img src', relImg.querySelector('img').getAttribute('src') === '/logo.svg');
+        var ownOrigin = window.location.origin + '/icons/icon-192.png';
+        var absImg = asDom(sanitize('<img src="' + ownOrigin + '" alt="n">'));
+        assert('keeps an absolute same-origin img src', absImg.querySelector('img').getAttribute('src') === ownOrigin);
         var credImg = asDom(sanitize('<img src="https://user:pw@example.com/x.png" alt="n">'));
         assert('strips an img src with credentials', !credImg.querySelector('img').getAttribute('src'));
         ['data:image/png,aaaa', 'blob:https://example.com/1', 'file:///x.png',

@@ -21,7 +21,9 @@ Library and source URL:
 3. :func:`commit`, in one Library command, re-checks that the Library names
    the URL, adopts the key (``lifecycle.adopt``) and inserts the row. When a
    concurrent save inserted it first, the new key is claimed and the
-   existing copy is returned; a refused commit claims the new key too.
+   existing copy is returned; a refused commit claims the new key too. A
+   row whose bytes are missing or damaged is repointed at the new key, and
+   the damaged key is claimed, so a backup never needs bytes that are gone.
 
 A reader never writes (§9.4): the route serves it a fetched copy uncached,
 as it does when a restore fenced the fill. The row is kept when the Work or
@@ -33,6 +35,7 @@ restore's key list.
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any, BinaryIO, Callable, LiteralString, Optional, Union
@@ -69,22 +72,28 @@ SUFFIXES = {"webp": ".webp", "jpeg": ".jpg"}
 # the Library renders contains it: a Work's notes, a Concept's or Position's
 # description, an Argument's main text. ``strpos`` is a plain substring match.
 # The Markdown renderer percent-encodes what the text left raw (a space,
-# non-ASCII), so a figure's text holds either the URL or its decoded form.
+# non-ASCII) and keeps the escapes it found, so a figure's text holds the
+# URL, its decoded form, or the form with only non-ASCII decoded (text that
+# mixes raw non-ASCII with escapes such as ``%20``).
 _NAMED: LiteralString = """
 SELECT EXISTS (SELECT 1 FROM prks.assets
                WHERE library_id = %(library_id)s AND thumb_url = %(url)s)
     OR EXISTS (SELECT 1 FROM prks.work_notes
                WHERE library_id = %(library_id)s
-                 AND (strpos(body, %(url)s) > 0 OR strpos(body, %(decoded)s) > 0))
+                 AND (strpos(body, %(url)s) > 0 OR strpos(body, %(decoded)s) > 0
+                      OR strpos(body, %(mixed)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.concepts
                WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0))
+                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
+                      OR strpos(description, %(mixed)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.positions
                WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0))
+                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
+                      OR strpos(description, %(mixed)s) > 0))
     OR EXISTS (SELECT 1 FROM prks.arguments
                WHERE library_id = %(library_id)s
-                 AND (strpos(main_text, %(url)s) > 0 OR strpos(main_text, %(decoded)s) > 0)) AS named
+                 AND (strpos(main_text, %(url)s) > 0 OR strpos(main_text, %(decoded)s) > 0
+                      OR strpos(main_text, %(mixed)s) > 0)) AS named
 """
 _SAVED: LiteralString = """
 SELECT locator, sha256, byte_size FROM prks.remote_images
@@ -96,6 +105,15 @@ VALUES (%(library_id)s, %(url)s, %(locator)s, %(sha256)s, %(size)s)
 ON CONFLICT (library_id, source_url) DO NOTHING
 RETURNING locator
 """
+# Repoint a row whose bytes are missing or damaged; only while it still names them.
+_REPLACE: LiteralString = """
+UPDATE prks.remote_images
+SET locator = %(locator)s, sha256 = %(sha256)s, byte_size = %(size)s, saved_at = now()
+WHERE library_id = %(library_id)s AND source_url = %(url)s AND locator = %(replaces)s
+RETURNING locator
+"""
+# A run of percent escapes of non-ASCII bytes (UTF-8 lead and continuation bytes).
+_NON_ASCII_ESCAPES = re.compile(r"(?:%[89a-fA-F][0-9a-fA-F])+")
 
 
 @dataclass(frozen=True)
@@ -156,7 +174,8 @@ def store(storage: StorageBackend, image: PortraitImage) -> StoredObject:
 
 def named(scope: LibraryScope, url: str) -> bool:
     """Whether the Library's own content names ``url``; reads only."""
-    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url)}).fetchone()
+    mixed = _NON_ASCII_ESCAPES.sub(lambda match: unquote(match.group(0)), url)
+    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url), "mixed": mixed}).fetchone()
     return bool(row is not None and row["named"])
 
 
@@ -169,11 +188,14 @@ def current(scope: LibraryScope, url: str) -> Optional[RemoteImage]:
 
 
 def commit(scope: LibraryScope, storage: StorageBackend, url: str,
-           obj: StoredObject) -> Union[RemoteImage, str]:
+           obj: StoredObject, replaces: Optional[str] = None) -> Union[RemoteImage, str]:
     """Name ``obj`` as the saved copy of ``url``; the copy, or :data:`NOT_NAMED`.
 
     Runs in the caller's Library command. A refusal, or a copy another save
-    committed first, claims ``obj``'s key in that command. Raises
+    committed first, claims ``obj``'s key in that command. ``replaces`` is
+    the locator of a copy the caller found missing or damaged: while the row
+    still names it, the row is repointed at ``obj`` and that key is claimed.
+    Raises
     ``lifecycle.ObjectMissing`` (the command rolls back) when the bytes are
     gone or not the ones written.
     """
@@ -185,6 +207,12 @@ def commit(scope: LibraryScope, storage: StorageBackend, url: str,
     lifecycle.adopt(scope, storage, obj)
     inserted = scope.execute(_INSERT, {"url": url, "locator": obj.key.name, "sha256": obj.sha256,
                                        "size": obj.size}).fetchone()
+    if inserted is None and replaces is not None:
+        params = {"url": url, "locator": obj.key.name, "sha256": obj.sha256, "size": obj.size,
+                  "replaces": replaces}
+        if scope.execute(_REPLACE, params).fetchone() is not None:
+            lifecycle.release(scope, StorageKey(NAMESPACE_REMOTE_IMAGES, replaces))
+            return RemoteImage(url, obj.key.name, obj.sha256, obj.size)
     if inserted is None:
         lifecycle.release(scope, obj.key)
         existing = current(scope, url)
@@ -207,7 +235,7 @@ def _read(objects: StorageBackend, found: RemoteImage) -> Optional[dict[str, Any
     subtype = identify_cached_portrait_subtype(body)
     if len(body) != found.size or subtype is None or hashlib.sha256(body).hexdigest() != found.sha256:
         return None
-    return {"body": body, "subtype": subtype}
+    return {"body": body, "subtype": subtype, "sha256": found.sha256}
 
 
 def saved(db: Database, ctx: RequestContext, objects: StorageBackend, url: str) -> Optional[dict[str, Any]]:
@@ -230,16 +258,27 @@ def save(db: Database, ctx: RequestContext, objects: StorageBackend, url: str,
     returns, or None when nothing was saved: the URL is not named, or the
     fetch or transcode failed.
     """
-    if not library_query(db, ctx, lambda scope: named(scope, url), capability=Capability.EDIT_LIBRARY):
+    def look(scope: LibraryScope) -> tuple[bool, Optional[RemoteImage]]:
+        return named(scope, url), current(scope, url)
+
+    is_named_here, found = library_query(db, ctx, look, capability=Capability.EDIT_LIBRARY)
+    if not is_named_here:
         return None
+    replaces = None
+    if found is not None:
+        # Saved since the caller looked, or saved and since lost or damaged.
+        intact = _read(objects, found)
+        if intact is not None:
+            return intact
+        replaces = found.locator
     image = prepare(url)
     if image is None:
         return None
     stored = store(objects, image)
     done = library_command(db, ctx, Capability.EDIT_LIBRARY,
-                           lambda scope: commit(scope, objects, url, stored))
+                           lambda scope: commit(scope, objects, url, stored, replaces))
     if not isinstance(done, RemoteImage):
         return None
     if done.locator != stored.key.name:
         return _read(objects, done)
-    return {"body": image.body, "subtype": image.subtype}
+    return {"body": image.body, "subtype": image.subtype, "sha256": stored.sha256}

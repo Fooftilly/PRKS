@@ -3276,7 +3276,7 @@
         "remote_images_saved_at_not_null": "NOT NULL saved_at",
         "remote_images_sha256_check": "CHECK (sha256 ~ '^[0-9a-f]{64}$'::text)",
         "remote_images_sha256_not_null": "NOT NULL sha256",
-        "remote_images_source_url_check": "CHECK (source_url ~ '^https?://'::text AND octet_length(source_url) <= 2048)",
+        "remote_images_source_url_check": "CHECK (source_url ~* '^https?://'::text AND octet_length(source_url) <= 2048)",
         "remote_images_source_url_not_null": "NOT NULL source_url"
       },
       "indexes": {

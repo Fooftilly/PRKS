@@ -106,7 +106,7 @@ CREATE INDEX persons_portrait_locator ON prks.persons (portrait_locator)
 -- that served it.
 CREATE TABLE prks.remote_images (
   library_id text NOT NULL REFERENCES prks.libraries,
-  source_url text NOT NULL CHECK (source_url ~ '^https?://' AND octet_length(source_url) <= 2048),
+  source_url text NOT NULL CHECK (source_url ~* '^https?://' AND octet_length(source_url) <= 2048),
   locator    text NOT NULL,
   sha256     text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
   byte_size  bigint NOT NULL CHECK (byte_size > 0),
