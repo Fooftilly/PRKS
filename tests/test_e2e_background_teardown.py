@@ -167,10 +167,18 @@ class _ShutdownServer:
         self.proc.terminate.side_effect = lambda: clock.events.append("terminate " + name)
         self.proc.kill.side_effect = lambda: clock.events.append("kill " + name)
         self.finish_timeouts: list[float | None] = []
+        self.clock = clock
+        self.dropped = False
 
     def _finish_stop(self, *, drop=True, timeout=None):
         self.finish_timeouts.append(timeout)
+        self.clock.now += timeout or 0.0  # the process takes all it is given to exit
         self.live.remove(self)
+        if drop:
+            self._drop_data()
+
+    def _drop_data(self):
+        self.dropped = True
 
 
 class ShutdownTests(unittest.TestCase):
@@ -194,7 +202,7 @@ class ShutdownTests(unittest.TestCase):
         server = _ShutdownServer(self.clock, name, self.live)
         thread = _BlockedThread(self.clock, name)
         self.live.append(server)
-        return server, (thread, "tests.e2e.test_x.T." + name, [], server)
+        return server, (thread, "tests.e2e.test_x.T." + name, [], server, ["running"])
 
     def test_a_server_owned_by_a_running_teardown_is_killed_not_stopped_twice(self):
         server, record = self._owned("owned")
@@ -223,6 +231,26 @@ class ShutdownTests(unittest.TestCase):
         self.assertEqual(server.finish_timeouts, [])  # still the teardown's server
         self.assertEqual(self.clock.events, ["terminate moving", "join moving", "kill moving"])
 
+    def test_a_signal_before_the_teardown_thread_starts_claims_its_server(self):
+        # _start_teardown() publishes the record, then starts the thread; a
+        # signal in between finds a thread that cannot be joined yet.
+        server = _ShutdownServer(self.clock, "unstarted", self.live)
+        self.live.append(server)
+        with mock.patch.object(harness.threading.Thread, "start"), \
+                mock.patch.object(harness, "_TEARDOWN_CLEANUP_REGISTERED", True):
+            harness._start_teardown(server, "tests.e2e.test_x.T.unstarted")
+        pending = harness._PENDING_TEARDOWN
+        assert pending is not None
+        thread = pending[0]
+        self.assertEqual(harness.stop_all_servers(budget_s=4.0), 1)
+        # Shutdown stopped it itself, and cleared the record.
+        self.assertEqual(server.finish_timeouts, [2.0])
+        self.assertIsNone(harness._PENDING_TEARDOWN)
+        # The thread, started late, leaves the server alone.
+        thread.start()
+        thread.join(timeout=5)
+        self.assertEqual(server.finish_timeouts, [2.0])
+
     def test_every_wait_shares_one_budget(self):
         owners = [self._owned(name) for name in ("a", "b", "c")]
         harness._STUCK_TEARDOWNS.extend(record for _server, record in owners)
@@ -245,6 +273,20 @@ class ShutdownTests(unittest.TestCase):
         self.live.append(free)
         self.assertEqual(harness.stop_all_servers(budget_s=8.0), 1)
         self.assertEqual(free.finish_timeouts, [4.0])
+
+    def test_an_unowned_server_is_dropped_only_while_budget_is_left(self):
+        free = _ShutdownServer(self.clock, "free", self.live)
+        self.live.append(free)
+        harness.stop_all_servers(budget_s=8.0)
+        self.assertTrue(free.dropped)
+        # A teardown thread that spends the whole budget leaves nothing for the drop.
+        late = _ShutdownServer(self.clock, "late", self.live)
+        self.live.append(late)
+        _server, record = self._owned("stuck")
+        harness._STUCK_TEARDOWNS.append(record)
+        harness.stop_all_servers(budget_s=8.0)
+        self.assertEqual(late.finish_timeouts, [0.0])
+        self.assertFalse(late.dropped)
 
     def test_the_default_budget_fits_the_parents_stop_timeout(self):
         from tests.e2e import run

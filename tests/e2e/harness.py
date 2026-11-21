@@ -762,7 +762,7 @@ def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
                 proc.terminate()
             except OSError:
                 pass
-    records = _teardown_records()
+    records = [record for record in _teardown_records() if not _claim_unstarted(record)]
     for record in records:
         record[0].join(timeout=remaining())
     owned = {id(record[3]) for record in records if record[0].is_alive()}
@@ -779,8 +779,16 @@ def stop_all_servers(budget_s: float = SHUTDOWN_BUDGET_S) -> int:
             continue
         try:
             # Half the time left for SIGTERM, half for SIGKILL (_terminate).
-            server._finish_stop(timeout=remaining() / 2)
+            server._finish_stop(timeout=remaining() / 2, drop=False)
             stopped += 1
+        except Exception:
+            continue
+        if remaining() <= 0:
+            # Its process is gone; its database and storage are left behind
+            # rather than overrunning the parent's stop timeout.
+            continue
+        try:
+            server._drop_data()
         except Exception:
             pass
     return stopped
@@ -1258,10 +1266,14 @@ class AppServer:
         except ValueError:
             pass
         if drop:
-            try:
-                self._drop_library(profiled=False)
-            finally:
-                self._tmpdir.cleanup()
+            self._drop_data()
+
+    def _drop_data(self):
+        """Drop the database and delete the storage of a server whose process has exited."""
+        try:
+            self._drop_library(profiled=False)
+        finally:
+            self._tmpdir.cleanup()
 
     def _drop_library(self, *, profiled=True):
         store, self._library_store = self._library_store, None
@@ -1289,8 +1301,15 @@ _STUCK_TEARDOWNS = []
 def _start_teardown(server, test_id):
     global _PENDING_TEARDOWN, _TEARDOWN_CLEANUP_REGISTERED
     failure = []
+    # "published" until the thread takes the server, or stop_all_servers()
+    # claims it first (a signal between publishing and thread.start()).
+    state = ["published"]
 
     def run():
+        with _TEARDOWN_LOCK:
+            if state[0] == "claimed":
+                return  # shutdown stopped this server itself
+            state[0] = "running"
         try:
             server._finish_stop()
         except BaseException as exc:  # noqa: BLE001 - re-raised by finish_pending_teardown
@@ -1298,7 +1317,7 @@ def _start_teardown(server, test_id):
 
     thread = threading.Thread(target=run, name="prks-e2e-teardown", daemon=True)
     with _TEARDOWN_LOCK:
-        _PENDING_TEARDOWN = (thread, test_id, failure, server)
+        _PENDING_TEARDOWN = (thread, test_id, failure, server, state)
         register = not _TEARDOWN_CLEANUP_REGISTERED
         _TEARDOWN_CLEANUP_REGISTERED = True
     thread.start()
@@ -1327,7 +1346,7 @@ def finish_pending_teardown():
         pending = _PENDING_TEARDOWN
     if pending is None:
         return
-    thread, test_id, failure, _server = pending
+    thread, test_id, failure, _server, _state = pending
     # _terminate waits STOP_TIMEOUT_S, kills, and waits again; the drop and
     # cleanup are quick. A thread still alive after that is itself a failure.
     thread.join(timeout=4 * STOP_TIMEOUT_S)
@@ -1372,6 +1391,19 @@ def _teardown_records():
         if _PENDING_TEARDOWN is not None and not any(r is _PENDING_TEARDOWN for r in records):
             records.insert(0, _PENDING_TEARDOWN)
         return records
+
+
+def _claim_unstarted(record):
+    """Take a published teardown's server from a thread that has not started.
+
+    Joining an unstarted thread raises, and once claimed the thread exits
+    without touching the server, so shutdown can stop it itself.
+    """
+    with _TEARDOWN_LOCK:
+        state = record[4]
+        if state[0] == "published":
+            state[0] = "claimed"
+        return state[0] == "claimed"
 
 
 def _forget_finished_teardowns():
