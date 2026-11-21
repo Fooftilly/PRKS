@@ -44,7 +44,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.ci.docs_only import AUDITED_CONFIG_FILES  # noqa: E402
 
-# The keys of mutmut 3.8.0's ``export-cicd-stats`` JSON.
+# The keys of mutmut 3.8.1's ``export-cicd-stats`` JSON.
 STATS_KEYS = (
     "total", "killed", "survived", "timeout", "skipped", "suspicious",
     "no_tests", "segfault", "check_was_interrupted_by_user",
