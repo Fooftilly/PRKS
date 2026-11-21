@@ -285,9 +285,11 @@ layer and dropped on 2026-11-20, because it would replace little PRKS code for
 a new runtime dependency. PRKS code stays synchronous on a bounded thread pool,
 in one web process, with a graceful drain on stop. The access gate and
 save-confirm tokens that tied it to one process were deleted in #1331 (§7.5).
-A second web process on the same root is still refused at start by the
-interim `content.lock` (`backend/storage/root_binding.py`); lifting it, with
-two-process tests, is the follow-up to #1331.
+More web processes may serve one root side by side: each holds `root.lock`
+shared, and `open.lock` (`backend/storage/root_binding.py`) only makes their
+starts take turns through the preflight probes. Two-process tests cover the
+restore fence, the backup snapshot and one field edited from both
+(`tests/pg/test_postgres_library_start.py`).
 Gunicorn, Cheroot and Waitress were evaluated and rejected. The stdlib server
 is deleted, with no fallback. Reverse-proxy exposure stays the recommended
 setup for the internet (§14, R9).

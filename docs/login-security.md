@@ -123,9 +123,9 @@ to start, with exit status 2, when the database belongs to another root, is a
 stale copy, is a testing database started without `--testing` (or the
 reverse), has no completed setup (`docs/admin-bootstrap.md`), or holds more than one
 Library (0.8 serves one Library per instance). The web process then holds the
-root's lease shared for its whole run, beside `worker` and `migrate`, plus an
-exclusive content lock, so one web process serves a root
-(`docs/storage-architecture.md`).
+root's lease shared for its whole run, beside `worker`, `migrate` and any
+other web process (`docs/storage-architecture.md`). Login attempt counts live
+in PostgreSQL, so the limits hold across processes.
 
 **`session`.** Every `/api/` route except the three below needs a
 `prks_session` cookie.

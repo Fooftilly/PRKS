@@ -1,8 +1,13 @@
+import contextlib
 import logging
 import os
+import stat
+import sys
+import time
 from logging.handlers import TimedRotatingFileHandler
 
 from backend.log_safety import PrivacySafeFormatter, safe_error_type
+from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
 from backend.storage.config import StorageConfig
 
 
@@ -10,6 +15,9 @@ _DEFAULT_ROTATE_WHEN = "midnight"
 _DEFAULT_ROTATE_INTERVAL = 1
 _DEFAULT_RETENTION_DAYS = 7
 _OWNER_ONLY_MODE = 0o600
+# How long a rollover waits for another process that is rotating the same log.
+_ROTATE_LOCK_WAIT_SECONDS = 5.0
+_ROTATE_LOCK_SUFFIX = ".rotate.lock"
 LOGGER = logging.getLogger("prks.log_config")
 
 
@@ -48,7 +56,167 @@ def _chmod_owner_only(path: str, *, report: bool = False) -> None:
         LOGGER.error("log_file_mode_insecure")
 
 
+def _log_target(filename) -> str:
+    """The file a configured log path writes to: a symlink to a log file, or
+    one not created yet, resolves to it; anything else keeps the configured
+    path. ``/dev/stderr`` on a pipe resolves to a ``pipe:[...]`` label no
+    name can open, so it is opened by the configured path, as before.
+    """
+    configured = os.path.abspath(os.fspath(filename))
+    # One stat decides, so a target another process creates meanwhile can
+    # never leave this process rotating the symlink instead of its target.
+    try:
+        kind = os.stat(configured).st_mode
+    except FileNotFoundError:
+        return os.path.realpath(configured)
+    except OSError:
+        return configured
+    return os.path.realpath(configured) if stat.S_ISREG(kind) else configured
+
+
 class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
+    """The error log: owner-only, rotated at midnight, shared by processes.
+
+    Several PRKS processes on one root (web processes, ``worker``) write the
+    same file, each through its own handler. The stdlib rollover assumes one
+    writer: a second process that finds the day already rotated returns
+    without reopening, so it keeps writing into the rotated file and retries
+    on every record. Here a rollover hard-links the file to its dated name,
+    which only one process can do for a given day, and every process reopens
+    the log when the name no longer points at the file it holds.
+
+    A configured symlink is resolved once, here: opening, rotating and
+    pruning all act on the file it names, so the link itself stays in place.
+    """
+
+    def __init__(self, filename, *args, **kwargs):
+        super().__init__(_log_target(filename), *args, **kwargs)
+
+    def emit(self, record):
+        try:
+            self._reopen_if_moved()
+        except Exception:
+            # The same boundary as the inherited emit: a log that cannot be
+            # reopened never fails the caller.
+            self.handleError(record)
+            return
+        super().emit(record)
+
+    def handleError(self, record):
+        """Report a failed log write without the record or its traceback.
+
+        The stdlib default prints both to stderr, which would bypass
+        ``PrivacySafeFormatter``; only the exception type is reported here.
+        """
+        if not logging.raiseExceptions:
+            return
+        error_type = safe_error_type(sys.exc_info()[1])
+        # When stderr itself is gone there is nothing left to report to.
+        with contextlib.suppress(Exception):
+            sys.stderr.write(f"prks_log_file_write_failed error_type={error_type}\n")
+
+    def _reopen_if_moved(self) -> None:
+        """Reopen when another process rotated the file this handler holds."""
+        if self.stream is None:
+            return
+        try:
+            held = os.fstat(self.stream.fileno())
+        except (OSError, ValueError):
+            return
+        try:
+            if os.path.samestat(held, os.stat(self.baseFilename)):
+                return
+        except FileNotFoundError:
+            pass
+        except OSError:
+            return
+        self.stream.close()
+        # A failed reopen leaves no closed stream behind: the next record
+        # then opens the log again (FileHandler.emit).
+        self.stream = None
+        self.stream = self._open()
+
+    def doRollover(self):
+        current = int(time.time())
+        t = self.rolloverAt - self.interval
+        time_tuple = time.gmtime(t) if self.utc else time.localtime(t)
+        if not self.utc:
+            dst_now = time.localtime(current)[-1]
+            if dst_now != time_tuple[-1]:
+                time_tuple = time.localtime(t + (3600 if dst_now else -3600))
+        dated = self.rotation_filename(self.baseFilename + "." + time.strftime(self.suffix, time_tuple))
+        held = None
+        if self.stream:
+            try:
+                held = os.fstat(self.stream.fileno())
+            except (OSError, ValueError):
+                held = None
+            self.stream.close()
+            self.stream = None
+        if self._rotate_once(dated, held) and self.backupCount > 0:
+            for old in self.getFilesToDelete():
+                try:
+                    os.remove(old)
+                except FileNotFoundError:
+                    pass  # another process removed it first
+        if not self.delay:
+            self.stream = self._open()
+        self.rolloverAt = self.computeRollover(current)
+        _chmod_owner_only(self.baseFilename, report=True)
+
+    def _rotate_once(self, dated: str, held: "os.stat_result | None") -> bool:
+        """Give the current log its dated name, under a rotation lock; True when this process did.
+
+        The lock is an OS lock on a file beside the log (``<log>.rotate.lock``),
+        never on the log itself, so taking it creates no empty log. Two
+        processes rotating at once, due for the same day or for different
+        ones, take turns. A process rotates only the file it was writing
+        (``held``): the second finds that file already renamed, or the log
+        gone or empty, and archives nothing. So records written since the
+        first rotation are never archived under another day, no empty
+        archive is kept, and no retained archive is pruned for either.
+        """
+        try:
+            lock = ExclusiveFileLock.acquire(self.baseFilename + _ROTATE_LOCK_SUFFIX,
+                                             timeout=_ROTATE_LOCK_WAIT_SECONDS)
+        except (LockBusy, LockUnavailable):
+            return False  # another process is rotating it, or it cannot be locked
+        try:
+            try:
+                current = os.stat(self.baseFilename)
+            except OSError:
+                return False  # gone: another process is between its rotation and its reopen
+            if held is not None and not os.path.samestat(held, current):
+                return False  # another process rotated the file this one was writing
+            if not stat.S_ISREG(current.st_mode) or current.st_size == 0:
+                return False  # nothing to archive, or not a file (``/dev/stderr``)
+            if os.path.exists(dated):
+                return False  # this day is rotated already, by another process
+            try:
+                os.link(self.baseFilename, dated)
+            except FileExistsError:
+                return False
+            except OSError:
+                # No hard links here: rename instead.
+                try:
+                    os.rename(self.baseFilename, dated)
+                except OSError:
+                    return False
+                return True
+            try:
+                os.unlink(self.baseFilename)
+            except OSError:
+                # Another process still holds it open where that forbids the
+                # unlink (Windows): undo, and keep writing to one file today.
+                try:
+                    os.unlink(dated)
+                except OSError:
+                    pass
+                return False
+            return True
+        finally:
+            lock.release()
+
     def _open(self):
         if os.name == "posix":
             flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
@@ -69,10 +237,6 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
             _chmod_owner_only(self.baseFilename)
             return stream
         return super()._open()
-
-    def doRollover(self):
-        super().doRollover()
-        _chmod_owner_only(self.baseFilename, report=True)
 
 
 def setup_logging(config: StorageConfig) -> None:

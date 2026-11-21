@@ -66,10 +66,10 @@ ROOT_LOCK_NAME = "root.lock"
 # The claim lock (§11.1): held exclusive by claim_root only, for one
 # read-check-write-read of an unclaimed marker. Lives beside root.lock.
 CLAIM_LOCK_NAME = "root.claim"
-# The content lock (L-D-1 #630): a web process holds root.lock shared
-# (beside its worker and migrate) and this lock exclusive for its whole run,
-# so one web process serves a root at a time. Lives beside root.lock.
-CONTENT_LOCK_NAME = "content.lock"
+# The open lock: a web process holds it exclusive only while it opens a bound
+# root paired (its preflight probes), so web processes starting together open
+# one at a time and then serve side by side. Lives beside root.lock.
+OPEN_LOCK_NAME = "open.lock"
 MARKER_FORMAT = 1
 LAYOUT_VERSION = 1
 
@@ -323,11 +323,6 @@ def _require_lease(root: str, lease: ExclusiveFileLock) -> None:
 def claim_lock_path(root: str) -> str:
     """``<root>/.prks-maintenance/root.claim``, the claim lock (§11.1)."""
     return os.path.join(root, MAINTENANCE_DIRNAME, CLAIM_LOCK_NAME)
-
-
-def content_lock_path(root: str) -> str:
-    """``<root>/.prks-maintenance/content.lock``, the interim content lock."""
-    return os.path.join(root, MAINTENANCE_DIRNAME, CONTENT_LOCK_NAME)
 
 
 def require_shared_lease(root: str, lease: SharedFileLock) -> None:

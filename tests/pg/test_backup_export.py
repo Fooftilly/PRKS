@@ -101,7 +101,7 @@ class ArchiveLayoutTests(BackupTestCase):
         maintenance = os.path.join(self.storage.root, root_marker.MAINTENANCE_DIRNAME)
         os.makedirs(maintenance, exist_ok=True)
         own = [os.path.join(maintenance, name) for name in
-               (root_marker.ROOT_LOCK_NAME, root_marker.CLAIM_LOCK_NAME, root_marker.CONTENT_LOCK_NAME)]
+               (root_marker.ROOT_LOCK_NAME, root_marker.CLAIM_LOCK_NAME, root_marker.OPEN_LOCK_NAME)]
         own.append(os.path.join(self.storage.root, root_marker.MARKER_FILENAME))
         for path in own:
             if not os.path.exists(path):
