@@ -484,20 +484,22 @@ def format_venv_create_commands(
 
 
 def _venv_create_lines(ctx: PlatformContext) -> list[str]:
-    """Commands for a new project venv, using uv when ``python -m venv`` would lack pip."""
-    use_uv = ctx.uv_available and not ctx.has_ensurepip
+    """Commands for a new project venv, using uv when ``python -m venv`` cannot add pip.
+
+    Without ensurepip, ``python -m venv`` fails (or yields a venv with no pip),
+    so the uv commands are the only ones printed, after a hint to install uv
+    when it is not on PATH.
+    """
+    use_uv = not ctx.has_ensurepip
     try:
         python_min: Sequence[int] = python_min_version()
     except (OSError, ValueError):
         python_min = (3, 12)
     lines: list[str] = []
-    if not use_uv and not ctx.has_ensurepip:
+    if use_uv and not ctx.uv_available:
         lines.append(
-            "  # This Python has no ensurepip, so `-m venv` creates a venv without pip."
-        )
-        lines.append(
-            "  # Install uv (https://docs.astral.sh/uv/) and use"
-            " `uv venv` + `uv pip install` instead."
+            "  # This Python has no ensurepip, so `-m venv` cannot add pip."
+            " Install uv (https://docs.astral.sh/uv/), then:"
         )
     lines.extend(
         f"  {cmd}"

@@ -982,7 +982,9 @@ class RemediationMessageTests(unittest.TestCase):
         )
         msg = remediation_message(missing=["uvicorn"], ctx=ctx)
         self.assertIn("no ensurepip", msg)
-        self.assertIn("python3 -m venv .venv", msg)
+        self.assertIn("https://docs.astral.sh/uv/", msg)
+        self.assertIn("uv venv --python", msg)
+        self.assertNotIn("-m venv", msg)
         self.assertIn("uv pip install --python /usr/bin/python3 -r requirements.txt", msg)
         self.assertNotIn("/usr/bin/python3 -m pip install", msg)
 
