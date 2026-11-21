@@ -29,9 +29,10 @@ permissions:
   contents: read
 
 concurrency:
-  # Scheduled and master dispatch runs share one group, so two runs never
-  # race to create the standing report issue.
-  group: mutation-testing-${{ github.event.pull_request.number || 'report' }}
+  # Scheduled and master dispatch runs (the ones that report) share one group,
+  # so two runs never race to create the standing report issue. Pull requests
+  # and branch dispatches get their own group and never displace a weekly run.
+  group: mutation-testing-${{ github.event.pull_request.number || ((github.event_name == 'schedule' || github.ref == 'refs/heads/master') && 'report') || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

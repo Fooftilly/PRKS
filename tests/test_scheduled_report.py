@@ -245,6 +245,21 @@ class MutationReportTests(unittest.TestCase):
                     redirect_stdout(io.StringIO()):
                 self.assertEqual(report.main(["mutation", "--run-id", "1", "--dry-run"]), code)
 
+    def test_a_missing_result_fails_the_report_after_reporting_the_rest(self):
+        from scripts.ci.mutation_testing import TARGETS
+
+        names = sorted(TARGETS)
+        outputs = json.dumps({f"result-{name}": json.dumps({
+            "target": name, "stats": {"total": 1, "killed": 1, "survived": 0, "no_tests": 0, "timeout": 0},
+            "survivors_by_function": []}) for name in names[1:]})
+        gh = FakeGitHub()
+        env = {"MUTATION_OUTPUTS": outputs, "GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "t"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(report, "GitHubClient", lambda *a: gh), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(report.main(["mutation", "--run-id", "1"]), 1)
+        (issue,) = gh.issues.values()
+        self.assertEqual(len(gh.bodies(issue["number"])), len(names) - 1)
+
     def test_previous_survivors_reads_only_that_target(self):
         body = "<!-- mutation-report:a survived=3 -->\n<!-- mutation-report:ab survived=9 -->"
         self.assertEqual(report.previous_survivors(body, "a"), 3)
@@ -286,6 +301,7 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertNotIn("issues:", jobs["report-preview"])
         self.assertIn("issues: write", jobs["report"])
         self.assertIn("github.event_name == 'schedule'", jobs["report"])
+        self.assertIn("&& 'report') || github.ref }}", text)
         self.assertNotIn("pull_request", jobs["report"].split("runs-on:", 1)[0])
         self.assertIn("--dry-run", jobs["report-preview"])
         self.assertIn("github.event_name == 'pull_request'", jobs["report-preview"])

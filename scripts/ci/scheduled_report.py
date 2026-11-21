@@ -323,7 +323,9 @@ def main(argv: list[str] | None = None) -> int:
     number = ensure_mutation_issue(client)
     for result in results:
         print(report_mutation(client, number, result, run_url))
-    return 0
+    # A missing result fails this job, so the workflow fails and the failure
+    # issue says so instead of leaving that target's comment silently stale.
+    return 1 if missing else 0
 
 if __name__ == "__main__":
     sys.exit(main())
