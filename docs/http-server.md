@@ -163,7 +163,7 @@ Everything below was read from master 02845f1.
   - Processing upload (`POST /api/processing-items`, up to 2 GiB);
   - backup stage (`POST /api/backups/stage`, up to 64 GiB by default).
 
-  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline. A stalled client still holds its request thread until one of them ends the read, so enough stalled uploads can fill the thread pool for that long; the timeouts bound the hold, they do not prevent it.
+  Both read the socket directly through `processing_api.TimedBody`, with a 30 s idle timeout and a deadline. A stalled client still holds its request thread until one of them ends the read. On Uvicorn, enough stalled uploads can fill the bounded `PRKS_HTTP_THREADS` pool for that long; the timeouts bound the hold, they do not prevent it.
 - **Lifecycle.** `run_server` binds the server. The embedded job worker (`backend/jobs/embedded.py`) serves the server and stops it gracefully on SIGTERM or SIGINT. The web process holds the data root's lease shared and bumps the start generation once per process start (§7.5, §11.1).
 - **Process-local state**: none that correctness depends on. #1331 deleted the last of it, the `LibraryAccessGate` and the save-confirm tokens (§7.5).
 - **What the stdlib server lacks:**
