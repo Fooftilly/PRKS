@@ -9,22 +9,26 @@ A recording run (``PRKS_E2E_COVERAGE_MAP_DIR`` set, see
   Chromium's precise coverage. A line counts when the innermost function
   around it ran. Coverage is taken before each ``goto``/``reload``/history
   navigation and before a context closes, because a new document discards
-  the old one's counters.
+  the old one's counters; and
+- the Vue source lines (``frontend-app/src/**``) behind the parts of the
+  bundle ``frontend/vue/prks-vue.js`` that ran, when the recording run built
+  a hidden source map of that same bundle (``PRKS_E2E_VUE_SOURCE_MAP``).
 
 ``build`` merges the per-shard records into one map: for each file, runs of
 lines with the set of tests that executed them. A selector can then pick the
 tests for a diff. The map is advisory data (shadow mode): the E2E gate does
 not read it.
 
-Not covered, by design: the Vue bundle (``frontend/vue/**``, no source maps
-here), vendored scripts, CSS and HTML, service and web workers, and app-side
-reloads that no test call started. Records hold repository paths, line
+Not covered, by design: vendored scripts, CSS (including ``<style>`` in a
+``.vue`` file) and HTML, service and web workers, and app-side reloads that
+no test call started. Records hold repository paths, line
 numbers and unittest ids only: never URLs with data, titles or bodies.
 """
 
 from __future__ import annotations
 
 import argparse
+import bisect
 import gzip
 import json
 import os
@@ -43,6 +47,24 @@ _JS_PREFIX = "/js/"
 _JS_ROOT = "frontend/js/"
 _PY_ROOTS = ("backend/",)
 _PY_FILES = ("prks_app.py",)
+# The Vue bundle, where it is served, and the sources its source map names.
+_VUE_BUNDLE = "frontend/vue/prks-vue.js"
+_VUE_URL = "/vue/prks-vue.js"
+_VUE_ROOT = "frontend-app/src/"
+_VUE_EXTENSIONS = (".ts", ".vue", ".js")
+_NOT_SHIPPED = tuple(f".{kind}.{ext}" for kind in ("test", "spec", "stories") for ext in ("ts", "js", "vue"))
+VUE_SOURCE_MAP_ENV = "PRKS_E2E_VUE_SOURCE_MAP"
+# Build outputs that static-analysis.yml rebuilds from the sources and diffs
+# against the commit: a change to them is explained by the source change.
+_DERIVED = (
+    "frontend/vue/prks-vue.js",
+    "frontend/vue/BUILD-MANIFEST.json",
+    "frontend/vue/THIRD_PARTY_LICENSES.md",
+    "frontend/vendor/DEPENDENCY-MANIFEST.json",
+)
+# sw.js is derived only where the build rewrites it: this one line.
+_SW = "frontend/sw.js"
+_SW_REVISION = re.compile(r"^[+-]\s*const DEPENDENCY_REVISION = '[0-9a-f]+';\s*$")
 
 _LOCK = threading.Lock()
 _SESSIONS: dict[Any, Any] = {}
@@ -232,6 +254,106 @@ def executed_lines(functions: Sequence[Mapping[str, Any]], starts: list[int], te
     return lines
 
 
+_B64 = {char: index for index, char in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")}
+
+
+def decode_mappings(mappings: str) -> list[tuple[int, int, int, int]]:
+    """Source map v3 ``mappings`` as ``(generated line, generated column, source, original line)``, 0-based.
+
+    A one-field segment starts generated code with no source: it is kept, with source -1.
+    """
+    out: list[tuple[int, int, int, int]] = []
+    source = original_line = original_column = 0
+    for generated_line, text in enumerate(mappings.split(";")):
+        column = 0
+        for segment in text.split(",") if text else ():
+            values: list[int] = []
+            value = shift = 0
+            for char in segment:
+                digit = _B64[char]
+                value += (digit & 31) << shift
+                if digit & 32:
+                    shift += 5
+                else:
+                    values.append(-(value >> 1) if value & 1 else value >> 1)
+                    value = shift = 0
+            column += values[0]
+            if len(values) == 1:
+                out.append((generated_line, column, -1, -1))
+            elif len(values) >= 4:
+                source += values[1]
+                original_line += values[2]
+                original_column += values[3]
+                out.append((generated_line, column, source, original_line))
+    return out
+
+
+class BundleMap:
+    """Generated offsets of the Vue bundle -> the ``frontend-app/src`` line each came from."""
+
+    def __init__(self, source_map: Mapping[str, Any], map_dir: Path, starts: list[int], repo: Path = REPO):
+        names: list[str | None] = []
+        for raw in source_map.get("sources") or ():
+            try:
+                rel = (map_dir / str(raw)).resolve().relative_to(repo.resolve()).as_posix()
+            except (ValueError, OSError):
+                rel = None
+            names.append(rel if rel is not None and is_vue_source(rel) else None)
+        # Each generated line starts unmapped: a mapping never carries over a line break.
+        entries: list[tuple[int, int, str | None, int]] = [(start, 0, None, 0) for start in starts]
+        self.code_lines: dict[str, set[int]] = {}
+        for line, column, source, original in decode_mappings(str(source_map.get("mappings") or "")):
+            if line >= len(starts) or source >= len(names):
+                continue
+            rel = names[source] if source >= 0 else None
+            entries.append((starts[line] + column, 1, rel, original + 1))
+            if rel is not None:
+                self.code_lines.setdefault(rel, set()).add(original + 1)
+        entries.sort(key=lambda entry: (entry[0], entry[1]))
+        self.offsets: list[int] = [offset for offset, _order, _rel, _line in entries]
+        self.targets: list[tuple[str | None, int]] = [(rel, line) for _offset, _order, rel, line in entries]
+
+    def lines(self, pieces: Iterable[tuple[int, int, int]]) -> dict[str, set[int]]:
+        """The source lines behind the executed ``pieces`` (start, end, count) of the bundle."""
+        found: dict[str, set[int]] = {}
+        for start, end, count in pieces:
+            if count <= 0 or end <= start:
+                continue
+            # The mapping in effect at ``start``, and every one that begins before ``end``.
+            first = max(0, bisect.bisect_right(self.offsets, start) - 1)
+            last = bisect.bisect_left(self.offsets, end)
+            for rel, line in self.targets[first:last]:
+                if rel is not None:
+                    found.setdefault(rel, set()).add(line)
+        return found
+
+
+_BUNDLE_MAP: list[BundleMap | None] = []
+
+
+def load_bundle_map(path: str | os.PathLike[str] | None = None) -> BundleMap | None:
+    """The Vue bundle's source map named by ``PRKS_E2E_VUE_SOURCE_MAP``, or None without one."""
+    if path is None:
+        if _BUNDLE_MAP:
+            return _BUNDLE_MAP[0]
+        path = os.environ.get(VUE_SOURCE_MAP_ENV) or None
+        if path is None:
+            _BUNDLE_MAP.append(None)
+            return None
+        _BUNDLE_MAP.append(load_bundle_map(path))
+        return _BUNDLE_MAP[0]
+    map_path = Path(path)
+    with open(map_path, encoding="utf-8") as fh:
+        source_map = json.load(fh)
+    _text, starts = _source(_VUE_BUNDLE)
+    return BundleMap(source_map, map_path.parent, starts)
+
+
+def _is_vue_bundle(url: str, origin_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and parsed.hostname in origin_hosts and parsed.path == _VUE_URL
+
+
 def _repo_path_for(url: str, origin_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")) -> str | None:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or parsed.hostname not in origin_hosts:
@@ -254,6 +376,12 @@ def _take(page) -> None:
         return
     files: dict[str, set[int]] = {}
     for script in result:
+        if _is_vue_bundle(script.get("url") or ""):
+            bundle = load_bundle_map()
+            if bundle is not None:
+                for rel, lines in bundle.lines(_segments(script.get("functions") or [])).items():
+                    files.setdefault(rel, set()).update(lines)
+            continue
         rel = _repo_path_for(script.get("url") or "")
         if rel is None:
             continue
@@ -342,11 +470,24 @@ def _read_records(paths: Iterable[Path]) -> tuple[list[str], dict[str, dict[int,
     return sorted(tests), lines
 
 
-def build_map(record_paths: Iterable[Path], *, commit: str) -> dict[str, Any]:
+def _spans(numbers: Iterable[int]) -> list[list[int]]:
+    spans: list[list[int]] = []
+    for number in sorted(set(numbers)):
+        if spans and spans[-1][1] == number - 1:
+            spans[-1][1] = number
+        else:
+            spans.append([number, number])
+    return spans
+
+
+def build_map(record_paths: Iterable[Path], *, commit: str, bundle: BundleMap | None = None) -> dict[str, Any]:
     """Merge records into ``{tests, sets, files: {path: [[first, last, set], ...]}}``.
 
     ``sets`` lists each distinct test set once (indexes into ``tests``); a file's
     runs are maximal spans of consecutive executed lines that share one set.
+    With the Vue ``bundle`` map, ``code_lines`` lists, per Vue source, the
+    spans of lines that produced bundle code, run or not: a changed line with
+    no code of its own then selects through its neighbours.
     """
     tests, lines = _read_records(record_paths)
     index = {test: i for i, test in enumerate(tests)}
@@ -363,13 +504,16 @@ def build_map(record_paths: Iterable[Path], *, commit: str) -> dict[str, Any]:
                 runs.append([number, number, set_id])
         files[rel] = runs
     sets = [list(key) for key, _ in sorted(set_ids.items(), key=lambda item: item[1])]
-    return {
+    result: dict[str, Any] = {
         "format": FORMAT,
         "commit": commit,
         "tests": tests,
         "sets": sets,
         "files": files,
     }
+    if bundle is not None:
+        result["code_lines"] = {rel: _spans(lines) for rel, lines in sorted(bundle.code_lines.items())}
+    return result
 
 
 def tests_for_lines(coverage_map: Mapping[str, Any], rel: str, wanted: Iterable[int]) -> set[str]:
@@ -395,7 +539,61 @@ def is_mapped_kind(rel: str) -> bool:
         (rel.startswith(_PY_ROOTS) and rel.endswith(".py"))
         or rel in _PY_FILES
         or (rel.startswith(_JS_ROOT) and rel.endswith(".js"))
+        or is_vue_source(rel)
     )
+
+
+def is_vue_source(rel: str) -> bool:
+    return rel.startswith(_VUE_ROOT) and rel.endswith(_VUE_EXTENSIONS) and not rel.endswith(_NOT_SHIPPED)
+
+
+def with_code_neighbours(wanted: Iterable[int], code: Iterable[Sequence[int]]) -> set[int]:
+    """Each wanted line that produced no bundle code stands for the nearest code lines above and below.
+
+    A source map names only the lines code came from: a changed prop default
+    or a line inside a multi-line literal can have no mapping of its own.
+    """
+    lines = sorted({n for first, last in code for n in range(int(first), int(last) + 1)})
+    if not lines:
+        return set(wanted)
+    known = set(lines)
+    out: set[int] = set()
+    for number in wanted:
+        if number in known:
+            out.add(number)
+            continue
+        at = bisect.bisect_left(lines, number)
+        if at > 0:
+            out.add(lines[at - 1])
+        if at < len(lines):
+            out.add(lines[at])
+    return out
+
+
+# Top-level blocks of a single-file component, in the order Vue's parser meets them:
+# a script is skipped whole, a comment hides what it wraps (to the end of the file
+# when unterminated), and a style block (paired, or a self-closing ``src`` import)
+# is live CSS.
+_SFC_BLOCK = re.compile(
+    r"<script\b.*?</script(?:[ \t\r\n\f][^>]*)?>|<!--(?:.*?-->|.*\Z)"
+    r"""|(<style\b(?:"[^"]*"|'[^']*'|[^>"'])*?/\s*>|<style\b.*?</style(?:[ \t\r\n\f][^>]*)?>)""",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def active_styles(text: str) -> list[str]:
+    """The live ``<style>`` blocks of a single-file component, tags included."""
+    return [m.group(1) for m in _SFC_BLOCK.finditer(text) if m.group(1)]
+
+
+def _sw_only_revision(diff_text: str) -> bool:
+    """Whether the diff only rewrites the revision value in place: one line replaced by one, at the same line."""
+    hunks = parse_hunks(diff_text)
+    if len(hunks) != 1 or hunks[0][1] != 1 or hunks[0][3] != 1 or hunks[0][0] != hunks[0][2]:
+        return False
+    changed = [line for line in diff_text.splitlines()
+               if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    return len(changed) == 2 and all(_SW_REVISION.match(line) for line in changed)
 
 
 def parse_hunks(diff_text: str) -> list[tuple[int, int, int, int]]:
@@ -464,6 +662,19 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout
 
 
+def _show(repo: Path, rev: str, rel: str) -> str:
+    try:
+        return _git(repo, "show", f"{rev}:{rel}")
+    except RuntimeError:
+        return ""  # added or deleted on that side
+
+
+def _touches_style(repo: Path, rel: str, old_rev: str, new_rev: str) -> bool:
+    # Compare the live CSS itself, so wrapping a block in a comment (or removing
+    # one) counts, and a comment or insertion outside every block does not.
+    return active_styles(_show(repo, old_rev, rel)) != active_styles(_show(repo, new_rev, rel))
+
+
 def select_for_diff(
     maps: Sequence[Mapping[str, Any]], *, repo: Path, base: str, head: str, all_ids: Iterable[str]
 ) -> dict[str, Any]:
@@ -499,13 +710,25 @@ def select_for_diff(
     fallback: list[str] = []
     files: dict[str, Any] = {}
     for rel in changed:
+        if rel in _DERIVED or (rel == _SW and _sw_only_revision(_git(repo, "diff", "-U0", f"{base}...{head}", "--", rel))):
+            # Rebuilt from the sources and diffed in CI: the source change selects.
+            files[rel] = {"rule": "derived"}
+            continue
         if is_mapped_kind(rel) and any(rel in m["files"] for m in maps):
             pr_hunks = parse_hunks(_git(repo, "diff", "-U0", f"{base}...{head}", "--", rel))
             wanted = touched_old_lines(pr_hunks)
+            if rel.endswith(".vue") and _touches_style(repo, rel, merge_base, head):
+                # The map does not measure CSS: a style change keeps the planner's full run.
+                files[rel] = {"rule": "full", "why": "vue-style"}
+                fallback.append(rel)
+                continue
             # The PR's old side is the merge base; the map was recorded at map_commit.
             if merge_base != map_commit:
                 drift = parse_hunks(_git(repo, "diff", "-U0", map_commit, merge_base, "--", rel))
                 wanted = translate_lines(wanted, drift)
+            if is_vue_source(rel):
+                code = [span for m in maps for span in (m.get("code_lines") or {}).get(rel, ())]
+                wanted = with_code_neighbours(wanted, code)
             picked = set().union(*(tests_for_lines(m, rel, wanted) for m in maps)) & known
             tests |= picked
             files[rel] = {"rule": "coverage-map", "tests": len(picked)}
@@ -529,7 +752,7 @@ def select_for_diff(
         files[rel] = {"rule": "features", "features": list(classified["features"]), "tests": len(feature_ids)}
     if fallback:
         return {"mode": "full", "tests": len(all_ids), "total": len(all_ids), "full_because": fallback, "files": files}
-    if not tests and all(f["rule"] == "skip" for f in files.values()):
+    if not tests and all(f["rule"] in ("skip", "derived") for f in files.values()):
         return {"mode": "skip", "tests": 0, "total": len(all_ids), "files": files}
     tests |= set(policy.select_smoke(all_ids))
     return {"mode": "subset", "tests": len(tests), "total": len(all_ids), "selected": sorted(tests), "files": files}
@@ -568,7 +791,7 @@ def main(argv: list[str] | None = None) -> int:
     if not paths:
         print("no coverage records found", file=sys.stderr)
         return 1
-    coverage_map = build_map(paths, commit=args.commit)
+    coverage_map = build_map(paths, commit=args.commit, bundle=load_bundle_map())
     with gzip.open(args.output, "wt", encoding="utf-8") as fh:
         json.dump(coverage_map, fh, sort_keys=True, separators=(",", ":"))
     lines = sum(last - first + 1 for runs in coverage_map["files"].values() for first, last, _ in runs)

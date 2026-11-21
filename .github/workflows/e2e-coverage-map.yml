@@ -64,6 +64,22 @@ jobs:
         with:
           node-version: "24"
 
+      - name: Build a source map of the committed Vue bundle
+        # A hidden source map (no sourceMappingURL comment) leaves the bundle
+        # byte for byte as committed; the check below refuses a map of any
+        # other bundle. Only the recorder reads the map: nothing serves it.
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --prefer-offline --no-audit --no-fund --prefix frontend-app
+          out="${RUNNER_TEMP}/prks-vue-source-map"
+          (cd frontend-app && node node_modules/vite/bin/vite.js build --outDir "$out" --emptyOutDir --sourcemap hidden)
+          if ! cmp -s "$out/prks-vue.js" frontend/vue/prks-vue.js; then
+            echo "::error::The rebuilt Vue bundle differs from frontend/vue/prks-vue.js; rebuild it with npm run build."
+            exit 1
+          fi
+          echo "PRKS_E2E_VUE_SOURCE_MAP=$out/prks-vue.js.map" >> "$GITHUB_ENV"
+
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

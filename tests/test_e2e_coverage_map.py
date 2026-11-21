@@ -293,6 +293,106 @@ class SelectForDiffTests(unittest.TestCase):
         self.assertEqual(result["mode"], "full")
         self.assertEqual(result["files"]["frontend/css/style.css"]["why"], "frontend-full")
 
+    def _vue_repo(self):
+        (self.repo / "frontend-app" / "src" / "components").mkdir(parents=True)
+        (self.repo / VUE).write_text(CARD)
+        (self.repo / "frontend" / "vue").mkdir(parents=True)
+        (self.repo / "frontend" / "vue" / "prks-vue.js").write_text("bundle1\n")
+        (self.repo / "frontend" / "sw.js").write_text("a\n    const DEPENDENCY_REVISION = 'aaa111';\nb\n")
+        self._commit()
+        self.base = _git(self.repo, "rev-parse", "HEAD")
+        return {"commit": self.base, "files": {VUE: [[2, 2, 0], [6, 6, 1], [9, 9, 1]]},
+                "code_lines": {VUE: [[2, 2], [6, 6], [9, 9]]}}
+
+    def _rebuild(self, revision="bbb222"):
+        (self.repo / "frontend" / "vue" / "prks-vue.js").write_text("bundle2\n")
+        sw = self.repo / "frontend" / "sw.js"
+        sw.write_text(sw.read_text().replace("aaa111", revision))
+
+    def test_a_vue_change_with_its_rebuilt_bundle_selects_from_the_map(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("function go() { return 1 }", "function go() { return 2 }"))
+        self._rebuild()
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["mode"], "subset")
+        self.assertEqual(result["selected"], [self.IDS[1]])
+        self.assertEqual(result["files"]["frontend/vue/prks-vue.js"], {"rule": "derived"})
+        self.assertEqual(result["files"]["frontend/sw.js"], {"rule": "derived"})
+
+    def test_a_vue_line_without_code_selects_through_its_neighbours(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("{ size: 'md' }", "{ size: 'lg' }"))
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["selected"], self.IDS)
+
+    def test_a_vue_style_change_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("color: red", "color: blue"))
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["mode"], "full")
+        self.assertEqual(result["files"][VUE]["why"], "vue-style")
+
+    def test_a_new_style_block_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD + "<style>\n.x { margin: 0 }\n</style>\n")
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
+
+    def test_a_moved_or_deleted_revision_line_is_not_derived(self):
+        overrides = self._vue_repo()
+        sw = self.repo / "frontend" / "sw.js"
+        sw.write_text("a\nb\n    const DEPENDENCY_REVISION = 'aaa111';\n")
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"]["frontend/sw.js"]["rule"], "full")
+        sw.write_text("a\nb\n")
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"]["frontend/sw.js"]["rule"], "full")
+
+    def test_an_insertion_just_above_a_style_block_is_not_a_style_change(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("</template>\n", "</template>\n<!-- note -->\n"))
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["rule"], "coverage-map")
+
+    def test_commenting_out_a_style_block_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD.replace("<style scoped>\n", "<!--\n<style scoped>\n")
+                                     .replace("</style>\n", "</style>\n-->\n"))
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
+
+    def test_a_new_self_closing_style_import_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD + '<style scoped src="./shared.css" />\n')
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
+
+    def test_any_other_sw_change_is_not_derived(self):
+        overrides = self._vue_repo()
+        sw = self.repo / "frontend" / "sw.js"
+        sw.write_text(sw.read_text().replace("b\n", "c\n"))
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["mode"], "full")
+        self.assertEqual(result["files"]["frontend/sw.js"]["rule"], "full")
+
+    def test_a_vue_source_the_map_never_saw_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / "frontend-app" / "src" / "types.ts").write_text("export type X = 1\n")
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["mode"], "full")
+        self.assertEqual(result["files"]["frontend-app/src/types.ts"]["why"], "frontend-full")
+
+    def test_a_bundle_change_alone_is_a_skip(self):
+        overrides = self._vue_repo()
+        self._rebuild()
+        self._commit()
+        self.assertEqual(self._select(**overrides)["mode"], "skip")
+
     def test_a_map_commit_that_is_not_a_sha_is_refused(self):
         for commit in ("--output=/tmp/x", "main", ""):
             with self.subTest(commit=commit), self.assertRaisesRegex(ValueError, "not a full SHA"):
@@ -301,6 +401,100 @@ class SelectForDiffTests(unittest.TestCase):
     def test_an_option_as_a_revision_is_refused(self):
         with self.assertRaisesRegex(ValueError, "not a revision"):
             cm.select_for_diff([self.map], repo=self.repo, base="--output=/tmp/x", head="HEAD", all_ids=self.IDS)
+
+
+VUE = "frontend-app/src/components/Card.vue"
+CARD = "".join([
+    "<script setup lang=\"ts\">\n",        # 1
+    "const props = withDefaults(\n",       # 2  (code)
+    "  defineProps<{ size?: string }>(),\n",  # 3
+    "  { size: 'md' },\n",                 # 4  no mapping of its own
+    ")\n",                                  # 5
+    "function go() { return 1 }\n",         # 6  (code)
+    "</script>\n",                          # 7
+    "<template>\n",                         # 8
+    "  <button @click=\"go\">x</button>\n",   # 9  (code)
+    "</template>\n",                        # 10
+    "<style scoped>\n",                     # 11
+    ".card { color: red }\n",               # 12
+    "</style>\n",                           # 13
+])
+
+
+class SourceMapTests(unittest.TestCase):
+    def test_decodes_v3_mappings(self):
+        # Line 0: col 0 -> source 0 line 0; col 2 -> source 0 line 1. Line 1: col 0 -> source 1 line 1.
+        self.assertEqual(cm.decode_mappings("AAAA,EACA;ACAA"), [(0, 0, 0, 0), (0, 2, 0, 1), (1, 0, 1, 1)])
+        # Negative deltas, and a one-field segment: generated code with no source.
+        self.assertEqual(cm.decode_mappings("AAEA,C,EADA"), [(0, 0, 0, 2), (0, 1, -1, -1), (0, 3, 0, 1)])
+
+    def _bundle(self, repo: Path) -> cm.BundleMap:
+        out = repo / "out"
+        out.mkdir()
+        source_map = {
+            "version": 3,
+            "sources": ["../frontend-app/src/components/Card.vue", "../frontend-app/node_modules/vue/x.js",
+                        "../frontend-app/src/components/Card.test.ts", "\u0000plugin-vue:export-helper"],
+            # Generated line 0: col 0 -> Card line 2, col 10 -> vue (dropped), col 20 -> Card line 6,
+            # col 30 -> test file (dropped), col 40 -> Card line 9.
+            "mappings": "AACA,UCAA,UDIA,UEAA,UFGA",
+        }
+        return cm.BundleMap(source_map, out, [0], repo=repo)
+
+    def test_only_shipped_vue_sources_are_kept(self):
+        with tempfile.TemporaryDirectory() as raw:
+            bundle = self._bundle(Path(raw))
+        self.assertEqual(bundle.code_lines, {VUE: {2, 6, 9}})
+
+    def test_executed_pieces_map_to_their_source_lines(self):
+        with tempfile.TemporaryDirectory() as raw:
+            bundle = self._bundle(Path(raw))
+        # 0-15 ran (Card 2 and the dropped vue line), 15-35 did not, 35-45 ran (the mapping at 30 is in effect).
+        self.assertEqual(bundle.lines([(0, 15, 1), (15, 35, 0), (35, 45, 1)]), {VUE: {2, 9}})
+
+    def test_unmapped_code_and_a_new_line_credit_no_source(self):
+        with tempfile.TemporaryDirectory() as raw:
+            out = Path(raw) / "out"
+            out.mkdir()
+            # Line 0: col 0 -> Card line 2, col 5 unmapped, col 10 -> Card line 3 (the line ends mapped).
+            # Line 1 (offset 20) has no mapping at all, so nothing carries over the newline.
+            source_map = {"sources": ["../frontend-app/src/components/Card.vue"], "mappings": "AACA,K,KACA;"}
+            bundle = cm.BundleMap(source_map, out, [0, 20], repo=Path(raw))
+        self.assertEqual(bundle.lines([(6, 9, 1)]), {})
+        self.assertEqual(bundle.lines([(21, 25, 1)]), {})
+        self.assertEqual(bundle.lines([(0, 4, 1)]), {VUE: {2}})
+        self.assertEqual(bundle.lines([(11, 15, 1)]), {VUE: {3}})
+
+    def test_the_map_lists_code_lines_when_built_with_a_bundle(self):
+        with tempfile.TemporaryDirectory() as raw:
+            bundle = self._bundle(Path(raw))
+            records = Path(raw) / "records-1.jsonl"
+            records.write_text(json.dumps({"test": "t1", "kind": "js", "files": {VUE: [3]}}) + "\n")
+            built = cm.build_map([records], commit="a" * 40, bundle=bundle)
+        self.assertEqual(built["code_lines"], {VUE: [[2, 2], [6, 6], [9, 9]]})
+        self.assertNotIn("code_lines", cm.build_map([], commit="a" * 40))
+
+    def test_a_line_without_code_stands_for_its_code_neighbours(self):
+        self.assertEqual(cm.with_code_neighbours({4}, [[2, 2], [6, 6], [9, 9]]), {2, 6})
+        self.assertEqual(cm.with_code_neighbours({6, 12}, [[2, 2], [6, 6], [9, 9]]), {6, 9})
+        self.assertEqual(cm.with_code_neighbours({1}, []), {1})
+
+    def test_live_style_blocks_are_found(self):
+        self.assertEqual(cm.active_styles(CARD), ["<style scoped>\n.card { color: red }\n</style>"])
+        self.assertEqual(cm.active_styles("<style>a{}</style>\n<template/>\n"), ["<style>a{}</style>"])
+        self.assertEqual(cm.active_styles("<!--\n<style>a{}</style>\n-->\n"), [])
+        self.assertEqual(cm.active_styles("<!-- open\n<style>a{}</style>\n"), [])
+        self.assertEqual(cm.active_styles("<script>const s = '<style>a{}</style>'</script>\n"), [])
+        self.assertEqual(cm.active_styles('<style scoped src="./a.css" />\n'), ['<style scoped src="./a.css" />'])
+        quoted = '<style data-x="a/>b">\n.c{}\n</style>'
+        self.assertEqual(cm.active_styles(quoted + "\n"), [quoted])
+        lookalike = "<style>\n/* ends with </style-preview> */\n.p { color: red }\n</style >"
+        self.assertEqual(cm.active_styles(lookalike + "\n"), [lookalike])
+
+    def test_only_the_bundle_url_is_the_bundle(self):
+        self.assertTrue(cm._is_vue_bundle("http://127.0.0.1:8123/vue/prks-vue.js?v=1"))
+        self.assertFalse(cm._is_vue_bundle("http://example.test/vue/prks-vue.js"))
+        self.assertFalse(cm._is_vue_bundle("http://127.0.0.1:8123/js/app.js"))
 
 
 class DiffLineTests(unittest.TestCase):
@@ -338,11 +532,24 @@ class DiffLineTests(unittest.TestCase):
         self.assertEqual(cm.translate_lines({7}, drift), {5, 6})
 
     def test_mapped_kinds(self):
-        for rel in ("backend/api/tags.py", "prks_app.py", "frontend/js/app.js"):
+        for rel in ("backend/api/tags.py", "prks_app.py", "frontend/js/app.js", "frontend-app/src/App.vue",
+                    "frontend-app/src/domain/x.ts"):
             self.assertTrue(cm.is_mapped_kind(rel), rel)
-        for rel in ("frontend/css/style.css", "frontend/vue/prks-vue.js", "frontend-app/src/App.vue",
+        for rel in ("frontend/css/style.css", "frontend/vue/prks-vue.js", "frontend-app/src/App.test.ts",
+                    "frontend-app/src/Card.stories.ts", "frontend-app/vite.config.ts",
                     "backend/db/schema/snapshot.json", "tests/test_x.py"):
             self.assertFalse(cm.is_mapped_kind(rel), rel)
+
+
+class RecordingWorkflowTests(unittest.TestCase):
+    def test_the_vue_source_map_is_hidden_and_only_of_the_committed_bundle(self):
+        root = Path(__file__).resolve().parents[1]
+        text = (root / ".github/workflows/e2e-coverage-map.yml").read_text(encoding="utf-8")
+        self.assertIn("--sourcemap hidden", text)
+        self.assertIn('cmp -s "$out/prks-vue.js" frontend/vue/prks-vue.js', text)
+        self.assertIn(f"{cm.VUE_SOURCE_MAP_ENV}=$out/prks-vue.js.map", text)
+        # The map is built before the tests record, so every shard reads it.
+        self.assertLess(text.index("--sourcemap hidden"), text.index("Record the shard's coverage"))
 
 
 if __name__ == "__main__":
