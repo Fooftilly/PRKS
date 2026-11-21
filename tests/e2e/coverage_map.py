@@ -130,7 +130,7 @@ def record_server(test_id: str, tmpdir: str) -> None:
     data_file = Path(tmpdir) / "server.coverage"
     if not data_file.exists():
         return
-    from coverage import CoverageData
+    from coverage import CoverageData  # pyright: ignore[reportMissingImports]  # installed only by e2e-coverage-map.yml
 
     data = CoverageData(basename=str(data_file))
     data.read()
