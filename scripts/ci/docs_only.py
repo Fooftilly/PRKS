@@ -1,6 +1,6 @@
 """Conservative docs-only PR scope for required CI checks (#643).
 
-Only A/M changes to an explicit audited subset of Wiki Markdown, or to an
+Only A/M changes to an explicit audited set of documentation Markdown, or to an
 explicit audited set of external analysis-tool config files, qualify. Missing/invalid baselines,
 renames, deletes, workflow or test changes, and unreadable diffs fail closed to
 ordinary full validation across the required CI workflows.
@@ -33,16 +33,39 @@ import re
 import subprocess
 from pathlib import Path
 
-# Only these four wiki pages have been audited as documentation-only. The
-# Getting Started / Offline and Sync pages are not read as source or test
-# fixtures; their relative links are covered by the docs validator.
-# README, licensing/agent guidance and implementation architecture documents
-# are read as fixtures by tests and must continue to run full validation.
+# Documentation pages audited as documentation-only: no source file, test,
+# script or workflow reads them (tests/test_ci_docs_only.py enforces this by
+# name), so a change cannot alter any suite's outcome. Their relative links,
+# anchors and fences are checked by the docs validator instead. README,
+# licensing/agent guidance, agent rules and every docs page that a test reads
+# as a fixture are absent and keep full validation; so are new pages.
 AUDITED_DOC_FILES = frozenset({
+    "docs/agent-workflows/agent-queue.md",
+    "docs/agent-workflows/github-discussions.md",
+    "docs/agent-workflows/project3-assignment-dispatch.md",
+    "docs/agent-workflows/project3-assignment-request.md",
+    "docs/agent-workflows/project3-triage.md",
+    "docs/b5-browser-baselines/comparison-1033.md",
+    "docs/classic-script-distribution.md",
+    "docs/e2e-performance.md",
+    "docs/job-worker.md",
+    "docs/mutation-coordinator-stall-design.md",
+    "docs/research/pragmatic-dnd-234.md",
+    "docs/storage-architecture.md",
+    "docs/wiki/Architecture.md",
+    "docs/wiki/Configuration-and-Operations.md",
+    "docs/wiki/Dependencies-and-Vendoring.md",
+    "docs/wiki/Developer-Reference.md",
+    "docs/wiki/Development-Workflow.md",
+    "docs/wiki/Domain-Model.md",
     "docs/wiki/Getting-Started.md",
     "docs/wiki/Glossary.md",
     "docs/wiki/Offline-and-Sync.md",
+    "docs/wiki/PDFs-and-Annotations.md",
+    "docs/wiki/Security-and-Operations.md",
+    "docs/wiki/Storage-Backup-and-Restore.md",
     "docs/wiki/Troubleshooting.md",
+    "docs/wiki/_Sidebar.md",
 })
 # Root config files read only by external services (Codacy, PR-Agent,
 # CodeRabbit). Audited: no test, script, runtime module or build step reads

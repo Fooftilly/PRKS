@@ -13,6 +13,7 @@ from pathlib import Path
 
 from scripts.ci.check_docs_only import _anchors, check_markdown
 from scripts.ci.docs_only import (
+    AUDITED_DOC_FILES,
     AUDITED_CONFIG_FILES,
     POSTGRES_SCOPE,
     changed_documentation,
@@ -72,6 +73,8 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
         approved = (
             "docs/wiki/Getting-Started.md", "docs/wiki/Glossary.md",
             "docs/wiki/Offline-and-Sync.md", "docs/wiki/Troubleshooting.md",
+            "docs/wiki/Architecture.md", "docs/e2e-performance.md",
+            "docs/agent-workflows/agent-queue.md",
         )
         rejected = (
             "AGENTS.md", "docs/AGENTS.md", "DESIGN.md", "README.md",
@@ -180,6 +183,36 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 for script in root_files:
                     if name in (ROOT / script).read_text(encoding="utf-8"):
                         hits.append(script)
+                self.assertEqual(hits, [])
+
+    def test_audited_docs_exist_and_are_read_by_no_suite_or_runtime(self):
+        # A docs page may skip the unit job only while no code, test, script
+        # or workflow reads it. A new reader must remove it from
+        # AUDITED_DOC_FILES. Its own name or full path counts as a read.
+        readers = (".github", "backend", "frontend", "frontend-app", "scripts", "tests", "tools")
+        suffixes = {".py", ".js", ".mjs", ".ts", ".vue", ".sh", ".json", ".toml", ".cfg", ".yml", ".yaml"}
+        allowed = {ROOT / "scripts/ci/docs_only.py", Path(__file__).resolve()}
+        texts = {}
+        for top in readers:
+            for path in (ROOT / top).rglob("*"):
+                if (
+                    path.is_file() and path not in allowed
+                    and "node_modules" not in path.parts and path.suffix in suffixes
+                ):
+                    try:
+                        texts[str(path.relative_to(ROOT))] = path.read_text(encoding="utf-8")
+                    except (OSError, UnicodeError):
+                        continue
+        for script in ("run_tests.py", "prks_app.py", "Dockerfile", "docker-compose.yml"):
+            texts[script] = (ROOT / script).read_text(encoding="utf-8")
+        for name in sorted(AUDITED_DOC_FILES):
+            with self.subTest(doc=name):
+                self.assertTrue((ROOT / name).is_file(), "audited page is missing")
+                basename = name.rsplit("/", 1)[-1]
+                hits = sorted(
+                    path for path, text in texts.items()
+                    if name in text or basename in text
+                )
                 self.assertEqual(hits, [])
 
     def test_audited_config_git_changes_fail_closed(self):
@@ -685,6 +718,23 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             self.assertTrue(any("missing relative target" in x for x in errors))
             self.assertTrue(any("missing anchor" in x for x in errors))
             self.assertTrue(any("unclosed" in x for x in errors))
+
+    def test_published_wiki_page_must_pass_publisher_link_check(self):
+        # The skipped unit suite runs tests/test_wiki_source_links.py; a
+        # relative link to an existing repo file resolves in the checkout but
+        # 404s on the wiki, so the docs validator must reject it too.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            link = "[readme](../../README.md)\n"
+            _write(root, "README.md", "# Present\n")
+            _write(root, "docs/wiki/Page.md", link)
+            _write(root, "docs/wiki/README.md", link)
+            _write(root, "docs/other/guide.md", link)
+            errors = check_markdown(root, "docs/wiki/Page.md")
+            self.assertEqual(errors, ["docs/wiki/Page.md: ](../../README.md)"])
+            # README is not published; non-wiki pages keep checkout semantics.
+            self.assertEqual(check_markdown(root, "docs/wiki/README.md"), [])
+            self.assertEqual(check_markdown(root, "docs/other/guide.md"), [])
 
 
 if __name__ == "__main__":
