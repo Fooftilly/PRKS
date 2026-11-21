@@ -68,13 +68,14 @@ AUDITED_DOC_FILES = frozenset({
     "docs/wiki/_Sidebar.md",
 })
 # Root config files read only by external services (Codacy, PR-Agent,
-# CodeRabbit). Audited: no test, script, runtime module or build step reads
+# CodeRabbit, SonarCloud). Audited: no test, script, runtime module or build step reads
 # them, so a change cannot alter any CI suite's outcome. Mergify and Greptile
 # configs (.mergify.yml, .greptile/*) are deliberately absent: they are not audited.
 AUDITED_CONFIG_FILES = frozenset({
     ".codacy.yml",
     ".coderabbit.yaml",
     ".pr_agent.toml",
+    ".sonarcloud.properties",
 })
 DEFAULT_SCOPE = "docs"
 POSTGRES_SCOPE = "postgres"

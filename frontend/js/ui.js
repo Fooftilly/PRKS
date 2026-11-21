@@ -3623,7 +3623,7 @@ function prksFlushPendingPrivateNotes(ctx) {
     if (editor) {
         if (!editor.dirty) return;
         ctx.clearTimer(editor.timerKey);
-        prksEnqueuePrivateNotesSave(editor);
+        void prksEnqueuePrivateNotesSave(editor);
         return;
     }
     /* The draft outlives its editor: warm park and a focus switch dispose
@@ -3650,7 +3650,7 @@ if (typeof prksOfflineRuntimeSubscribe === 'function') {
             const editor = ctx && ctx.getResource ? ctx.getResource('privateNotesEditor') : null;
             if (!editor || !editor.textarea) return;
             editor.textarea.readOnly = false;
-            if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
+            if (editor.dirty) void prksEnqueuePrivateNotesSave(editor);
         });
     });
 }
@@ -3692,7 +3692,7 @@ function prksPrivateNotesArmSave(editor) {
     const ctx = editor.ctx;
     const timer = window.setTimeout(function () {
         if (ctx.timers && ctx.timers.get(editor.timerKey) === timer) ctx.clearTimer(editor.timerKey);
-        if (editor.dirty) prksEnqueuePrivateNotesSave(editor);
+        if (editor.dirty) void prksEnqueuePrivateNotesSave(editor);
     }, 850);
     ctx.setTimer(editor.timerKey, timer);
 }
@@ -3746,7 +3746,7 @@ function prksBindPrivateNotesField(entityType, entityId, ownerCtx) {
     const blur = function () {
         if (!editor.dirty) return;
         ctx.clearTimer(editor.timerKey);
-        prksEnqueuePrivateNotesSave(editor);
+        void prksEnqueuePrivateNotesSave(editor);
     };
     const attached = ctx.registerResource(ticket, {
         kind: 'privateNotesEditor',

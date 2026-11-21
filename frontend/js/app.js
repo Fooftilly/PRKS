@@ -627,7 +627,7 @@ function initSidebarBrandHome() {
         // Vue Folder Library retains across this refresh; signal an intentional
         // filter clear so the mounted input stays in sync with storage.
         window.__prksFolderLibraryBrandHomeReset = true;
-        handleRoute();
+        void handleRoute();
     });
 }
 
@@ -2179,7 +2179,7 @@ function initRouter() {
     if (typeof prksWorkspaceInit !== 'function') {
         window.addEventListener('hashchange', handleRoute);
     }
-    handleRoute();
+    void handleRoute();
 }
 
 function prksRouteTitleFromHash(hash) {
