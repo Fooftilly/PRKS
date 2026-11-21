@@ -7,7 +7,9 @@ Advisory only: nothing here changes what the E2E gate runs. The script
    ``e2e-coverage-map.yml`` (one gzipped shard map per shard);
 2. asks ``tests/e2e/coverage_map.select_for_diff`` what it would run for
    ``base...head``;
-3. asks the real planner (``tests/e2e/run.py --ci-plan``) what the gate runs;
+3. asks the real planner (``tests/e2e/run.py --ci-plan``) what the gate runs,
+   in the gate's plan-time environment (``--plan-only``, before the E2E
+   dependencies that test discovery needs are installed);
 4. writes both to the job summary and to ``--output`` (JSON), so later runs
    can be compared with the gate's actual failures.
 
@@ -16,7 +18,8 @@ and its artifacts expire.
 
 Usage::
 
-    python scripts/ci/e2e_selection_shadow.py --base origin/master --output shadow.json
+    python scripts/ci/e2e_selection_shadow.py --base origin/master --plan-only --output plan.json
+    python scripts/ci/e2e_selection_shadow.py --base origin/master --plan plan.json --output shadow.json
 """
 from __future__ import annotations
 
@@ -80,6 +83,7 @@ def latest_map_artifacts(client: Client) -> tuple[dict[str, Any] | None, list[di
     runs = (client.request(
         "GET", f"actions/workflows/{MAP_WORKFLOW}/runs?branch=master&status=success&per_page=10",
     ) or {}).get("workflow_runs", [])
+    incomplete = ""
     for run in runs:
         if run.get("event") == "pull_request":
             continue
@@ -94,8 +98,11 @@ def latest_map_artifacts(client: Client) -> tuple[dict[str, Any] | None, list[di
                 shards.add(int(match.group(1)))
         if shards == set(range(1, SHARDS + 1)):
             return run, sorted(maps, key=lambda a: a["name"]), ""
-        return None, [], f"the newest master map ({run.get('html_url')}) has shards {sorted(shards)}, not 1-{SHARDS}"
-    return None, [], "no successful master recording run yet"
+        # An incomplete recording (a shard expired or deleted) falls back to an
+        # older complete one; the newest one's gap is the reason if none is.
+        incomplete = incomplete or (
+            f"the newest master map ({run.get('html_url')}) has shards {sorted(shards)}, not 1-{SHARDS}")
+    return None, [], incomplete or "no successful master recording run yet"
 
 
 def read_map(zipped: bytes, name: str) -> dict[str, Any]:
@@ -122,11 +129,20 @@ def planner(base: str) -> dict[str, Any]:
     return json.loads(out)
 
 
-def summarize(shadow: dict[str, Any] | None, plan: dict[str, Any], why: str, map_url: str) -> str:
+def _rev(ref: str) -> str:
+    return subprocess.run(  # nosec B603 B607 - fixed argv
+        ["git", "rev-parse", ref], cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def summarize(shadow: dict[str, Any] | None, plan: dict[str, Any], why: str, map_url: str,
+              base_sha: str = "") -> str:
     gate = plan.get("mode")
     gate_tests = plan.get("test_count") if gate == "affected" else (0 if gate == "skip" else "all")
     lines = ["## E2E selection (shadow)", "",
-             "Advisory: the gate below is what ran; the coverage map changes nothing.", "",
+             "Advisory: the gate below is what ran; the coverage map changes nothing.",
+             *([f"Both are against base `{base_sha[:12]}`; the gate fetched master separately, "
+                "so compare its own plan if master moved in between."] if base_sha else []), "",
              f"- Gate plan: **{gate}**, {gate_tests} tests ({plan.get('reason', '')})"]
     if shadow is None:
         lines.append(f"- Coverage map: not available ({why})")
@@ -148,27 +164,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--plan-only", action="store_true",
+                        help="write only the gate plan to --output (run in the gate's plan-time environment)")
+    parser.add_argument("--plan", type=Path, help="a gate plan written earlier by --plan-only")
     args = parser.parse_args(argv)
+    if args.plan_only:
+        args.output.write_text(json.dumps(planner(args.base)), encoding="utf-8")
+        return 0
     token, repo = os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"]
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
     client = GitHubClient(token, repo, api_url)
 
-    plan = planner(args.base)
+    plan = json.loads(args.plan.read_text(encoding="utf-8")) if args.plan else planner(args.base)
+    base_sha = _rev(args.base)
     run, artifacts, why = latest_map_artifacts(client)
     shadow = None
     map_url = ""
     if run is not None:
         from tests.e2e import coverage_map
-        from tests.e2e.run import discover_test_ids
+        from tests.e2e.run import discover_test_ids, invalid_e2e_discovery_ids
 
-        maps = [read_map(_download(token, api_url, repo, a["id"]), a["name"]) for a in artifacts]
-        map_url = str(run.get("html_url"))
         os.environ["PRKS_E2E"] = "1"
-        shadow = coverage_map.select_for_diff(
-            maps, repo=ROOT, base=args.base, head=args.head, all_ids=discover_test_ids())
-    report = {"plan": plan, "shadow": shadow, "map_run": map_url, "unavailable": why or None}
+        all_ids = discover_test_ids()
+        invalid = invalid_e2e_discovery_ids(all_ids)
+        if invalid:
+            # An import failure hides that module's tests: refuse a short inventory.
+            why = "E2E discovery failed: " + ", ".join(invalid[:5])
+        else:
+            maps = [read_map(_download(token, api_url, repo, a["id"]), a["name"]) for a in artifacts]
+            map_url = str(run.get("html_url"))
+            shadow = coverage_map.select_for_diff(
+                maps, repo=ROOT, base=args.base, head=args.head, all_ids=all_ids)
+    report = {"plan": plan, "shadow": shadow, "map_run": map_url, "unavailable": why or None,
+              "base_sha": base_sha}
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    text = summarize(shadow, plan, why, map_url)
+    text = summarize(shadow, plan, why, map_url, base_sha)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:

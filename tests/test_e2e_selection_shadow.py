@@ -70,6 +70,14 @@ class LatestMapTests(unittest.TestCase):
         self.assertEqual(artifacts, [])
         self.assertIn("not 1-8", why)
 
+    def test_an_incomplete_newest_map_falls_back_to_an_older_complete_one(self):
+        client = _Runs([{"id": 3, "event": "schedule", "html_url": "u3"}, {"id": 2, "event": "schedule"}],
+                       {3: _artifacts(range(1, 8)), 2: _artifacts(range(1, 9))})
+        run, artifacts, why = shadow.latest_map_artifacts(client)
+        self.assertEqual(run and run["id"], 2)
+        self.assertEqual(len(artifacts), 8)
+        self.assertEqual(why, "")
+
     def test_no_run_yet(self):
         self.assertEqual(shadow.latest_map_artifacts(_Runs([], {}))[2], "no successful master recording run yet")
 
@@ -143,6 +151,7 @@ class MainTests(unittest.TestCase):
                 mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "o/r",
                                              "GITHUB_STEP_SUMMARY": str(Path(raw) / "summary.md")}), \
                 mock.patch.object(shadow, "planner", return_value=plan), \
+                mock.patch.object(shadow, "_rev", return_value="c" * 40), \
                 mock.patch.object(shadow, "latest_map_artifacts", return_value=(None, [], "no map")):
             out = Path(raw) / "report.json"
             self.assertEqual(shadow.main(["--base", "origin/master", "--output", str(out)]), 0)
@@ -153,12 +162,63 @@ class MainTests(unittest.TestCase):
             self.assertIn("E2E selection (shadow)", (Path(raw) / "summary.md").read_text(encoding="utf-8"))
 
 
+class MainWithMapTests(unittest.TestCase):
+    def _main(self, raw, ids):
+        plan_file = Path(raw) / "plan.json"
+        plan_file.write_text(json.dumps({"mode": "skip"}), encoding="utf-8")
+        out = Path(raw) / "report.json"
+        run = {"id": 2, "html_url": "https://map"}
+        with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}), \
+                mock.patch.dict(os.environ, {}, clear=False) as env, \
+                mock.patch.object(shadow, "planner", side_effect=AssertionError("plan was given")), \
+                mock.patch.object(shadow, "_rev", return_value="b" * 40), \
+                mock.patch.object(shadow, "latest_map_artifacts", return_value=(run, [{"id": 7, "name": "m"}], "")), \
+                mock.patch.object(shadow, "_download", return_value=b"zip"), \
+                mock.patch.object(shadow, "read_map", return_value={}), \
+                mock.patch("tests.e2e.run.discover_test_ids", return_value=ids), \
+                mock.patch("tests.e2e.coverage_map.select_for_diff",
+                           return_value={"mode": "subset", "tests": 1, "total": 2, "files": {}}) as select:
+            env.pop("GITHUB_STEP_SUMMARY", None)
+            self.assertEqual(shadow.main(["--base", "origin/master", "--plan", str(plan_file),
+                                          "--output", str(out)]), 0)
+        return json.loads(out.read_text(encoding="utf-8")), select
+
+    def test_a_complete_inventory_is_passed_to_the_selector(self):
+        ids = ["tests.e2e.test_a.A.test_x", "tests.e2e.test_b.B.test_y"]
+        with tempfile.TemporaryDirectory() as raw:
+            report, select = self._main(raw, ids)
+        self.assertEqual(select.call_args.kwargs["all_ids"], ids)
+        self.assertEqual(report["shadow"]["mode"], "subset")
+        self.assertEqual(report["plan"], {"mode": "skip"})
+        self.assertEqual(report["base_sha"], "b" * 40)
+
+    def test_an_import_failure_in_discovery_is_reported_not_selected_from(self):
+        ids = ["tests.e2e.test_a.A.test_x", "unittest.loader._FailedTest.tests.e2e.test_pg"]
+        with tempfile.TemporaryDirectory() as raw:
+            report, select = self._main(raw, ids)
+        select.assert_not_called()
+        self.assertIsNone(report["shadow"])
+        self.assertIn("E2E discovery failed: unittest.loader._FailedTest", report["unavailable"])
+
+    def test_plan_only_writes_the_gate_plan_and_needs_no_token(self):
+        with tempfile.TemporaryDirectory() as raw, \
+                mock.patch.dict(os.environ, {}, clear=False) as env, \
+                mock.patch.object(shadow, "planner", return_value={"mode": "affected"}):
+            env.pop("GITHUB_TOKEN", None)
+            out = Path(raw) / "plan.json"
+            self.assertEqual(shadow.main(["--base", "origin/master", "--plan-only", "--output", str(out)]), 0)
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"mode": "affected"})
+
+
 class WiringTests(unittest.TestCase):
     def test_the_workflow_is_advisory_and_reads_actions_only(self):
         text = (ROOT / ".github/workflows/e2e-selection-shadow.yml").read_text(encoding="utf-8")
         self.assertIn("actions: read", text)
         self.assertNotIn("write", text)
         self.assertIn("scripts/ci/e2e_selection_shadow.py", text)
+        # The plan is computed before the E2E dependencies are installed, as in the gate.
+        self.assertLess(text.index("--plan-only"), text.index("install_pinned_python.py e2e"))
+        self.assertLess(text.index("install_pinned_python.py e2e"), text.index("--plan gate-plan.json"))
         gate = (ROOT / ".github/workflows/e2e-gate.yml").read_text(encoding="utf-8")
         self.assertNotIn("e2e_selection_shadow", gate)
 

@@ -37,7 +37,20 @@ jobs:
           python-version: "3.12"
 
       - name: Install plan-time dependencies
+        # The same environment as e2e-gate.yml's plan job, so the gate plan matches.
         run: python scripts/ci/install_pinned_python.py plan
+
+      - name: Compute the gate plan
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${BASE_REF}"
+          python scripts/ci/e2e_selection_shadow.py --base "origin/${BASE_REF}" --plan-only --output gate-plan.json
+
+      - name: Install E2E dependencies
+        # Test discovery imports every E2E module (psycopg, PyMuPDF, ...).
+        run: python scripts/ci/install_pinned_python.py e2e
 
       - name: Compare the coverage-map selection with the gate plan
         env:
@@ -45,8 +58,8 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin "${BASE_REF}"
-          python scripts/ci/e2e_selection_shadow.py --base "origin/${BASE_REF}" --output e2e-selection-shadow.json
+          python scripts/ci/e2e_selection_shadow.py --base "origin/${BASE_REF}" --plan gate-plan.json \
+            --output e2e-selection-shadow.json
 
       - name: Upload the shadow report
         if: always()
