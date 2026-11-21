@@ -10,6 +10,26 @@ export type NewFileField = 'file' | 'videoUrl' | 'folder' | 'people' | 'date' | 
 
 export const CHOOSE_PDF = 'Choose a PDF file.'
 export const BAD_PDF_READ = 'Could not read this PDF. Choose the file again.'
+export const EMPTY_PDF = 'This file is empty. Choose another PDF.'
+export const NOT_A_PDF = "This file doesn't look like a PDF. Choose another file."
+
+/** The bytes every PDF starts with; PRKS refuses an upload without them (#772). */
+const PDF_MAGIC = '%PDF-'
+
+/**
+ * Why a picked file cannot be this Work's PDF, or '' when it can: the same
+ * rule the server applies to the upload (`backend/api/works.py`), checked
+ * when the file is chosen so the dialog says so before Create File.
+ */
+export async function pdfFileProblem(file: Blob): Promise<string> {
+  if (file.size === 0) return EMPTY_PDF
+  try {
+    const head = new Uint8Array(await file.slice(0, PDF_MAGIC.length).arrayBuffer())
+    return String.fromCharCode(...head) === PDF_MAGIC ? '' : NOT_A_PDF
+  } catch {
+    return BAD_PDF_READ
+  }
+}
 export const BAD_YOUTUBE_URL = 'Enter a valid YouTube URL.'
 export const BAD_DATE = 'Use dd/mm/yyyy.'
 export const NOTHING_SAVED = 'Nothing was saved.'

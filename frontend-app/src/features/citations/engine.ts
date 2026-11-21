@@ -3,12 +3,14 @@
  *
  * citeproc-js formats; PRKS loads it on demand from `/vendor/citeproc/`
  * (about 1 MB, so not part of the Vue bundle) with the chosen style and the
- * en-US locale from `/vendor/csl/`. Nothing here reaches outside PRKS.
+ * en-US locale from `/vendor/csl/`; an imported style's text comes from
+ * `/api/citation-styles/:id`. Nothing here reaches outside PRKS.
  * Output is a bibliography: each entry as HTML (for a rich copy), as plain
  * text, and as text runs a component renders without `v-html`.
  */
 import type { CslItem } from '../../api/citations'
-import { isCitationStyle } from './styles'
+import { readImportedStyle } from '../../api/citation-styles'
+import { isImportedStyleId, isShippedStyle } from './styles'
 
 const CITEPROC_SRC = '/vendor/citeproc/citeproc.js'
 const LOCALE_SRC = '/vendor/csl/locales-en-US.xml'
@@ -100,12 +102,15 @@ function remember<T>(load: () => Promise<T>, forget: () => void): Promise<T> {
 
 /** citeproc-js, the locale and one style, each loaded once per page. */
 export async function loadCitationResources(styleId: string): Promise<CitationResources> {
-  if (!isCitationStyle(styleId)) throw new Error('Unknown citation style.')
+  if (!isShippedStyle(styleId) && !isImportedStyleId(styleId)) throw new Error('Unknown citation style.')
   citeproc ??= remember(() => loadCiteproc(), () => { citeproc = null })
   locale ??= remember(() => fetchText(LOCALE_SRC), () => { locale = null })
   let style = styles.get(styleId)
   if (!style) {
-    style = remember(() => fetchText(`/vendor/csl/${styleId}.csl`), () => styles.delete(styleId))
+    const read = isShippedStyle(styleId)
+      ? () => fetchText(`/vendor/csl/${styleId}.csl`)
+      : async () => (await readImportedStyle(styleId)).csl
+    style = remember(read, () => styles.delete(styleId))
     styles.set(styleId, style)
   }
   const [csl, localeText, styleText] = await Promise.all([citeproc, locale, style])

@@ -12754,6 +12754,24 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.locator(".prks-pdf-toolbar__title, h2.page-header--work-title", has_text="E2E Created Work").first.wait_for()
         self.assertTrue(page.locator("#work-modal").evaluate("el => el.classList.contains('hidden')"))
 
+    def test_an_empty_or_non_pdf_file_is_refused_when_chosen(self):
+        """#772: the dialog says why before Create File, and keeps what was typed."""
+        _server, page, _collector = self._start_app()
+        page.locator("#prks-ribbon-new-file").click()
+        page.wait_for_selector("#work-modal:not(.hidden):not([inert])")
+        page.fill("#work-title", "Kept Title")
+        page.set_input_files("#work-file", {"name": "zero.pdf", "mimeType": "application/pdf", "buffer": b""})
+        page.locator("#work-file-error", has_text="This file is empty. Choose another PDF.").wait_for()
+        self.assertFalse(page.locator("#upload-selected-file").is_visible())
+        page.set_input_files("#work-file", {"name": "notapdf.pdf", "mimeType": "application/pdf",
+                                            "buffer": b"This is not a PDF at all"})
+        page.locator("#work-file-error", has_text="This file doesn't look like a PDF. Choose another file.").wait_for()
+        self.assertFalse(page.locator("#upload-selected-file").is_visible())
+        self.assertEqual(page.locator("#work-title").input_value(), "Kept Title")
+        page.set_input_files("#work-file", str(MINIMAL_PDF))
+        page.locator("#upload-selected-file-name").wait_for(state="visible")
+        self.assertEqual(page.locator("#work-file-error").inner_text().strip(), "")
+
     def test_create_button_blocks_duplicate_post(self):
         _server, page, _collector = self._start_app()
         page.locator("#prks-ribbon-new-file").click()

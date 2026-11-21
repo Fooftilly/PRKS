@@ -1,0 +1,14 @@
+# GitHub collapses these in pull request diffs and leaves them out of the
+# language statistics. They change git nothing else: no diff, merge or
+# line-ending rule is set here.
+
+# Third-party files PRKS serves as they are (pinned in DEPENDENCY-MANIFEST.json).
+frontend/vendor/** linguist-vendored
+
+# Built from frontend-app by `npm run build`; never edited by hand.
+frontend/vue/** linguist-generated
+frontend/js/owner-resource.js linguist-generated
+frontend/js/tab-leave.js linguist-generated
+
+# Generated from the checked-in OpenAPI documents.
+frontend-app/src/api/generated/** linguist-generated

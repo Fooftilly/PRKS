@@ -4,7 +4,8 @@
  *
  * Shown inside the Metadata disclosure. It reads the Work's CSL-JSON item
  * from the server only while that disclosure is open, formats it in the
- * Work's style (or the Library's default) and copies it as rich text.
+ * Work's style (or the Library's default) and copies it as rich text. An
+ * imported style that is gone is cited in the Library's default.
  * It is a read of the saved record: an edit that has not reached PRKS yet
  * shows once it has.
  */
@@ -14,7 +15,7 @@ import { fetchCslItems } from '../../api/citations'
 import { isAbortError } from '../../api/http'
 import { formatCitations, type CitationEntry } from './engine'
 import { copyRichText } from './export'
-import { citationStyleLabel, effectiveCitationStyle } from './styles'
+import { citationStyleLabel, effectiveCitationStyle, isImportedStyleId, libraryCitationStyle, loadImportedStyles } from './styles'
 
 const props = defineProps<{
   workId: string
@@ -42,7 +43,19 @@ function key(): string {
   return `${props.workId}\n${style.value}\n${props.revision}`
 }
 
+/** An imported style is used only once the Library's list says it exists. */
+async function importedStylesRead(): Promise<void> {
+  if (!isImportedStyleId(props.workStyle) && !isImportedStyleId(libraryCitationStyle())) return
+  try {
+    await loadImportedStyles()
+  } catch {
+    /* Cited in a style PRKS ships until the list can be read. */
+  }
+}
+
 async function load(): Promise<void> {
+  if (disclosure && !disclosure.open) return
+  await importedStylesRead()
   if (disclosure && !disclosure.open) return
   const wanted = key()
   if (loaded === wanted && state.value === 'ready') return
