@@ -101,7 +101,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertFalse(proposal["active"])
         self.assertEqual(proposal["effective_mode"], "full")
         self.assertEqual(proposal["proposed_mode"], "smoke_affected")
-        self.assertEqual(proposal["full_shards_if_executed"], 6)
+        self.assertEqual(proposal["full_shards_if_executed"], 8)
         self.assertEqual(
             proposal["required_independent_guards"],
             ["docker-build-modes", "worker-upgrade-rollback"],
@@ -319,7 +319,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
             full,
         )
-        self.assertIn("shard: [1, 2, 3, 4, 5, 6]", full)
+        self.assertIn("shard: [1, 2, 3, 4, 5, 6, 7, 8]", full)
         self.assertIn("github.event_name == 'workflow_dispatch'", smoke)
         self.assertNotIn("plan_packaged_e2e", workflow)
         self.assertNotIn("smoke_affected", workflow)

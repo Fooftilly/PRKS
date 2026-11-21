@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare six-shard source and packaged E2E costs on one exact Git commit.
+"""Compare eight-shard source and packaged E2E costs on one exact Git commit.
 
 Read-only GitHub API analysis. Measurements are summed job/step wall spans,
 NOT GitHub-billed minutes or evidence of equivalent regression coverage.
@@ -24,7 +24,7 @@ from scripts.ci.compare_packaged_e2e import InvalidBenchmark, _seconds, fetch_ru
 
 SOURCE_WORKFLOW = ".github/workflows/e2e-gate.yml"
 PACKAGED_WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
-SHARDS = 6
+SHARDS = 8
 PLAN_SUMMARY = re.compile(
     r"(?m)^\S+ mode=(full|affected|skip) run=(true|false) "
     r"features=\S+ test_count=\S+ shards=(\d+) pointer=(true|false)\s*$"
@@ -32,13 +32,13 @@ PLAN_SUMMARY = re.compile(
 KINDS = {
     "source": (
         SOURCE_WORKFLOW,
-        "E2E ({}/6)",
+        "E2E ({}/8)",
         "Run E2E selection shard",
         ("E2E plan", "E2E pointer capture", "Full E2E gate"),
     ),
     "packaged": (
         PACKAGED_WORKFLOW,
-        "Packaged classic bundles ({}/6)",
+        "Packaged classic bundles ({}/8)",
         "Run complete E2E shard on the packaged frontend",
         (
             "Docker classic bundle and rollback build smoke",
@@ -78,7 +78,7 @@ def _check_jobs(jobs: list[dict], mode: str) -> tuple[list[dict], str]:
             raise InvalidBenchmark(f"Missing or repeated required {mode} guard: {guard}")
     required_names = [template.format(i) for i in range(1, SHARDS + 1)]
     if any(names.count(name) != 1 for name in required_names):
-        raise InvalidBenchmark(f"{mode} run does not contain six distinct passing shards")
+        raise InvalidBenchmark(f"{mode} run does not contain eight distinct passing shards")
     prefix = "E2E (" if mode == "source" else "Packaged classic bundles ("
     if any(name.startswith(prefix) and name not in required_names
            for name in names if isinstance(name, str)):
@@ -149,9 +149,9 @@ def _validated_steps(job: dict, step_name: str, job_start: datetime,
 def summarize(
     run: dict, jobs: list[dict], mode: str, *, source_plan: tuple[str, str, str, str] | None = None
 ) -> dict:
-    """Require same-head full mode, six complete jobs and nonoverlapping steps."""
+    """Require same-head full mode, eight complete jobs and nonoverlapping steps."""
     _check_run(run, mode)
-    if mode == "source" and source_plan != ("full", "true", "6", "true"):
+    if mode == "source" and source_plan != ("full", "true", str(SHARDS), "true"):
         raise InvalidBenchmark("Source planner full mode was not verified")
     shards, step_name = _check_jobs(jobs, mode)
     job_seconds = 0.0
@@ -302,8 +302,8 @@ def verify_source_full_plan(repo: str, jobs: list[dict], token: str | None) -> t
     if not isinstance(job_id, int) or job_id <= 0:
         raise InvalidBenchmark("Missing E2E planner job ID")
     found = PLAN_SUMMARY.findall(_read_source_plan_log(repo, job_id, token))
-    if len(found) != 1 or found[0] != ("full", "true", "6", "true"):
-        raise InvalidBenchmark("E2E planner did not prove a complete six-shard full suite")
+    if len(found) != 1 or found[0] != ("full", "true", str(SHARDS), "true"):
+        raise InvalidBenchmark("E2E planner did not prove a complete eight-shard full suite")
     return found[0]
 
 
@@ -331,8 +331,8 @@ def compare(source: dict, packaged: dict) -> str:
         f"| Longest shard job min | {source['longest_job_minutes']:.2f} | {packaged['longest_job_minutes']:.2f} |",
         f"| Shard start-time spread sec | {source['start_skew_seconds']:.0f} | {packaged['start_skew_seconds']:.0f} |",
         f"| Browser-shard envelope min (overlaps included) | {source['shard_envelope_minutes']:.2f} | {packaged['shard_envelope_minutes']:.2f} |",
-        f"| Job created-to-start observations | {source['created_to_start_count']}/6 | {packaged['created_to_start_count']}/6 |",
-        f"| Sum job created-to-start lag min (6/6 only) | {_minutes(source['created_to_start_minutes'])} | {_minutes(packaged['created_to_start_minutes'])} |",
+        f"| Job created-to-start observations | {source['created_to_start_count']}/{SHARDS} | {packaged['created_to_start_count']}/{SHARDS} |",
+        f"| Sum job created-to-start lag min ({SHARDS}/{SHARDS} only) | {_minutes(source['created_to_start_minutes'])} | {_minutes(packaged['created_to_start_minutes'])} |",
         f"| Workflow wall min (explicit start/end only) | {_minutes(source['workflow_wall_minutes'])} | {_minutes(packaged['workflow_wall_minutes'])} |",
         "",
         "| Mode | Shard | Created-to-start sec | Job span sec | Browser step sec | Non-test residual sec |",
@@ -342,7 +342,7 @@ def compare(source: dict, packaged: dict) -> str:
         for shard in item["per_shard"]:
             lag = shard["created_to_start_seconds"]
             rows.append(
-                f"| {item['mode']} | {shard['shard']}/6 | "
+                f"| {item['mode']} | {shard['shard']}/{SHARDS} | "
                 f"{_minutes(lag)} | {shard['job_seconds']:.2f} | "
                 f"{shard['test_seconds']:.2f} | {shard['non_test_seconds']:.2f} |"
             )
@@ -355,7 +355,7 @@ def compare(source: dict, packaged: dict) -> str:
         "Workflow wall time is unavailable unless GitHub supplies reliable explicit workflow start AND completion timestamps; updated_at is excluded.",
         "Job-span minutes are NOT GitHub-billed minutes (billing/rounding not queried). Start skew is not queue delay.",
         "The non-test residual includes setup, installation, post-processing, idle gaps and teardown together; these are not separately attributed.",
-        "Only six browser shards are measured here; Docker, SW and pointer guards are verified but excluded from shard sums.",
+        "Only eight browser shards are measured here; Docker, SW and pointer guards are verified but excluded from shard sums.",
         "Passing identical tests on both distributions does not establish equivalence with a narrower packaged smoke pilot.",
         "No automatic E2E selection or required gate policy is changed.",
     ))

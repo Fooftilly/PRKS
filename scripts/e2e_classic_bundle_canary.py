@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Manually exercise all six PRKS E2E shards with temporary classic bundles.
+"""Manually exercise all eight PRKS E2E shards with temporary classic bundles.
 
 The candidate and assets exist only in the checkout of the selected Actions
 job. This is *not* a production packaging or service-worker cache change.
@@ -15,16 +15,18 @@ import sys
 
 from .benchmark_classic_script_bundle import build_candidate, BODY_URL, HEAD_URL
 
-SHARD_COUNT = 6
+SHARD_COUNT = 8
 # Do not pass user-supplied shard strings to subprocess: this fixed map
 # contains only known external partition identifiers.
 SHARD_ARGUMENTS = {
-    1: "1/6",
-    2: "2/6",
-    3: "3/6",
-    4: "4/6",
-    5: "5/6",
-    6: "6/6",
+    1: "1/8",
+    2: "2/8",
+    3: "3/8",
+    4: "4/8",
+    5: "5/8",
+    6: "6/8",
+    7: "7/8",
+    8: "8/8",
 }
 BUNDLE_URLS = (HEAD_URL, BODY_URL)
 ROOT = Path(__file__).resolve().parents[1]
@@ -188,7 +190,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
         if shard_index is not None:
             raise ValueError("preflight may not also select a shard")
     elif type(shard_index) is not int or shard_index not in SHARD_ARGUMENTS:
-        raise ValueError("expected one shard index from 1 through 6")
+        raise ValueError("expected one shard index from 1 through 8")
 
     index = root / "frontend/index.html"
     worker = root / "frontend/sw.js"
@@ -249,7 +251,7 @@ def run_canary(root: Path, shard_index: int | None = None, *, preflight: bool = 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--shard", type=int, help="1-based shard index (1 through 6)")
+    group.add_argument("--shard", type=int, help="1-based shard index (1 through 8)")
     group.add_argument("--preflight", action="store_true", help="check real bundled browser boot")
     args = parser.parse_args()
     run_canary(ROOT, args.shard, preflight=args.preflight)

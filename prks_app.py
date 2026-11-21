@@ -491,5 +491,11 @@ if __name__ == "__main__":
             jobs.bind_root(config.root)
 
     port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    run_server(port=port, host=args.host, auth=auth, jobs=jobs, readiness=readiness_for(auth, config.root),
-               http=http_settings)
+    try:
+        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
+                   readiness=readiness_for(auth, config.root), http=http_settings)
+    finally:
+        # Close the web pool here rather than leave it to its finaliser at
+        # interpreter exit, which joins the pool's threads late (on Python
+        # 3.13 it held every stop for seconds).
+        auth.db.close()

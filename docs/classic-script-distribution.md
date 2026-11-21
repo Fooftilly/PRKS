@@ -17,13 +17,13 @@ Three same-runner ABBA experiments on 40 selected E2E tests each measured
 The corrected diagnostic [six-shard full E2E canary](https://github.com/Fooftilly/PRKS/actions/runs/39028440166)
 passed **837/837 tests**, including offline reload. These observations do
 **not** directly measure real user page speed or the Docker distribution.
-The dedicated **E2E Classic Production Distribution Gate** runs all six shards
+The dedicated **E2E Classic Production Distribution Gate** runs all eight shards
 against the actual generated files in this PR, not the diagnostic candidate.
 
 ### Packaged E2E CI cost pilot (manual only)
 
 The non-required **E2E Classic Production Distribution Gate** retains its full
-six-shard packaged-browser matrix on every matching pull request. Docker
+eight-shard packaged-browser matrix on every matching pull request. Docker
 bundle/rollback image checks and the real Chromium service-worker
 upgrade/offline-boot/downgrade test remain separate jobs.
 
@@ -33,7 +33,7 @@ manual-only job stages the same deterministic production frontend, runs the
 nine curated real-Chromium smoke cases (shell, Work, offline cache and durable
 store), and additionally tests divider reload prevention and a PDF annotation
 interaction. The Docker and SW transition jobs still run. The default/manual
-`packaged_mode=full` and **every PR** run the original six packaged shards;
+`packaged_mode=full` and **every PR** run all eight packaged shards;
 there is no automatic coverage reduction.
 
 Baseline from [PR #742](https://github.com/Fooftilly/PRKS/pull/742)
@@ -43,7 +43,10 @@ used about **53.8 summed runner-minutes**, while
 used **52.3 summed runner-minutes**. Both executed 843 E2E tests. These
 numbers sum log start/end times, excluding queue time, billed-minute rounding,
 the Docker/SW jobs, and other workflows. No manual smoke runtime or
-equivalence claim has been established yet.
+equivalence claim has been established yet. These baseline runs used the
+earlier six-shard width; since November 2026 both gates run eight shards, and
+`scripts/ci/compare_e2e_gates.py` and `compare_packaged_e2e.py` only accept
+eight-shard runs, so compare new runs against a new eight-shard baseline.
 
 Before considering any future routine-PR smoke policy, compare full and
 smoke **on the same commit and runner class**, measure actual runner cost,

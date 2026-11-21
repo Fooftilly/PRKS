@@ -84,7 +84,9 @@ FULL_GATE_DEFAULT_JOBS = 4
 # Raised 4 → 6 after LPT timing-weight measurement on the post-rationalization
 # suite (~747 tests): estimated slowest-shard load ~980s → ~654s with balanced
 # imbalance; do not raise local --jobs on a single runner.
-FULL_GATE_EXTERNAL_SHARDS = 6
+# Raised 6 → 8 (2026-11) when per-test setup growth pushed the slowest of six
+# balanced shards to ~12.4 min; eight balance to ~9.3 min.
+FULL_GATE_EXTERNAL_SHARDS = 8
 
 # CI gate modes for ``--ci-plan`` / ``.github/workflows/e2e-gate.yml``.
 # ``run`` alone is not enough — consumers must branch on ``mode``.
