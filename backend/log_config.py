@@ -86,7 +86,13 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
         super().__init__(_log_target(filename), *args, **kwargs)
 
     def emit(self, record):
-        self._reopen_if_moved()
+        try:
+            self._reopen_if_moved()
+        except Exception:
+            # The same boundary as the inherited emit: a log that cannot be
+            # reopened never fails the caller.
+            self.handleError(record)
+            return
         super().emit(record)
 
     def _reopen_if_moved(self) -> None:
@@ -105,6 +111,9 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
         except OSError:
             return
         self.stream.close()
+        # A failed reopen leaves no closed stream behind: the next record
+        # then opens the log again (FileHandler.emit).
+        self.stream = None
         self.stream = self._open()
 
     def doRollover(self):

@@ -247,6 +247,22 @@ class SharedLogRotationTests(unittest.TestCase):
         self.assertEqual(self.read(os.path.join(folder, "prks-errors.log.2026-11-19")), ["a1", "b1"])
         self.assertEqual(sorted(self.read(self.path)), ["a2", "b2", "b3"])
 
+    def test_a_failed_reopen_drops_one_record_and_the_next_one_reopens(self):
+        from unittest import mock
+
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        first.rolloverAt = 0
+        self.write(first, "a2")  # rotates: the second now holds the rotated file
+        with (mock.patch.object(second, "_open", side_effect=OSError("disk gone")),
+              mock.patch.object(second, "handleError") as handled):
+            self.write(second, "lost")  # contained, not raised to the caller
+        handled.assert_called_once()
+        self.assertIsNone(second.stream)
+        self.write(second, "b2")
+        self.assertEqual(self.read(self.path), ["a2", "b2"])
+
     @unittest.skipUnless(sys.platform.startswith("linux"), "/dev/stderr on a pipe is Linux behaviour")
     def test_a_log_sent_to_piped_stderr_is_written_there(self):
         import subprocess
