@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 import unittest
 from unittest import mock
@@ -87,6 +88,20 @@ class BackgroundTeardownTests(unittest.TestCase):
         waiter.join(5)
         self.assertIsNone(harness._PENDING_TEARDOWN)
 
+    def test_a_teardown_that_outlives_its_join_stays_awaited(self):
+        release = threading.Event()
+        server = _FakeServer(release)
+        self._stop_later(server)
+        with mock.patch.object(harness, "STOP_TIMEOUT_S", 0.01):
+            with self.assertRaisesRegex(RuntimeError, "did not finish"):
+                harness.finish_pending_teardown()
+        self.assertEqual(len(harness._STUCK_TEARDOWNS), 1)
+        threading.Timer(0.05, release.set).start()
+        with mock.patch.object(harness, "_LIVE_SERVERS", []):
+            harness.stop_all_servers()
+        self.assertTrue(server.finished.is_set())
+        self.assertEqual(harness._STUCK_TEARDOWNS, [])
+
     def test_the_lock_is_reentrant_for_a_signal_handler(self):
         with harness._TEARDOWN_LOCK:
             harness.stop_all_servers()  # would deadlock on a plain Lock
@@ -112,24 +127,11 @@ class BackgroundTeardownTests(unittest.TestCase):
         self.assertIsNone(harness._PENDING_TEARDOWN)
 
 
-class _StuckProcess:
-    def poll(self):
-        return None
-
-    def terminate(self):
-        pass
-
-    def kill(self):
-        pass
-
-    def wait(self, timeout=None):
-        return None
-
-
 class FinishStopTests(unittest.TestCase):
     def test_a_process_that_does_not_exit_keeps_its_database_and_entry(self):
         server = object.__new__(harness.AppServer)
-        server.proc = _StuckProcess()
+        server.proc = stuck = mock.create_autospec(subprocess.Popen, instance=True)
+        stuck.poll.return_value = None
         server._stdout = server._stderr = None
         server.library = mock.Mock()
         server._library_store = None
