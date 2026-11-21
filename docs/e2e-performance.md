@@ -66,6 +66,8 @@ Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run 
 - every other file keeps the planner's rule, and one that would run the full suite keeps the whole selection full;
 - smoke is always added.
 
+On every pull request, `.github/workflows/e2e-selection-shadow.yml` (advisory, not required) runs `scripts/ci/e2e_selection_shadow.py`: it takes the newest complete map recorded on master and writes both what the map would run and what the gate plan runs to the job summary, and to the `e2e-selection-shadow` artifact (kept 90 days) for later comparison with the gate's failures.
+
 The gate does not read the map. It is evidence for deciding whether it should. Not measured: the Vue bundle, vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
 
 ## Moving coverage out of the browser

@@ -1,0 +1,58 @@
+name: E2E selection shadow (advisory)
+
+# Reports what a coverage-map E2E selection would run for each pull request,
+# beside what the Full E2E gate actually runs (scripts/ci/e2e_selection_shadow.py).
+# Shadow mode only: the gate never reads this, and this check is not required.
+on:
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-selection-shadow-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  shadow:
+    name: E2E selection (shadow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Reads the coverage-map artifacts of master's recording runs.
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install plan-time dependencies
+        run: python scripts/ci/install_pinned_python.py plan
+
+      - name: Compare the coverage-map selection with the gate plan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "${BASE_REF}"
+          python scripts/ci/e2e_selection_shadow.py --base "origin/${BASE_REF}" --output e2e-selection-shadow.json
+
+      - name: Upload the shadow report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-selection-shadow
+          path: e2e-selection-shadow.json
+          if-no-files-found: ignore
+          retention-days: 90
