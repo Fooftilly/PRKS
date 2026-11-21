@@ -31,9 +31,10 @@ sign, spaces or leading zeros (400 ``LIBRARY_EPOCH_REQUIRED`` otherwise,
 checked before the capability); then, for an authorized actor only,
 maintenance is 503 ``MAINTENANCE`` and another epoch than the Library's 409
 ``LIBRARY_EPOCH_CHANGED``. Admitted responses carry the Library's current
-epoch in ``PRKS-Library-Epoch``. One read acts on the epoch it read: ``GET
-/api/persons/<id>/profile-image`` may fill the Person's cached portrait, a
-Library command, and an ``<img>`` sends no epoch, so its context carries the
+epoch in ``PRKS-Library-Epoch``. Two reads act on the epoch they read: ``GET
+/api/persons/<id>/profile-image`` may fill the Person's cached portrait and
+``GET /api/remote-images`` a saved remote image, each a Library command, and
+an ``<img>`` sends no epoch, so its context carries the
 epoch admission read and a restore since then fences the fill.
 
 The admission check runs in its own transaction and commits before the route
@@ -103,11 +104,13 @@ _ADMIN_READS = frozenset({"/api/diagnostics/jobs"})
 _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
 
 # Reads that may fill a derived cache in the Library (a Person's portrait,
-# fetched from its ``image_url`` on a miss). The fill is a Library command, so
-# it needs an acted-on epoch, and a browser ``<img>`` sends none: admission
-# gives the context the epoch it just read. A restore since then refuses the
+# fetched from its ``image_url`` on a miss, or a saved remote image). The
+# fill is a Library command, so it needs an acted-on epoch, and a browser
+# ``<img>`` sends none: admission gives the context the epoch it just read. A restore since then refuses the
 # fill (``LIBRARY_EPOCH_CHANGED``), and the route serves the image uncached.
 def _fills_derived_cache(method: str, path: str) -> bool:
+    if method == "GET" and path == "/api/remote-images":
+        return True  # a saved copy of a remote image (#1351)
     parts = path.split("/")
     return (method == "GET" and len(parts) == 5 and parts[1:3] == ["api", "persons"]
             and bool(parts[3]) and parts[4] == "profile-image")

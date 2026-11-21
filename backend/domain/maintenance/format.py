@@ -64,6 +64,9 @@ def object_references(schema: str = "prks") -> sql.Composed:
         "FROM {items} WHERE library_id = %(library_id)s AND object_locator IS NOT NULL "
         "UNION ALL "
         "SELECT 'portraits', portrait_locator, portrait_sha256, portrait_byte_size "
-        "FROM {persons} WHERE library_id = %(library_id)s AND portrait_locator IS NOT NULL"
+        "FROM {persons} WHERE library_id = %(library_id)s AND portrait_locator IS NOT NULL "
+        "UNION ALL "
+        "SELECT 'remote-images', locator, sha256, byte_size "
+        "FROM {remote_images} WHERE library_id = %(library_id)s"
     ).format(assets=sql.Identifier(schema, "assets"), items=sql.Identifier(schema, "processing_items"),
-             persons=sql.Identifier(schema, "persons"))
+             persons=sql.Identifier(schema, "persons"), remote_images=sql.Identifier(schema, "remote_images"))

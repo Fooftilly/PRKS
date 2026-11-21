@@ -219,13 +219,17 @@ def decode_and_transcode(
         return None
 
 
-def fetch_and_prepare(url: str) -> PortraitImage | None:
-    """Validate, fetch, and transcode a remote portrait. Never returns raw bytes."""
+def fetch_and_prepare(url: str, max_edge: int = PRKS_PORTRAIT_MAX_EDGE) -> PortraitImage | None:
+    """Validate, fetch, and transcode a remote image. Never returns raw bytes.
+
+    Portraits keep the default edge; saved remote images
+    (``backend.domain.objects.remote_images``) pass their own.
+    """
     with perf_span("portrait_fetch"):
-        return _fetch_and_prepare_inner(url)
+        return _fetch_and_prepare_inner(url, max_edge)
 
 
-def _fetch_and_prepare_inner(url: str) -> PortraitImage | None:
+def _fetch_and_prepare_inner(url: str, max_edge: int) -> PortraitImage | None:
     try:
         normalized = normalize_person_image_url(url)
     except PersonImageUrlError:
@@ -236,7 +240,7 @@ def _fetch_and_prepare_inner(url: str) -> PortraitImage | None:
     if fetched is None:
         return None
     raw, content_type = fetched
-    encoded = decode_and_transcode(raw, content_type)
+    encoded = decode_and_transcode(raw, content_type, max_edge)
     if encoded is None:
         return None
     body, subtype = encoded

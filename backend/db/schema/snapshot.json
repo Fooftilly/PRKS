@@ -2227,7 +2227,7 @@
         "object_cleanup_claims_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id) ON DELETE SET NULL",
         "object_cleanup_claims_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND name !~ '^\\s|\\s$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
         "object_cleanup_claims_name_not_null": "NOT NULL name",
-        "object_cleanup_claims_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
+        "object_cleanup_claims_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text, 'remote-images'::text]))",
         "object_cleanup_claims_namespace_not_null": "NOT NULL namespace",
         "object_cleanup_claims_pkey": "PRIMARY KEY (namespace, name)",
         "object_cleanup_claims_recorded_at_not_null": "NOT NULL recorded_at"
@@ -3231,6 +3231,59 @@
         "publishers_pkey": "CREATE UNIQUE INDEX publishers_pkey ON prks.publishers USING btree (id)"
       }
     },
+    "prks.remote_images": {
+      "columns": [
+        {
+          "name": "library_id",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "source_url",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "locator",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "sha256",
+          "not_null": true,
+          "type": "text"
+        },
+        {
+          "name": "byte_size",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
+          "default": "now()",
+          "name": "saved_at",
+          "not_null": true,
+          "type": "timestamp with time zone"
+        }
+      ],
+      "constraints": {
+        "remote_images_byte_size_check": "CHECK (byte_size > 0)",
+        "remote_images_byte_size_not_null": "NOT NULL byte_size",
+        "remote_images_library_id_fkey": "FOREIGN KEY (library_id) REFERENCES prks.libraries(id)",
+        "remote_images_library_id_not_null": "NOT NULL library_id",
+        "remote_images_locator_check": "CHECK (locator ~ '^[^/\\\\]+$'::text AND locator !~ '^\\s|\\s$'::text AND (locator <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(locator) <= 255 AND \"left\"(locator, 6) <> '.prks-'::text AND \"left\"(locator, 12) <> '.linearized_'::text)",
+        "remote_images_locator_not_null": "NOT NULL locator",
+        "remote_images_pkey": "PRIMARY KEY (library_id, source_url)",
+        "remote_images_saved_at_not_null": "NOT NULL saved_at",
+        "remote_images_sha256_check": "CHECK (sha256 ~ '^[0-9a-f]{64}$'::text)",
+        "remote_images_sha256_not_null": "NOT NULL sha256",
+        "remote_images_source_url_check": "CHECK (source_url ~* '^https?://'::text AND octet_length(source_url) <= 2048)",
+        "remote_images_source_url_not_null": "NOT NULL source_url"
+      },
+      "indexes": {
+        "remote_images_locator": "CREATE INDEX remote_images_locator ON prks.remote_images USING btree (locator)",
+        "remote_images_pkey": "CREATE UNIQUE INDEX remote_images_pkey ON prks.remote_images USING btree (library_id, source_url)"
+      }
+    },
     "prks.restore_run_objects": {
       "columns": [
         {
@@ -3252,7 +3305,7 @@
       "constraints": {
         "restore_run_objects_name_check": "CHECK (name ~ '^[^/\\\\]+$'::text AND name !~ '^\\s|\\s$'::text AND (name <> ALL (ARRAY['.'::text, '..'::text])) AND octet_length(name) <= 255 AND \"left\"(name, 6) <> '.prks-'::text AND \"left\"(name, 12) <> '.linearized_'::text)",
         "restore_run_objects_name_not_null": "NOT NULL name",
-        "restore_run_objects_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text]))",
+        "restore_run_objects_namespace_check": "CHECK (namespace = ANY (ARRAY['asset-objects'::text, 'portraits'::text, 'remote-images'::text]))",
         "restore_run_objects_namespace_not_null": "NOT NULL namespace",
         "restore_run_objects_pkey": "PRIMARY KEY (run_id, namespace, name)",
         "restore_run_objects_run_id_fkey": "FOREIGN KEY (run_id) REFERENCES prks.restore_runs(id) ON DELETE CASCADE",

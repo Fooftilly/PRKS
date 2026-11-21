@@ -32,6 +32,12 @@ def request_access_mode(method: str, path: str, query: str = "") -> str | None:
             return MODE_MUTATION
         if path.startswith("/api/works/") and path.endswith("/thumbnail"):
             return MODE_MUTATION
+        # A saved remote image (#1351) is a read here even when it fills the
+        # copy: the fetch waits on another site (up to its deadline), and the
+        # exclusive mutation scope would hold off every edit and backup
+        # meanwhile. The fill is one PostgreSQL Library command, fenced by the
+        # maintenance lock and the epoch admission read, so a restore since
+        # then refuses it and the image is served uncached.
         return MODE_READ
     if method == "POST":
         if path == "/api/backups/progress":

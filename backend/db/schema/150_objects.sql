@@ -7,8 +7,8 @@
 -- catalogue to it. One data root serves every Library of the instance
 -- (§6.2), so a key is referenced if ANY catalogue row names it: an Asset's
 -- `storage_locator` or `source_locator` (namespace `asset-objects`), or a
--- live restore run's staged key, or a Person's cached portrait
--- (`portraits`, below).
+-- live restore run's staged key, a Person's cached portrait
+-- (`portraits`), or a saved remote image (`remote-images`, below).
 
 -- One restore of a Library (§11.4). Only what the reference check needs:
 -- whether the run is still live. Backup and restore (L-B-1) add the lease,
@@ -28,7 +28,7 @@ CREATE INDEX restore_runs_library ON prks.restore_runs (library_id);
 -- committed run's rows are deleted once the catalogue names the keys.
 CREATE TABLE prks.restore_run_objects (
   run_id    uuid NOT NULL REFERENCES prks.restore_runs ON DELETE CASCADE,
-  namespace text NOT NULL CHECK (namespace IN ('asset-objects', 'portraits')),
+  namespace text NOT NULL CHECK (namespace IN ('asset-objects', 'portraits', 'remote-images')),
   name      text NOT NULL,
   CONSTRAINT restore_run_objects_name_check CHECK (
     name ~ '^[^/\\]+$' AND name !~ '^\s|\s$' AND name NOT IN ('.', '..') AND octet_length(name) <= 255
@@ -47,7 +47,7 @@ CREATE INDEX restore_run_objects_key ON prks.restore_run_objects (namespace, nam
 -- sweep's orphan: settle takes that Library's objects lock, so a backup
 -- copying the key finishes first (§11.3).
 CREATE TABLE prks.object_cleanup_claims (
-  namespace       text NOT NULL CHECK (namespace IN ('asset-objects', 'portraits')),
+  namespace       text NOT NULL CHECK (namespace IN ('asset-objects', 'portraits', 'remote-images')),
   name            text NOT NULL,
   library_id      text REFERENCES prks.libraries ON DELETE SET NULL,
   recorded_at     timestamptz NOT NULL DEFAULT now(),
@@ -95,3 +95,27 @@ ALTER TABLE prks.persons
 -- The reference check reads portraits by key, across Libraries.
 CREATE INDEX persons_portrait_locator ON prks.persons (portrait_locator)
   WHERE portrait_locator IS NOT NULL;
+
+-- A saved copy of a remote image the Library shows (namespace
+-- `remote-images`): a video File's thumbnail or a figure in a note, fetched
+-- and transcoded like a portrait (backend/person_image.py) and served from
+-- PRKS itself, so the page loads no image from another site (CSP `img-src
+-- 'self'`, #1351). One row per Library and source URL; the bytes are an
+-- immutable object (backend/domain/objects/remote_images.py). The row is kept
+-- when the Work or note stops naming the URL, so a copy outlives the site
+-- that served it.
+CREATE TABLE prks.remote_images (
+  library_id text NOT NULL REFERENCES prks.libraries,
+  source_url text NOT NULL CHECK (source_url ~* '^https?://' AND octet_length(source_url) <= 2048),
+  locator    text NOT NULL,
+  sha256     text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  byte_size  bigint NOT NULL CHECK (byte_size > 0),
+  saved_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (library_id, source_url),
+  CONSTRAINT remote_images_locator_check CHECK (
+    locator ~ '^[^/\\]+$' AND locator !~ '^\s|\s$' AND locator NOT IN ('.', '..')
+    AND octet_length(locator) <= 255
+    AND left(locator, 6) <> '.prks-' AND left(locator, 12) <> '.linearized_')
+);
+-- The reference check reads saved images by key, across Libraries.
+CREATE INDEX remote_images_locator ON prks.remote_images (locator);

@@ -105,6 +105,7 @@ _STATIC_API_PATHS = frozenset(
         "/api/openapi/saved-views.json",
         "/api/openapi/processing-items.json",
         "/api/research-graph",
+        "/api/remote-images",
     }
 )
 

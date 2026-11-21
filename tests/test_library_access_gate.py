@@ -83,6 +83,8 @@ class RequestAccessModeTests(unittest.TestCase):
             request_access_mode("GET", "/api/works/W-1/thumbnail"),
             "mutation",
         )
+        # Its fill is fenced in PostgreSQL; the remote fetch holds no mutation scope.
+        self.assertEqual(request_access_mode("GET", "/api/remote-images", "url=x"), "read")
         self.assertEqual(request_access_mode("GET", "/api/backups/download"), "read")
         self.assertEqual(request_access_mode("POST", "/api/backups/progress"), "backup")
         self.assertEqual(request_access_mode("POST", "/api/backups/restore"), "restore")

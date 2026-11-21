@@ -17,6 +17,7 @@ import json
 import os
 import socket
 import threading
+from io import BytesIO
 from typing import Any, Callable
 from unittest import mock
 
@@ -123,6 +124,40 @@ class LibraryGateHttpTests(ProcessingHttpTestCase):
             second.join()
         self.assertEqual(order, ["a", "b"])
         self.assertEqual(self.titles(), ["A", "B"])
+
+    def test_a_stalled_remote_image_fetch_does_not_block_a_mutation(self) -> None:
+        """A saved remote image's first view waits on another site (#1351): it
+        holds only the read scope, so an edit runs meanwhile, and the copy is
+        still saved once the fetch returns."""
+        from backend.person_image import PortraitImage, decode_and_transcode
+        from PIL import Image
+        from urllib.parse import quote
+
+        buf = BytesIO()
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, format="PNG")
+        encoded = decode_and_transcode(buf.getvalue())
+        assert encoded is not None
+        figure = "https://figures.example/stalled.png"
+        work = self.create("Has a figure")
+        self.run_sql("INSERT INTO prks.work_notes (library_id, work_id, kind, body) VALUES (%s, %s, 'research', %s)",
+                     (self.lib, work["id"], f"![x]({figure})"))
+        fetching, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def stalled(url: str, max_edge: int) -> Any:
+            fetching.set()
+            self.assertTrue(release.wait(10))
+            return PortraitImage(*encoded)
+
+        with mock.patch("backend.api.remote_images.fetch_and_prepare", stalled):
+            image = _Worker(lambda: self.get("/api/remote-images?url=" + quote(figure, safe="")))
+            self.assertTrue(fetching.wait(10))
+            self.assertFalse(self.gate.snapshot()["mutation_active"])
+            self.create("Written while the image is fetched")
+            release.set()
+            self.assertEqual(image.join().status, 200)
+        self.assertIn("Written while the image is fetched", self.titles())
+        self.assertEqual(len(self.run_sql("SELECT 1 FROM prks.remote_images WHERE source_url = %s", (figure,))), 1)
 
     def test_a_backup_holds_no_gate(self) -> None:
         inside, release = threading.Event(), threading.Event()

@@ -81,9 +81,20 @@
                 ''
             );
             assertEq(
-                'https video thumb allowed',
+                'https video thumb loads its saved copy',
                 root.prksSafeWorkThumbSrc('https://img.example/thumb.jpg'),
-                'https://img.example/thumb.jpg'
+                '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')
+            );
+            assertEq(
+                'a saved-copy src maps to itself',
+                root.prksSafeWorkThumbSrc(
+                    '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')),
+                '/api/remote-images?url=' + encodeURIComponent('https://img.example/thumb.jpg')
+            );
+            assertEq(
+                'a saved-copy src naming a non-http URL rejected',
+                root.prksSafeWorkThumbSrc('/api/remote-images?url=' + encodeURIComponent('javascript:alert(1)')),
+                ''
             );
             assertEq(
                 'relative non-thumb path rejected',
