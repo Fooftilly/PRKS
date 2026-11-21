@@ -30,6 +30,11 @@ class FailingCases(unittest.TestCase):
         self.assertEqual("also-expected", "also-actual")
 
 
+class SkippingCases(unittest.TestCase):
+    def test_skips(self):
+        self.skipTest("selfcheck skip")
+
+
 class CrashingCases(unittest.TestCase):
     def test_kills_the_worker(self):
         # Leaves no unittest result behind: the worker process simply vanishes.

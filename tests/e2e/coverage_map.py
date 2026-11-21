@@ -32,7 +32,7 @@ import re
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 from urllib.parse import urlparse
 
 REPO = Path(__file__).resolve().parents[2]
@@ -173,7 +173,7 @@ def _line_of(starts: list[int], offset: int) -> int:
     return lo + 1
 
 
-def _segments(functions: list[Mapping[str, Any]]) -> list[tuple[int, int, int]]:
+def _segments(functions: Sequence[Mapping[str, Any]]) -> list[tuple[int, int, int]]:
     """Split the script into pieces, each with the count of its innermost range.
 
     V8's ranges nest: a function's range holds its inner functions' ranges
@@ -211,7 +211,7 @@ def _segments(functions: list[Mapping[str, Any]]) -> list[tuple[int, int, int]]:
     return pieces
 
 
-def executed_lines(functions: list[Mapping[str, Any]], starts: list[int], text: str | None = None) -> set[int]:
+def executed_lines(functions: Sequence[Mapping[str, Any]], starts: list[int], text: str | None = None) -> set[int]:
     """Lines holding code that ran (precise coverage, innermost range wins).
 
     With ``text``, only non-whitespace characters count, so the indentation
@@ -465,7 +465,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 def select_for_diff(
-    maps: list[Mapping[str, Any]], *, repo: Path, base: str, head: str, all_ids: Iterable[str]
+    maps: Sequence[Mapping[str, Any]], *, repo: Path, base: str, head: str, all_ids: Iterable[str]
 ) -> dict[str, Any]:
     """What a coverage-map selection would run for ``base...head`` (advisory only).
 
@@ -536,7 +536,7 @@ def select_for_diff(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
     build = sub.add_parser("build", help="merge record files into one gzipped map")
     build.add_argument("records", type=Path, help="directory searched recursively for records-*.jsonl")

@@ -131,6 +131,47 @@ def _git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
 
 
+class RunnerStatusTests(unittest.TestCase):
+    """tests/e2e/run.py's own run_serial() writes what check-run decides on."""
+
+    CASES = "tests.e2e.runner_selfcheck_cases"
+
+    def _run(self, *ids):
+        import contextlib
+        import io
+        import os
+
+        previous = os.environ.get("PRKS_E2E")
+        os.environ["PRKS_E2E"] = "1"  # importing the runner sets it; keep the unit suite clean
+        try:
+            from tests.e2e import run as runner
+
+            with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {cm.ENV: raw}), \
+                    contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                passed, _, _, _ = runner.run_serial(["%s.%s" % (self.CASES, i) for i in ids], False)
+                return passed, json.loads((Path(raw) / cm.RUN_STATUS).read_text(encoding="utf-8")), \
+                    cm.check_run(Path(raw))
+        finally:
+            if previous is None:
+                os.environ.pop("PRKS_E2E", None)
+            else:
+                os.environ["PRKS_E2E"] = previous
+
+    def test_a_failure_alone_is_tolerated(self):
+        passed, status, (ok, _why) = self._run("FailingCases.test_fails", "PassingCases.test_first")
+        self.assertFalse(passed)
+        self.assertEqual((status["selected"], status["ran"], status["failures"]), (2, 2, 1))
+        self.assertTrue(ok)
+
+    def test_a_failure_with_a_skip_fails_the_shard(self):
+        passed, status, (ok, why) = self._run("FailingCases.test_fails", "SkippingCases.test_skips")
+        self.assertFalse(passed)
+        self.assertEqual(status["failures"], 1)
+        self.assertIn("SkippingCases.test_skips", status["skip_error"])
+        self.assertFalse(ok)
+        self.assertIn("skipped", why)
+
+
 class CheckRunTests(unittest.TestCase):
     """A failed recording shard still counts only when it ran to its end."""
 
