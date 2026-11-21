@@ -55,6 +55,16 @@ class ResearchMarkupTests(unittest.TestCase):
         long_label = "[[argument:A-1|" + ("x" * 241) + "]]"
         self.assertEqual(parse_research_markup(long_label).argument_refs, ())
 
+    def test_ref_spans_cover_the_whole_marker(self):
+        text = "See [[concept:A]] and [[concept-encoded:B%20C]]."
+        plain, encoded = parse_research_markup(text).concept_refs
+        self.assertEqual((plain.start, plain.end, plain.raw), (4, 17, "[[concept:A]]"))
+        self.assertEqual(
+            (encoded.start, encoded.end, encoded.raw, encoded.name),
+            (22, 47, "[[concept-encoded:B%20C]]", "B C"),
+        )
+        self.assertEqual(text[encoded.start:encoded.end], encoded.raw)
+
     def test_python_js_agreement(self):
         node = shutil.which("node")
         assert node is not None, "node is required for research-links parser agreement"

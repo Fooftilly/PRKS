@@ -1,0 +1,120 @@
+name: Mutation testing (advisory)
+
+# mutmut changes one small piece of a pure module at a time and reruns that
+# module's unit tests (scripts/ci/mutation_testing.py lists the targets). A
+# survivor is a behaviour change no test noticed; the job summary names the
+# functions they are in. Survivors never fail the job: they need review and
+# some are equivalent. The job fails only when a run is incomplete. Not a
+# required check, and no pull_request run unless the mutation setup changes.
+# Scheduled results reach issues (scripts/ci/scheduled_report.py): one
+# standing report issue; scheduled-report.yml opens a failure issue when a
+# run is incomplete.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+      timezone: Europe/Podgorica
+  pull_request:
+    paths:
+      - ".github/workflows/mutation-testing.yml"
+      - "scripts/ci/mutation_testing.py"
+      - "tests/hypothesis_profiles.py"
+      - "scripts/ci/scheduled_report.py"
+      - "scripts/ci/install_pinned_python.py"
+      - "requirements.txt"
+      # The mutmut and pytest pins: a bump must prove the runner still works.
+      - "requirements-dev.txt"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Scheduled and master dispatch runs (the ones that report) share one group,
+  # so two runs never race to create the standing report issue. Pull requests
+  # and branch dispatches get their own group and never displace a weekly run.
+  group: mutation-testing-${{ github.event.pull_request.number || ((github.event_name == 'schedule' || github.ref == 'refs/heads/master') && 'report') || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mutation:
+    name: Mutation testing (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    # Each leg sets only its own output, so the merged outputs hold every target.
+    outputs:
+      result-docs-only-ci: ${{ steps.run.outputs.result-docs-only-ci }}
+      result-research-markup: ${{ steps.run.outputs.result-research-markup }}
+      result-sync-envelope: ${{ steps.run.outputs.result-sync-envelope }}
+      result-text-identity: ${{ steps.run.outputs.result-text-identity }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [docs-only-ci, research-markup, sync-envelope, text-identity]
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        # The research-markup differential compares against the JS renderer.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install pinned mutation-testing dependencies
+        run: python scripts/ci/install_pinned_python.py mutation
+
+      - name: Run mutants against the target's unit tests
+        env:
+          TARGET: ${{ matrix.target }}
+        id: run
+        run: python scripts/ci/mutation_testing.py run "$TARGET" --json
+
+  report:
+    # The only job with an issue token, and it never runs for a pull request:
+    # the matrix legs above run pull request code with a read-only token.
+    name: Update the mutation report issue
+    needs: mutation
+    if: ${{ !cancelled() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # create the report issue and edit each target's comment
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Report each target's survivors
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MUTATION_OUTPUTS: ${{ toJSON(needs.mutation.outputs) }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 scripts/ci/scheduled_report.py mutation --run-id "$RUN_ID"
+
+  report-preview:
+    # Pull requests prove the hand-over without touching any issue.
+    name: Check the mutation report hand-over
+    needs: mutation
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every target handed over a result
+        env:
+          MUTATION_OUTPUTS: ${{ toJSON(needs.mutation.outputs) }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 scripts/ci/scheduled_report.py mutation --run-id "$RUN_ID" --dry-run

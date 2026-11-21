@@ -215,4 +215,153 @@
     ],
     "arguments": []
   }
+,
+  {
+    "id": "fence-indented-three-spaces",
+    "text": "   ```\n[[concept:A]]\n   ```\nAfter [[concept:B]]",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-indented-four-spaces-is-not-a-fence",
+    "text": "    ```\n[[concept:A]]\n",
+    "concepts": [
+      "A"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-closer-indented-three-spaces",
+    "text": "```\n[[concept:A]]\n   ```\n[[concept:B]]",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-closer-indented-four-spaces-stays-open",
+    "text": "```\n[[concept:A]]\n    ```\n[[concept:B]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "fence-shorter-closer-stays-open",
+    "text": "````\n[[concept:A]]\n```\n[[concept:B]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "fence-longer-closer-closes",
+    "text": "```\n[[concept:A]]\n`````\n[[concept:B]]",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-closer-trailing-blanks",
+    "text": "```\n[[concept:A]]\n``` \t\n[[concept:B]]",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-closer-with-text-stays-open",
+    "text": "```\n[[concept:A]]\n``` x\n[[concept:B]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "fence-closer-at-end-of-text",
+    "text": "[[concept:B]]\n```\n[[concept:A]]\n```",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-tilde-not-closed-by-backticks",
+    "text": "~~~\n[[concept:A]]\n```\n[[concept:B]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "fence-mid-line-is-not-a-fence",
+    "text": "x ```\n[[concept:A]]",
+    "concepts": [
+      "A"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "fence-info-string",
+    "text": "```python title\n[[concept:A]]\n```\n[[concept:B]]",
+    "concepts": [
+      "B"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-truncated-percent",
+    "text": "[[concept-encoded:Odd%4]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-trailing-percent",
+    "text": "[[concept-encoded:Odd%]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-second-hex-digit-invalid",
+    "text": "[[concept-encoded:Odd%4G]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-first-hex-digit-invalid",
+    "text": "[[concept-encoded:Odd%G4]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-unsafe-raw-character",
+    "text": "[[concept-encoded:Odd Name]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-percent-at-start",
+    "text": "[[concept-encoded:%41BC]]",
+    "concepts": [
+      "ABC"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-astral-at-bound",
+    "text": "[[concept-encoded:%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80]]",
+    "concepts": [
+      "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"
+    ],
+    "arguments": []
+  },
+  {
+    "id": "encoded-astral-over-bound",
+    "text": "[[concept-encoded:%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80%F0%9F%9A%80]]",
+    "concepts": [],
+    "arguments": []
+  },
+  {
+    "id": "encoded-ascii-at-bound",
+    "text": "[[concept-encoded:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA]]",
+    "concepts": [
+      "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    ],
+    "arguments": []
+  }
 ]

@@ -91,11 +91,7 @@ def _is_plain_relative(path: str) -> bool:
 
 
 def is_approved_markdown(path: str) -> bool:
-    if (
-        not _is_plain_relative(path)
-        or path.rsplit("/", 1)[-1].lower() == "agents.md"
-    ):
-        return False
+    """An exact audited page; the set holds only plain paths and no AGENTS.md (tested)."""
     return path in AUDITED_DOC_FILES
 
 

@@ -57,10 +57,11 @@ The property tests are `tests/pg/test_tags_properties.py` and `tests/pg/test_wor
 
 ## Hypothesis profiles
 
-Two Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
+Three Hypothesis profiles live in `tests/hypothesis_profiles.py`, selected by `PRKS_HYPOTHESIS_PROFILE`:
 
 - `pr` (default, the Unit / API / contract gate): `derandomize=True`, so every run draws the same inputs and a red pull request is caused by that pull request. About 2 seconds.
 - `nightly` ([advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/hypothesis-nightly.yml), daily and on manual dispatch, never on pull requests): random seeds and 5,000 examples per property. Not a required check.
+- `mutation` (only `scripts/ci/mutation_testing.py`): derandomized with 100 examples, since every mutant reruns the properties.
 
 ```bash
 ./.venv/bin/python -m unittest tests.test_sync_envelope_properties tests.test_byte_range_properties tests.test_research_markup_differential -v
@@ -68,6 +69,29 @@ PRKS_HYPOTHESIS_PROFILE=nightly ./.venv/bin/python -m unittest tests.test_sync_e
 ```
 
 When the nightly run fails, it prints the shrunk input and a `@reproduce_failure` blob. Fix the bug, add the input as an `@example(...)` on the property, and add a PostgreSQL regression in `tests/pg` when the input reached the database. Never relax a property or retry to get green. When a family changes its payload shape, regenerate the seed for it from the `tests/pg` sync suite rather than editing it by hand.
+
+## Mutation testing (#651 B2)
+
+`scripts/ci/mutation_testing.py` runs [mutmut](https://github.com/boxed/mutmut) on a few pure modules. mutmut changes one small piece of a module at a time (a comparison, a constant, a boolean operator) and reruns that module's unit tests. A mutant the tests still pass on has **survived**: a behaviour change no test notices. Each target in `TARGETS` names the modules to mutate and the database-free tests that cover them: `text-identity`, `sync-envelope` (`backend/sync_protocol.py`), `research-markup` and `docs-only-ci` (the docs-only classifier, Markdown validator and wiki link rules).
+
+The [advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/mutation-testing.yml) runs every target weekly, on manual dispatch, and on pull requests that change the mutation setup. The job summary gives counts and the functions with survivors. Survivors never fail the job; only an incomplete run does. The run copies the tracked files into a temporary workspace and writes mutmut's `[mutmut]` section there, so the checkout is never changed.
+
+```bash
+python scripts/ci/install_pinned_python.py mutation
+python scripts/ci/mutation_testing.py run docs-only-ci --keep /tmp/prks-mutation
+python scripts/ci/mutation_testing.py show docs-only-ci scripts.ci.wiki_links.x_map_prose__mutmut_11 --workspace /tmp/prks-mutation
+```
+
+For each survivor, read the diff first. If it can change behaviour, add an assertion that fails on it. Some survivors are equivalent (they cannot change behaviour, such as `fence = None` for `fence = ""` in a truthiness test): leave those, or delete the redundant code that made them possible. `no_tests` mutants are in functions the selected tests never call, such as the ledger code in `backend/sync/protocol.py`, which needs PostgreSQL. A test that runs a module as a subprocess cannot judge a mutant, because mutmut's switch between mutants only works in-process; a target lists such tests under `deselect`.
+
+## Scheduled results as issues
+
+Scheduled runs report to issues, so nobody has to read the Actions page ([`scripts/ci/scheduled_report.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/scheduled_report.py)).
+
+- **Failures.** [`scheduled-report.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/scheduled-report.yml) watches the scheduled runs of the PRKS Test Gate (nightly unit repeat), nightly property fuzzing and mutation testing. A failed run opens the issue "Scheduled check failing: &lt;workflow&gt;" (label `scheduled-check`) with the run link and failed jobs. A repeat failure comments on that issue, the next passing run closes it, and a later failure reopens it. Cancelled runs report nothing.
+- **Mutation survivors.** The weekly mutation run keeps one comment per target on the standing issue "Mutation testing report" (label `mutation-report`), edited in place, which sends no notification. A new comment, which does notify, appears only when a target has more survivors than its last report. The matrix jobs hold no issue token: each hands its result to one report job that never runs for a pull request, and pull requests run a dry check of that hand-over instead.
+
+A new scheduled test workflow must be added to the `workflow_run` list, or named in `NOT_TEST_RUNS` in `tests/test_scheduled_report.py` when it is not a test run.
 
 ## PostgreSQL model-based Work lifecycle sequences (#1285)
 

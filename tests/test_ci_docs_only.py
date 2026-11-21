@@ -16,6 +16,7 @@ from scripts.ci.docs_only import (
     AUDITED_DOC_FILES,
     AUDITED_CONFIG_FILES,
     POSTGRES_SCOPE,
+    _is_plain_relative,
     changed_documentation,
     is_approved_markdown,
     is_audited_config,
@@ -91,6 +92,14 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             with self.subTest(rejected=path):
                 self.assertFalse(is_approved_markdown(path))
 
+    def test_audited_docs_are_plain_paths_and_never_agent_guidance(self):
+        # is_approved_markdown is exact set membership, so the set itself must
+        # never hold an AGENTS.md or a path that escapes or aliases the tree.
+        for path in AUDITED_DOC_FILES | AUDITED_CONFIG_FILES:
+            with self.subTest(path=path):
+                self.assertTrue(_is_plain_relative(path))
+                self.assertNotEqual(path.rsplit("/", 1)[-1].lower(), "agents.md")
+
     def test_actual_git_changes_fail_closed(self):
         cases = (
             ("root docs test fixture", {"README.md": "# Changed\n"}, False),
@@ -129,8 +138,11 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                     _git(root, "add", ".")
                     _git(root, "commit", "-qm", "change")
                 result = changed_documentation(root, base)
-                self.assertEqual(result is not None, expected)
+                # An approved diff reports exactly its changed paths.
+                self.assertEqual(result, tuple(sorted(changes)) if expected else None)
                 self.assertIsNone(changed_documentation(root, "not-a-valid-sha"))
+                # A well-formed SHA git does not have refuses, never raises.
+                self.assertIsNone(changed_documentation(root, "0" * 40))
 
     def test_audited_config_files_are_exact_root_paths(self):
         for path in (".codacy.yml", ".coderabbit.yaml", ".pr_agent.toml"):
@@ -177,7 +189,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
                 root_files = (
                     "run_tests.py", "prks_app.py", "Dockerfile", ".dockerignore",
                     "docker-compose.yml", "docker-build.sh", "docker-entrypoint.sh",
-                    "eslint.config.mjs", "ruff.toml", "setup.cfg",
+                    "eslint.config.mjs", "ruff.toml",
                     "pyrightconfig.json", "pyrightconfig.typed-slice.json",
                 )
                 for script in root_files:
@@ -261,6 +273,7 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
         )
         rejected = (
             "", "/README.md", "../README.md", "docs/../backend/a.md",
+            "./README.md", "docs/./a.md",
             "docs//a.md", "docs\\a.md", "README.MD", "docs/a.markdown",
             "backend/db/schema/999_x.sql", "tests/pg/test_a.py",
             "tests/pg/search_ranking_baseline.json", "requirements.txt",
@@ -412,6 +425,23 @@ class DocsOnlyCIClassifierTests(unittest.TestCase):
             self.assertEqual(merge_base_parent(root, stale, head), _git(root, "rev-parse", "HEAD^1"))
             _git(root, "checkout", "-q", head)
             self.assertEqual(merge_base_parent(root, stale, head), stale)
+
+    def test_the_event_base_is_kept_when_git_cannot_answer(self):
+        # Not a repository, or a merge whose first parent is neither present
+        # nor fetchable: the immutable event base, never an error.
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertEqual(merge_base_parent(Path(folder), "a" * 40, "b" * 40), "a" * 40)
+            root = Path(folder) / "repo"
+            root.mkdir()
+            stale, head = self.stale_base_merge(root, {"docs/guide.md": "Changed\n"})
+            first = _git(root, "rev-parse", "HEAD^1")
+            merge = _git(root, "rev-parse", "HEAD")
+            shallow = Path(folder) / "shallow"
+            _git(Path(folder), "clone", "-q", "--depth=1", f"file://{root}", str(shallow))
+            _git(shallow, "remote", "remove", "origin")
+            self.assertEqual(_git(shallow, "rev-parse", "HEAD"), merge)
+            self.assertNotEqual(first, stale)
+            self.assertEqual(merge_base_parent(shallow, stale, head), stale)
 
     def test_deleted_or_renamed_markdown_is_not_safe_skip(self):
         for page in ("Glossary", "Getting-Started", "Offline-and-Sync"):
@@ -713,11 +743,66 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
                 "[anchor](../README.md#absent)\n"
                 f"{fence}python\nprint('no closing fence')\n"
             ))
-            errors = check_markdown(root, "docs/guide.md")
-            self.assertEqual(len(errors), 3)
-            self.assertTrue(any("missing relative target" in x for x in errors))
-            self.assertTrue(any("missing anchor" in x for x in errors))
-            self.assertTrue(any("unclosed" in x for x in errors))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                # Both links share one paragraph, which starts on line 1.
+                "docs/guide.md:1: missing relative target not-here.md",
+                "docs/guide.md:1: missing anchor #absent in ../README.md",
+                f"docs/guide.md: unclosed {fence} fence",
+            ])
+
+    def test_errors_name_the_line_of_every_link_kind(self):
+        # Markdown images, raw HTML blocks and inline HTML are all checked,
+        # and each error names its own source line.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "# Guide\n"
+                "![logo](missing.png)\n\n"
+                '<a href="block.md">block</a>\n\n'
+                'Text <img src="inline.png"> here.\n'
+                "[self](#nowhere)\n"
+            ))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:2: missing relative target missing.png",
+                "docs/guide.md:4: missing relative target block.md",
+                # Markdown links of a paragraph come before its inline HTML.
+                "docs/guide.md:6: missing anchor #nowhere in docs/guide.md",
+                "docs/guide.md:6: missing relative target inline.png",
+            ])
+
+    def test_external_protocol_relative_and_site_root_links_are_not_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            _write(root, "docs/guide.md", (
+                "[a](https://example.org/x.md) [b](//example.org/x.md) "
+                "[c](/settings/x.md) [d](mailto:x@example.org)\n"
+            ))
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [])
+
+    def test_an_unreadable_anchor_target_has_no_anchors(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "docs").mkdir()
+            (root / "docs/latin1.md").write_bytes(b"# Caf\xe9\n")
+            _write(root, "docs/guide.md", "[x](latin1.md#caf)\n")
+            self.assertEqual(check_markdown(root, "docs/guide.md"), [
+                "docs/guide.md:1: missing anchor #caf in latin1.md",
+            ])
+
+    def test_heading_anchors_use_visible_text_breaks_and_repeat_suffixes(self):
+        tick = chr(96)
+        content = (
+            f"# Run {tick}prks{tick} now\n"
+            "## ![Logo](logo.png) Brand\n"
+            "Two\nlines\n===\n"
+            "Hard\\\nbreak\n---\n"
+            "## Same\n## Same\n## Same\n"
+            'Some <span id="inline-anchor">text</span>.\n'
+        )
+        self.assertEqual(_anchors(content), {
+            "run-prks-now", "logo-brand", "two-lines", "hard-break",
+            "same", "same-1", "same-2", "inline-anchor",
+        })
 
     def test_published_wiki_page_must_pass_publisher_link_check(self):
         # The skipped unit suite runs tests/test_wiki_source_links.py; a

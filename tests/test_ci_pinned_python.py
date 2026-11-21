@@ -22,7 +22,7 @@ class CIPinsTests(unittest.TestCase):
         )
         (self.root / "requirements-dev.txt").write_text(
             "playwright==1.63.0\nopenapi-core==0.23.1\nhypothesis==6.170.9\n"
-            "markdown-it-py==4.2.0\nmdurl==0.1.2\nrequests==2.34.2\n",
+            "markdown-it-py==4.2.0\nmdurl==0.1.2\nrequests==2.34.2\nmutmut==3.8.1\npytest==9.2.0\n",
             encoding="utf-8",
         )
 
@@ -55,6 +55,16 @@ class CIPinsTests(unittest.TestCase):
         self.assertEqual(
             pins_for_profile(self.root, "docs"),
             ["markdown-it-py==4.2.0", "mdurl==0.1.2"],
+        )
+
+    def test_mutation_profile_adds_the_targets_test_imports_and_mutmut(self) -> None:
+        self.assertEqual(
+            pins_for_profile(self.root, "mutation")[-5:],
+            ["hypothesis==6.170.9", "markdown-it-py==4.2.0", "mdurl==0.1.2", "mutmut==3.8.1",
+             "pytest==9.2.0"],
+        )
+        self.assertEqual(
+            pins_for_profile(self.root, "mutation")[:-5], pins_for_profile(self.root, "runtime"),
         )
 
     def test_missing_extra_fails_closed(self) -> None:
