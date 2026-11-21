@@ -54,14 +54,18 @@ def prks_thumb_cache_stem(
     return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
 
 
-def prks_prune_thumbnail_page(thumbs_dir: str, work_id: str, page: int, keep: str) -> None:
-    """Remove one Work page's other cached thumbnails, keeping the file ``keep`` (best-effort).
+def prks_prune_thumbnail_page(
+    thumbs_dir: str, work_id: str, page: int, keep: str, older_than: float
+) -> None:
+    """Remove one Work page's other cached thumbnails older than ``older_than`` (best-effort).
 
-    Each render of new bytes publishes under a new name, so older names for
-    the same page are dropped here instead of accumulating until the Work is
-    deleted. Only a render of the Work's current PDF calls this, so a late
-    render of replaced bytes never evicts the current copy; it may still
-    publish its own after this, and the next prune removes it.
+    ``older_than`` is the modification time of the PDF that ``keep`` was
+    rendered from. Each managed PDF is a new file (PG14), and a thumbnail is
+    only written after its PDF exists, so a thumbnail of the same PDF or of
+    any newer one is never older than that: whatever order concurrent
+    renders and replaces finish in, this removes only copies of older PDFs.
+    A late render of an older PDF may still publish after this; the next
+    render of a newer PDF removes it.
     """
     prefix = f"{prks_thumb_cache_safe_wid(work_id)}_p{int(page)}"
     page_pat = re.compile(
@@ -77,8 +81,10 @@ def prks_prune_thumbnail_page(thumbs_dir: str, work_id: str, page: int, keep: st
         # on this page's own names.
         if fname == keep or not fname.startswith(prefix) or not page_pat.match(fname):
             continue
+        path = os.path.join(thumbs_dir, fname)
         try:
-            os.remove(os.path.join(thumbs_dir, fname))
+            if os.path.getmtime(path) < older_than:
+                os.remove(path)
         except OSError:
             pass
 

@@ -132,8 +132,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
                 "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
             viewer.start()
             self.assertTrue(rendering.wait(10))
-            new = self.ok(self.send("POST", f"/api/works/{work['id']}/pdf",
-                                    {"file_b64": base64.b64encode(pdf_bytes("thumbracenew")).decode("ascii")}))
+            new = self.replace_pdf(work["id"], "thumbracenew")
             # The new PDF is viewed, and cached, before the old render ends.
             self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
             replaced.set()
@@ -150,12 +149,56 @@ class ManagedPdfTests(ManagedPdfTestCase):
         with open(os.path.join(self.storage.thumbs_dir, f"{new_stem}.webp"), "rb") as handle:
             current = handle.read()
         self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").raw, current)
-        # A later render of the current PDF prunes the stale copy.
-        os.remove(os.path.join(self.storage.thumbs_dir, f"{new_stem}.webp"))
+        # The first render of a newer PDF prunes both older copies.
+        newest = self.replace_pdf(work["id"], "thumbracenewest")
         self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
-        names = set(os.listdir(self.storage.thumbs_dir))
-        self.assertIn(f"{new_stem}.webp", names)
-        self.assertNotIn(f"{old_stem}.webp", names)
+        newest_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=newest["file_path"].rsplit("/", 1)[1])
+        self.assertEqual(self.thumb_names(work["id"]), {f"{newest_stem}.webp"})
+
+    def test_a_render_that_resumes_its_prune_after_a_replace_keeps_the_new_copy(self) -> None:
+        """The interleaving a current-PDF check could not close: the old render
+        is held between publishing its copy and pruning, the PDF is replaced
+        and its thumbnail cached, then the old prune runs. It removes only
+        copies older than the PDF it rendered, so the new copy survives."""
+        import threading
+
+        from backend.derived_caches import prks_thumb_cache_stem
+
+        work = self.upload("Thumb Prune Race", "thumbpruneold", "thumb_prune_race.pdf")
+        original = self.server_module.prks_prune_thumbnail_page
+        pruning, replaced = threading.Event(), threading.Event()
+        self.addCleanup(replaced.set)
+        first = [True]
+
+        def held(*args: Any, **kwargs: Any) -> None:
+            if first[0]:
+                first[0] = False
+                pruning.set()
+                self.assertTrue(replaced.wait(10))
+            original(*args, **kwargs)
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "prks_prune_thumbnail_page", held):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(pruning.wait(10))
+            new = self.replace_pdf(work["id"], "thumbprunenew")
+            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+            replaced.set()
+            viewer.join(20)
+            self.assertEqual(result["res"].status, 200)
+        primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        self.assertIn(f"{new_stem}.webp", self.thumb_names(work["id"]))
+
+    def replace_pdf(self, work_id: str, text: str) -> dict[str, Any]:
+        return self.ok(self.send("POST", f"/api/works/{work_id}/pdf",
+                                 {"file_b64": base64.b64encode(pdf_bytes(text)).decode("ascii")}))
+
+    def thumb_names(self, work_id: str) -> set[str]:
+        assert self.storage is not None
+        return {name for name in os.listdir(self.storage.thumbs_dir) if name.startswith(work_id + "_")}
 
     def test_the_pdf_route_validates_the_whole_suffix(self) -> None:
         work = self.upload("Route Suffix Guard", "route", "route_suffix_guard.pdf")

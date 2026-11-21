@@ -1590,12 +1590,12 @@ class PRKSHandler(HttpHandlerBase):
                             publish_derived_cache_bytes(
                                 thumbs_root, f"{cache_base}.{ext}", generated_bytes
                             )
-                            # Only a render of the Work's current PDF prunes: a
-                            # late render of replaced bytes must not evict the
-                            # current one's copy.
-                            current = works_api.thumbnail_fields(self, db, w_id) or {}
-                            if current.get('file_path') == thumb.get('file_path'):
-                                prks_prune_thumbnail_page(thumbs_root, w_id, page, f"{cache_base}.{ext}")
+                            # Only copies older than the PDF just rendered go: a
+                            # late render of replaced bytes never evicts a newer
+                            # PDF's copy, whatever order the two finish in.
+                            prks_prune_thumbnail_page(
+                                thumbs_root, w_id, page, f"{cache_base}.{ext}", older_than=pdf_mtime
+                            )
                         except Exception:
                             try:
                                 tmp_path = os.path.join(thumbs_root, tmp_name)

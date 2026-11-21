@@ -9,6 +9,7 @@ import hashlib
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -80,6 +81,12 @@ class ThumbnailPruneTests(unittest.TestCase):
             handle.write(b"t")
         return path
 
+    @staticmethod
+    def age(path: str, seconds: float) -> str:
+        then = time.time() - seconds
+        os.utime(path, (then, then))
+        return path
+
     def test_a_page_keeps_only_its_current_render(self):
         keep = prks_thumb_cache_stem("W-1", 1, "AS-A", source="new.pdf") + ".webp"
         stale = [prks_thumb_cache_stem("W-1", 1, "AS-A", source="old.pdf") + ".webp",
@@ -89,9 +96,19 @@ class ThumbnailPruneTests(unittest.TestCase):
                  prks_thumb_cache_stem("W-12", 1, "AS-A", source="old.pdf") + ".webp",
                  prks_thumb_cache_stem("W-1", 1, "AS-A", source="old.pdf") + ".webp.tmp"]
         for name in [keep, *stale, *other]:
-            self.touch(name)
-        prks_prune_thumbnail_page(self.thumbs_dir, "W-1", 1, keep)
+            self.age(self.touch(name), 100)
+        prks_prune_thumbnail_page(self.thumbs_dir, "W-1", 1, keep, older_than=time.time())
         self.assertEqual(sorted(os.listdir(self.thumbs_dir)), sorted([keep, *other]))
+
+    def test_a_copy_not_older_than_the_rendered_pdf_is_kept(self):
+        """A late render of an older PDF never evicts a newer PDF's copy."""
+        newer = self.touch(prks_thumb_cache_stem("W-1", 1, "AS-A", source="new.pdf") + ".webp")
+        older = self.age(self.touch(prks_thumb_cache_stem("W-1", 1, "AS-A", source="older.pdf") + ".webp"), 100)
+        late = prks_thumb_cache_stem("W-1", 1, "AS-A", source="old.pdf") + ".webp"
+        self.touch(late)
+        prks_prune_thumbnail_page(self.thumbs_dir, "W-1", 1, late, older_than=time.time() - 50)
+        self.assertTrue(os.path.exists(newer))
+        self.assertFalse(os.path.exists(older))
 
     def test_a_work_delete_removes_named_renders(self):
         names = [prks_thumb_cache_stem("W-1", 2, None, source="x.pdf") + ".webp",
