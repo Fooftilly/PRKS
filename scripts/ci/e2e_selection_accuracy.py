@@ -50,6 +50,11 @@ _SUMMARY_MARKER = "<!-- e2e-selection-accuracy:summary -->"
 _MISS_MARKER = "<!-- e2e-selection-miss:{run_id} -->"
 _FOOTER = "\n\n---\n_Posted by `scripts/ci/e2e_selection_accuracy.py`._"
 _TEST_ID = re.compile(r"tests\.e2e\.[\w.]+\Z")
+_SHARD_JOB = re.compile(r"E2E \(([1-9][0-9]*)/([1-9][0-9]*)\)\Z")
+# e2e-gate.yml's last job, which fails whenever a shard or pointer capture did.
+_GATE_SUMMARY_JOB = "Full E2E gate"
+_UPLOAD_SLACK = dt.timedelta(minutes=2)
+_ROWS_SHOWN = 60
 
 Download = Callable[[int], bytes]
 
@@ -78,50 +83,111 @@ def _runs(client: sr.Client, workflow: str, query: str) -> list[dict[str, Any]]:
     return runs
 
 
-def gate_runs(client: sr.Client, since: dt.date) -> list[dict[str, Any]]:
+def _since(when: dt.datetime) -> str:
+    return "%3E%3D" + when.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def gate_runs(client: sr.Client, since: dt.datetime) -> list[dict[str, Any]]:
     """Completed pull request runs of the gate since ``since``, newest first."""
-    runs = _runs(client, GATE_WORKFLOW, f"event=pull_request&status=completed&created=%3E%3D{since.isoformat()}")
+    runs = _runs(client, GATE_WORKFLOW, f"event=pull_request&status=completed&created={_since(since)}")
     return [r for r in runs if r.get("conclusion") in ("success", "failure")]
 
 
-def shadow_runs(client: sr.Client, since: dt.date) -> dict[str, int]:
+def shadow_runs(client: sr.Client, since: dt.datetime) -> dict[str, int]:
     """Head SHA -> the newest successful shadow run on it (one listing for the whole window)."""
     found: dict[str, int] = {}
-    for run in _runs(client, SHADOW_WORKFLOW, f"event=pull_request&status=success&created=%3E%3D{since.isoformat()}"):
+    for run in _runs(client, SHADOW_WORKFLOW, f"event=pull_request&status=success&created={_since(since)}"):
         found.setdefault(str(run.get("head_sha")), int(run["id"]))
     return found
 
 
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def clean_report(data: Any) -> dict[str, Any]:
+    """Only the fields the report uses, each checked.
+
+    A pull request's own code writes its shadow report, so nothing from it
+    reaches an issue comment unchecked: modes come from fixed sets, counts are
+    integers and test IDs match the E2E ID pattern. Raises ValueError otherwise.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("not an object")
+    plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+    gate_mode = plan.get("mode")
+    if gate_mode not in ("full", "affected", "skip"):
+        raise ValueError("unknown gate mode")
+    selection = data.get("shadow")
+    if selection is None:
+        return {"gate_mode": gate_mode, "selection": None}
+    if not isinstance(selection, dict) or selection.get("mode") not in ("full", "skip", "subset"):
+        raise ValueError("unknown map mode")
+    tests, total = _count(selection.get("tests")), _count(selection.get("total"))
+    if tests is None or total is None:
+        raise ValueError("bad test counts")
+    selected = selection.get("selected") or []
+    if not isinstance(selected, list) or not all(isinstance(t, str) and _TEST_ID.match(t) for t in selected):
+        raise ValueError("bad selected test IDs")
+    return {"gate_mode": gate_mode, "gate_test_count": _count(plan.get("test_count")),
+            "selection": {"mode": selection["mode"], "tests": tests, "total": total, "selected": selected}}
+
+
 def shadow_report(client: sr.Client, download: Download, run_id: int) -> dict[str, Any] | None:
-    """The report a shadow run uploaded, or None when it has expired."""
+    """The checked report a shadow run uploaded, or None when it has expired."""
     artifacts = (client.request("GET", f"actions/runs/{run_id}/artifacts?per_page=100") or {}).get("artifacts", [])
     for artifact in artifacts:
         if artifact.get("name") == SHADOW_ARTIFACT and not artifact.get("expired"):
-            return _member(download(int(artifact["id"])), f"{SHADOW_ARTIFACT}.json")
+            return clean_report(_member(download(int(artifact["id"])), f"{SHADOW_ARTIFACT}.json"))
     return None
 
 
+def _time(value: Any) -> dt.datetime | None:
+    try:
+        return dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _uploaded_by(artifact: dict[str, Any], job: dict[str, Any]) -> bool:
+    """Whether ``artifact`` was uploaded while ``job`` ran (a rerun keeps the run's artifacts, so
+    an earlier attempt's shard log must not stand in for this attempt's)."""
+    created, started, ended = _time(artifact.get("created_at")), _time(job.get("started_at")), _time(
+        job.get("completed_at"))
+    return None not in (created, started, ended) and started <= created <= ended + _UPLOAD_SLACK  # type: ignore[operator]
+
+
 def gate_failures(client: sr.Client, download: Download, run_id: int) -> tuple[set[str], bool]:
-    """The test IDs a failed gate run reported, and whether every failing shard reported them."""
-    artifacts = (client.request("GET", f"actions/runs/{run_id}/artifacts?per_page=100") or {}).get(
-        "artifacts", [])
+    """The test IDs a failed gate run's latest attempt reported, and whether that is every failure.
+
+    Complete means each failed shard job of the latest attempt uploaded a log
+    with test IDs during that job, and no other job failed (pointer capture, the
+    plan) except the gate's own summary job, which fails because they did.
+    """
+    artifacts = [a for a in (client.request("GET", f"actions/runs/{run_id}/artifacts?per_page=100") or {}).get(
+        "artifacts", []) if _SHARD_LOG.match(str(a.get("name"))) and not a.get("expired")]
     jobs = (client.request("GET", f"actions/runs/{run_id}/jobs?filter=latest&per_page=100") or {}).get("jobs", [])
-    failed_shards = {
-        job["name"] for job in jobs
-        if job.get("conclusion") in ("failure", "timed_out") and str(job.get("name", "")).startswith("E2E (")
-    }
+    failed = [job for job in jobs if job.get("conclusion") in ("failure", "timed_out")]
     ids: set[str] = set()
-    reported = 0
-    for artifact in artifacts:
-        match = _SHARD_LOG.match(str(artifact.get("name")))
-        if not match or artifact.get("expired"):
+    complete = bool(failed)
+    for job in failed:
+        name = str(job.get("name", ""))
+        shard = _SHARD_JOB.match(name)
+        if shard is None:
+            if name != _GATE_SUMMARY_JOB:
+                complete = False
             continue
-        data = _member(download(int(artifact["id"])), "e2e-last-failed.json")
-        found = [t for t in (data or {}).get("test_ids", []) if isinstance(t, str) and _TEST_ID.match(t)]
-        if found:
-            reported += 1
-            ids.update(found)
-    return ids, bool(failed_shards) and reported >= len(failed_shards)
+        log_name = f"e2e-shard-{shard.group(1)}-of-{shard.group(2)}-log"
+        found: list[str] = []
+        for artifact in artifacts:
+            if artifact.get("name") == log_name and _uploaded_by(artifact, job):
+                data = _member(download(int(artifact["id"])), "e2e-last-failed.json")
+                found = [t for t in (data or {}).get("test_ids", []) if isinstance(t, str) and _TEST_ID.match(t)]
+                break
+        if not found:
+            complete = False
+        ids.update(found)
+    return ids, complete
 
 
 def _title(run: dict[str, Any]) -> str:
@@ -129,7 +195,9 @@ def _title(run: dict[str, Any]) -> str:
     pulls = run.get("pull_requests") or []
     if pulls and pulls[0].get("number"):
         return f"#{pulls[0]['number']}"
-    title = re.sub(r"[|`\[\]<>\r\n]", " ", str(run.get("display_title") or "?")).strip()
+    # Pull request titles are anyone's text: no table breaks, markup, links or @mentions.
+    title = re.sub(r"[|`\[\]<>()@#*_~!\\\r\n]", " ", str(run.get("display_title") or "?"))
+    title = re.sub(r"\s+", " ", title).strip() or "?"
     return title if len(title) <= 50 else title[:49] + "…"
 
 
@@ -139,21 +207,21 @@ def compare(run: dict[str, Any], shadow: dict[str, Any] | None, failed: set[str]
         "title": _title(run), "conclusion": run["conclusion"],
         "failed": sorted(failed), "missed": [], "complete": complete,
     }
-    if shadow is None or not shadow.get("shadow"):
-        row["status"] = "no map" if shadow else "no shadow report"
+    if shadow is None or shadow.get("selection") is None:
+        row["status"] = shadow.get("status", "no map") if shadow else "no shadow report"
         return row
-    plan, selection = shadow.get("plan") or {}, shadow["shadow"]
-    total = selection.get("total")
-    row["gate_mode"] = plan.get("mode")
-    row["gate_tests"] = {"skip": 0, "affected": plan.get("test_count")}.get(str(plan.get("mode")), total)
-    row["map_mode"] = selection.get("mode")
-    row["map_tests"] = selection.get("tests")
-    if selection.get("mode") == "full":
+    selection = shadow["selection"]
+    row["gate_mode"] = shadow["gate_mode"]
+    row["gate_tests"] = {"skip": 0, "affected": shadow.get("gate_test_count")}.get(shadow["gate_mode"],
+                                                                                 selection["total"])
+    row["map_mode"] = selection["mode"]
+    row["map_tests"] = selection["tests"]
+    if selection["mode"] == "full":
         chosen = None
-    elif selection.get("mode") == "skip":
+    elif selection["mode"] == "skip":
         chosen = set()
     else:
-        chosen = set(selection.get("selected") or [])
+        chosen = set(selection["selected"])
     row["missed"] = sorted(failed - chosen) if chosen is not None else []
     if run["conclusion"] == "failure" and not complete:
         row["status"] = "failed, test IDs incomplete"
@@ -167,19 +235,23 @@ def summary_comment(rows: list[dict[str, Any]], days: int, run_url: str) -> str:
     ran = sum(int(r["gate_tests"] or 0) for r in compared)
     would = sum(int(r["map_tests"] or 0) for r in compared)
     misses = [r for r in compared if r["missed"]]
+    incomplete = [r for r in compared if r["status"] == "failed, test IDs incomplete"]
     lines = [
         _SUMMARY_MARKER,
         f"### Last {days} days (updated by {run_url})",
         "",
         f"- Gate runs on pull requests: {len(rows)}; with a coverage-map selection: {len(compared)} "
         "(the rest have no shadow report, or none with a complete map)",
-        f"- Tests the gate ran: {ran}; the map would have run: {would}",
+        f"- Tests selected (planned, not timed): the gate {ran}; the map {would}",
         f"- Gate runs with a failure the map would not have run: **{len(misses)}**",
+        f"- Failed gate runs whose failed tests are not all known: {len(incomplete)}",
     ]
     if compared:
-        lines += ["", "| Pull request | Gate | Gate tests | Map | Map tests | Result |",
+        shown = "" if len(compared) <= _ROWS_SHOWN else f" (newest {_ROWS_SHOWN} of {len(compared)})"
+        lines += ["", f"Compared runs{shown}:", "",
+                  "| Pull request | Gate | Gate tests | Map | Map tests | Result |",
                   "| --- | --- | ---: | --- | ---: | --- |"]
-        for r in compared[:60]:
+        for r in compared[:_ROWS_SHOWN]:
             lines.append(
                 f"| {r['title']} | [{r['conclusion']}]({r['run_url']}) | {r['gate_tests']} "
                 f"| {r['map_mode']} | {r['map_tests']} | {r['status']} |")
@@ -210,7 +282,14 @@ BODY = (
 
 
 def report(client: sr.Client, rows: list[dict[str, Any]], days: int, run_url: str) -> str:
-    issue = sr._open_issue(client, LABEL, TITLE) or sr._create_issue(client, LABEL, TITLE, BODY)
+    issue = sr._open_issue(client, LABEL, TITLE)
+    if issue is None:
+        # A closed report is reopened, not replaced: its comments are the record of misses already posted.
+        issue = sr._find_issue(client, LABEL, TITLE, state="closed")
+        if issue is not None:
+            client.request("PATCH", f"issues/{issue['number']}", {"state": "open"})
+        else:
+            issue = sr._create_issue(client, LABEL, TITLE, BODY)
     number = int(issue["number"])
     ours = [c for c in sr._comments(client, number) if (c.get("user") or {}).get("login") == sr.REPORTER_LOGIN]
     posted = "\n".join(str(c.get("body", "")) for c in ours)
@@ -228,15 +307,26 @@ def report(client: sr.Client, rows: list[dict[str, Any]], days: int, run_url: st
     return f"#{number}: {len(rows)} gate runs, {new} new misses"
 
 
-def collect(client: sr.Client, download: Download, days: int, today: dt.date) -> list[dict[str, Any]]:
-    since = today - dt.timedelta(days=days)
+def collect(client: sr.Client, download: Download, days: int, now: dt.datetime) -> list[dict[str, Any]]:
+    since = now - dt.timedelta(days=days)
     shadows = shadow_runs(client, since)
     rows = []
     for run in gate_runs(client, since):
         shadow_run = shadows.get(str(run.get("head_sha")))
-        shadow = shadow_report(client, download, shadow_run) if shadow_run else None
-        failed, complete = (gate_failures(client, download, int(run["id"]))
-                            if run["conclusion"] == "failure" else (set(), True))
+        shadow: dict[str, Any] | None = None
+        if shadow_run:
+            try:
+                shadow = shadow_report(client, download, shadow_run)
+            except (ValueError, RuntimeError, zipfile.BadZipFile, UnicodeDecodeError) as error:
+                # One bad report (a pull request's code wrote it) never stops the others.
+                shadow = {"selection": None, "status": f"unreadable shadow report ({type(error).__name__})"}
+        failed, complete = set(), True
+        # Failure logs matter only when there is a selection to check them against.
+        if run["conclusion"] == "failure" and shadow and shadow.get("selection") is not None:
+            try:
+                failed, complete = gate_failures(client, download, int(run["id"]))
+            except (ValueError, RuntimeError, zipfile.BadZipFile, UnicodeDecodeError):
+                failed, complete = set(), False
         rows.append(compare(run, shadow, failed, complete))
     return rows
 
@@ -253,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     client = sr.GitHubClient(token, repo, api_url)
     run_url = f"{server}/{repo}/actions/runs/{args.run_id}" if args.run_id else "a local run"
     rows = collect(client, lambda artifact_id: _download(token, api_url, repo, artifact_id), args.days,
-                   dt.datetime.now(dt.timezone.utc).date())
+                   dt.datetime.now(dt.timezone.utc))
     text = summary_comment(rows, args.days, run_url)
     print(text)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
