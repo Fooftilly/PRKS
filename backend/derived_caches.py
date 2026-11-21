@@ -27,22 +27,57 @@ PRKS_THUMB_CACHE_REV = 2
 
 
 def prks_thumb_cache_stem(
-    work_id: str, page: int, asset_id: Optional[str] = None
+    work_id: str, page: int, asset_id: Optional[str] = None, source: Optional[str] = None
 ) -> str:
     """Cache filename stem for one PDF page thumbnail (no extension).
 
     Includes the selected primary Asset id when known so switching the primary
     PDF cannot reuse a cache file generated from a previous Asset (mtime alone
     is insufficient when the new PDF is older than an existing thumb).
+
+    ``source`` names the exact PDF bytes rendered: a managed PDF's file name,
+    which is immutable per storage key (PG14). A render that started from
+    bytes since replaced (a materialization, a replacement) then publishes
+    under the old bytes' name and is never served for the new ones, however
+    late it finishes (#1331).
     """
     safe = prks_thumb_cache_safe_wid(work_id)
     p = int(page) if page is not None else 1
     if p < 1:
         p = 1
     asset = prks_thumb_cache_safe_asset_id(asset_id)
+    if source:
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+        return f"{safe}_p{p}_a{asset}_s{digest}_v{PRKS_THUMB_CACHE_REV}"
     if asset:
         return f"{safe}_p{p}_a{asset}_v{PRKS_THUMB_CACHE_REV}"
     return f"{safe}_p{p}_v{PRKS_THUMB_CACHE_REV}"
+
+
+def prks_prune_thumbnail_page(thumbs_dir: str, work_id: str, page: int, keep: str) -> None:
+    """Remove one Work page's other cached thumbnails, keeping the file ``keep`` (best-effort).
+
+    Each render of new bytes publishes under a new name, so older names for
+    the same page are dropped here instead of accumulating until the Work is
+    deleted. A late render of old bytes may still publish after this; the
+    next prune removes it.
+    """
+    page_pat = re.compile(
+        r"^" + re.escape(prks_thumb_cache_safe_wid(work_id)) + r"_p" + str(int(page))
+        + r"(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        re.IGNORECASE,
+    )
+    try:
+        names = os.listdir(thumbs_dir)
+    except OSError:
+        return
+    for fname in names:
+        if fname == keep or not page_pat.match(fname):
+            continue
+        try:
+            os.remove(os.path.join(thumbs_dir, fname))
+        except OSError:
+            pass
 
 
 def prks_person_image_cache_safe_id(person_id: str) -> str:
@@ -128,11 +163,11 @@ def prks_delete_pdf_thumbnails_for_work_id(work_id: str, thumbs_dir: str) -> tup
     if not os.path.isdir(td):
         return ()
     pat_final = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
         re.IGNORECASE,
     )
     pat_tmp = re.compile(
-        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]+)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
+        r"^" + re.escape(safe) + r"_p\d+(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)\.tmp$",
         re.IGNORECASE,
     )
     try:

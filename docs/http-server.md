@@ -110,7 +110,7 @@ keeping slow clients off the request threads.
 | Server | **Uvicorn**, pinned like every other runtime dependency. |
 | Framework | **None** (changed 2026-11-20, see "Migration status"). It was **Starlette** as a thin request/response layer; PRKS's own plain ASGI adapter took that role. |
 | Domain code | Stays **synchronous** (psycopg 3 sync API, PG3). Each request's PRKS work runs in a bounded worker thread pool. Nothing in `backend/domain/` becomes `async`. |
-| Process model | **One web process**, as today. Multiple web processes wait for #1331, which moves the last process-local state into PostgreSQL. |
+| Process model | **One web process**, as today. #1331 removed the last process-local state; multiple web processes still wait for the interim `content.lock` to be lifted (its follow-up). |
 
 ## Long-term support
 
@@ -220,6 +220,6 @@ Linux (directly or in Docker Compose) is the main supported server platform; CI 
 
 ## Not decided here
 
-- **Multiple web processes**: after #1331, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
+- **Multiple web processes**: once the `content.lock` follow-up to #1331 lands, either Uvicorn's own `--workers` or Gunicorn managing Uvicorn workers on Linux.
 - **HTTP/2**: stays with the reverse proxy. TLS termination was decided later (#1339, 2026-11-20): PRKS can serve HTTPS itself (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`, [docs/https.md](https.md)), and a reverse proxy such as Caddy stays the recommended path for internet exposure.
 - **Exact pins.** Phase B added `uvicorn` and its dependencies (`h11`, `click`); `starlette`, `anyio` and `idna` are not needed after the 2026-11-20 decision. They go to `requirements.txt`, `dependency-inventory.json`, `THIRD_PARTY_NOTICES.md` and the Pyright CI install step. It installs plain `uvicorn`, not `uvicorn[standard]`: uvloop and httptools are optional speedups PRKS does not need.

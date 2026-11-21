@@ -11,7 +11,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id, prks_thumb_cache_stem
+from backend.derived_caches import (
+    prks_delete_pdf_thumbnails_for_work_id,
+    prks_prune_thumbnail_page,
+    prks_thumb_cache_stem,
+)
 
 
 class ThumbnailCleanupTests(unittest.TestCase):
@@ -53,6 +57,50 @@ class ThumbnailStemTests(unittest.TestCase):
             prks_thumb_cache_stem("W-1", 1, "AS-B"),
         )
         self.assertIn("_aAS-A_", prks_thumb_cache_stem("W-1", 1, "AS-A"))
+
+    def test_the_rendered_bytes_name_their_cache_file(self):
+        self.assertNotEqual(
+            prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
+            prks_thumb_cache_stem("W-1", 1, "AS-A", source="b.pdf"),
+        )
+        self.assertEqual(
+            prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
+            prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
+        )
+
+
+class ThumbnailPruneTests(unittest.TestCase):
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.thumbs_dir = tmp.name
+
+    def touch(self, name: str) -> str:
+        path = os.path.join(self.thumbs_dir, name)
+        with open(path, "wb") as handle:
+            handle.write(b"t")
+        return path
+
+    def test_a_page_keeps_only_its_current_render(self):
+        keep = prks_thumb_cache_stem("W-1", 1, "AS-A", source="new.pdf") + ".webp"
+        stale = [prks_thumb_cache_stem("W-1", 1, "AS-A", source="old.pdf") + ".webp",
+                 prks_thumb_cache_stem("W-1", 1, "AS-A") + ".webp",
+                 prks_thumb_cache_stem("W-1", 1, None, source="old.pdf") + ".png"]
+        other = [prks_thumb_cache_stem("W-1", 10, "AS-A", source="old.pdf") + ".webp",
+                 prks_thumb_cache_stem("W-12", 1, "AS-A", source="old.pdf") + ".webp",
+                 prks_thumb_cache_stem("W-1", 1, "AS-A", source="old.pdf") + ".webp.tmp"]
+        for name in [keep, *stale, *other]:
+            self.touch(name)
+        prks_prune_thumbnail_page(self.thumbs_dir, "W-1", 1, keep)
+        self.assertEqual(sorted(os.listdir(self.thumbs_dir)), sorted([keep, *other]))
+
+    def test_a_work_delete_removes_named_renders(self):
+        names = [prks_thumb_cache_stem("W-1", 2, None, source="x.pdf") + ".webp",
+                 prks_thumb_cache_stem("W-1", 2, "AS-A", source="x.pdf") + ".webp.tmp"]
+        for name in names:
+            self.touch(name)
+        self.assertEqual(prks_delete_pdf_thumbnails_for_work_id("W-1", self.thumbs_dir), ())
+        self.assertEqual(os.listdir(self.thumbs_dir), [])
 
 
 if __name__ == "__main__":

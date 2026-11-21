@@ -105,6 +105,51 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertEqual(res.status, 200, res.raw[:300])
         self.assertTrue(res.header("Content-Type")[0].startswith("image/"))
 
+    def test_a_thumbnail_rendered_from_replaced_bytes_is_never_served_for_the_new_ones(self) -> None:
+        """A render that started before a replace and publishes after it (#1331:
+        no gate orders the two any more) is cached under the old bytes' name,
+        so the next view renders the new PDF instead of serving the late copy."""
+        import threading
+
+        from backend.derived_caches import prks_thumb_cache_stem
+
+        work = self.upload("Thumb Race", "thumbraceold", "thumb_race.pdf")
+        original = self.server_module._prks_thumbnail_bytes_from_pixmap
+        rendering, replaced = threading.Event(), threading.Event()
+        self.addCleanup(replaced.set)
+        first = [True]
+
+        def slow(pix: Any) -> tuple[bytes, str]:
+            if first[0]:
+                first[0] = False
+                rendering.set()
+                self.assertTrue(replaced.wait(10))
+            return original(pix)
+
+        result: dict[str, Any] = {}
+        with mock.patch.object(self.server_module, "_prks_thumbnail_bytes_from_pixmap", slow):
+            viewer = threading.Thread(target=lambda: result.setdefault(
+                "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
+            viewer.start()
+            self.assertTrue(rendering.wait(10))
+            new = self.ok(self.send("POST", f"/api/works/{work['id']}/pdf",
+                                    {"file_b64": base64.b64encode(pdf_bytes("thumbracenew")).decode("ascii")}))
+            replaced.set()
+            viewer.join(20)
+            self.assertEqual(result["res"].status, 200)
+            assert self.storage is not None
+            names = set(os.listdir(self.storage.thumbs_dir))
+            primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
+            old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=work["file_path"].rsplit("/", 1)[1])
+            new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+            self.assertNotEqual(old_stem, new_stem)
+            self.assertIn(f"{old_stem}.webp", names)
+            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+        names = set(os.listdir(self.storage.thumbs_dir))
+        self.assertIn(f"{new_stem}.webp", names)
+        # The late copy of the old bytes was pruned with the new render.
+        self.assertNotIn(f"{old_stem}.webp", names)
+
     def test_the_pdf_route_validates_the_whole_suffix(self) -> None:
         work = self.upload("Route Suffix Guard", "route", "route_suffix_guard.pdf")
         name = work["file_path"].rsplit("/", 1)[1]

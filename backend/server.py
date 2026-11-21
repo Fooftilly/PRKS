@@ -20,6 +20,7 @@ from urllib.request import urlopen, Request
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.derived_caches import (
+    prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
 )
 from backend.domain.people.errors import MissingPersonError
@@ -1576,7 +1577,7 @@ class PRKSHandler(HttpHandlerBase):
                     pdf_mtime = 0.0
 
                 cache_base = prks_thumb_cache_stem(
-                    w_id, page, thumb.get("primary_asset_id")
+                    w_id, page, thumb.get("primary_asset_id"), source=pdf_filename
                 )
                 thumbs_root = _require_bound(thumbs_dir, "thumbs_dir")
                 path_webp = os.path.join(thumbs_root, cache_base + ".webp")
@@ -1666,6 +1667,7 @@ class PRKSHandler(HttpHandlerBase):
                             publish_derived_cache_bytes(
                                 thumbs_root, f"{cache_base}.{ext}", generated_bytes
                             )
+                            prks_prune_thumbnail_page(thumbs_root, w_id, page, f"{cache_base}.{ext}")
                         except Exception:
                             try:
                                 tmp_path = os.path.join(thumbs_root, tmp_name)
