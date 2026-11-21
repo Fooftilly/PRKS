@@ -57,8 +57,8 @@ _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
 _ERA = r"(?:\s*(BCE|BC|CE|AD))?"
 #: The whole Year field as a year, ``950`` or ``399 BCE``; anything else (``19th century``) is not a date.
 _YEAR_RE = re.compile(r"^\s*(\d{1,4})" + _ERA + r"\s*$", re.IGNORECASE)
-#: The whole Year field as a range of years: ``2020–2021``, ``1998-99``, ``1914/1918``.
-_YEAR_RANGE_RE = re.compile(r"^\s*(\d{4})\s*[-–—/]\s*(\d{2}|\d{4})\s*$")
+#: The whole Year field as a range of years: ``2020–2021``, ``1999–00``, ``950–951``, ``1914/1918``.
+_YEAR_RANGE_RE = re.compile(r"^\s*(\d{1,4})\s*[-–—/]\s*(\d{1,4})\s*$")
 
 
 def _text(value: Any) -> str:
@@ -106,11 +106,17 @@ def _year_field(raw: Any) -> Optional[dict[str, Any]]:
         return {"date-parts": [[_year(match.group(1), match.group(2))]]}
     match = _YEAR_RANGE_RE.match(text)
     if match:
-        start, end = match.group(1), match.group(2)
-        if len(end) == 2:  # 1998-99
-            end = start[:2] + end
-        if int(end) > int(start):
-            return {"date-parts": [[int(start)], [int(end)]]}
+        start, end = int(match.group(1)), int(match.group(2))
+        digits = len(match.group(2))
+        if digits < len(match.group(1)):
+            # An abbreviated end is the first year after the start that ends
+            # in those digits: 1998-99 is 1999, 1999-00 is 2000, 950-51 is 951.
+            step = 10 ** digits
+            end = start - start % step + end
+            if end <= start:
+                end += step
+        if end > start:
+            return {"date-parts": [[start], [end]]}
     return None
 
 
