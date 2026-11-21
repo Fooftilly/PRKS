@@ -737,6 +737,9 @@ def stop_all_servers() -> int:
         finish_pending_teardown()
     except Exception:
         pass
+    # A teardown that outlived its join still owns its server: wait once more
+    # before stopping what is left from this thread.
+    _join_stuck_teardowns(STOP_TIMEOUT_S)
     for server in list(_LIVE_SERVERS):
         try:
             # Synchronous: callers exit the process right after this.
@@ -1242,6 +1245,9 @@ class AppServer:
 _TEARDOWN_LOCK = threading.RLock()
 _PENDING_TEARDOWN = None
 _TEARDOWN_CLEANUP_REGISTERED = False
+# Teardowns already reported as not finishing: their threads may still be
+# running, so stop_all_servers() and the atexit drain wait for them too.
+_STUCK_TEARDOWNS = []
 
 
 def _start_teardown(server, test_id):
@@ -1289,17 +1295,39 @@ def finish_pending_teardown():
     # _terminate waits STOP_TIMEOUT_S, kills, and waits again; the drop and
     # cleanup are quick. A thread still alive after that is itself a failure.
     thread.join(timeout=4 * STOP_TIMEOUT_S)
+    alive = thread.is_alive()
     with _TEARDOWN_LOCK:
         if _PENDING_TEARDOWN is not pending:
             return  # another caller already reported it
         _PENDING_TEARDOWN = None
-    if thread.is_alive():
+        if alive:
+            _STUCK_TEARDOWNS.append(pending)
+    if alive:
         raise RuntimeError("PRKS E2E teardown of %s did not finish" % (test_id or "a server"))
     if failure:
         raise RuntimeError("PRKS E2E teardown of %s failed" % (test_id or "a server")) from failure[0]
 
 
-atexit.register(lambda: finish_pending_teardown() if _PENDING_TEARDOWN is not None else None)
+def _join_stuck_teardowns(timeout):
+    """Give teardowns that outlived their join one more bounded wait."""
+    with _TEARDOWN_LOCK:
+        stuck = list(_STUCK_TEARDOWNS)
+    for record in stuck:
+        record[0].join(timeout=timeout)
+        if not record[0].is_alive():
+            with _TEARDOWN_LOCK:
+                if record in _STUCK_TEARDOWNS:
+                    _STUCK_TEARDOWNS.remove(record)
+
+
+def _drain_teardowns_at_exit():
+    try:
+        finish_pending_teardown()
+    finally:
+        _join_stuck_teardowns(STOP_TIMEOUT_S)
+
+
+atexit.register(_drain_teardowns_at_exit)
 
 
 class FixtureServer:
