@@ -1,6 +1,7 @@
 import { nextTick } from 'vue'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import docTypesSource from '../../../../frontend/js/doc-types.js?raw'
+import iconsSource from '../../../../frontend/js/icons.js?raw'
 import { applyWorkMetadataChrome, presentWorkMetadataEditor, registerWorkMetadataEditorBridge, resetWorkMetadataEditorForTests } from './metadata-session'
 import type { WorkMetadataOwner } from './metadata-session'
 import { cloneWorkMetaDraft } from './metadata-draft'
@@ -30,6 +31,8 @@ function owner(tabId: string, workId: string, title: string): WorkMetadataOwner 
 
 describe('work metadata editor session', () => {
   beforeAll(() => {
+    // doc-types.js uses icons.js's prksCssVarClass, as on the page.
+    ;(window as unknown as { eval: (code: string) => void }).eval(iconsSource)
     ;(window as unknown as { eval: (code: string) => void }).eval(docTypesSource)
   })
 

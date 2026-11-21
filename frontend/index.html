@@ -13,7 +13,9 @@
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/vendor/inter/inter.css">
-    <link rel="stylesheet" href="/css/style.css">
+    <!-- The id tells Cytoscape its container rule is already present (it is in
+         style.css), so it does not inject a style element the CSP would refuse. -->
+    <link rel="stylesheet" href="/css/style.css" id="__________cytoscape_stylesheet">
     <link rel="stylesheet" href="/vendor/easymde/easymde.min.css">
     <link rel="stylesheet" href="/vendor/codemirror/show-hint.css">
     <!-- CodeMirror lib must load before show-hint (addon needs global CodeMirror). EasyMDE bundles its own CM; we copy hint APIs onto that instance's constructor in works.js. -->

@@ -8,6 +8,6 @@
   "vueTsc": "3.3.14",
   "vitest": "5.1.0",
   "outputSha256": {
-    "prks-vue.js": "f27b6d5697d885d54c25d760f125965c468237302b2f8f6c1e2ce311918ba3ed"
+    "prks-vue.js": "0bb13dc397a2b07d1c7d90751bbb2503fc80fccec10d748e3155f5b1c0133401"
   }
 }

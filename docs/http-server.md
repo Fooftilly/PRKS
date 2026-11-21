@@ -18,6 +18,13 @@ request work; up to 8 requests per thread wait for one,
 and further requests get an immediate 503 with `Retry-After`. Compose passes
 `PRKS_HTTP_THREADS` to `web`.
 
+The threads share the web database pool, `PRKS_DB_POOL_MAX` (default 10). More
+threads than connections is deliberate: many requests (the shell, static files,
+thumbnails) never touch the database, and a request that does waits briefly
+for a free connection. It fails only after `pool_timeout_seconds` (10 s), when
+long requests hold every connection. If you raise `PRKS_HTTP_THREADS` a lot,
+raise `PRKS_DB_POOL_MAX` with it.
+
 `PRKSHandler` no longer subclasses `http.server.SimpleHTTPRequestHandler`:
 its base is `backend.web.handler_base.HttpHandlerBase` (response head,
 plain-text `send_error`, static frontend files with `Last-Modified` and

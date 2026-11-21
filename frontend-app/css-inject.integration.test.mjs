@@ -7,6 +7,7 @@ import vue from '@vitejs/plugin-vue'
 import { build } from 'vite'
 import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js'
 import { describe, expect, it } from 'vitest'
+import { injectPrksVueCss } from './vite.config.ts'
 
 const require = createRequire(join(process.cwd(), 'package.json'))
 const vueEntry = require.resolve('vue')
@@ -29,7 +30,7 @@ async function buildStyledSfc(root, outDir) {
     publicDir: false,
     logLevel: 'error',
     resolve: { alias: { vue: vueEntry } },
-    plugins: [vue(), cssInjectedByJsPlugin()],
+    plugins: [vue(), cssInjectedByJsPlugin({ injectCodeFunction: injectPrksVueCss })],
     build: {
       outDir,
       emptyOutDir: true,
@@ -49,7 +50,7 @@ async function buildStyledSfc(root, outDir) {
 }
 
 describe('Vite CSS injection', () => {
-  it('inlines an SFC style into prks-vue.js without a stylesheet, twice', async () => {
+  it('inlines an SFC style into prks-vue.js as a constructable stylesheet, twice', async () => {
     const root = mkdtempSync(join(tmpdir(), 'prks-vue-css-'))
     const outRoot = mkdtempSync(join(tmpdir(), 'prks-vue-out-'))
     try {
@@ -75,7 +76,10 @@ describe('Vite CSS injection', () => {
         expect(files.some((path) => path.endsWith('.css'))).toBe(false)
         const js = readFileSync(join(dir, 'prks-vue.js'), 'utf8')
         expect(js).toContain(STYLE_MARKER)
-        expect(js).toContain('createElement')
+        // The CSP refuses inline <style> elements: CSS goes in through CSSOM.
+        const prelude = js.slice(0, js.indexOf(STYLE_MARKER))
+        expect(prelude).toContain('adoptedStyleSheets')
+        expect(prelude).not.toContain('createElement')
       }
       const first = readFileSync(join(firstDir, 'prks-vue.js'))
       const second = readFileSync(join(secondDir, 'prks-vue.js'))
