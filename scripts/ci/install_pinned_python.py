@@ -27,6 +27,9 @@ DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "e2e": ("playwright",),
     "schemathesis": ("schemathesis",),
     "locust": ("locust",),
+    # Mutation testing reruns the targets' unit tests, so it needs what they
+    # import (Hypothesis, the docs validator's parser) beside mutmut itself.
+    "mutation": ("hypothesis", "markdown-it-py", "mdurl", "mutmut"),
     # PostgreSQL requirements are part of the runtime image (#630); the
     # PostgreSQL HTTP contract tests validate against the OpenAPI slice (#641).
     "postgres": ("openapi-core",),

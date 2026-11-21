@@ -1,0 +1,59 @@
+name: Mutation testing (advisory)
+
+# mutmut changes one small piece of a pure module at a time and reruns that
+# module's unit tests (scripts/ci/mutation_testing.py lists the targets). A
+# survivor is a behaviour change no test noticed; the job summary names the
+# functions they are in. Survivors never fail the job: they need review and
+# some are equivalent. The job fails only when a run is incomplete. Not a
+# required check, and no pull_request run unless the mutation setup changes.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+      timezone: Europe/Podgorica
+  pull_request:
+    paths:
+      - ".github/workflows/mutation-testing.yml"
+      - "scripts/ci/mutation_testing.py"
+      - "tests/hypothesis_profiles.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-testing-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  mutation:
+    name: Mutation testing (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [docs-only-ci, research-markup, sync-envelope, text-identity]
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        # The research-markup differential compares against the JS renderer.
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install pinned mutation-testing dependencies
+        run: python scripts/ci/install_pinned_python.py mutation
+
+      - name: Run mutants against the target's unit tests
+        env:
+          TARGET: ${{ matrix.target }}
+        run: python scripts/ci/mutation_testing.py run "$TARGET"

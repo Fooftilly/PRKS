@@ -70,6 +70,22 @@ class WikiLinkRuleTests(unittest.TestCase):
         self.assertEqual(rewrite_page(text, WIKI_BASE), text)
         self.assertEqual(unresolved_links(text), [])
 
+    def test_a_sibling_link_without_an_anchor_keeps_none(self) -> None:
+        self.assertEqual(
+            rewrite_page("[Testing](Testing.md)", WIKI_BASE),
+            f"[Testing]({WIKI_BASE}/Testing)",
+        )
+
+    def test_prose_after_a_closed_or_indented_fence_is_still_checked(self) -> None:
+        fence = "`" * 3
+        for text in (
+            f"{fence}\n[a](A.md)\n{fence}\n[bad](../x.md)\n",
+            f"   {fence}\n[a](A.md)\n   {fence}\n[bad](../x.md)\n",
+            "`one` and `two` then [bad](../x.md)\n",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(unresolved_links(text), ["](../x.md)"])
+
     def test_the_cli_rewrites_in_place_and_fails_on_a_bad_link(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             good = Path(tmp, "Good.md")
