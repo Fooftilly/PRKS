@@ -286,6 +286,28 @@ class SharedLogRotationTests(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(done.stderr.decode().split(), ["on-the-pipe", "after-midnight"])
 
+    def test_a_symlink_to_a_log_not_created_yet_resolves_to_its_target(self):
+        from unittest import mock
+
+        from backend import log_config
+
+        folder = os.path.dirname(self.path)
+        target = os.path.join(folder, "later.log")
+        link = os.path.join(folder, "link.log")
+        os.symlink(target, link)
+        real_stat, created = os.stat, []
+
+        def target_appears_after_the_check(path, *args, **kwargs):
+            try:
+                return real_stat(path, *args, **kwargs)
+            finally:
+                if not created:
+                    created.append(path)
+                    open(target, "w").close()  # another process creates it now
+
+        with mock.patch("backend.log_config.os.stat", target_appears_after_the_check):
+            self.assertEqual(log_config._log_target(link), os.path.realpath(target))
+
     def test_a_symlinked_log_is_rotated_where_it_points_and_the_link_stays(self):
         from backend import log_config
 

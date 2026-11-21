@@ -62,10 +62,15 @@ def _log_target(filename) -> str:
     name can open, so it is opened by the configured path, as before.
     """
     configured = os.path.abspath(os.fspath(filename))
-    resolved = os.path.realpath(configured)
-    if os.path.isfile(resolved) or not os.path.exists(configured):
-        return resolved
-    return configured
+    # One stat decides, so a target another process creates meanwhile can
+    # never leave this process rotating the symlink instead of its target.
+    try:
+        kind = os.stat(configured).st_mode
+    except FileNotFoundError:
+        return os.path.realpath(configured)
+    except OSError:
+        return configured
+    return os.path.realpath(configured) if stat.S_ISREG(kind) else configured
 
 
 class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
