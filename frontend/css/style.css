@@ -10942,6 +10942,12 @@ button.prks-research-row {
     margin-left: var(--space-md);
 }
 
+/* Cytoscape's own container rule. It would inject this as a <style> element,
+ * which the CSP refuses; index.html marks the stylesheet as present. */
+.__________cytoscape_container {
+    position: relative;
+}
+
 .research-graph__inspector .person-sidebar__section-label {
     margin-top: var(--space-md);
 }

@@ -118,13 +118,12 @@
         else if (o.size === 'ribbon') parts.push('prks-icon--ribbon');
         else if (o.size === 'nav') parts.push('prks-icon--nav');
         else if (o.size === 'navSub') parts.push('prks-icon--nav-sub');
-        const cls = parts.join(' ');
-        let style = '';
         if (typeof o.size === 'number' && o.size > 0) {
-            style = ` style="--prks-icon-size:${o.size}px"`;
+            parts.push(prksCssVarClass('--prks-icon-size', o.size + 'px'));
         }
+        const cls = parts.join(' ');
         return (
-            `<i data-lucide="${lucideName}" class="${cls}" aria-hidden="true"${style}></i>`
+            `<i data-lucide="${lucideName}" class="${cls}" aria-hidden="true"></i>`
         );
     }
 
@@ -185,14 +184,66 @@
             'stroke-width': 2,
             'aria-hidden': 'true',
         };
-        if (nodes.length) {
-            lucide.createIcons({ nodes, attrs });
-        } else {
-            lucide.createIcons({ attrs });
+        /* Lucide copies every placeholder attribute onto the new <svg> with
+         * setAttribute, and the CSP refuses a style attribute set that way.
+         * A style the app gave the placeholder through CSSOM (a folder's
+         * colour, say) is carried across through CSSOM instead. */
+        // Lucide scans its root (the document), not `nodes`, so look there.
+        const carried = [];
+        document.querySelectorAll('[data-lucide][style]').forEach(function (el) {
+            el.setAttribute('data-prks-icon-style', String(carried.length));
+            carried.push(el.style.cssText);
+            el.removeAttribute('style');
+        });
+        try {
+            if (nodes.length) {
+                lucide.createIcons({ nodes, attrs });
+            } else {
+                lucide.createIcons({ attrs });
+            }
+        } finally {
+            if (carried.length) {
+                document.querySelectorAll('[data-prks-icon-style]').forEach(function (el) {
+                    const css = carried[Number(el.getAttribute('data-prks-icon-style'))];
+                    el.removeAttribute('data-prks-icon-style');
+                    if (css) el.style.cssText = css;
+                });
+            }
         }
     }
 
+
+    /* PRKS's Content-Security-Policy refuses inline style attributes (#1305,
+     * ZAP 10055). A per-element custom property therefore travels as a
+     * generated class whose single rule lives in a constructable stylesheet:
+     * CSSOM is not inline style. The value is set with setProperty and never
+     * parsed as CSS text, and `important` keeps the precedence the inline
+     * attribute had over ordinary rules. */
+    const cssVarClasses = new Map();
+    let cssVarSheet = null;
+    function prksCssVarClass(name, value) {
+        if (!/^--[a-z][a-z0-9-]*$/.test(String(name))) throw new Error('Invalid custom property name.');
+        const v = String(value == null ? '' : value);
+        const key = name + '\n' + v;
+        const known = cssVarClasses.get(key);
+        if (known) return known;
+        // Without constructable stylesheets there is no CSP-safe way to set
+        // the value: return no class, and the element keeps its CSS default.
+        if (typeof document === 'undefined' || typeof CSSStyleSheet !== 'function' ||
+            !Array.isArray(document.adoptedStyleSheets)) return '';
+        const cls = 'prks-var-' + (cssVarClasses.size + 1);
+        if (!cssVarSheet) {
+            cssVarSheet = new CSSStyleSheet();
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, cssVarSheet];
+        }
+        const index = cssVarSheet.insertRule('.' + cls + '{}', cssVarSheet.cssRules.length);
+        cssVarSheet.cssRules[index].style.setProperty(name, v, 'important');
+        cssVarClasses.set(key, cls);
+        return cls;
+    }
+
     global.PRKS_ICON = PRKS_ICON;
+    global.prksCssVarClass = prksCssVarClass;
     global.PRKS_ROLE_TYPE_ICON = PRKS_ROLE_TYPE_ICON;
     global.PRKS_PROGRESS_STATUS_ICON = PRKS_PROGRESS_STATUS_ICON;
     global.prksIcon = prksIcon;

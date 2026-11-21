@@ -5341,7 +5341,7 @@ function renderFolderTagsChipsHtml(folder) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};" ` +
+                `<span class="tag work-tag-chip work-tag-chip--colored ${prksCssVarClass('--tag-accent', prksSafeTagColorCss(t.color))}" ` +
                 `role="button" tabindex="0" data-tag-nav="${encodeURIComponent(t.name)}" ` +
                 `data-prks-route="#/search?tag=${encodeURIComponent(t.name)}" ` +
                 `data-prks-key-activate>` +
@@ -5482,7 +5482,7 @@ function renderWorkTagsChips(work, options = {}) {
     return tags
         .map(
             (t) =>
-                `<span class="tag work-tag-chip work-tag-chip--colored" style="--tag-accent:${prksSafeTagColorCss(t.color)};">` +
+                `<span class="tag work-tag-chip work-tag-chip--colored ${prksCssVarClass('--tag-accent', prksSafeTagColorCss(t.color))}">` +
                 `<a href="#/search?tag=${encodeURIComponent(t.name)}" class="work-tag-chip__link">${escapeHtml(t.name)}</a>` +
                 (editable ? `<button type="button" class="work-tag-remove" title="Remove tag" aria-label="Remove" data-work-id="${escapeHtml(work.id)}" data-tag-id="${escapeHtml(t.id)}">×</button>` : '') +
                 `</span>`

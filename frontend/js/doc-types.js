@@ -42,11 +42,10 @@ function prksDocTypeBadgeHtml(docType) {
     const m = prksDocTypeMeta(docType);
     const label = prksEscapeDocTypeAttr(m.label);
     return (
-        '<span class="doc-type-badge" style="--doc-type-color:' +
-        m.color +
-        ';--doc-type-border:' +
-        m.border +
-        ';" title="BibTeX type: @' +
+        '<span class="doc-type-badge ' +
+        prksCssVarClass('--doc-type-color', m.color) + ' ' +
+        prksCssVarClass('--doc-type-border', m.border) +
+        '" title="BibTeX type: @' +
         prksEscapeDocTypeAttr(m.value) +
         '">' +
         label +
@@ -114,7 +113,7 @@ function prksRefreshDocTypeMenu(wrap) {
         b.setAttribute('data-value', d.value);
         b.setAttribute('aria-selected', d.value === current ? 'true' : 'false');
         b.innerHTML =
-            `<span class="prks-doc-type-menu__swatch" style="--doc-type-color:${prksEscapeDocTypeAttr(d.color)}"></span>` +
+            `<span class="prks-doc-type-menu__swatch ${prksCssVarClass('--doc-type-color', d.color)}"></span>` +
             `<span class="prks-doc-type-menu__option-label">${prksEscapeDocTypeAttr(d.label)}</span>`;
         panel.appendChild(b);
     }

@@ -11,8 +11,21 @@ import { defineConfig } from 'vitest/config'
 const storybook =
   (globalThis as { process?: { env?: { STORYBOOK?: string } } }).process?.env?.STORYBOOK === 'true'
 
+// PRKS's Content-Security-Policy refuses inline <style> elements (style-src
+// has no 'unsafe-inline'), so the bundled CSS is applied as a constructable
+// stylesheet instead: CSSOM is not inline style. The plugin inlines this
+// function's source into prks-vue.js, so it must stay self-contained.
+// Without constructable stylesheets the components render unstyled rather
+// than failing before Vue mounts; there is no inline fallback under the CSP.
+export function injectPrksVueCss(cssCode: string): void {
+  if (typeof CSSStyleSheet !== 'function' || !Array.isArray(document.adoptedStyleSheets)) return
+  const sheet = new CSSStyleSheet()
+  sheet.replaceSync(cssCode)
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+}
+
 export default defineConfig({
-  plugins: [vue(), ...(storybook ? [] : [cssInjectedByJsPlugin()])],
+  plugins: [vue(), ...(storybook ? [] : [cssInjectedByJsPlugin({ injectCodeFunction: injectPrksVueCss })])],
   publicDir: false,
   base: '/vue/',
   build: {

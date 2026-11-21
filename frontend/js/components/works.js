@@ -2342,7 +2342,7 @@ async function copyBibTeX(workId, btn) {
     const snapshotIfNeeded = () => {
         if (btn.dataset.copyBibtexOriginal == null) {
             btn.dataset.copyBibtexOriginal = btn.innerHTML;
-            btn.dataset.copyBibtexStyle = btn.getAttribute('style') || '';
+            btn.dataset.copyBibtexStyle = btn.style.cssText;
         }
     };
     const restore = () => {
@@ -2351,7 +2351,8 @@ async function copyBibTeX(workId, btn) {
             delete btn.dataset.copyBibtexOriginal;
         }
         if (btn.dataset.copyBibtexStyle != null) {
-            btn.setAttribute('style', btn.dataset.copyBibtexStyle);
+            // CSSOM, not the style attribute: the CSP refuses inline style.
+            btn.style.cssText = btn.dataset.copyBibtexStyle;
             delete btn.dataset.copyBibtexStyle;
         }
     };

@@ -107,15 +107,16 @@ HSTS_VALUE = "max-age=31536000"
 # Sent on every response (#1305). The policy allows only PRKS's own scripts:
 # no inline script or handler, no eval. 'wasm-unsafe-eval' lets the PDF viewer
 # compile its PDFium WebAssembly, and blob: workers and images are what that
-# viewer makes. Inline styles stay allowed: markup still sets CSS variables in
-# style attributes. Images may come from anywhere, as Research Notes figures
+# viewer makes. No inline style either (ZAP 10055): per-element CSS variables
+# go through CSSOM (prksCssVarClass), and the Vue bundle adopts its CSS as a
+# constructable stylesheet. Images may come from anywhere, as Research Notes figures
 # and video thumbnails are remote URLs. The only other site PRKS talks to is
 # YouTube: its player frame and the oEmbed lookup behind New File's autofill.
 # Nothing may frame PRKS, and no page URL leaves in Referer.
 CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'self'",
     "script-src 'self' 'wasm-unsafe-eval'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self'",
     "img-src * data: blob:",
     "font-src 'self' data:",
     "connect-src 'self' data: blob: https://www.youtube.com",
