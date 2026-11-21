@@ -122,7 +122,13 @@
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
         if (parsed.username || parsed.password || !parsed.hostname) return '';
         if (prksPageOrigin() && parsed.origin === prksPageOrigin()) return trimmed;
-        return PRKS_REMOTE_IMAGE_ROUTE + encodeURIComponent(trimmed);
+        // A browser never sends a fragment when it loads an image, and the
+        // server saves the copy under the URL without one.
+        var hash = trimmed.indexOf('#');
+        var source = hash === -1 ? trimmed : trimmed.slice(0, hash);
+        // `figure=1` lets the service worker keep this copy for offline
+        // reading (a Work thumbnail, mapped elsewhere, has none).
+        return PRKS_REMOTE_IMAGE_ROUTE + encodeURIComponent(source) + '&figure=1';
     }
 
     function prksClassTokens(node) {

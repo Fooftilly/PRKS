@@ -2434,7 +2434,8 @@ CREATE INDEX jobs_expired ON prks.jobs (locked_until) WHERE state = 'running';
 - **0.8 job kinds**: `text.extract`,
   `research.reindex_work`, `objects.cleanup`, `objects.sweep`,
   `search.repair`, `derived.rebuild`, `backup.create`,
-  `pdf.materialize` (if materialization moves off the request path), `sessions.prune`, `jobs.prune`. Thumbnails stay on-demand and cached
+  `pdf.materialize` (if materialization moves off the request path), `sessions.prune`, `jobs.prune`,
+  `remote_images.prune` (weekly per Library while it has saved remote images). Thumbnails stay on-demand and cached
   as derived files.
 - A separate `domain_events` table for external subscribers (#314 connectors,
   automation #62) is **not** created until one exists.

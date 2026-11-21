@@ -195,7 +195,9 @@ another site are served from a transcoded copy (#1351;
 `backend/domain/objects/remote_images.py`), so the page loads no image from
 another site. Each copy is an immutable object under a fresh key, named by a
 `prks.remote_images` row per Library and source URL, and backed up with the
-Library. The row is kept when the note stops naming the URL.
+Library. A weekly `remote_images.prune` job drops a copy once no content of
+the Library names its URL (a copy saved in the last day is left alone), and
+claims its key for cleanup.
 
 **Rule: a derived cache may never become impossible to rebuild because it
 shares a parent directory with canonical data.** Every derived component is

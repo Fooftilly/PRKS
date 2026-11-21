@@ -24,8 +24,8 @@ connection (:func:`connection.maintenance_connection`; never pooled):
   and content rows of the Library are replaced by the staged ones (devices
   marked new first); every object the old catalogue named and the new one
   does not gets a ``hold`` claim; the Library's jobs are cancelled; the epoch
-  advances and the flag clears; ``derived.rebuild``, a cleanup pass and the
-  orphan sweep are enqueued; the run is marked committed.
+  advances and the flag clears; ``derived.rebuild``, a cleanup pass, the
+  orphan sweep and the saved remote images' prune are enqueued; the run is marked committed.
 
   Cleanup claims: R4 replaces the Library's ordinary claims with the
   archive's, but **keeps every existing ``hold`` claim**, merging by key
@@ -66,6 +66,7 @@ from backend.domain.maintenance.connection import maintenance_connection
 from backend.domain.maintenance.format import IO_CHUNK_SIZE
 from backend.domain.maintenance.staging import STAGING_PREFIX, drop_staging, stage
 from backend.domain.objects import jobs as object_jobs
+from backend.domain.objects import remote_images
 from backend.domain.search import rebuild
 from backend.storage.objects import ObjectExists, StorageBackend, StorageKey
 
@@ -429,6 +430,7 @@ def _commit(conn: psycopg.Connection[Any], schema: str, library_id: str, run_id:
             rebuild.enqueue_for_host(tx, library_id, epoch)
             object_jobs.enqueue_cleanup(tx)
             object_jobs.enqueue_sweep(tx)
+            remote_images.enqueue_prune_for_host(tx, library_id, epoch)
         finally:
             tx.close()
         conn.execute(_FORGET_STAGED_SQL, (run_id,))

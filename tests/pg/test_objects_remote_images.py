@@ -16,15 +16,20 @@ from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Optional
+from unittest import mock
 
 from backend.db.errors import ConstraintViolationError
-from backend.domain.identity.authorization import AccessRefused, Refusal
+from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
+from backend.domain.identity.library_scope import library_command
 from backend.domain.maintenance.format import object_references
 from backend.domain.objects import lifecycle, remote_images
 from backend.domain.objects.lifecycle import Settled, StoredObject
+from backend.jobs import queue
+from backend.jobs.runner import Outcome, run_job
 from backend.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStorage, StorageKey
 from tests import acting_context as facade_context
+from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_works_mutations import MutationTestCase
 
 THUMB = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
@@ -135,6 +140,11 @@ class SaveTests(RemoteImageTestCase):
         # The renderer encodes the raw "é" and keeps the "%20" it found.
         self.noted("![x](https://example.org/caf\u00e9%20plot.png)")
         self.assertIsNotNone(self.save("https://example.org/caf%C3%A9%20plot.png"))
+
+    def test_an_html_escaped_figure_matches(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        self.noted('<img src="https://example.org/chart.png?w=400&amp;format=png">')
+        self.assertIsNotNone(self.save(url))
 
     def test_an_uppercase_scheme_is_saved(self) -> None:
         url = "HTTPS://example.org/figures/Graph.png"
@@ -297,11 +307,65 @@ class LifecycleTests(RemoteImageTestCase):
                       Settled.REFERENCED)
         self.assertEqual(self.names(), {named})
 
-    def test_the_row_outlives_the_work_that_named_it(self) -> None:
+    def prunes(self) -> list[dict[str, Any]]:
+        return self.sql("SELECT state, run_after > now() + interval '6 days' AS later FROM prks.jobs"
+                        " WHERE kind = %s ORDER BY created_at", (remote_images.PRUNE_KIND,))
+
+    def run_prune(self) -> Outcome:
+        """Make the queued prune due, and the saved copies old enough, then run it as the worker would."""
+        self.sql("UPDATE prks.remote_images SET saved_at = now() - interval '2 days'")
+        self.sql("UPDATE prks.jobs SET run_after = now() WHERE kind = %s AND state = 'queued'",
+                 (remote_images.PRUNE_KIND,))
+        job = queue.claim(self.db, "test-worker", lease=LEASE)
+        assert job is not None and job.kind == remote_images.PRUNE_KIND
+        return run_job(self.db, job, lease=LEASE)
+
+    def test_the_worker_runs_the_prune(self) -> None:
+        from backend.jobs import worker  # noqa: F401  the worker's imports register its kinds
+        from backend.jobs.handlers import REGISTRY
+
+        self.assertIs(REGISTRY.get(remote_images.PRUNE_KIND), remote_images.prune)
+
+    def test_a_save_schedules_one_prune_a_week_later(self) -> None:
+        self.video()
+        self.noted(f"![x]({FIGURE})")
+        self.save(THUMB)
+        self.save(FIGURE)
+        self.assertEqual(self.prunes(), [{"state": "queued", "later": True}])
+
+    def test_the_row_outlives_the_work_until_the_prune(self) -> None:
         work_id = self.video()
         self.save(THUMB)
         self.sql("UPDATE prks.assets SET thumb_url = NULL WHERE work_id = %s", (work_id,))
         self.assertIsNotNone(self.saved(THUMB))
+        locator = self.rows()[THUMB]
+        self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(self.rows(), {})
+        self.assertEqual(self.claims(), {locator})
+        # Nothing left to check: no next prune.
+        self.assertEqual([row["state"] for row in self.prunes()], ["succeeded"])
+
+    def test_the_prune_keeps_named_and_recent_copies_and_comes_back(self) -> None:
+        self.video()
+        work_id = self.noted(f"![a]({FIGURE}) ![b]({SPACED})")
+        self.save(THUMB)
+        self.save(FIGURE)
+        self.save(SPACED)
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s", (f"![a]({FIGURE})", work_id))
+        recent = "https://example.org/figures/new.png"
+        self.sql("UPDATE prks.work_notes SET body = body || %s WHERE work_id = %s", (f" ![n]({recent})", work_id))
+        with mock.patch.object(remote_images, "PRUNE_BATCH", 1):
+            self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(set(self.rows()), {THUMB, FIGURE})
+        self.assertEqual(len(self.claims()), 1)
+        self.assertEqual(self.prunes()[-1], {"state": "queued", "later": True})
+        # A copy saved within the grace period is never examined.
+        self.save(recent)
+        self.sql("UPDATE prks.work_notes SET body = '' WHERE work_id = %s", (work_id,))
+        _last, dropped = library_command(self.db, self.actor.context, Capability.EDIT_LIBRARY,
+                                         lambda scope: remote_images.prune_page(scope, ""))
+        self.assertEqual(dropped, 1)  # the old figure
+        self.assertEqual(set(self.rows()), {THUMB, recent})
 
     def test_a_backup_carries_the_saved_copy(self) -> None:
         self.video()

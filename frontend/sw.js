@@ -2,8 +2,10 @@
  * PRKS app-shell / PDF service worker.
  *
  * Scope (see AGENTS.md "Offline / PWA" invariants):
- *   - App-shell + static-resource availability, plus a focused managed-PDF
- *     response cache. Nothing else.
+ *   - App-shell + static-resource availability, plus focused managed-PDF and
+ *     saved note-figure (/api/remote-images?...&figure=1, #1351) response
+ *     caches in the page's scoped cache. Nothing else; Work thumbnails are
+ *     never cached.
  *   - Never queues API mutations. Never generically caches /api/... JSON --
  *     app code/IndexedDB own structured offline records (offline-store.js /
  *     offline-runtime.js).
@@ -237,6 +239,14 @@
         }
     }
 
+    function searchOf(rawUrl, origin) {
+        try {
+            return new URL(rawUrl, origin).search;
+        } catch (_e) {
+            return '';
+        }
+    }
+
     function isNavigationRequest(request) {
         return !!(request && request.mode === 'navigate');
     }
@@ -251,6 +261,23 @@
     /** Canonical managed-PDF route only: /api/pdfs/<one filename segment>. */
     function isManagedPdfPath(pathname) {
         return /^\/api\/pdfs\/[^/]+$/.test(pathname);
+    }
+
+    /**
+     * A note figure's saved copy: /api/remote-images with one `url` and
+     * `figure=1` (markdown-sanitize.js). A Work thumbnail uses the same route
+     * without `figure`, and is never cached (offline media policy).
+     */
+    function isRemoteFigureRequest(pathname, search) {
+        if (pathname !== '/api/remote-images') return false;
+        let params;
+        try {
+            params = new URLSearchParams(search || '');
+        } catch (_e) {
+            return false;
+        }
+        return params.getAll('url').length === 1 && params.getAll('figure').length === 1 &&
+            params.get('figure') === '1';
     }
 
     function hasRangeHeader(request) {
@@ -768,10 +795,108 @@
             }
         }
 
+        /**
+         * A saved note figure, in the page's own scoped cache (the managed-PDF
+         * cache of its scope and Library epoch), so a note read offline shows
+         * the figures it showed online. The network first: a saved copy
+         * (200 with an ETag, its hash) is stored only while the session is
+         * still that cache's scope, before and after the fetch; an uncached
+         * copy (no ETag) is never stored, and a 404 (the Library no longer
+         * names the URL) drops the entry. Offline or on a 502-504, the stored
+         * copy (else a 503, or the gateway's answer). `waitUntil` keeps the
+         * worker alive until a cache write or delete settles.
+         */
+        // Per cache and key: the order in which figure requests started, the
+        // start of the newest one whose answer was applied, and one chain of
+        // cache writes and deletes. An answer older than an applied one (it
+        // started earlier, finished later) changes nothing, a put runs only
+        // while its request is still the newest applied, and a delete queued
+        // behind a put in progress runs after it, so an older copy never
+        // comes back after a 404 dropped it.
+        const figureOrder = new Map();
+        function figureState(cacheName, key) {
+            const id = cacheName + '\n' + key;
+            let state = figureOrder.get(id);
+            if (!state) {
+                state = { started: 0, applied: 0, chain: Promise.resolve() };
+                figureOrder.set(id, state);
+            }
+            return state;
+        }
+        function queueFigureMutation(state, op) {
+            state.chain = state.chain.then(op).catch(function () {});
+            return state.chain;
+        }
+
+        async function fetchFigureFromNetwork(request) {
+            try {
+                return await fetchImpl(request);
+            } catch (_e) {
+                return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
+            }
+        }
+
+        async function handleRemoteFigureRequest(request, key, clientId, waitUntil) {
+            const keepAlive = typeof waitUntil === 'function' ? waitUntil : function () {};
+            const cacheName = await pdfCacheName(clientId || '', false);
+            if (!cacheName) return fetchFigureFromNetwork(request);
+            let cache;
+            try {
+                cache = await cachesApi.open(cacheName);
+            } catch (_eOpen) {
+                // Cache storage is optional (a full quota): the network only.
+                return fetchFigureFromNetwork(request);
+            }
+            const state = figureState(cacheName, key);
+            state.started += 1;
+            const order = state.started;
+            try {
+                const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
+                const res = await fetchImpl(request);
+                const etag = res && res.headers && typeof res.headers.get === 'function' ? res.headers.get('ETag') : null;
+                if (res && res.status >= 502 && res.status <= 504) {
+                    // An unreachable server (a proxy's answer), as browser-scope.js reads it.
+                    const stored = await cache.match(key);
+                    if (stored) return stored;
+                    return res;
+                }
+                const saved = !!etag && isCacheableStaticResponse(res);
+                if ((res && res.status === 404) || saved) {
+                    if (order < state.applied) return res; // a newer request's answer already applies
+                    state.applied = order;
+                }
+                if (res && res.status === 404) {
+                    keepAlive(queueFigureMutation(state, function () { return cache.delete(key); }));
+                } else if (saved) {
+                    let cloned = null;
+                    try {
+                        cloned = res.clone();
+                    } catch (_eClone) {
+                        cloned = null;
+                    }
+                    if (cloned) {
+                        keepAlive(Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
+                            if (!checks[0] || !checks[1]) return false;
+                            return queueFigureMutation(state, function () {
+                                if (state.applied !== order) return false;
+                                return cache.put(key, cloned);
+                            });
+                        }).catch(function () {}));
+                    }
+                }
+                return res;
+            } catch (_e) {
+                const cached = await cache.match(key);
+                if (cached) return cached;
+                return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
+            }
+        }
+
         return {
             handleNavigation: handleNavigation,
             handleStatic: handleStatic,
             handlePdfRequest: handlePdfRequest,
+            handleRemoteFigureRequest: handleRemoteFigureRequest,
         };
     }
 
@@ -1012,6 +1137,12 @@
                 event.respondWith(handlers.handlePdfRequest(request, pathname, event.clientId || ''));
                 return;
             }
+            const search = searchOf(url, origin);
+            if (isRemoteFigureRequest(pathname, search)) {
+                const keepAlive = typeof event.waitUntil === 'function' ? event.waitUntil.bind(event) : null;
+                event.respondWith(handlers.handleRemoteFigureRequest(request, pathname + search, event.clientId || '', keepAlive));
+                return;
+            }
             if (pathname === '/' || pathname === '/index.html' || isNavigationRequest(request)) {
                 event.respondWith(handlers.handleNavigation(request));
                 return;
@@ -1065,9 +1196,11 @@
         isGetRequest: isGetRequest,
         isSameOriginUrl: isSameOriginUrl,
         pathnameOf: pathnameOf,
+        searchOf: searchOf,
         isNavigationRequest: isNavigationRequest,
         isStaticEligiblePath: isStaticEligiblePath,
         isManagedPdfPath: isManagedPdfPath,
+        isRemoteFigureRequest: isRemoteFigureRequest,
         hasRangeHeader: hasRangeHeader,
         parseRangeHeaderValue: parseRangeHeaderValue,
         isCacheableStaticResponse: isCacheableStaticResponse,
