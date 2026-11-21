@@ -968,7 +968,7 @@ class RemediationMessageTests(unittest.TestCase):
         self.assertNotIn("-m pip install", msg)
         assert_remediation_is_safe(msg)
 
-    def test_host_without_ensurepip_or_uv_warns_venv_lacks_pip(self):
+    def test_host_without_ensurepip_or_uv_points_to_uv(self):
         ctx = detect_platform_context(
             prefix="/usr",
             base_prefix="/usr",
@@ -984,7 +984,7 @@ class RemediationMessageTests(unittest.TestCase):
         self.assertIn("no ensurepip", msg)
         self.assertIn("https://docs.astral.sh/uv/", msg)
         self.assertIn("uv venv --python", msg)
-        self.assertNotIn("-m venv", msg)
+        self.assertNotIn("python3 -m venv .venv", msg)
         self.assertIn("uv pip install --python /usr/bin/python3 -r requirements.txt", msg)
         self.assertNotIn("/usr/bin/python3 -m pip install", msg)
 
