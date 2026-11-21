@@ -168,15 +168,23 @@ def main(argv: list[str] | None = None) -> int:
                         help="write only the gate plan to --output (run in the gate's plan-time environment)")
     parser.add_argument("--plan", type=Path, help="a gate plan written earlier by --plan-only")
     args = parser.parse_args(argv)
+    revisions = {"base_sha": _rev(args.base), "head_sha": _rev(args.head)}
     if args.plan_only:
-        args.output.write_text(json.dumps(planner(args.base)), encoding="utf-8")
+        args.output.write_text(json.dumps({**revisions, "plan": planner(args.base)}), encoding="utf-8")
         return 0
     token, repo = os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"]
     api_url = os.environ.get("GITHUB_API_URL", "https://api.github.com")
     client = GitHubClient(token, repo, api_url)
 
-    plan = json.loads(args.plan.read_text(encoding="utf-8")) if args.plan else planner(args.base)
-    base_sha = _rev(args.base)
+    if args.plan:
+        saved = json.loads(args.plan.read_text(encoding="utf-8"))
+        made_at = {key: saved.get(key) for key in revisions}
+        if made_at != revisions:
+            raise SystemExit(f"{args.plan} was planned at {made_at}, not {revisions}")
+        plan = saved["plan"]
+    else:
+        plan = planner(args.base)
+    base_sha = revisions["base_sha"]
     run, artifacts, why = latest_map_artifacts(client)
     shadow = None
     map_url = ""

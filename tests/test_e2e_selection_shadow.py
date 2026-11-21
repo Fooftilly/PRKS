@@ -165,7 +165,8 @@ class MainTests(unittest.TestCase):
 class MainWithMapTests(unittest.TestCase):
     def _main(self, raw, ids):
         plan_file = Path(raw) / "plan.json"
-        plan_file.write_text(json.dumps({"mode": "skip"}), encoding="utf-8")
+        plan_file.write_text(json.dumps({"base_sha": "b" * 40, "head_sha": "b" * 40, "plan": {"mode": "skip"}}),
+                             encoding="utf-8")
         out = Path(raw) / "report.json"
         run = {"id": 2, "html_url": "https://map"}
         with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}), \
@@ -203,11 +204,24 @@ class MainWithMapTests(unittest.TestCase):
     def test_plan_only_writes_the_gate_plan_and_needs_no_token(self):
         with tempfile.TemporaryDirectory() as raw, \
                 mock.patch.dict(os.environ, {}, clear=False) as env, \
-                mock.patch.object(shadow, "planner", return_value={"mode": "affected"}):
+                mock.patch.object(shadow, "planner", return_value={"mode": "affected"}), \
+                mock.patch.object(shadow, "_rev", return_value="d" * 40):
             env.pop("GITHUB_TOKEN", None)
             out = Path(raw) / "plan.json"
             self.assertEqual(shadow.main(["--base", "origin/master", "--plan-only", "--output", str(out)]), 0)
-            self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"mode": "affected"})
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8")),
+                             {"base_sha": "d" * 40, "head_sha": "d" * 40, "plan": {"mode": "affected"}})
+
+    def test_a_plan_made_at_other_revisions_is_refused(self):
+        with tempfile.TemporaryDirectory() as raw, \
+                mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t", "GITHUB_REPOSITORY": "o/r"}), \
+                mock.patch.object(shadow, "_rev", return_value="e" * 40):
+            plan_file = Path(raw) / "plan.json"
+            plan_file.write_text(json.dumps({"base_sha": "f" * 40, "head_sha": "e" * 40, "plan": {}}),
+                                 encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "was planned at"):
+                shadow.main(["--base", "origin/master", "--plan", str(plan_file),
+                             "--output", str(Path(raw) / "r.json")])
 
 
 class WiringTests(unittest.TestCase):
