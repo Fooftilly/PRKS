@@ -111,6 +111,16 @@ class DownloadTests(unittest.TestCase):
         # The signed storage URL is fetched as a bare string: no headers, no token.
         self.assertEqual(urlopen.call_args.args[0], "https://storage.example.test/blob?sig=1")
 
+    def test_an_oversized_direct_response_is_refused(self):
+        body = mock.MagicMock()
+        body.__enter__.return_value.read.return_value = b"x" * 9
+        opener = mock.Mock()
+        opener.open.return_value = body
+        with mock.patch.object(shadow.urllib.request, "build_opener", return_value=opener), \
+                mock.patch.object(shadow, "MAX_ARTIFACT_BYTES", 8), \
+                self.assertRaisesRegex(RuntimeError, "larger than 8 bytes"):
+            shadow._download("tok", "https://api.example.test", "o/r", 7)
+
     def test_a_non_https_redirect_is_refused(self):
         headers = Message()
         headers["Location"] = "http://storage.example.test/blob"

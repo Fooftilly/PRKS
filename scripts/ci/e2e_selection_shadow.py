@@ -66,13 +66,13 @@ def _download(token: str, api_url: str, repo: str, artifact_id: int) -> bytes:
     try:
         # The URL is https (api_url is checked by GitHubClient).
         with opener.open(request, timeout=30) as response:  # nosec B310
-            return response.read(MAX_ARTIFACT_BYTES + 1)
+            data = response.read(MAX_ARTIFACT_BYTES + 1)
     except urllib.error.HTTPError as error:
         location = error.headers.get("Location") if error.code in (301, 302, 303, 307, 308) else None
         if not location or not location.startswith("https://"):
             raise
-    with urllib.request.urlopen(location, timeout=60) as response:  # nosec B310 - https checked above
-        data = response.read(MAX_ARTIFACT_BYTES + 1)
+        with urllib.request.urlopen(location, timeout=60) as response:  # nosec B310 - https checked above
+            data = response.read(MAX_ARTIFACT_BYTES + 1)
     if len(data) > MAX_ARTIFACT_BYTES:
         raise RuntimeError(f"artifact {artifact_id} is larger than {MAX_ARTIFACT_BYTES} bytes")
     return data
