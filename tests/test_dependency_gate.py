@@ -1434,8 +1434,9 @@ class RuntimeLockTests(unittest.TestCase):
             f"Pillow==13.0.0 \\\n    --hash=sha256:{_H1} \\\n    --hash=sha256:{_H2}\n"
             f"tzdata==2026.6 ; sys_platform == 'win32' \\\n    --hash=sha256:{_H1}\n"
         )
-        self.assertEqual(entries["pillow"], ("13.0.0", (_H1, _H2)))
+        self.assertEqual(entries["pillow"], ("13.0.0", (_H1, _H2), ""))
         self.assertEqual(entries["tzdata"][0], "2026.6")
+        self.assertEqual(entries["tzdata"][2], "sys_platform == 'win32'")
 
     def test_parse_rejects_entry_without_hash_or_exact_pin(self):
         for text in ("uvicorn==0.54.0\n", f"uvicorn>=0.54 --hash=sha256:{_H1}\n", "-r requirements.txt\n"):
@@ -1476,6 +1477,30 @@ class RuntimeLockTests(unittest.TestCase):
                 requirements="Pillow==13.0.0\n",
                 lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
                 docker="FROM python:3.12-slim\nRUN pip install -r requirements.txt\n",
+            )
+            self.assertEqual(self._codes(root), ["runtime_lock_unused"])
+
+    def test_direct_pin_locked_only_under_a_marker_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.0.0\n",
+                lock=(
+                    f"pillow==13.0.0 ; sys_platform == 'win32' --hash=sha256:{_H1}\n"
+                    f"tzdata==2026.6 ; sys_platform == 'win32' --hash=sha256:{_H2}\n"
+                ),
+            )
+            self.assertEqual(self._codes(root), ["runtime_lock_stale"])
+
+    def test_install_from_another_file_with_a_lock_prefix_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._repo(
+                root,
+                requirements="Pillow==13.0.0\n",
+                lock=f"pillow==13.0.0 --hash=sha256:{_H1}\n",
+                docker="FROM python:3.12-slim\nRUN pip install --require-hashes -r requirements-lock.txt.old\n",
             )
             self.assertEqual(self._codes(root), ["runtime_lock_unused"])
 
