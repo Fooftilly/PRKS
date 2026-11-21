@@ -272,16 +272,20 @@ def report_mutation(client: Client, number: int, result: MutationResult, run_url
     )
     previous = previous_survivors(sticky["body"], result.target) if sticky else None
     body = mutation_comment(result, run_url, previous)
+    survived = result.stats["survived"]
+    rose = previous is not None and survived > previous
+    if rose:
+        # Notify before the sticky comment moves the baseline: if this post
+        # fails, the next run still sees the old count and notifies again.
+        client.request("POST", f"issues/{number}/comments", {
+            "body": f"**`{result.target}`: survivors went from {previous} to {survived}.** "
+                    f"The target's comment lists them. Run: {run_url}" + _FOOTER,
+        })
     if sticky is None:
         client.request("POST", f"issues/{number}/comments", {"body": body})
     else:
         client.request("PATCH", f"issues/comments/{sticky['id']}", {"body": body})
-    survived = result.stats["survived"]
-    if previous is not None and survived > previous:
-        client.request("POST", f"issues/{number}/comments", {
-            "body": f"**`{result.target}`: survivors went from {previous} to {survived}.** "
-                    f"The target's comment above lists them. Run: {run_url}" + _FOOTER,
-        })
+    if rose:
         return f"{result.target}: survivors up {previous} -> {survived}"
     return f"{result.target}: {survived} survivors"
 

@@ -177,6 +177,24 @@ class MutationReportTests(unittest.TestCase):
         self.assertIn("| `backend.sync_protocol.x_f` | 3 |", bodies[0])
         self.assertTrue(bodies[1].startswith("<!-- mutation-report:text-identity survived=1 -->"))
 
+    def test_a_failed_notification_is_retried_by_the_next_run(self):
+        gh = FakeGitHub()
+        number = report.ensure_mutation_issue(gh)
+        report.report_mutation(gh, number, _result(1), URL)
+        real = gh.request
+
+        def refuse_notices(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
+            if method == "POST" and "went from" in str((body or {}).get("body", "")):
+                raise ApiError(502, method, path)
+            return real(method, path, body)
+
+        gh.request = refuse_notices  # type: ignore[method-assign]
+        with self.assertRaises(ApiError):
+            report.report_mutation(gh, number, _result(3), URL)
+        self.assertIn("survived=1 -->", gh.bodies(number)[0])  # the baseline did not move
+        gh.request = real  # type: ignore[method-assign]
+        self.assertEqual(report.report_mutation(gh, number, _result(3), URL), "sync-envelope: survivors up 1 -> 3")
+
     def test_a_marker_in_someone_elses_comment_is_not_state(self):
         gh = FakeGitHub()
         number = report.ensure_mutation_issue(gh)
