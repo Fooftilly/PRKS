@@ -575,8 +575,8 @@ def with_code_neighbours(wanted: Iterable[int], code: Iterable[Sequence[int]]) -
 # when unterminated), and a style block (paired, or a self-closing ``src`` import)
 # is live CSS.
 _SFC_BLOCK = re.compile(
-    r"<script\b.*?</script\s*>|<!--(?:.*?-->|.*\Z)"
-    r"""|(<style\b(?:"[^"]*"|'[^']*'|[^>"'])*?/\s*>|<style\b.*?</style\s*>)""",
+    r"<script\b.*?</script\b[^>]*>|<!--(?:.*?-->|.*\Z)"
+    r"""|(<style\b(?:"[^"]*"|'[^']*'|[^>"'])*?/\s*>|<style\b.*?</style\b[^>]*>)""",
     re.DOTALL | re.IGNORECASE,
 )
 
