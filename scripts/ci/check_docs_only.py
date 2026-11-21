@@ -1,4 +1,4 @@
-"""Validate links, anchors and balanced fences in changed Wiki Markdown (#643).
+"""Validate links, anchors and balanced fences in changed documentation Markdown (#643).
 
 Uses pinned markdown-it-py (CommonMark plus tables), not hand-written link
 regular expressions: references, parenthesized paths, escaped syntax and
@@ -201,7 +201,7 @@ def main() -> int:
         for msg in errors:
             print(msg)
         return 1
-    print(f"Validated {len(markdown)} changed Wiki Markdown files (links, anchors, fences)")
+    print(f"Validated {len(markdown)} changed Markdown files (links, anchors, fences)")
     skipped = len(docs) - len(markdown)
     if skipped:
         print(f"{skipped} audited analysis-tool config file(s) changed; no CI suite reads them")
