@@ -162,13 +162,12 @@ def summarize(shadow: dict[str, Any] | None, plan: dict[str, Any], why: str, map
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", required=True)
-    parser.add_argument("--head", default="HEAD")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan-only", action="store_true",
                         help="write only the gate plan to --output (run in the gate's plan-time environment)")
     parser.add_argument("--plan", type=Path, help="a gate plan written earlier by --plan-only")
     args = parser.parse_args(argv)
-    revisions = {"base_sha": _rev(args.base), "head_sha": _rev(args.head)}
+    revisions = {"base_sha": _rev(args.base), "head_sha": _rev("HEAD")}  # the planner reads the checkout
     if args.plan_only:
         args.output.write_text(json.dumps({**revisions, "plan": planner(args.base)}), encoding="utf-8")
         return 0
@@ -202,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             maps = [read_map(_download(token, api_url, repo, a["id"]), a["name"]) for a in artifacts]
             map_url = str(run.get("html_url"))
             shadow = coverage_map.select_for_diff(
-                maps, repo=ROOT, base=args.base, head=args.head, all_ids=all_ids)
+                maps, repo=ROOT, base=args.base, head="HEAD", all_ids=all_ids)
     report = {"plan": plan, "shadow": shadow, "map_run": map_url, "unavailable": why or None,
               "base_sha": base_sha}
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
