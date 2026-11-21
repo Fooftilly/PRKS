@@ -56,8 +56,6 @@ STATS_KEYS = (
 # so they are not copied.
 _UNCOPIED = AUDITED_CONFIG_FILES
 RUN_TIMEOUT_S = 1500
-# The JSON result of the last ``run --json`` (``.tests/`` is git-ignored).
-RESULT_FILE = ROOT / ".tests" / "mutation-result.json"
 
 
 @dataclass(frozen=True)
@@ -180,6 +178,27 @@ def by_function(names: list[str]) -> list[tuple[str, int]]:
     return sorted(counts.items())
 
 
+def result_json(name: str, stats: dict[str, int], names: list[str]) -> str:
+    """One target's result, as scripts/ci/scheduled_report.py reads it."""
+    return json.dumps({"target": name, "stats": stats, "survivors_by_function": by_function(names)},
+                      separators=(",", ":"))
+
+
+def _write_result(name: str, stats: dict[str, int], names: list[str]) -> None:
+    """Hand the result to the workflow's report job as the step output ``result-<target>``.
+
+    Each matrix leg sets a differently named output, so the job's merged
+    outputs hold every target. Outside Actions the JSON is printed instead.
+    """
+    line = f"result-{name}={result_json(name, stats, names)}\n"
+    output = os.environ.get("GITHUB_OUTPUT")
+    if not output:
+        print(line, end="")
+        return
+    with open(output, "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
 def summary(name: str, target: Target, stats: dict[str, int], names: list[str]) -> str:
     lines = [
         f"## Mutation testing: `{name}` (advisory)",
@@ -249,12 +268,7 @@ def run(name: str, workspace: Path, max_children: int, write_json: bool = False)
         return 1
     names = survivors(results.stdout)
     if write_json:
-        # Read by scripts/ci/scheduled_report.py for the weekly report issue.
-        # A fixed path in the ignored .tests/ folder: no file name comes from argv.
-        RESULT_FILE.parent.mkdir(exist_ok=True)
-        RESULT_FILE.write_text(json.dumps({
-            "target": name, "stats": stats, "survivors_by_function": by_function(names),
-        }), encoding="utf-8")
+        _write_result(name, stats, names)
     text = summary(name, target, stats, names)
     print(text)
     print("\n".join(names))
@@ -273,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("target", choices=sorted(TARGETS))
     run_parser.add_argument("--max-children", type=int, default=os.cpu_count() or 2)
     run_parser.add_argument("--keep", type=Path, help="keep the workspace here (for show)")
-    run_parser.add_argument("--json", action="store_true", help="also write the counts and survivors to .tests/mutation-result.json")
+    run_parser.add_argument("--json", action="store_true", help="also hand the counts and survivors to the report job (step output result-<target>)")
     show_parser = sub.add_parser("show")
     show_parser.add_argument("target", choices=sorted(TARGETS))
     show_parser.add_argument("mutant")

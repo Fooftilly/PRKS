@@ -16,14 +16,15 @@ Two reports, both stdlib-only and driven by the workflow's ``GITHUB_TOKEN``:
     comment, edited in place, on the standing issue "Mutation testing report"
     (label ``mutation-report``). Editing does not notify anyone. A new comment,
     which does notify, is posted only when a target has more survivors than
-    its last report. ``ensure-mutation-issue`` creates that issue once, before
-    the matrix starts, so parallel targets never race to create it.
+    its last report. The matrix legs hold no issue token: each hands its
+    result to one report job as the step output ``result-<target>``, and that
+    job (never run for a pull request) updates the issue. On pull requests a
+    dry run checks that every target handed over a result.
 
 Usage::
 
     python scripts/ci/scheduled_report.py failure --workflow NAME --run-id ID --conclusion failure
-    python scripts/ci/scheduled_report.py ensure-mutation-issue
-    python scripts/ci/scheduled_report.py mutation --issue N --run-id ID
+    MUTATION_OUTPUTS='{...}' python scripts/ci/scheduled_report.py mutation --run-id ID [--dry-run]
 """
 from __future__ import annotations
 
@@ -48,8 +49,6 @@ REPORTER_LOGIN = "github-actions[bot]"
 _LABEL_COLORS = {FAILURE_LABEL: "d73a4a", MUTATION_LABEL: "fbca04"}
 _FOOTER = "\n\n---\n_Posted by `scripts/ci/scheduled_report.py`._"
 _TARGET = re.compile(r"[a-z0-9-]{1,40}\Z")
-# Written by ``mutation_testing.py run --json`` (kept in step with RESULT_FILE there).
-RESULT_FILE = Path(__file__).resolve().parents[2] / ".tests" / "mutation-result.json"
 _STATE = re.compile(r"<!-- mutation-report:([a-z0-9-]+) survived=(\d+) -->")
 
 
@@ -95,13 +94,18 @@ class GitHubClient:
         return json.loads(raw) if raw else None
 
 
-def _open_issue(client: Client, label: str, title: str) -> dict[str, Any] | None:
-    """The oldest open issue (not pull request) with ``label`` and exactly ``title``."""
-    issues = client.request("GET", f"issues?state=open&labels={label}&per_page=100&sort=created&direction=asc")
+def _find_issue(client: Client, label: str, title: str, state: str = "open") -> dict[str, Any] | None:
+    """The issue (not pull request) with ``label`` and exactly ``title``: oldest open, or latest closed."""
+    order = "sort=created&direction=asc" if state == "open" else "sort=updated&direction=desc"
+    issues = client.request("GET", f"issues?state={state}&labels={label}&per_page=100&{order}")
     for issue in issues or []:
         if "pull_request" not in issue and issue.get("title") == title:
             return issue
     return None
+
+
+def _open_issue(client: Client, label: str, title: str) -> dict[str, Any] | None:
+    return _find_issue(client, label, title)
 
 
 def _ensure_label(client: Client, label: str) -> None:
@@ -155,6 +159,12 @@ def report_failure(client: Client, workflow: str, run_id: int, run_url: str, con
         return f"closed #{issue['number']}"
     text = failure_text(workflow, run_url, failed_jobs(client, run_id))
     if issue is None:
+        # A failure that comes back reopens its old issue, keeping the history in one place.
+        closed = _find_issue(client, FAILURE_LABEL, title, state="closed")
+        if closed is not None:
+            client.request("PATCH", f"issues/{closed['number']}", {"state": "open"})
+            client.request("POST", f"issues/{closed['number']}/comments", {"body": "Failing again.\n\n" + text})
+            return f"reopened #{closed['number']}"
         created = _create_issue(client, FAILURE_LABEL, title, text)
         return f"opened #{created['number']}"
     client.request("POST", f"issues/{issue['number']}/comments", {"body": "Failed again.\n\n" + text})
@@ -171,15 +181,32 @@ class MutationResult:
     survivors: tuple[tuple[str, int], ...]
 
 
-def load_result(path: Path) -> MutationResult:
-    """The JSON that ``mutation_testing.py run --json-out`` writes."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+def parse_result(text: str) -> MutationResult:
+    """One ``result-<target>`` output of ``mutation_testing.py run --json``."""
+    data = json.loads(text)
     target = data["target"]
     if not isinstance(target, str) or not _TARGET.fullmatch(target):
         raise ValueError("invalid mutation target name")
     stats = {str(key): int(value) for key, value in data["stats"].items()}
     survivors = tuple((str(name), int(count)) for name, count in data["survivors_by_function"])
     return MutationResult(target, stats, survivors)
+
+
+def results_from_outputs(outputs: str, targets: list[str]) -> tuple[list[MutationResult], list[str]]:
+    """The results in the mutation job's merged outputs (JSON), and the targets without one."""
+    merged = json.loads(outputs or "{}")
+    found: list[MutationResult] = []
+    missing: list[str] = []
+    for target in targets:
+        text = merged.get(f"result-{target}") if isinstance(merged, dict) else None
+        if not text:
+            missing.append(target)
+            continue
+        result = parse_result(text)
+        if result.target != target:
+            raise ValueError(f"result-{target} holds the result of {result.target}")
+        found.append(result)
+    return found, missing
 
 
 def previous_survivors(body: str, target: str) -> int | None:
@@ -266,34 +293,37 @@ def main(argv: list[str] | None = None) -> int:
     failure.add_argument("--workflow", required=True)
     failure.add_argument("--run-id", type=int, required=True)
     failure.add_argument("--conclusion", choices=("success", "failure"), required=True)
-    sub.add_parser("ensure-mutation-issue")
     mutation = sub.add_parser("mutation")
-    mutation.add_argument("--issue", type=int, required=True)
     mutation.add_argument("--run-id", type=int, required=True)
+    mutation.add_argument("--dry-run", action="store_true",
+                          help="only check that every target handed over a result (pull requests)")
     args = parser.parse_args(argv)
 
+    results: list[MutationResult] = []
+    if args.command == "mutation":
+        root = str(Path(__file__).resolve().parents[2])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from scripts.ci.mutation_testing import TARGETS
+
+        results, missing = results_from_outputs(os.environ.get("MUTATION_OUTPUTS", ""), sorted(TARGETS))
+        for target in missing:
+            print(f"{target}: no result (incomplete run; the failure issue reports it)")
+        if args.dry_run:
+            for result in results:
+                print(f"{result.target}: would report {result.stats['survived']} survivors")
+            return 1 if missing else 0
     repo = os.environ["GITHUB_REPOSITORY"]
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     client = GitHubClient(os.environ["GITHUB_TOKEN"], repo, os.environ.get("GITHUB_API_URL", "https://api.github.com"))
-    if args.command == "ensure-mutation-issue":
-        number = ensure_mutation_issue(client)
-        output = os.environ.get("GITHUB_OUTPUT")
-        if output:
-            with open(output, "a", encoding="utf-8") as handle:
-                handle.write(f"issue={number}\n")
-        print(f"mutation report issue #{number}")
-        return 0
     run_url = f"{server}/{repo}/actions/runs/{args.run_id}"
     if args.command == "failure":
         print(report_failure(client, args.workflow, args.run_id, run_url, args.conclusion))
         return 0
-    if not RESULT_FILE.is_file():
-        # The run was incomplete; the workflow's failure issue reports that.
-        print("no mutation result to report")
-        return 0
-    print(report_mutation(client, args.issue, load_result(RESULT_FILE), run_url))
+    number = ensure_mutation_issue(client)
+    for result in results:
+        print(report_mutation(client, number, result, run_url))
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

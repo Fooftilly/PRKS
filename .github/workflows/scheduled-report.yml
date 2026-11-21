@@ -21,11 +21,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # One report per watched workflow at a time, so two runs never open two issues.
-  group: scheduled-report-${{ github.event.workflow_run.workflow_id }}
-  cancel-in-progress: false
-
 jobs:
   report:
     name: Report scheduled result
@@ -33,6 +28,11 @@ jobs:
     if: >-
       ${{ github.event.workflow_run.event == 'schedule' &&
       contains(fromJSON('["success", "failure", "timed_out"]'), github.event.workflow_run.conclusion) }}
+    # Job-level, so skipped (non-scheduled) completions never take the pending
+    # slot: one report per watched workflow at a time, never two issues.
+    concurrency:
+      group: scheduled-report-${{ github.event.workflow_run.workflow_id }}
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

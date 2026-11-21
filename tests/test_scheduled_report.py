@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import re
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 from typing import Any
 
 from scripts.ci import scheduled_report as report
@@ -43,7 +47,8 @@ class FakeGitHub:
         route = path.split("?", 1)[0]
         if method == "GET" and route == "issues":
             label = re.search(r"labels=([^&]+)", path).group(1)  # type: ignore[union-attr]
-            return [i for i in self.issues.values() if i["state"] == "open" and label in i["labels"]]
+            state = re.search(r"state=(\w+)", path).group(1)  # type: ignore[union-attr]
+            return [i for i in self.issues.values() if i["state"] == state and label in i["labels"]]
         if method == "POST" and route == "labels":
             if data["name"] in self.labels:
                 raise ApiError(422, method, path)
@@ -104,6 +109,11 @@ class FailureIssueTests(unittest.TestCase):
         self.assertEqual(report.report_failure(gh, "Nightly", 7, URL, "success"), "closed #2")
         self.assertEqual(issue["state"], "closed")
         self.assertIn("passes again", gh.bodies(2)[-1])
+
+        # A failure that comes back reopens the same issue.
+        self.assertEqual(report.report_failure(gh, "Nightly", 7, URL, "failure"), "reopened #2")
+        self.assertEqual((issue["state"], len(gh.issues)), ("open", 1))
+        self.assertTrue(gh.bodies(2)[-1].startswith("Failing again."))
 
     def test_each_workflow_has_its_own_issue_and_pull_requests_are_ignored(self):
         gh = FakeGitHub()
@@ -187,21 +197,53 @@ class MutationReportTests(unittest.TestCase):
         report.report_mutation(gh, number, _result(1), URL)
         self.assertEqual(sum(b.startswith("<!-- mutation-report:") for b in gh.bodies(number)), 1)
 
-    def test_result_files_are_validated(self):
+    def test_results_are_read_from_the_merged_job_outputs(self):
+        def out(target: str, survived: int = 1) -> str:
+            return json.dumps({"target": target, "stats": {"total": 3, "survived": survived},
+                               "survivors_by_function": [["m.x_f", survived]]})
+
+        outputs = json.dumps({"result-a": out("a"), "result-b": "", "result-c": out("c", 2)})
+        found, missing = report.results_from_outputs(outputs, ["a", "b", "c", "d"])
+        self.assertEqual(found, [
+            MutationResult("a", {"total": 3, "survived": 1}, (("m.x_f", 1),)),
+            MutationResult("c", {"total": 3, "survived": 2}, (("m.x_f", 2),)),
+        ])
+        self.assertEqual(missing, ["b", "d"])
+        self.assertEqual(report.results_from_outputs("", ["a"]), ([], ["a"]))
+        with self.assertRaisesRegex(ValueError, "result-a holds the result of c"):
+            report.results_from_outputs(json.dumps({"result-a": out("c")}), ["a"])
+
+    def test_result_target_names_are_validated(self):
+        for bad in ("Docs Only", "x" * 41, "a -->"):
+            with self.subTest(target=bad), self.assertRaises(ValueError):
+                report.parse_result(json.dumps({"target": bad, "stats": {}, "survivors_by_function": []}))
+
+    def test_the_runner_writes_what_the_reporter_reads(self):
+        from scripts.ci import mutation_testing
+
+        names = ["backend.sync_protocol.x_f__mutmut_1", "backend.sync_protocol.x_f__mutmut_2"]
+        stats = {"total": 5, "killed": 3, "survived": 2, "no_tests": 0, "timeout": 0}
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "r.json"
-            path.write_text(json.dumps({
-                "target": "docs-only-ci", "stats": {"total": 3, "survived": 1},
-                "survivors_by_function": [["scripts.ci.docs_only.x_f", 1]],
-            }), encoding="utf-8")
-            self.assertEqual(report.load_result(path), MutationResult(
-                "docs-only-ci", {"total": 3, "survived": 1}, (("scripts.ci.docs_only.x_f", 1),),
-            ))
-            for bad in ("Docs Only", "x" * 41, "a -->"):
-                path.write_text(json.dumps({"target": bad, "stats": {}, "survivors_by_function": []}),
-                                encoding="utf-8")
-                with self.subTest(target=bad), self.assertRaises(ValueError):
-                    report.load_result(path)
+            output = Path(folder) / "out"
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+                mutation_testing._write_result("sync-envelope", stats, names)
+            key, _, value = output.read_text(encoding="utf-8").rstrip("\n").partition("=")
+        self.assertEqual(key, "result-sync-envelope")
+        found, missing = report.results_from_outputs(json.dumps({key: value}), ["sync-envelope"])
+        self.assertEqual(missing, [])
+        self.assertEqual(found[0], MutationResult("sync-envelope", stats, (("backend.sync_protocol.x_f", 2),)))
+
+    def test_the_dry_run_fails_when_a_target_handed_over_nothing(self):
+        from scripts.ci.mutation_testing import TARGETS
+
+        def outputs(targets: list[str]) -> str:
+            return json.dumps({f"result-{name}": json.dumps({
+                "target": name, "stats": {"survived": 0}, "survivors_by_function": []}) for name in targets})
+
+        for targets, code in ((sorted(TARGETS), 0), (sorted(TARGETS)[1:], 1)):
+            with self.subTest(code=code), mock.patch.dict(os.environ, {"MUTATION_OUTPUTS": outputs(targets)}), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(report.main(["mutation", "--run-id", "1", "--dry-run"]), code)
 
     def test_previous_survivors_reads_only_that_target(self):
         body = "<!-- mutation-report:a survived=3 -->\n<!-- mutation-report:ab survived=9 -->"
@@ -233,18 +275,26 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn("github.event.workflow_run.event == 'schedule'", text)
         self.assertNotIn("pull_request", text.split("jobs:", 1)[0].split("on:", 1)[1].split("permissions:", 1)[0])
 
-    def test_mutation_targets_report_to_the_standing_issue(self):
+    def test_only_the_non_pull_request_report_job_holds_an_issue_token(self):
+        from scripts.ci.mutation_testing import TARGETS
+
         text = self._text("mutation-testing.yml")
-        self.assertIn("scripts/ci/scheduled_report.py ensure-mutation-issue", text)
-        self.assertIn('mutation_testing.py run "$TARGET" --json', text)
-        self.assertNotIn("--result", text)
-        self.assertIn("needs.report-issue.outputs.issue != ''", text)
-
-    def test_both_scripts_agree_on_the_result_file(self):
-        from scripts.ci import mutation_testing
-
-        self.assertEqual(report.RESULT_FILE, mutation_testing.RESULT_FILE)
-        self.assertEqual(report.RESULT_FILE.relative_to(ROOT).as_posix(), ".tests/mutation-result.json")
+        jobs = dict(re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)", text.split("\njobs:\n", 1)[1],
+                               re.MULTILINE | re.DOTALL))
+        self.assertEqual(sorted(jobs), ["mutation", "report", "report-preview"])
+        self.assertNotIn("issues:", jobs["mutation"])
+        self.assertNotIn("issues:", jobs["report-preview"])
+        self.assertIn("issues: write", jobs["report"])
+        self.assertIn("github.event_name == 'schedule'", jobs["report"])
+        self.assertNotIn("pull_request", jobs["report"].split("runs-on:", 1)[0])
+        self.assertIn("--dry-run", jobs["report-preview"])
+        self.assertIn("github.event_name == 'pull_request'", jobs["report-preview"])
+        # One output per target, each set only by its own matrix leg.
+        self.assertEqual(
+            re.findall(r"result-([a-z-]+): \$\{\{ steps\.run\.outputs\.result-\1 \}\}", jobs["mutation"]),
+            sorted(TARGETS),
+        )
+        self.assertIn('mutation_testing.py run "$TARGET" --json', jobs["mutation"])
 
     def test_the_workflow_token_is_the_only_trusted_commenter(self):
         self.assertEqual(report.REPORTER_LOGIN, "github-actions[bot]")
