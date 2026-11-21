@@ -29,6 +29,8 @@ PROFILE_ENV = "PRKS_E2E_PROFILE"
 ROUTE_FASTPATH_ENV = "PRKS_E2E_ROUTE_FASTPATH"
 # Manual soft module-affinity sharding pilot; never train normal history.
 MODULE_AFFINITY_ENV = "PRKS_E2E_MODULE_AFFINITY_PILOT"
+# Coverage-map recording (tests/e2e/coverage_map.py): instrumented, never trains history.
+COVERAGE_MAP_ENV = "PRKS_E2E_COVERAGE_MAP_DIR"
 
 FALSE_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
@@ -57,6 +59,8 @@ def benchmark_modes(environ=None) -> tuple:
         modes.append("route-fastpath")
     if env_flag_enabled(MODULE_AFFINITY_ENV, environ=environ):
         modes.append("module-affinity")
+    if (os.environ if environ is None else environ).get(COVERAGE_MAP_ENV):
+        modes.append("coverage-map")
     return tuple(modes)
 
 

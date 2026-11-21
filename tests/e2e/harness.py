@@ -40,6 +40,7 @@ from tests.e2e.policy import (
     ROUTE_FASTPATH_ENV,
     env_flag_enabled,
 )
+from tests.e2e import coverage_map
 from tests.e2e.postgres_identity import provision_library, seed_postgres_library
 from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
@@ -444,6 +445,7 @@ def require_chromium():
     apply_e2e_playwright_env()
     from playwright.sync_api import sync_playwright
 
+    coverage_map.install_browser_hooks()
     pw = sync_playwright().start()
     try:
         browser = pw.chromium.launch(headless=True)
@@ -1012,6 +1014,9 @@ class AppServer:
         self._members = tuple(members)
 
     def start(self):
+        # The test this server belongs to, for the coverage map: its
+        # background teardown finishes while the next test is running.
+        self._owner_test_id = get_e2e_heartbeat().get("test_id") or ""
         if self.library is None:
             try:
                 kwargs: dict[str, Any] = {"members": self._members}
@@ -1106,9 +1111,16 @@ class AppServer:
             _LIVE_SERVERS.append(self)
         self._stdout = open(self._stdout_path, "w", encoding="utf-8")
         self._stderr = open(self._stderr_path, "w", encoding="utf-8")
+        # A coverage-map recording run (tests/e2e/coverage_map.py) runs the
+        # same server under coverage.py; ordinary runs never do.
+        interpreter = (
+            coverage_map.server_argv(python_for_subprocess(), self._tmpdir.name)
+            if coverage_map.enabled()
+            else [python_for_subprocess()]
+        )
         self.proc = subprocess.Popen(
             [
-                python_for_subprocess(),
+                *interpreter,
                 str(REPO / "prks_app.py"),
                 "--testing",
                 "--host",
@@ -1209,6 +1221,11 @@ class AppServer:
                 _LIVE_SERVERS.remove(self)
             except ValueError:
                 pass
+            if coverage_map.enabled():
+                try:
+                    coverage_map.record_server(getattr(self, "_owner_test_id", ""), self._tmpdir.name)
+                except Exception as exc:  # noqa: BLE001 - a lost record must not fail the test
+                    print("coverage map: server record failed: %s" % type(exc).__name__, file=sys.stderr)
             if drop:
                 try:
                     self._drop_library(profiled=False)

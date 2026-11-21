@@ -55,6 +55,19 @@ Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run 
 - `PRKS_E2E_CHROMIUM_RECYCLE_EVERY` relaunches Chromium lazily after N contexts in heavy service-worker modules (default 1 for Offline Work metadata, `0` off). Contexts stay per-test either way.
 - `PRKS_E2E_REDUCED_MOTION=1` opts into `prefers-reduced-motion` for motion experiments; it stays off for the gate because it changes layout that scroll-restore assertions depend on.
 
+## Coverage map (shadow mode)
+
+`.github/workflows/e2e-coverage-map.yml` (weekly and manual) runs the full suite with `PRKS_E2E_COVERAGE_MAP_DIR` set. `tests/e2e/coverage_map.py` then records, per test, the Python lines its server ran (coverage.py) and the `frontend/js/**` lines its pages ran (Chromium precise coverage; a line counts when its innermost function ran). Each shard uploads `e2e-coverage-map-N.json.gz`.
+
+`python -m tests.e2e.coverage_map select MAP... --base B --head H` prints what a map-based selection would run for a diff:
+
+- each changed `backend/**`, `prks_app.py` or `frontend/js/**` line selects the tests that ran it (an insertion selects the tests that ran the lines on either side);
+- lines changed on master since the map was recorded are translated back to the map's commit;
+- every other file keeps the planner's rule, and one that would run the full suite keeps the whole selection full;
+- smoke is always added.
+
+The gate does not read the map. It is evidence for deciding whether it should. Not measured: the Vue bundle, vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
+
 ## Moving coverage out of the browser
 
 Decide by coverage, never by duration. Classify each contract as KEEP, SPLIT or MOVE (`tests/e2e/AGENTS.md`). Land the faster replacement before removing the browser scenario, and never delete an E2E only because a similarly named unit test exists.
