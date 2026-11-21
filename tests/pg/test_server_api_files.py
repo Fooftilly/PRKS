@@ -211,10 +211,14 @@ class ManagedPdfTests(ManagedPdfTestCase):
         # records what happened and the test asserts it outside the handler.
         resumed: list[bool] = []
 
-        def held(*args: Any, **kwargs: Any) -> Any:
+        published: list[bool] = []
+
+        def held(root: str, name: str, data: Any) -> Any:
             publishing.set()
             resumed.append(deleted.wait(10))
-            return original(*args, **kwargs)
+            out = original(root, name, data)
+            published.append(os.path.isfile(os.path.join(root, name)))
+            return out
 
         result: dict[str, Any] = {}
         with mock.patch.object(self.server_module, "publish_derived_cache_bytes", held):
@@ -227,6 +231,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
             viewer.join(20)
             self.assertFalse(viewer.is_alive())
         self.assertEqual(resumed, [True])  # the copy was published after the delete
+        self.assertEqual(published, [True])
         self.assertEqual(result["res"].status, 404)
         self.assertEqual(self.thumb_names(work["id"]), set())
 
