@@ -572,9 +572,10 @@ def with_code_neighbours(wanted: Iterable[int], code: Iterable[Sequence[int]]) -
 
 # Top-level blocks of a single-file component, in the order Vue's parser meets them:
 # a script is skipped whole, a comment hides what it wraps (to the end of the file
-# when unterminated), and a style block is live CSS.
+# when unterminated), and a style block (paired, or a self-closing ``src`` import)
+# is live CSS.
 _SFC_BLOCK = re.compile(
-    r"<script\b.*?</script\s*>|<!--(?:.*?-->|.*\Z)|(<style\b.*?</style\s*>)",
+    r"<script\b.*?</script\s*>|<!--(?:.*?-->|.*\Z)|(<style\b[^>]*/\s*>|<style\b.*?</style\s*>)",
     re.DOTALL | re.IGNORECASE,
 )
 

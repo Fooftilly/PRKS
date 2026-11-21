@@ -364,6 +364,12 @@ class SelectForDiffTests(unittest.TestCase):
         self._commit()
         self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
 
+    def test_a_new_self_closing_style_import_runs_the_full_suite(self):
+        overrides = self._vue_repo()
+        (self.repo / VUE).write_text(CARD + '<style scoped src="./shared.css" />\n')
+        self._commit()
+        self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
+
     def test_any_other_sw_change_is_not_derived(self):
         overrides = self._vue_repo()
         sw = self.repo / "frontend" / "sw.js"
@@ -479,6 +485,7 @@ class SourceMapTests(unittest.TestCase):
         self.assertEqual(cm.active_styles("<!--\n<style>a{}</style>\n-->\n"), [])
         self.assertEqual(cm.active_styles("<!-- open\n<style>a{}</style>\n"), [])
         self.assertEqual(cm.active_styles("<script>const s = '<style>a{}</style>'</script>\n"), [])
+        self.assertEqual(cm.active_styles('<style scoped src="./a.css" />\n'), ['<style scoped src="./a.css" />'])
 
     def test_only_the_bundle_url_is_the_bundle(self):
         self.assertTrue(cm._is_vue_bundle("http://127.0.0.1:8123/vue/prks-vue.js?v=1"))
