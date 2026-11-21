@@ -1,0 +1,70 @@
+name: E2E selection accuracy (advisory)
+
+# Joins the shadow E2E selection of each pull request head
+# (e2e-selection-shadow.yml) with what the Full E2E gate caught on that head,
+# and keeps the standing issue "E2E selection accuracy" up to date
+# (scripts/ci/e2e_selection_accuracy.py): one summary comment edited in place,
+# one new comment for each gate failure the coverage map would not have run.
+# Daily, because gate failure logs keep 7 days. Advisory: the gate never
+# reads the map, and this check is not required.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "53 2 * * *"
+      timezone: Europe/Podgorica
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-selection-accuracy.yml"
+      - "scripts/ci/e2e_selection_accuracy.py"
+      - "scripts/ci/e2e_selection_shadow.py"
+      - "scripts/ci/scheduled_report.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Reporting runs share one group, so two never race to create the issue.
+  group: e2e-selection-accuracy-${{ github.event.pull_request.number || ((github.event_name == 'schedule' || github.ref == 'refs/heads/master') && 'report') || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  report:
+    # The only job with an issue token, and it never runs for a pull request.
+    name: Update the E2E selection accuracy issue
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # list gate and shadow runs, download their reports and failure logs
+      issues: write # create the report issue, edit its summary, post each miss
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the shadow selections with the gate results
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/e2e_selection_accuracy.py
+
+  preview:
+    # Pull requests and branch runs print the summary without touching any issue.
+    name: Preview the E2E selection accuracy report
+    if: ${{ github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/master') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # list gate and shadow runs, download their reports and failure logs
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the shadow selections with the gate results (dry run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/e2e_selection_accuracy.py --dry-run

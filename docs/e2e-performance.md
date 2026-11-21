@@ -68,6 +68,8 @@ Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run 
 
 On every pull request, `.github/workflows/e2e-selection-shadow.yml` (advisory, not required) runs `scripts/ci/e2e_selection_shadow.py`: it takes the newest complete map recorded on master and writes both what the map would run and what the gate plan runs to the job summary, and to the `e2e-selection-shadow` artifact (kept 90 days) for later comparison with the gate's failures.
 
+Daily, `.github/workflows/e2e-selection-accuracy.yml` (advisory) runs `scripts/ci/e2e_selection_accuracy.py`: for each pull request head of the last 7 days (gate failure logs keep 7 days), it compares the gate's failed tests with that head's shadow selection. The standing issue **E2E selection accuracy** (label `e2e-selection-report`) keeps one summary comment, edited in place, of the tests the gate planned against the tests the map would have selected (planned counts, not timings). It gets one new comment for each gate failure the map would not have run, so each miss can be checked as a real regression or a flake.
+
 The gate does not read the map. It is evidence for deciding whether it should. Not measured: the Vue bundle, vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
 
 ## Moving coverage out of the browser
