@@ -164,6 +164,25 @@ class SaveTests(RemoteImageTestCase):
                 refs = self.sql(object_references("prks"), {"library_id": self.actor.library_id})
                 self.assertNotIn(old, {ref["name"] for ref in refs})
 
+    def test_an_unreadable_copy_is_kept_and_the_fetch_served_unsaved(self) -> None:
+        self.video()
+        self.save(THUMB)
+        old = self.rows()[THUMB]
+        real_open = self.objects.open_read
+
+        def refuse(key: StorageKey) -> Any:
+            if key.name == old:
+                raise PermissionError("no read permission")
+            return real_open(key)
+
+        self.objects.open_read = refuse  # type: ignore[method-assign]
+        fresh = self.save(THUMB, image((10, 10, 200)))
+        self.assertIsNotNone(fresh)
+        self.assertNotIn("sha256", fresh)
+        self.assertEqual(self.rows(), {THUMB: old})
+        self.assertEqual(self.claims(), set())
+        self.assertEqual(self.names(), {old})
+
     def test_a_url_the_library_does_not_name_is_never_fetched(self) -> None:
         self.video()
         self.noted("no figures here")

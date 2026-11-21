@@ -57,6 +57,7 @@ from backend.storage.objects import (
     NAMESPACE_REMOTE_IMAGES,
     StorageBackend,
     StorageKey,
+    ObjectNotFound,
     StorageObjectError,
     validate_key_name,
 )
@@ -225,17 +226,33 @@ def commit(scope: LibraryScope, storage: StorageBackend, url: str,
 # -- the route's commands ------------------------------------------------------
 
 
-def _read(objects: StorageBackend, found: RemoteImage) -> Optional[dict[str, Any]]:
-    """The copy's bytes when they are the recorded size and hash; read with a bound, never whole."""
+LOST = "lost"
+UNREADABLE = "unreadable"
+
+
+def _inspect(objects: StorageBackend, found: RemoteImage) -> Union[dict[str, Any], str]:
+    """The copy's bytes when they are the recorded size and hash; read with a bound, never whole.
+
+    Otherwise :data:`LOST` when the key is gone or its bytes are proven
+    wrong, and :data:`UNREADABLE` when reading failed for another reason (a
+    permission, an I/O error, a link): those bytes may still be the copy.
+    """
     try:
         with objects.open_read(found.key) as handle:
             body = handle.read(found.size + 1)
+    except ObjectNotFound:
+        return LOST
     except (OSError, StorageObjectError):
-        return None
+        return UNREADABLE
     subtype = identify_cached_portrait_subtype(body)
     if len(body) != found.size or subtype is None or hashlib.sha256(body).hexdigest() != found.sha256:
-        return None
+        return LOST
     return {"body": body, "subtype": subtype, "sha256": found.sha256}
+
+
+def _read(objects: StorageBackend, found: RemoteImage) -> Optional[dict[str, Any]]:
+    copy = _inspect(objects, found)
+    return copy if isinstance(copy, dict) else None
 
 
 def saved(db: Database, ctx: RequestContext, objects: StorageBackend, url: str) -> Optional[dict[str, Any]]:
@@ -256,7 +273,9 @@ def save(db: Database, ctx: RequestContext, objects: StorageBackend, url: str,
     The Library must name the URL and the actor needs ``EDIT_LIBRARY``, both
     checked before anything is fetched or written. Returns what :func:`saved`
     returns, or None when nothing was saved: the URL is not named, or the
-    fetch or transcode failed.
+    fetch or transcode failed. A saved copy that is gone or proven damaged
+    is replaced; one that could not be read for another reason is kept, and
+    the fetched bytes are returned without a ``sha256`` (not saved).
     """
     def look(scope: LibraryScope) -> tuple[bool, Optional[RemoteImage]]:
         return named(scope, url), current(scope, url)
@@ -267,13 +286,17 @@ def save(db: Database, ctx: RequestContext, objects: StorageBackend, url: str,
     replaces = None
     if found is not None:
         # Saved since the caller looked, or saved and since lost or damaged.
-        intact = _read(objects, found)
-        if intact is not None:
-            return intact
-        replaces = found.locator
+        copy = _inspect(objects, found)
+        if isinstance(copy, dict):
+            return copy
+        replaces = found.locator if copy == LOST else None
     image = prepare(url)
     if image is None:
         return None
+    if found is not None and replaces is None:
+        # The saved bytes may be intact but unreadable now: keep them and
+        # serve this fetch uncached (no hash).
+        return {"body": image.body, "subtype": image.subtype}
     stored = store(objects, image)
     done = library_command(db, ctx, Capability.EDIT_LIBRARY,
                            lambda scope: commit(scope, objects, url, stored, replaces))

@@ -114,5 +114,8 @@ def handle_get(handler: Any, db: Any, path: str, query: Mapping[str, Sequence[st
         LOGGER.info("remote_image_unavailable request_id=%s", safe_log_id(handler._prks_request_id))
         _unavailable(handler)
         return True
-    _send_saved(handler, fresh)
+    if "sha256" in fresh:
+        _send_saved(handler, fresh)
+    else:
+        handler._send_person_profile_image_bytes(fresh["body"], fresh["subtype"], max_age=UNCACHED_MAX_AGE)
     return True
