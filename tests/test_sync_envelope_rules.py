@@ -24,9 +24,9 @@ from backend import sync_protocol as rules
 def _local_time_zone(name: str) -> Iterator[None]:
     """Run with ``name`` as the process's local time zone (POSIX ``TZ``)."""
     previous = os.environ.get("TZ")
-    os.environ["TZ"] = name
-    time.tzset()
     try:
+        os.environ["TZ"] = name
+        time.tzset()
         yield
     finally:
         if previous is None:
@@ -124,16 +124,18 @@ class EnvelopeRuleTests(unittest.TestCase):
         # The envelope checks against its own canonical op_id.
         self.assertRefused(_envelope(op_id=OP_ID.upper(), depends_on=[OP_ID]))
 
+    @unittest.skipUnless(hasattr(time, "tzset"), "time.tzset is POSIX-only")
+    def test_timestamps_are_utc_whatever_the_local_time_zone(self):
+        with _local_time_zone("PRKS-2"):  # POSIX: two hours east of UTC, no tzdata needed
+            self.assertEqual(rules.normalize_timestamp("2026-07-02T03:04:05+00:00"), "2026-07-02T03:04:05+00:00")
+            self.assertEqual(rules.normalize_timestamp("2026-07-02T05:04:05+02:00"), "2026-07-02T03:04:05+00:00")
+
     def test_timestamps(self):
         self.assertEqual(rules.normalize_timestamp("2026-01-02T03:04:05Z"), "2026-01-02T03:04:05+00:00")
         self.assertEqual(rules.normalize_timestamp("2026-01-02T00:04:05-03:00"), "2026-01-02T03:04:05+00:00")
         forty = "2026-01-02T03:04:05.1234+00:00:00.000000"
         self.assertEqual(len(forty), 40)
         self.assertEqual(rules.normalize_timestamp(forty), "2026-01-02T03:04:05.123400+00:00")
-        # The canonical form is UTC whatever the server's local time zone is.
-        with _local_time_zone("PRKS-2"):  # POSIX: two hours east of UTC, no tzdata needed
-            self.assertEqual(rules.normalize_timestamp("2026-07-02T03:04:05+00:00"), "2026-07-02T03:04:05+00:00")
-            self.assertEqual(rules.normalize_timestamp("2026-07-02T05:04:05+02:00"), "2026-07-02T03:04:05+00:00")
         for bad in (None, "2026-01-02T03:04:05", "yesterday", forty + "0", "2026-01-02T03:04:05z"):
             with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:
                 rules.normalize_timestamp(bad)
