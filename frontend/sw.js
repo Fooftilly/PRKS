@@ -806,32 +806,50 @@
          * copy (else a 503, or the gateway's answer). `waitUntil` keeps the
          * worker alive until a cache write or delete settles.
          */
-        // Per cache and key, the generation of the newest figure answer: a put
-        // whose answer is no longer the newest (a later 200 or 404 for the
-        // same key arrived while its session checks ran) is skipped, so an
-        // older copy never comes back after a 404 dropped it.
-        const figureGenerations = new Map();
-        function nextFigureGeneration(cacheName, key) {
+        // Per cache and key: the order in which figure requests started, the
+        // start of the newest one whose answer was applied, and one chain of
+        // cache writes and deletes. An answer older than an applied one (it
+        // started earlier, finished later) changes nothing, a put runs only
+        // while its request is still the newest applied, and a delete queued
+        // behind a put in progress runs after it, so an older copy never
+        // comes back after a 404 dropped it.
+        const figureOrder = new Map();
+        function figureState(cacheName, key) {
             const id = cacheName + '\n' + key;
-            const next = (figureGenerations.get(id) || 0) + 1;
-            figureGenerations.set(id, next);
-            return next;
+            let state = figureOrder.get(id);
+            if (!state) {
+                state = { started: 0, applied: 0, chain: Promise.resolve() };
+                figureOrder.set(id, state);
+            }
+            return state;
         }
-        function isNewestFigure(cacheName, key, generation) {
-            return figureGenerations.get(cacheName + '\n' + key) === generation;
+        function queueFigureMutation(state, op) {
+            state.chain = state.chain.then(op).catch(function () {});
+            return state.chain;
+        }
+
+        async function fetchFigureFromNetwork(request) {
+            try {
+                return await fetchImpl(request);
+            } catch (_e) {
+                return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
+            }
         }
 
         async function handleRemoteFigureRequest(request, key, clientId, waitUntil) {
             const keepAlive = typeof waitUntil === 'function' ? waitUntil : function () {};
             const cacheName = await pdfCacheName(clientId || '', false);
-            if (!cacheName) {
-                try {
-                    return await fetchImpl(request);
-                } catch (_e) {
-                    return new Response(null, { status: 503, statusText: 'Image is not available offline.' });
-                }
+            if (!cacheName) return fetchFigureFromNetwork(request);
+            let cache;
+            try {
+                cache = await cachesApi.open(cacheName);
+            } catch (_eOpen) {
+                // Cache storage is optional (a full quota): the network only.
+                return fetchFigureFromNetwork(request);
             }
-            const cache = await cachesApi.open(cacheName);
+            const state = figureState(cacheName, key);
+            state.started += 1;
+            const order = state.started;
             try {
                 const confirmedBefore = Promise.resolve(confirmScope(cacheName)).catch(function () { return false; });
                 const res = await fetchImpl(request);
@@ -842,11 +860,14 @@
                     if (stored) return stored;
                     return res;
                 }
+                const saved = !!etag && isCacheableStaticResponse(res);
+                if ((res && res.status === 404) || saved) {
+                    if (order < state.applied) return res; // a newer request's answer already applies
+                    state.applied = order;
+                }
                 if (res && res.status === 404) {
-                    nextFigureGeneration(cacheName, key);
-                    keepAlive(cache.delete(key).catch(function () {}));
-                } else if (etag && isCacheableStaticResponse(res)) {
-                    const generation = nextFigureGeneration(cacheName, key);
+                    keepAlive(queueFigureMutation(state, function () { return cache.delete(key); }));
+                } else if (saved) {
                     let cloned = null;
                     try {
                         cloned = res.clone();
@@ -856,8 +877,10 @@
                     if (cloned) {
                         keepAlive(Promise.all([confirmedBefore, confirmScope(cacheName)]).then(function (checks) {
                             if (!checks[0] || !checks[1]) return false;
-                            if (!isNewestFigure(cacheName, key, generation)) return false;
-                            return cache.put(key, cloned);
+                            return queueFigureMutation(state, function () {
+                                if (state.applied !== order) return false;
+                                return cache.put(key, cloned);
+                            });
                         }).catch(function () {}));
                     }
                 }

@@ -406,6 +406,42 @@ async function run() {
             const raceCache = await raceStorage.open(PDF_CACHE);
             assert('a 404 after a pending older 200 leaves the figure absent', !(await raceCache.match(fig)));
         }
+        {
+            // A's network 200 is held; B (started later) gets a 404 and deletes; then A
+            // arrives. A's older answer must not put its copy back.
+            const raceStorage = makeFakeCacheStorage();
+            const seed = await raceStorage.open(PDF_CACHE);
+            await seed.put(fig, new Response(body, { status: 200 }));
+            let releaseA;
+            const heldA = new Promise((resolve) => { releaseA = resolve; });
+            let calls = 0;
+            const racing = sw.createHandlers({
+                pdfCacheName: scopedPdfCacheName, caches: raceStorage, confirmScope: sessionConfirmed,
+                fetchImpl: () => {
+                    calls += 1;
+                    return calls === 1 ? heldA.then(() => respond(200, { ETag: '"old"' })()) : respond(404)();
+                },
+            });
+            const kept = [];
+            const a = racing.handleRemoteFigureRequest(req, fig, '', (p) => kept.push(p));
+            await settle();
+            await racing.handleRemoteFigureRequest(req, fig, '', (p) => kept.push(p));
+            await Promise.all(kept);
+            releaseA();
+            await a;
+            await Promise.all(kept);
+            await settle();
+            assert('an older 200 arriving after a newer 404 leaves the figure absent', !(await seed.match(fig)));
+        }
+        {
+            const failing = sw.createHandlers({
+                pdfCacheName: scopedPdfCacheName,
+                caches: { open: () => Promise.reject(new Error('quota')) },
+                fetchImpl: respond(200, { ETag: '"q"' }),
+            });
+            const res = await failing.handleRemoteFigureRequest(req, fig, '');
+            assertEq('a cache that will not open still loads the figure from the network', res.status, 200);
+        }
         const unscoped = sw.createHandlers({ caches: cacheStorage, fetchImpl: () => Promise.reject(new Error('offline')) });
         assertEq('without a scope, offline is 503', (await unscoped.handleRemoteFigureRequest(req, fig, '')).status, 503);
     }
