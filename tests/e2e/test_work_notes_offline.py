@@ -1235,8 +1235,13 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         mark = "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)"
         self.assertIsNotNone(page.evaluate(mark, work))
         page.reload()
+        # Right after the reload the recovery scope is not known yet and
+        # scopeNames() is null; a throw would end the wait, so wait for it too.
         page.wait_for_function(
-            "(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId) === null",
+            """(workId) => {
+                const names = window.prksEditorRecovery && window.prksEditorRecovery.scopeNames();
+                return !!names && localStorage.getItem(names.deletedWorkPrefix + workId) === null;
+            }""",
             arg=work, timeout=20000)
 
     def test_drafts_of_a_never_synced_work_deleted_from_its_own_pane_are_removed(self):
