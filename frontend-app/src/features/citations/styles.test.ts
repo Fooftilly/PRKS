@@ -66,4 +66,24 @@ describe('citation style registry', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(isCitationStyle(HOUSE)).toBe(true)
   })
+
+  it('keeps the latest read’s list when an earlier read answers after it', async () => {
+    const answers: Array<(styles: typeof listed) => void> = []
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answers.push((styles) => resolve(new Response(JSON.stringify({ styles }))))
+    })))
+    const earlier = loadImportedStyles(true)
+    const latest = loadImportedStyles(true)
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    const added = { id: GONE, title: 'Just Imported', created_at: 'x' }
+    answers[1]?.([...listed, added])
+    await latest
+    answers[0]?.(listed)
+    await earlier
+    expect(isCitationStyle(GONE)).toBe(true)
+    expect(citationStyleLabel(GONE)).toBe('Just Imported')
+    // A later read without force reuses the latest read, not the earlier one.
+    await loadImportedStyles()
+    expect(isCitationStyle(GONE)).toBe(true)
+  })
 })

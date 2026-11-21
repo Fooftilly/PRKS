@@ -46,6 +46,8 @@ export const importedStyles = ref<readonly CitationStyle[]>([])
 /** Whether `importedStyles` has been read from PRKS on this page. */
 const importedListed = ref(false)
 let importedLoad: Promise<void> | null = null
+/** Counts list reads, so only the latest one started sets the list. */
+let importedGeneration = 0
 
 function toStyle(summary: ImportedStyleSummary): CitationStyle {
   return { id: summary.id, label: summary.title }
@@ -53,12 +55,16 @@ function toStyle(summary: ImportedStyleSummary): CitationStyle {
 
 /**
  * Read the imported styles once per page; `force` reads them again (after
- * an import or a delete). A failed read leaves the last list and is retried
- * on the next call.
+ * an import or a delete). Only the latest read started sets the list: an
+ * earlier one that answers last (say, the list Settings read on opening,
+ * after an import's own read) must not put back the list before the import.
+ * A failed read leaves the last list and is retried on the next call.
  */
 export function loadImportedStyles(force = false): Promise<void> {
   if (importedLoad && !force) return importedLoad
+  const generation = ++importedGeneration
   const load = listImportedStyles().then((styles) => {
+    if (generation !== importedGeneration) return
     importedStyles.value = styles.map(toStyle)
     importedListed.value = true
   })
@@ -74,6 +80,7 @@ export function resetImportedStylesForTests(): void {
   importedStyles.value = []
   importedListed.value = false
   importedLoad = null
+  importedGeneration += 1
 }
 
 /** A style a citation can use now: shipped, or imported and still listed. */
