@@ -7,6 +7,11 @@ name: E2E coverage map (advisory)
 # E2E gate does not read them. Instrumented runs never train timing history.
 on:
   workflow_dispatch:
+  # A change to the recorder proves itself on the pull request.
+  pull_request:
+    paths:
+      - ".github/workflows/e2e-coverage-map.yml"
+      - "tests/e2e/coverage_map.py"
   schedule:
     - cron: "41 2 * * 0"
       timezone: Europe/Podgorica
@@ -15,8 +20,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-coverage-map-${{ github.ref }}
-  cancel-in-progress: false
+  group: e2e-coverage-map-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   record:
