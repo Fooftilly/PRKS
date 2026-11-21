@@ -47,6 +47,7 @@ from backend.api import works as works_api
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
+    citations_openapi_document,
     job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
@@ -1686,6 +1687,8 @@ class PRKSHandler(HttpHandlerBase):
                 self.send_json(200, job_diagnostics_openapi_document())
             elif path == '/api/openapi/publishers.json':
                 self.send_json(200, publishers_openapi_document())
+            elif path == '/api/openapi/citations.json':
+                self.send_json(200, citations_openapi_document())
             elif path == '/api/openapi/saved-views.json':
                 self.send_json(200, saved_views_openapi_document())
             elif path == '/api/openapi/processing-items.json':
@@ -1787,6 +1790,8 @@ class PRKSHandler(HttpHandlerBase):
                 self.send_json(200, {"status": "logged", "request_id": self._prks_request_id})
             elif works_api.handle_bulk(self, db, path, data):
                 return
+            elif works_api.handle_citations(self, db, path, data):
+                return
             elif path == '/api/works/reindex-pdf-text':
                 # ``force`` is accepted and asks for nothing more: a text
                 # rebuild re-extracts only what has no current row.
@@ -1842,7 +1847,9 @@ class PRKSHandler(HttpHandlerBase):
 
                 postgres_upload = None
                 # Upload: PDF (existing behavior)
-                if data.get('file_b64') and data.get('file_name'):
+                # A chosen file is sent even when it is empty, so a 0-byte
+                # file is refused below rather than read as "no file" (#772).
+                if data.get('file_name') and isinstance(data.get('file_b64'), str):
                     try:
                         decoded_pdf = base64.b64decode(data['file_b64'], validate=True)
                     except (binascii.Error, ValueError):

@@ -146,6 +146,51 @@ def bibtex(db: Database, ctx: RequestContext, work_id: str) -> str:
     return format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
 
 
+#: The formats ``POST /api/citations`` answers in.
+CITATION_FORMATS = ("csl-json", "bibtex")
+
+
+def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
+    """``POST /api/citations``: the selected Works' citations in one format, read in one snapshot.
+
+    ``data`` is ``{"work_ids": [...], "format": "csl-json" | "bibtex"}``.
+    The ids are validated as a bulk selection (at most
+    ``PRKS_BULK_WORK_MAX``, deduplicated, in request order) before the
+    database is read. ``csl-json`` answers ``items``, one CSL-JSON item per
+    Work (``csl_format.format_csl``); ``bibtex`` answers ``text``, the
+    entries ``bibtex`` gives one Work each, separated by a blank line. Ids
+    this Library has no Work for are listed in ``missing`` and left out, so
+    a selection made before another tab deleted a Work still exports the
+    rest. Raises ``BulkWorkError`` (400) for a malformed body.
+    """
+    from backend.domain.works import citation
+    from backend.domain.works.bibtex_format import format_bibtex
+    from backend.domain.works.csl_format import format_csl
+    from backend.domain.works.rules import BulkWorkError, _normalize_bulk_ids
+
+    if not isinstance(data, dict):
+        raise BulkWorkError("JSON object body required")
+    fmt = data.get("format")
+    if fmt not in CITATION_FORMATS:
+        raise BulkWorkError("Unknown citation format.")
+    work_ids = _normalize_bulk_ids(data.get("work_ids"), kind="work")
+
+    def read(scope: LibraryScope) -> list[tuple[str, Any]]:
+        return [(work_id, None if "\x00" in work_id else citation.bibtex_inputs(scope, work_id))
+                for work_id in work_ids]
+
+    found = library_query(db, ctx, read)
+    missing = [work_id for work_id, inputs in found if inputs is None]
+    present = [(work_id, inputs) for work_id, inputs in found if inputs is not None]
+    if fmt == "csl-json":
+        items = [format_csl(work_id, record, roles, video=record["source_kind"] == "video")
+                 for work_id, (record, roles, _profile) in present]
+        return {"format": fmt, "items": items, "missing": missing}
+    entries = [format_bibtex(record, roles, profile, video=record["source_kind"] == "video")
+               for _work_id, (record, roles, profile) in present]
+    return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
+
+
 def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
     """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
 

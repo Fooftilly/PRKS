@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from backend.api_contract.citations import (
+    CitationsBibtex,
+    CitationsCslJson,
+    CitationsRequest,
+)
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.jobs import (
     EmbeddedJobWorker,
@@ -650,6 +655,93 @@ def publishers_openapi_document() -> dict[str, Any]:
         "components": {
             "schemas": schemas,
         },
+    }
+
+
+CITATIONS_CONTRACT_VERSION = "0.1.0"
+
+
+def citations_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for ``POST /api/citations`` (Citation V1, #41).
+
+    A read made with POST, because a selection of Works does not fit a query
+    string. CSL-JSON is the citation interchange boundary (#179): formatted
+    citations and bibliographies are built from these items in the client.
+    """
+    schemas: dict[str, Any] = {}
+    for model in (ApiErrorEnvelope, CitationsRequest, CitationsCslJson, CitationsBibtex):
+        _merge_defs(schemas, _schema(model))
+    schemas["CitationsResult"] = {
+        "oneOf": [
+            {"$ref": "#/components/schemas/CitationsCslJson"},
+            {"$ref": "#/components/schemas/CitationsBibtex"},
+        ],
+        "discriminator": {
+            "propertyName": "format",
+            "mapping": {
+                "csl-json": "#/components/schemas/CitationsCslJson",
+                "bibtex": "#/components/schemas/CitationsBibtex",
+            },
+        },
+    }
+
+    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
+        return {"application/json": {"schema": schema_ref}}
+
+    def _json_error(description: str) -> dict[str, Any]:
+        return {
+            "description": description,
+            "content": _json_content({"$ref": "#/components/schemas/ApiErrorEnvelope"}),
+        }
+
+    paths: dict[str, Any] = {
+        "/api/citations": {
+            "post": {
+                "operationId": "exportCitations",
+                "summary": "Read the selected Works' citations as CSL-JSON or BibTeX",
+                "description": (
+                    "Changes nothing. Each Work is cited from its citation "
+                    "Manifestation. Ids this Library has no Work for are "
+                    "listed in `missing` and left out."
+                ),
+                "tags": ["citations"],
+                "requestBody": {
+                    "required": True,
+                    "content": _json_content({"$ref": "#/components/schemas/CitationsRequest"}),
+                },
+                "responses": {
+                    "200": {
+                        "description": "The found Works' citations, in request order.",
+                        "content": _json_content({"$ref": "#/components/schemas/CitationsResult"}),
+                    },
+                    "400": _json_error(
+                        "Domain refusal: not an object, unknown format, or an "
+                        "empty, malformed or too large selection."
+                    ),
+                    "413": _json_error(
+                        "Request body larger than the JSON body limit (request_too_large)."
+                    ),
+                    "415": _json_error(
+                        "Missing or unsupported Content-Type (unsupported_media_type)."
+                    ),
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Citations slice",
+            "version": CITATIONS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for citation export (#41). Schemas are "
+                "generated from the same Pydantic boundary as the rest of "
+                "backend/api_contract."
+            ),
+        },
+        "paths": paths,
+        "components": {"schemas": schemas},
     }
 
 
