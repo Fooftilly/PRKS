@@ -114,7 +114,8 @@ def clean_report(data: Any) -> dict[str, Any]:
     """
     if not isinstance(data, dict):
         raise ValueError("not an object")
-    plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
+    raw_plan = data.get("plan")
+    plan: dict[str, Any] = raw_plan if isinstance(raw_plan, dict) else {}
     gate_mode = plan.get("mode")
     if gate_mode not in ("full", "affected", "skip"):
         raise ValueError("unknown gate mode")
@@ -187,7 +188,8 @@ def gate_failures(client: sr.Client, download: Download, run_id: int) -> tuple[s
         if not found:
             complete = False
         ids.update(found)
-    return ids, complete
+    # A failure with no test ID at all (only the summary job failed) is never "complete".
+    return ids, bool(ids) and complete
 
 
 def _title(run: dict[str, Any]) -> str:

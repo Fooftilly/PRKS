@@ -161,6 +161,12 @@ class GateFailureTests(unittest.TestCase):
                     r"GET actions/runs/7/jobs.*": {"jobs": [_job("E2E plan", "failure")]}})
         self.assertEqual(acc.gate_failures(api, {}.__getitem__, 7), (set(), False))
 
+    def test_a_failed_summary_job_alone_is_incomplete(self):
+        api = _Api({r"GET actions/runs/7/artifacts.*": {"artifacts": []},
+                    r"GET actions/runs/7/jobs.*": {"jobs": [_job("E2E (1/8)", "success"),
+                                                             _job("Full E2E gate", "failure")]}})
+        self.assertEqual(acc.gate_failures(api, {}.__getitem__, 7), (set(), False))
+
     def test_a_pointer_failure_beside_a_shard_failure_is_incomplete(self):
         api = _Api({
             r"GET actions/runs/7/artifacts.*": {"artifacts": [_artifact(1, "e2e-shard-2-of-8-log")]},
