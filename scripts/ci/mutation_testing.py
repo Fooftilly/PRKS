@@ -78,6 +78,18 @@ TARGETS: dict[str, Target] = {
         mutate=("backend/sync_protocol.py",),
         tests=("tests/test_sync_envelope_rules.py", "tests/test_sync_envelope_properties.py"),
     ),
+    "entity-ids": Target(
+        mutate=("backend/entity_ids.py",),
+        tests=("tests/test_entity_ids.py",),
+    ),
+    "pdf-byte-mentions": Target(
+        mutate=("backend/pdf_byte_mentions.py",),
+        tests=("tests/test_pdf_byte_mentions.py",),
+    ),
+    "tag-color": Target(
+        mutate=("backend/tag_color.py",),
+        tests=("tests/test_tag_color.py",),
+    ),
     "byte-range": Target(
         mutate=("backend/byte_range.py",),
         tests=("tests/test_byte_range_properties.py",),
