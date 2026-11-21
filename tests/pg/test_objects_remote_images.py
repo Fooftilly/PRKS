@@ -150,7 +150,7 @@ class SaveTests(RemoteImageTestCase):
         kept = self.rows()[THUMB]
         loser = self.stored()
         done = self.run_command(lambda scope: remote_images.commit(scope, self.objects, THUMB, loser))
-        self.assertIsInstance(done, remote_images.RemoteImage)
+        assert isinstance(done, remote_images.RemoteImage)
         self.assertEqual(done.locator, kept)
         self.assertEqual(self.claims(), {loser.key.name})
         self.assertEqual(self.saved(THUMB)["body"], first.body)
