@@ -135,6 +135,16 @@ class RunnerStatusTests(unittest.TestCase):
     """tests/e2e/run.py's own run_serial() writes what check-run decides on."""
 
     CASES = "tests.e2e.runner_selfcheck_cases"
+    REPORT_ENV = ("PRKS_JUNIT_REPORT_DIR", "PRKS_E2E_BENCHMARK_RESULT", "PRKS_E2E_PROFILE",
+                  "PRKS_E2E_HEARTBEAT_FILE", "PRKS_E2E_CANCEL_SENTINEL")
+
+    def test_reports_of_the_calling_run_are_left_alone(self):
+        import os
+
+        with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {"PRKS_JUNIT_REPORT_DIR": raw}):
+            self._run("FailingCases.test_fails")
+            self.assertEqual(list(Path(raw).iterdir()), [])
+            self.assertEqual(os.environ["PRKS_JUNIT_REPORT_DIR"], raw)
 
     def _run(self, *ids):
         import contextlib
@@ -148,6 +158,10 @@ class RunnerStatusTests(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as raw, mock.patch.dict(os.environ, {cm.ENV: raw}), \
                     contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+                # The self-check's deliberate failure and skip must not reach a
+                # real run's reports (mock.patch.dict restores these on exit).
+                for name in self.REPORT_ENV:
+                    os.environ.pop(name, None)
                 passed, _, _, _ = runner.run_serial(["%s.%s" % (self.CASES, i) for i in ids], False)
                 return passed, json.loads((Path(raw) / cm.RUN_STATUS).read_text(encoding="utf-8")), \
                     cm.check_run(Path(raw))
