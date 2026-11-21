@@ -6,6 +6,9 @@ name: Mutation testing (advisory)
 # functions they are in. Survivors never fail the job: they need review and
 # some are equivalent. The job fails only when a run is incomplete. Not a
 # required check, and no pull_request run unless the mutation setup changes.
+# Scheduled results reach issues (scripts/ci/scheduled_report.py): one
+# standing report issue; scheduled-report.yml opens a failure issue when a
+# run is incomplete.
 on:
   workflow_dispatch:
   schedule:
@@ -16,6 +19,7 @@ on:
       - ".github/workflows/mutation-testing.yml"
       - "scripts/ci/mutation_testing.py"
       - "tests/hypothesis_profiles.py"
+      - "scripts/ci/scheduled_report.py"
       # The mutmut and pytest pins: a bump must prove the runner still works.
       - "requirements-dev.txt"
 
@@ -27,9 +31,39 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  report-issue:
+    # Creates the standing "Mutation testing report" issue once, before the
+    # matrix, so parallel targets never race to create it.
+    name: Mutation report issue
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # create the standing report issue
+    outputs:
+      issue: ${{ steps.issue.outputs.issue }}
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Find or create the report issue
+        id: issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/scheduled_report.py ensure-mutation-issue
+
   mutation:
     name: Mutation testing (${{ matrix.target }})
+    needs: report-issue
+    # Pull requests skip the report issue and still run every target.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write # edit this target's comment on the report issue (scheduled runs only)
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -58,4 +92,12 @@ jobs:
       - name: Run mutants against the target's unit tests
         env:
           TARGET: ${{ matrix.target }}
-        run: python scripts/ci/mutation_testing.py run "$TARGET"
+        run: python scripts/ci/mutation_testing.py run "$TARGET" --json-out "$RUNNER_TEMP/mutation.json"
+
+      - name: Update this target's comment on the report issue
+        if: ${{ !cancelled() && needs.report-issue.outputs.issue != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ISSUE: ${{ needs.report-issue.outputs.issue }}
+          RUN_ID: ${{ github.run_id }}
+        run: python scripts/ci/scheduled_report.py mutation --issue "$ISSUE" --result "$RUNNER_TEMP/mutation.json" --run-id "$RUN_ID"

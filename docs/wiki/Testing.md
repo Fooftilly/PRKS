@@ -84,6 +84,15 @@ python scripts/ci/mutation_testing.py show docs-only-ci scripts.ci.wiki_links.x_
 
 For each survivor, read the diff first. If it can change behaviour, add an assertion that fails on it. Some survivors are equivalent (they cannot change behaviour, such as `fence = None` for `fence = ""` in a truthiness test): leave those, or delete the redundant code that made them possible. `no_tests` mutants are in functions the selected tests never call, such as the ledger code in `backend/sync/protocol.py`, which needs PostgreSQL. A test that runs a module as a subprocess cannot judge a mutant, because mutmut's switch between mutants only works in-process; a target lists such tests under `deselect`.
 
+## Scheduled results as issues
+
+Scheduled runs report to issues, so nobody has to read the Actions page ([`scripts/ci/scheduled_report.py`](https://github.com/Fooftilly/PRKS/blob/master/scripts/ci/scheduled_report.py)).
+
+- **Failures.** [`scheduled-report.yml`](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/scheduled-report.yml) watches the scheduled runs of the PRKS Test Gate (nightly unit repeat), nightly property fuzzing and mutation testing. A failed run opens the issue "Scheduled check failing: &lt;workflow&gt;" (label `scheduled-check`) with the run link and failed jobs. A repeat failure comments on that issue, and the next passing run closes it. Cancelled runs report nothing.
+- **Mutation survivors.** The weekly mutation run keeps one comment per target on the standing issue "Mutation testing report" (label `mutation-report`), edited in place, which sends no notification. A new comment, which does notify, appears only when a target has more survivors than its last report.
+
+A new scheduled test workflow must be added to the `workflow_run` list, or named in `NOT_TEST_RUNS` in `tests/test_scheduled_report.py` when it is not a test run.
+
 ## PostgreSQL model-based Work lifecycle sequences (#1285)
 
 `tests/pg/test_work_lifecycle_model.py` draws seeded random sequences (10 seeds × 14 steps) of Work–Tag links, Work Folder moves, title edits, Work and Tag deletes and replays of earlier operations, sends each through the sync protocol, and compares PostgreSQL with a small reference model after every step: live Works/Tags, links, Folders, titles and every edited scope's revision as the shared decision table predicts (future base → `FUTURE_REVISION`, stale disagreeing base → `REVISION_CONFLICT`, else acknowledged and advanced only on a real change). It also checks that no link or filing dangles, no `entity_revisions` row moves backwards, a Work delete tombstones each of its scopes exactly once, and a replay answers as the first time and leaves every `entity_revisions` row as it was, deleted targets' tombstones included. Revisions are predicted by the model, never copied from the server's answer. The PostgreSQL job has no Hypothesis, so sequences come from a seeded `random.Random`; the generator picks fixtures by creation order and the trace names them `W0`, `T1`, `F0`, so a failure's seed and printed steps replay it exactly; keep a significant counterexample as a named regression test.

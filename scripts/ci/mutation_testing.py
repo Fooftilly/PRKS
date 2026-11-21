@@ -22,7 +22,7 @@ failing clean test run, a crash, or stats that do not add up).
 Usage::
 
     python scripts/ci/mutation_testing.py list
-    python scripts/ci/mutation_testing.py run docs-only-ci [--max-children N] [--keep DIR]
+    python scripts/ci/mutation_testing.py run docs-only-ci [--max-children N] [--keep DIR] [--json-out FILE]
     python scripts/ci/mutation_testing.py show docs-only-ci MUTANT --workspace DIR
 """
 from __future__ import annotations
@@ -219,7 +219,7 @@ def _mutmut(workspace: Path, *args: str, timeout: float | None = None) -> subpro
     return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
-def run(name: str, workspace: Path, max_children: int) -> int:
+def run(name: str, workspace: Path, max_children: int, json_out: Path | None = None) -> int:
     target = TARGETS[name]
     prepare_workspace(ROOT, target, workspace)
     try:
@@ -243,8 +243,14 @@ def run(name: str, workspace: Path, max_children: int) -> int:
     results = _mutmut(workspace, "results")
     if results.returncode:
         print(f"Mutation run incomplete: {name}: mutmut results failed", file=sys.stderr)
+        print("\n".join(results.stderr.splitlines()[-20:]), file=sys.stderr)
         return 1
     names = survivors(results.stdout)
+    if json_out is not None:
+        # Read by scripts/ci/scheduled_report.py for the weekly report issue.
+        json_out.write_text(json.dumps({
+            "target": name, "stats": stats, "survivors_by_function": by_function(names),
+        }), encoding="utf-8")
     text = summary(name, target, stats, names)
     print(text)
     print("\n".join(names))
@@ -263,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("target", choices=sorted(TARGETS))
     run_parser.add_argument("--max-children", type=int, default=os.cpu_count() or 2)
     run_parser.add_argument("--keep", type=Path, help="keep the workspace here (for show)")
+    run_parser.add_argument("--json-out", type=Path, help="write the counts and survivors here as JSON")
     show_parser = sub.add_parser("show")
     show_parser.add_argument("target", choices=sorted(TARGETS))
     show_parser.add_argument("mutant")
@@ -285,9 +292,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Mutation workspace already exists: {workspace}; remove it or pick another --keep",
                   file=sys.stderr)
             return 1
-        return run(args.target, workspace, args.max_children)
+        return run(args.target, workspace, args.max_children, args.json_out)
     with tempfile.TemporaryDirectory(prefix="prks-mutation-") as folder:
-        return run(args.target, Path(folder), args.max_children)
+        return run(args.target, Path(folder), args.max_children, args.json_out)
 
 
 if __name__ == "__main__":

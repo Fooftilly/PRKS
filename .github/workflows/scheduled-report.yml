@@ -1,0 +1,54 @@
+name: Scheduled test report
+
+# Scheduled test runs only show on the Actions page, which is too busy to
+# watch. When one of the workflows below finishes a scheduled run, this opens
+# the issue "Scheduled check failing: <workflow>" (label scheduled-check) on a
+# failure, comments on it while it keeps failing, and closes it on the next
+# pass (scripts/ci/scheduled_report.py). Mutation survivors are reported by
+# mutation-testing.yml itself, on its standing "Mutation testing report" issue.
+#
+# workflow_run always runs this file from the default branch, never from a
+# pull request, and only for scheduled runs, so the issue token never meets
+# pull request code. The watched workflows stay unchanged.
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] default-branch code only, never checks out the triggering run
+    workflows:
+      - PRKS Test Gate
+      - Nightly property fuzzing (advisory)
+      - Mutation testing (advisory)
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One report per watched workflow at a time, so two runs never open two issues.
+  group: scheduled-report-${{ github.event.workflow_run.workflow_id }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report scheduled result
+    # Cancelled or skipped runs say nothing about the tests: no report.
+    if: >-
+      ${{ github.event.workflow_run.event == 'schedule' &&
+      contains(fromJSON('["success", "failure", "timed_out"]'), github.event.workflow_run.conclusion) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # open, comment on and close the failure issue
+      actions: read # list the run's failed jobs
+    steps:
+      - name: Checkout PRKS
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open, update or close the failure issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion == 'success' && 'success' || 'failure' }}
+        run: python3 scripts/ci/scheduled_report.py failure --workflow "$WORKFLOW" --run-id "$RUN_ID" --conclusion "$CONCLUSION"
