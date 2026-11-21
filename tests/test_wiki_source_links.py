@@ -112,7 +112,10 @@ class WikiLinkRuleTests(unittest.TestCase):
 
     def test_the_cli_runs_as_a_script(self) -> None:
         # The only subprocess test: mutation testing deselects it.
+        # A bad link must fail the script, as Publish Wiki relies on: an
+        # empty folder would pass even if the script never called main().
         with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "Bad.md").write_text("[guide](docs/admin-bootstrap.md)", encoding="utf-8")
             result = subprocess.run(  # nosec B603 - fixed interpreter and script
                 [sys.executable, str(ROOT / "scripts" / "ci" / "wiki_links.py"), tmp],
                 capture_output=True,
@@ -120,7 +123,9 @@ class WikiLinkRuleTests(unittest.TestCase):
                 env={**os.environ, "WIKI_BASE_URL": WIKI_BASE},
                 check=False,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("Bad.md: ](docs/admin-bootstrap.md)", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
