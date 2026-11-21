@@ -16,6 +16,8 @@ on:
       - ".github/workflows/mutation-testing.yml"
       - "scripts/ci/mutation_testing.py"
       - "tests/hypothesis_profiles.py"
+      # The mutmut and pytest pins: a bump must prove the runner still works.
+      - "requirements-dev.txt"
 
 permissions:
   contents: read

@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess  # nosec B404 - fixed git and mutmut argv only
 import sys
 import tempfile
@@ -201,11 +202,20 @@ def summary(name: str, target: Target, stats: dict[str, int], names: list[str]) 
 
 
 def _mutmut(workspace: Path, *args: str, timeout: float | None = None) -> subprocess.CompletedProcess[str]:
+    """Run mutmut in its own process group, so a timeout also stops its forked workers."""
     env = {**os.environ, "PRKS_HYPOTHESIS_PROFILE": "mutation"}
-    return subprocess.run(  # nosec B603 - fixed interpreter and mutmut argv
-        [sys.executable, "-m", "mutmut", *args],
-        cwd=workspace, env=env, capture_output=True, text=True, check=False, timeout=timeout,
-    )
+    argv = [sys.executable, "-m", "mutmut", *args]
+    with subprocess.Popen(  # nosec B603 - fixed interpreter and mutmut argv
+        argv, cwd=workspace, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True,
+    ) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def run(name: str, workspace: Path, max_children: int) -> int:
@@ -263,9 +273,13 @@ def main(argv: list[str] | None = None) -> int:
         return shown.returncode
     if args.keep is not None:
         workspace = args.keep / args.target
-        if workspace.exists():
-            shutil.rmtree(workspace)
-        workspace.mkdir(parents=True)
+        try:
+            workspace.mkdir(parents=True)
+        except FileExistsError:
+            # Never delete a folder this run did not create.
+            print(f"Mutation workspace already exists: {workspace}; remove it or pick another --keep",
+                  file=sys.stderr)
+            return 1
         return run(args.target, workspace, args.max_children)
     with tempfile.TemporaryDirectory(prefix="prks-mutation-") as folder:
         return run(args.target, Path(folder), args.max_children)

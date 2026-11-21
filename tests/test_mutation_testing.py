@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import ast
+import io
 import re
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 from scripts.ci.docs_only import AUDITED_CONFIG_FILES
@@ -14,6 +16,7 @@ from scripts.ci.mutation_testing import (
     TARGETS,
     Target,
     by_function,
+    main,
     mutmut_config,
     prepare_workspace,
     survivors,
@@ -98,6 +101,16 @@ class MutationTargetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaisesRegex(ValueError, "not tracked"):
                 prepare_workspace(ROOT, Target(mutate=("backend/nope.py",), tests=()), Path(folder))
+
+    def test_keep_refuses_an_existing_workspace_and_leaves_it_untouched(self):
+        with tempfile.TemporaryDirectory() as folder:
+            saved = Path(folder) / "text-identity" / "report.txt"
+            saved.parent.mkdir()
+            saved.write_text("keep me", encoding="utf-8")
+            with redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(main(["run", "text-identity", "--keep", folder]), 1)
+            self.assertIn("already exists", err.getvalue())
+            self.assertEqual(saved.read_text(encoding="utf-8"), "keep me")
 
 
 class MutationStatsTests(unittest.TestCase):

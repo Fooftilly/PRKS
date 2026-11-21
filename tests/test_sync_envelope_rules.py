@@ -134,7 +134,8 @@ class RegistrationTests(unittest.TestCase):
         self.assertIn("TEST_ONLY_OP", rules.supported_operations())
         with self.assertRaisesRegex(RuntimeError, "^duplicate sync operation: TEST_ONLY_OP$"):
             rules.register("TEST_ONLY_OP", entity_type="tag")
-        for bad in ("", " ", None):
+        bad_types: tuple[Any, ...] = ("", " ", None)
+        for bad in bad_types:
             with self.subTest(entity_type=bad), self.assertRaisesRegex(
                 RuntimeError, "^sync operation entity_type is required$"
             ):
