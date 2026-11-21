@@ -46,6 +46,8 @@ class ResearchMarkupTests(unittest.TestCase):
             args = [r.argument_id for r in markup.argument_refs]
             self.assertEqual(names, row["concepts"], row["id"])
             self.assertEqual(args, row["arguments"], row["id"])
+            if "labels" in row:
+                self.assertEqual([r.label for r in markup.argument_refs], row["labels"], row["id"])
 
     def test_bounds(self):
         too_long = "[[concept:" + ("A" * (CONCEPT_REF_MAX + 1)) + "]]"
@@ -54,6 +56,16 @@ class ResearchMarkupTests(unittest.TestCase):
         self.assertEqual(len(parse_research_markup(ok).concept_refs), 1)
         long_label = "[[argument:A-1|" + ("x" * 241) + "]]"
         self.assertEqual(parse_research_markup(long_label).argument_refs, ())
+        (longest,) = parse_research_markup("[[argument:A-1|" + ("x" * 240) + "]]").argument_refs
+        self.assertEqual(len(longest.label), 240)
+
+    def test_argument_ref_fields(self):
+        text = "See [[argument: A-1 | first | second ]] now."
+        (ref,) = parse_research_markup(text).argument_refs
+        self.assertEqual(
+            (ref.start, ref.end, ref.raw, ref.argument_id, ref.label),
+            (4, 39, "[[argument: A-1 | first | second ]]", "A-1", "first | second"),
+        )
 
     def test_ref_spans_cover_the_whole_marker(self):
         text = "See [[concept:A]] and [[concept-encoded:B%20C]]."
