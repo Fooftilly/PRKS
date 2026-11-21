@@ -394,5 +394,47 @@ class FinishStopTests(unittest.TestCase):
         server._tmpdir.cleanup.assert_not_called()
 
 
+
+
+class DropAllRaceTests(unittest.TestCase):
+    """The exit sweep survives a teardown that drops a database under it."""
+
+    def test_a_database_dropped_meanwhile_does_not_stop_the_sweep(self):
+        from tests.pg import harness as pg
+
+        sweep = object.__new__(pg.PostgresHarness)
+        sweep._lock = threading.Lock()
+        sweep._template = "tpl"
+        sweep._created = {"tpl", "a", "b"}
+        present = {"tpl", "a", "b"}
+        dropped: list[str] = []
+
+        def drop_database(name):
+            if name == "a":
+                # The teardown got there first: dropped and forgotten.
+                present.discard("a")
+                sweep._created.discard("a")
+                raise pg.HarnessRefusal("the database was not created by this test run")
+            present.discard(name)
+            dropped.append(name)
+
+        with mock.patch.object(sweep, "exists", side_effect=lambda name: name in present), \
+                mock.patch.object(sweep, "drop_database", side_effect=drop_database):
+            sweep.drop_all()
+        self.assertEqual(dropped, ["b", "tpl"])
+
+    def test_a_refusal_for_a_database_that_still_exists_is_raised(self):
+        from tests.pg import harness as pg
+
+        sweep = object.__new__(pg.PostgresHarness)
+        sweep._lock = threading.Lock()
+        sweep._template = None
+        sweep._created = {"a"}
+        refusal = pg.HarnessRefusal("the database was not created by this test run")
+        with mock.patch.object(sweep, "exists", return_value=True), \
+                mock.patch.object(sweep, "drop_database", side_effect=refusal):
+            with self.assertRaises(pg.HarnessRefusal):
+                sweep.drop_all()
+
 if __name__ == "__main__":
     unittest.main()
