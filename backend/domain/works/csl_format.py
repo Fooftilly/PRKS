@@ -20,7 +20,7 @@ Field mapping, from the record's names to CSL 1.0.2 variables:
   ``translator`` in role order; with no linked Author, ``author_text``
   (``;``-separated names, or on a stream one corporate name).
 - ``published_date`` (``YYYY``, ``YYYY-MM`` or ``YYYY-MM-DD``), else
-  ``year``, gives ``issued``.
+  ``year`` (a year, a range of years, or an ISO month or date), gives ``issued``.
 - ``journal`` is the ``container-title``; ``publisher``, ``location``,
   ``edition``, ``volume``, ``issue``, ``pages``, ``isbn``, ``doi``,
   ``source_url`` and ``abstract`` map one to one. ``accessed`` is the
@@ -57,6 +57,8 @@ _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
 _ERA = r"(?:\s*(BCE|BC|CE|AD))?"
 #: The whole Year field as a year, ``950`` or ``399 BCE``; anything else (``19th century``) is not a date.
 _YEAR_RE = re.compile(r"^\s*(\d{1,4})" + _ERA + r"\s*$", re.IGNORECASE)
+#: A Year field holding an ISO year-month or date (``2020-05``, ``2020-05-02``) with a real month.
+_ISO_MONTH_RE = re.compile(r"^\s*\d{4}-(?:0?[1-9]|1[0-2])(?:-\d{1,2})?\s*$")
 #: The whole Year field as a range of years: ``2020–2021``, ``1999–00``, ``950–951``, ``1914/1918``.
 _YEAR_RANGE_RE = re.compile(r"^\s*(\d{1,4})\s*[-–—/]\s*(\d{1,4})\s*$")
 
@@ -120,16 +122,27 @@ def _year_field(raw: Any) -> Optional[dict[str, Any]]:
     return None
 
 
+def _date(text: str) -> Optional[dict[str, Any]]:
+    match = _DATE_RE.match(text)
+    if not match:
+        return None
+    parts = [int(part) for part in match.groups() if part]
+    if len(parts) > 1 and not 1 <= parts[1] <= 12:
+        parts = parts[:1]
+    if len(parts) > 2 and not 1 <= parts[2] <= 31:
+        parts = parts[:2]
+    return {"date-parts": [parts]}
+
+
 def _issued(work: dict[str, Any]) -> Optional[dict[str, Any]]:
-    match = _DATE_RE.match(_text(work.get("published_date")))
-    if match:
-        parts = [int(part) for part in match.groups() if part]
-        if len(parts) > 1 and not 1 <= parts[1] <= 12:
-            parts = parts[:1]
-        if len(parts) > 2 and not 1 <= parts[2] <= 31:
-            parts = parts[:2]
-        return {"date-parts": [parts]}
-    return _year_field(work.get("year"))
+    issued = _date(_text(work.get("published_date")))
+    if issued:
+        return issued
+    year = _text(work.get("year"))
+    if _ISO_MONTH_RE.match(year):
+        # 2020-05 in the Year field is May 2020, not a range ending in 2105.
+        return _date(year)
+    return _year_field(year)
 
 
 def format_csl(work_id: str, work: dict[str, Any], roles: list[dict[str, Any]], *,
@@ -179,7 +192,7 @@ def format_csl(work_id: str, work: dict[str, Any], roles: list[dict[str, Any]], 
     ):
         if value:
             item[variable] = value
-    accessed = _issued({"published_date": _text(work.get("updated_at"))[:10]})
+    accessed = _date(_text(work.get("updated_at"))[:10])
     if "URL" in item and accessed and len(accessed["date-parts"][0]) == 3:
         item["accessed"] = accessed
     return item

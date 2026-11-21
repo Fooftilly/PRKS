@@ -69,6 +69,10 @@ class CslFormatTests(unittest.TestCase):
         self.assertEqual(item({"year": "1999–00"})["issued"], {"date-parts": [[1999], [2000]]})
         self.assertEqual(item({"year": "950–951"})["issued"], {"date-parts": [[950], [951]]})
         self.assertEqual(item({"year": "950-51"})["issued"], {"date-parts": [[950], [951]]})
+        # A Year that reads as an ISO month is that month, never a range into the next century.
+        self.assertEqual(item({"year": "2020-05"})["issued"], {"date-parts": [[2020, 5]]})
+        self.assertEqual(item({"year": "2020-12-24"})["issued"], {"date-parts": [[2020, 12, 24]]})
+        self.assertEqual(item({"year": "2020-21"})["issued"], {"date-parts": [[2020], [2021]]})
         self.assertEqual(item({"year": "399 BCE"})["issued"], {"date-parts": [[-399]]})
         self.assertEqual(item({"year": "44 bc"})["issued"], {"date-parts": [[-44]]})
         self.assertEqual(item({"year": "800 AD"})["issued"], {"date-parts": [[800]]})
