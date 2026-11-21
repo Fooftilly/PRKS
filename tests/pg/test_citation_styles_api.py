@@ -69,6 +69,20 @@ class CitationStyleRouteTests(ServerApiTestCase):
                          "Choose a .csl style file.")
         self.assertEqual(self.ok(self.get("/api/citation-styles")), {"styles": []})
 
+    def test_a_style_citeproc_would_misread_is_stored_as_it_reads_it(self) -> None:
+        prefixed = (f'<cs:style xmlns:cs="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0">'
+                    "<cs:info><cs:title>Prefixed</cs:title></cs:info>"
+                    "<cs:citation><cs:layout><cs:text value=\"it&apos;s\"/></cs:layout></cs:citation>"
+                    '<cs:bibliography><cs:layout><cs:text variable="title"/></cs:layout></cs:bibliography></cs:style>')
+        stored = self.ok(self.get(f"/api/citation-styles/{self.imported(prefixed)['id']}"))["csl"]
+        self.assertIn(f"<style {_NS}", stored)
+        self.assertNotIn("cs:", stored)
+        self.assertIn('value="it\'s"', stored)
+        self.assertNotIn("&apos;", stored)
+        # Another style is stored byte for byte.
+        plain = style("Plain")
+        self.assertEqual(self.ok(self.get(f"/api/citation-styles/{self.imported(plain)['id']}"))["csl"], plain)
+
     def test_a_library_holds_a_bounded_number_of_styles(self) -> None:
         with self.subTest("the limit is checked inside the import"):
             original = custom_citation_styles.MAX_STYLES

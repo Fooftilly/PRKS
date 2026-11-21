@@ -64,6 +64,12 @@ class Row:
     verify: Optional[str] = None
 
 
+# A minimal independent CSL style the import accepts; it has no braces, so ``str.format`` leaves it as is.
+_CSL = ('<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version="1.0">'
+        '<info><title>Matrix style</title></info>'
+        '<citation><layout><text variable="title"/></layout></citation>'
+        '<bibliography><layout><text variable="title"/></layout></bibliography></style>')
+
 # ``{work}``, ``{tag}`` … are the ids seeded in setUp. Bodies are valid for the owner,
 # so the owner's answer shows the route is real, not a 404 for an unknown path.
 ROWS: tuple[Row, ...] = (
@@ -99,6 +105,8 @@ ROWS: tuple[Row, ...] = (
     Row("processing", EDIT, "POST", "/api/processing-items/import", {"item_ids": ["{ready}"]}, verify="imported"),
     Row("search", READ, "GET", "/api/search?q=matrix"),
     Row("settings", READ, "GET", "/api/settings"),
+    Row("citation_styles", READ, "GET", "/api/citation-styles"),
+    Row("citation_styles", ADMIN, "POST", "/api/citation-styles", {"csl": _CSL}),
     Row("settings", ADMIN, "PATCH", "/api/settings", {}),
     Row("maintenance", ADMIN, "GET", "/api/backups/download", allowed=(404,)),
     # The stage route takes the archive as the raw body; a JSON body is refused after admission.

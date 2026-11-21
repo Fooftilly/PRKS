@@ -15,6 +15,13 @@ checks it before it is stored:
   because PRKS formats bibliography entries;
 - a title (``<info><title>``), which is what the pickers show.
 
+The file is stored as it came, except where the browser's formatter
+(citeproc-js, which parses the text itself) would misread it: a style whose
+CSL elements carry a namespace prefix (``<cs:style xmlns:cs=…>``), or one that
+writes ``&apos;``, is stored re-serialized with CSL as the default namespace
+and the apostrophe as itself. The text is then the same style, as citeproc
+reads it.
+
 A Library holds at most :data:`MAX_STYLES` imported styles. Each gets an id
 ``custom-`` and 32 hex digits. Deleting a style that is the Library's
 ``citation_style`` setting removes the setting in the same transaction, so
@@ -46,6 +53,9 @@ MAX_TITLE_CHARS = 300
 
 _CSL = "{http://purl.org/net/xbiblio/csl}"
 _DECLARATION_RE = re.compile(r"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
+# What citeproc-js's own XML parser misreads: a prefixed CSL element, and the ``&apos;`` entity.
+_PREFIXED_RE = re.compile(r"<\s*/?\s*[A-Za-z_][\w.-]*:")
+_APOS = "&apos;"
 
 _LIST_SQL: LiteralString = """
 SELECT id, title, created_at FROM prks.citation_styles
@@ -90,8 +100,8 @@ def _has_layout(style: ElementTree.Element, name: str) -> bool:
     return section is not None and _child(section, "layout") is not None
 
 
-def check_style(csl: Any) -> str:
-    """The style's title when ``csl`` is a style PRKS can import, else :class:`StyleRefused`."""
+def check_style(csl: Any) -> tuple[str, str]:
+    """The style's title and the text to store when ``csl`` is a style PRKS can import, else :class:`StyleRefused`."""
     if not isinstance(csl, str) or not csl.strip():
         raise StyleRefused("Choose a .csl style file.")
     if len(csl.encode("utf-8")) > MAX_CSL_BYTES:
@@ -115,7 +125,15 @@ def check_style(csl: Any) -> str:
     title = re.sub(r"\s+", " ", title_element.text or "").strip() if title_element is not None else ""
     if not title:
         raise StyleRefused("The style has no title.")
-    return title[:MAX_TITLE_CHARS]
+    return title[:MAX_TITLE_CHARS], _for_citeproc(csl, root)
+
+
+def _for_citeproc(csl: str, root: ElementTree.Element) -> str:
+    """``csl`` as is, or re-serialized when citeproc-js would misread it (see the module docstring)."""
+    if _APOS not in csl and not _PREFIXED_RE.search(csl):
+        return csl
+    ElementTree.register_namespace("", _CSL[1:-1])
+    return '<?xml version="1.0" encoding="utf-8"?>\n' + ElementTree.tostring(root, encoding="unicode")
 
 
 def _summary(row: Any) -> dict[str, Any]:
@@ -143,7 +161,7 @@ def import_style(scope: LibraryScope, data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise StyleRefused("invalid body")
     csl = data.get("csl")
-    title = check_style(csl)
+    title, csl = check_style(csl)
     scope.execute(_LOCK_SQL)
     count = scope.execute(_COUNT_SQL).fetchone()
     if count is not None and int(count["n"]) >= MAX_STYLES:

@@ -88,7 +88,8 @@ let pickSeq = 0
 function refuseFile(message: string): void {
   state.clearErrors()
   state.errors.file = message
-  if (fileInput.value) fileInput.value.value = ''
+  // A refused replacement leaves no file chosen, not the earlier one under the refusal.
+  clearPdf()
   props.focusControl(dropZone.value)
 }
 

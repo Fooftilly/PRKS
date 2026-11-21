@@ -12,7 +12,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import { fetchCslItems } from '../../api/citations'
-import { isAbortError } from '../../api/http'
+import { PrksApiError, isAbortError } from '../../api/http'
 import { formatCitations, type CitationEntry } from './engine'
 import { copyRichText } from './export'
 import { citationStyleLabel, effectiveCitationStyle, isImportedStyleId, libraryCitationStyle, loadImportedStyles } from './styles'
@@ -53,6 +53,23 @@ async function importedStylesRead(): Promise<void> {
   }
 }
 
+/**
+ * Format in the effective style. An imported style another session deleted
+ * answers 404 while this page's list still has it: read the list again, so
+ * the style falls back to the Library's, and format once more.
+ */
+async function formatWithLiveStyle(items: Parameters<typeof formatCitations>[0]): ReturnType<typeof formatCitations> {
+  const tried = style.value
+  try {
+    return await formatCitations(items, tried)
+  } catch (error) {
+    if (!(isImportedStyleId(tried) && error instanceof PrksApiError && error.status === 404)) throw error
+    await loadImportedStyles(true)
+    if (style.value === tried) throw error
+    return formatCitations(items, style.value)
+  }
+}
+
 async function load(): Promise<void> {
   if (disclosure && !disclosure.open) return
   await importedStylesRead()
@@ -65,11 +82,11 @@ async function load(): Promise<void> {
   state.value = 'loading'
   try {
     const { items } = await fetchCslItems([props.workId], current.signal)
-    const formatted = items.length ? await formatCitations(items, style.value) : null
+    const formatted = items.length ? await formatWithLiveStyle(items) : null
     if (current.signal.aborted) return
     entry.value = formatted?.entries[0] ?? null
     state.value = entry.value ? 'ready' : 'error'
-    loaded = wanted
+    loaded = key()
   } catch (error) {
     if (isAbortError(error) || current.signal.aborted) return
     state.value = 'error'

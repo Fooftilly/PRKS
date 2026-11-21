@@ -12771,6 +12771,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         page.set_input_files("#work-file", str(MINIMAL_PDF))
         page.locator("#upload-selected-file-name").wait_for(state="visible")
         self.assertEqual(page.locator("#work-file-error").inner_text().strip(), "")
+        # A refused replacement does not leave the earlier PDF chosen under the refusal.
+        page.set_input_files("#work-file", {"name": "zero.pdf", "mimeType": "application/pdf", "buffer": b""})
+        page.locator("#work-file-error", has_text="This file is empty. Choose another PDF.").wait_for()
+        page.locator("#upload-selected-file").wait_for(state="hidden")
 
     def test_create_button_blocks_duplicate_post(self):
         _server, page, _collector = self._start_app()

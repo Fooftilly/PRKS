@@ -444,8 +444,12 @@ class WorkCitationTests(unittest.TestCase):
                      has_text="Imported “House Numbered”").wait_for(timeout=15000)
         style_id = page.locator("#prks-citation-style optgroup option").get_attribute("value")
         self.assertRegex(style_id or "", r"^custom-[0-9a-f]{32}$")
-        page.locator("#prks-citation-style").select_option(style_id)
-        page.wait_for_function("id => window.__prksCitationStyle === id", arg=style_id, timeout=10000)
+        # The picker updates its cache before the PATCH answers, so wait for the saved setting itself.
+        with page.expect_response(lambda r: r.request.method == "PATCH" and r.url.endswith("/api/settings")
+                                  and r.ok, timeout=10000):
+            page.locator("#prks-citation-style").select_option(style_id)
+        saved = page.evaluate("() => fetch('/api/settings', {credentials: 'same-origin'}).then(r => r.json())")
+        self.assertEqual(saved["citation_style"], style_id)
         page.keyboard.press("Escape")
         page.wait_for_selector("#settings-modal.hidden", state="attached")
 

@@ -93,6 +93,18 @@ describe('ImportedCitationStyles', () => {
     expect(calls.filter((call) => call.method === 'POST')).toEqual([])
   })
 
+  it('refuses a file that is not UTF-8 before sending it, and sends UTF-8 text as it is', async () => {
+    const wrapper = mount(ImportedCitationStyles)
+    await flushPromises()
+    calls = []
+    // "Café" in Latin-1: 0xE9 is not UTF-8.
+    await pick(wrapper, new File([new Uint8Array([0x3c, 0x73, 0x3e, 0x43, 0x61, 0x66, 0xe9])], 'latin1.csl'))
+    expect(wrapper.get('[role="alert"]').text()).toBe('The style file is not UTF-8 text. Save it as UTF-8 and import it again.')
+    expect(calls.filter((call) => call.method === 'POST')).toEqual([])
+    await pick(wrapper, new File(['<style>Café</style>'], 'utf8.csl'))
+    expect(calls.find((call) => call.method === 'POST')?.body).toEqual({ csl: '<style>Café</style>' })
+  })
+
   it('deletes a style after the destructive confirm', async () => {
     const wrapper = mount(ImportedCitationStyles)
     await flushPromises()

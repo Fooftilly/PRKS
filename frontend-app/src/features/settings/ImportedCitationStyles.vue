@@ -45,6 +45,15 @@ async function refresh(): Promise<void> {
   }
 }
 
+/** The file's text, or null when it is not UTF-8 (`File.text()` would replace the bytes it cannot read). */
+async function utf8Text(file: File): Promise<string | null> {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer())
+  } catch {
+    return null
+  }
+}
+
 function choose(): void {
   fileInput.value?.click()
 }
@@ -62,7 +71,12 @@ async function onFile(event: Event): Promise<void> {
   }
   busy.value = true
   try {
-    const imported = await importStyle(await file.text())
+    const text = await utf8Text(file)
+    if (text === null) {
+      error.value = 'The style file is not UTF-8 text. Save it as UTF-8 and import it again.'
+      return
+    }
+    const imported = await importStyle(text)
     status.value = `Imported “${imported.title}”. Choose it above to use it.`
     await refresh()
     emit('changed', null)
