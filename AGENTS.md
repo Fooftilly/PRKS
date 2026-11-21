@@ -1,6 +1,6 @@
 # PRKS
 
-PRKS is a research-library application. The runtime is Python 3.12 with a stdlib HTTP adapter, PostgreSQL 18 as the only Library store, managed local files, and a Vue 3 + TypeScript frontend that is replacing the legacy JavaScript UI.
+PRKS is a research-library application. The runtime is Python 3.12 served by Uvicorn, PostgreSQL 18 as the only Library store, managed local files, and a Vue 3 + TypeScript frontend that is replacing the legacy JavaScript UI.
 
 Where things are documented:
 
@@ -42,7 +42,7 @@ Before choosing new work, check the Project #3 custom **Agent** field (not issue
 
 Distinguish **implemented constraints** from **accepted target architecture**.
 
-- The current implementation (PostgreSQL, local files, stdlib HTTP, durable browser sync, the Vue/legacy bridge) is authoritative when changing the code that implements it.
+- The current implementation (PostgreSQL, local files, the Uvicorn HTTP server, durable browser sync, the Vue/legacy bridge) is authoritative when changing the code that implements it.
 - #310 targets a modular monolith: explicit User/Library/LibraryMembership boundaries, authentication separate from authorization, PostgreSQL as canonical store, stateless-capable API processes, durable jobs.
 - #311 requires a storage-backend abstraction with a user-configurable data root; a physical file location is never domain identity.
 - The offline/local-first machinery is a correctness contract until deliberately migrated, not a design every future client must copy.
@@ -115,4 +115,4 @@ New substantial behavior, in order of preference:
 
 ### HTTP adapter decomposition
 
-`server.py` stays the stdlib HTTP adapter until #1329 replaces the transport with Uvicorn and a thin Starlette layer (`docs/http-server.md`); controllers and domain code stay synchronous and no full web framework is added. It keeps host/origin validation, body size limits, admission, response encoding/ETags/cache headers, static files and dispatch. Controllers parse request shape, call domain code and map domain errors to status and JSON bodies; SQL, file mutation, indexing and sync semantics stay out of controllers. When moving routes, preserve paths, status codes, error bodies, ETags, cache headers, security checks and size limits, and do not move unrelated helpers just to shrink `server.py`.
+PRKS serves through Uvicorn with its own plain ASGI adapter (`backend/web/asgi.py`, `docs/http-server.md`); controllers and domain code stay synchronous on a bounded thread pool, and no web framework is added. `server.py` keeps host/origin validation, body size limits, admission, response encoding/ETags/cache headers, static files and dispatch. Controllers parse request shape, call domain code and map domain errors to status and JSON bodies; SQL, file mutation, indexing and sync semantics stay out of controllers. When moving routes, preserve paths, status codes, error bodies, ETags, cache headers, security checks and size limits, and do not move unrelated helpers just to shrink `server.py`.

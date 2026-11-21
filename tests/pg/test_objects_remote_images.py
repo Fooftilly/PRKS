@@ -152,6 +152,15 @@ class SaveTests(RemoteImageTestCase):
                 self.noted(f'<img src="https://example.org/chart{number}.png?w=400{spelling}format=png">')
                 self.assertIsNotNone(self.save(f"https://example.org/chart{number}.png?w=400&format=png"))
 
+    def test_quote_and_apostrophe_references_are_decoded_too(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&#38;label=O&#x27;Neil&amp;t=&quot;x&quot;">')
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=O'Neil&t=\"x\""))
+
+    def test_a_reference_is_decoded_only_once(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&amp;amp;format=png">')
+        self.assertIsNone(self.save("https://example.org/chart.png?w=400&format=png"))
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&amp;format=png"))
+
     def test_an_uppercase_scheme_is_saved(self) -> None:
         url = "HTTPS://example.org/figures/Graph.png"
         self.noted(f"![x]({url})")
