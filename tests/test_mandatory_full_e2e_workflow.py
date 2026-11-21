@@ -111,10 +111,13 @@ class FrontendCISelectionTests(unittest.TestCase):
 
     def test_manual_full_shard_pilot_emits_exact_six_or_eight_rows(self):
         # The CLI plan is the exact JSON consumed by the GitHub workflow.
-        # Ordinary frontend PR selection remains six; only force-full manual
-        # runs are allowed to request a different width.
+        # Ordinary frontend PR selection uses the full-gate width; only
+        # force-full manual runs are allowed to request a different width.
         normal = self._plan(["frontend/js/app.js"])
-        self.assertEqual(normal["matrix"]["include"], policy.ci_matrix_include(6, 1))
+        self.assertEqual(
+            normal["matrix"]["include"],
+            policy.ci_matrix_include(policy.FULL_GATE_EXTERNAL_SHARDS, 1),
+        )
         for requested, count in (("6", 6), ("8", 8)):
             with self.subTest(requested=requested):
                 plan = self._plan(

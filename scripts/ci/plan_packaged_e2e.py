@@ -1,7 +1,7 @@
 """Dormant, fail-closed candidate policy for packaged PR E2E (#740).
 
 This module is advisory ONLY. No GitHub Actions job imports it or consumes its
-output. Existing packaged PRs continue running six full shards until a separate
+output. Existing packaged PRs continue running eight full shards until a separate
 maintainer-approved workflow change. Reuse the source E2E path/feature mapping,
 and apply a much narrower allowlist before considering smoke + affected tests.
 
@@ -101,7 +101,7 @@ def _result(
         "features": list(features),
         "test_ids": list(test_ids),
         "test_count": len(test_ids),
-        "full_shards_if_executed": 6,
+        "full_shards_if_executed": 8,
         "required_independent_guards": [
             "docker-build-modes",
             "worker-upgrade-rollback",
@@ -165,7 +165,7 @@ def plan_packaged_e2e(
     """Stage an inactive packaged E2E proposal, defaulting to full coverage.
 
     Unknown/unsafe changes, generated assets and missing test discovery
-    cannot reduce the six-shard packaged gate.
+    cannot reduce the eight-shard packaged gate.
     """
     if force_full:
         return _result("release, master, manual override or operator requires full")

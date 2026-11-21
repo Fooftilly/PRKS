@@ -25,7 +25,7 @@ def job_source(workflow: str, job: str) -> str:
 
 
 class PackagedSmokeWorkflowTests(unittest.TestCase):
-    def test_pull_requests_always_run_all_six_packaged_shards(self):
+    def test_pull_requests_always_run_all_eight_packaged_shards(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         full = job_source(workflow, "packaged-frontend")
         self.assertIn("  pull_request:\n", workflow)
@@ -33,10 +33,10 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
             full,
         )
-        self.assertIn("shard: [1, 2, 3, 4, 5, 6]", full)
+        self.assertIn("shard: [1, 2, 3, 4, 5, 6, 7, 8]", full)
         self.assertIn("PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}", full)
         self.assertIn(
-            'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/6" --no-pointer-capture',
+            'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/8" --no-pointer-capture',
             full,
         )
 

@@ -102,7 +102,7 @@ class E2ETimingArtifactWorkflowTests(unittest.TestCase):
             "          (inputs.packaged_mode == 'full' || inputs.packaged_mode == 'compare') && success()\n",
             step,
         )
-        self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-6", step)
+        self.assertIn("name: packaged-e2e-timings-${{ matrix.shard }}-of-8", step)
         self.assertIn(
             "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
             step,

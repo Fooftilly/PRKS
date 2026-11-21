@@ -19,7 +19,7 @@ PRKS E2E is Python unittest + Playwright Chromium via `tests/e2e/run.py`
 | Last-failed | `python tests/e2e/run.py --last-failed` | unresolved failures from prior runs |
 | Dev | `python tests/e2e/run.py --dev --feature tabs` | Fail-fast + no pointer-capture |
 | Full | `python tests/e2e/run.py --jobs 4` | Complete regression gate (runner hard-limits at 1200s; `timeout 1200 …` still fine) |
-| Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; full-mode TOTAL = `FULL_GATE_EXTERNAL_SHARDS`, currently 6) |
+| Full (CI shard) | `python tests/e2e/run.py --jobs 1 --shard INDEX/TOTAL` | One external slice of the full gate (GitHub Actions matrix; full-mode TOTAL = `FULL_GATE_EXTERNAL_SHARDS`, currently 8) |
 
 Convenience wrapper: `scripts/e2e smoke|feature|affected|last-failed|dev|full`.
 Catalog: `python tests/e2e/run.py --list-features`. On-demand counts/timing:

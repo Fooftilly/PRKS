@@ -22,12 +22,12 @@ on:
         type: boolean
         default: false
       shard_count:
-        description: "Manual full-suite shard-width pilot; normal PR/master gates stay at six"
+        description: "Manual full-suite shard width; normal PR/master gates use eight"
         type: choice
         options:
           - "6"
           - "8"
-        default: "6"
+        default: "8"
 
 concurrency:
   # Manual comparisons must neither cancel master gates nor be cancelled by merges.

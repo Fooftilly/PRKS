@@ -14,9 +14,9 @@ from datetime import datetime
 import requests
 
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
-FULL_JOB = re.compile(r"Packaged classic bundles \(([1-6])/6\)\Z")
+FULL_JOB = re.compile(r"Packaged classic bundles \(([1-8])/8\)\Z")
 SMOKE_JOB = "Packaged classic smoke (manual pilot)"
-SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/6)"
+SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/8)"
 SHARED_JOBS = (
     "Docker classic bundle and rollback build smoke",
     "Classic bundle SW upgrade and rollback (real Chromium)",
@@ -87,8 +87,8 @@ def _browser_jobs(active: list[dict], jobs: list[dict], mode: str) -> list[dict]
     skipped = [job.get("name") or "" for job in jobs if job.get("conclusion") == "skipped"]
     if mode == "full":
         indices = sorted(_shard_number(job) for job in shards)
-        if indices != list(range(1, 7)) or smoke:
-            raise InvalidBenchmark("Full run must have six distinct passing shards and no smoke job")
+        if indices != list(range(1, 9)) or smoke:
+            raise InvalidBenchmark("Full run must have eight distinct passing shards and no smoke job")
         if SMOKE_JOB not in skipped:
             raise InvalidBenchmark("Full run is missing its skipped smoke job")
         return shards
@@ -150,8 +150,8 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
     shards = [j for j in active if FULL_JOB.fullmatch(j.get("name") or "")]
     smoke = [j for j in active if j.get("name") == SMOKE_JOB]
     shard_ids = sorted(_shard_number(j) for j in shards)
-    if shard_ids != list(range(1, 7)) or len(smoke) != 1:
-        raise InvalidBenchmark("Paired run requires all six full shards and one smoke job")
+    if shard_ids != list(range(1, 9)) or len(smoke) != 1:
+        raise InvalidBenchmark("Paired run requires all eight full shards and one smoke job")
     permitted = {*(j["name"] for j in shards), SMOKE_JOB, *SHARED_JOBS}
     if any(j.get("name") not in permitted for j in active):
         raise InvalidBenchmark("Unexpected successful job in paired run")

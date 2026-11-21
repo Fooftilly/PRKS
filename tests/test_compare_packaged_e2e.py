@@ -46,8 +46,8 @@ def full_jobs() -> list[dict]:
     return [
         job("Docker classic bundle and rollback build smoke", 23),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 20),
-        *(job(f"Packaged classic bundles ({n}/6)", seconds)
-          for n, seconds in enumerate((471, 494, 522, 477, 538, 471), start=1)),
+        *(job(f"Packaged classic bundles ({n}/8)", seconds)
+          for n, seconds in enumerate((371, 372, 371, 372, 372, 371, 372, 372), start=1)),
         job("Packaged classic smoke (manual pilot)", 0, "skipped"),
     ]
 
@@ -65,7 +65,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
     def test_real_same_sha_sample_uses_all_successful_job_spans(self):
         full = summarize(run(39069624598), full_jobs(), "full")
         smoke = summarize(run(39069996637), smoke_jobs(), "smoke")
-        self.assertEqual(full["browser_count"], 6)
+        self.assertEqual(full["browser_count"], 8)
         self.assertEqual(smoke["browser_count"], 1)
         self.assertAlmostEqual(full["browser_minutes"], 49.55)
         self.assertAlmostEqual(smoke["browser_minutes"], 53 / 60)
@@ -82,7 +82,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
             job(SMOKE_JOB, 75),
         ]
         full, smoke = summarize_paired(run(99), combined)
-        self.assertEqual(full["browser_count"], 6)
+        self.assertEqual(full["browser_count"], 8)
         self.assertEqual(smoke["browser_count"], 1)
         self.assertAlmostEqual(full["browser_minutes"], 49.55)
         self.assertAlmostEqual(smoke["browser_minutes"], 75 / 60)
@@ -161,7 +161,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
                 with self.assertRaises(InvalidBenchmark):
                     summarize(run(1), changed, mode)
                 changed = [dict(j) for j in jobs]
-                selected = "Packaged classic smoke (manual pilot)" if mode == "smoke" else "Packaged classic bundles (1/6)"
+                selected = "Packaged classic smoke (manual pilot)" if mode == "smoke" else "Packaged classic bundles (1/8)"
                 for value in changed:
                     if value["name"] == selected:
                         value["conclusion"] = "failure"
@@ -193,8 +193,8 @@ class PackagedCostComparisonTests(unittest.TestCase):
             summarize(run(2), selected, "smoke")
 
     def test_smoke_rejects_renamed_or_partial_skipped_full_matrix(self):
-        for fake_name in ("Packaged classic bundles (renamed/6)",
-                          "Packaged classic bundles (1/6)"):
+        for fake_name in ("Packaged classic bundles (renamed/8)",
+                          "Packaged classic bundles (1/8)"):
             with self.subTest(fake_name=fake_name):
                 incomplete = smoke_jobs()
                 incomplete[-1]["name"] = fake_name

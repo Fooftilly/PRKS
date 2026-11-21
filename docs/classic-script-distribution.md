@@ -17,13 +17,13 @@ Three same-runner ABBA experiments on 40 selected E2E tests each measured
 The corrected diagnostic [six-shard full E2E canary](https://github.com/Fooftilly/PRKS/actions/runs/39028440166)
 passed **837/837 tests**, including offline reload. These observations do
 **not** directly measure real user page speed or the Docker distribution.
-The dedicated **E2E Classic Production Distribution Gate** runs all six shards
+The dedicated **E2E Classic Production Distribution Gate** runs all eight shards
 against the actual generated files in this PR, not the diagnostic candidate.
 
 ### Packaged E2E CI cost pilot (manual only)
 
 The non-required **E2E Classic Production Distribution Gate** retains its full
-six-shard packaged-browser matrix on every matching pull request. Docker
+eight-shard packaged-browser matrix on every matching pull request. Docker
 bundle/rollback image checks and the real Chromium service-worker
 upgrade/offline-boot/downgrade test remain separate jobs.
 

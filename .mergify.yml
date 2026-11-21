@@ -4,7 +4,7 @@
 # Merge Queue is disabled in the Mergify dashboard. This YAML cannot enforce
 # that product setting: leave Merge Queue disabled to preserve manual merges.
 # CI Insights auto-retry (a dashboard setting) reruns a failed job once, and
-# only for the six "E2E (n/6)" shard jobs; other jobs are never retried.
+# only for the eight "E2E (n/8)" shard jobs; other jobs are never retried.
 
 # Merge Protections is active. Report via GitHub checks, without comments.
 # Do not set auto_merge_conditions here or turn on Mergify Workflow Automation.

@@ -1,4 +1,4 @@
-"""Guards for the isolated six-shard temporary classic-script bundle canary."""
+"""Guards for the isolated eight-shard temporary classic-script bundle canary."""
 from __future__ import annotations
 
 from contextlib import redirect_stdout
@@ -120,7 +120,7 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             root = _fixture(Path(td))
             index = root / "frontend/index.html"
             before = index.read_bytes()
-            for bad in (0, 7, -1, 1.0, "1"):
+            for bad in (0, 9, -1, 1.0, "1"):
                 with self.subTest(shard=bad), self.assertRaises(ValueError):
                     run_canary(root, bad)  # pyright: ignore[reportArgumentType]
             self.assertEqual(index.read_bytes(), before)
@@ -337,12 +337,12 @@ class ClassicBundleCanaryTests(unittest.TestCase):
             self.assertEqual(sw.read_text(encoding="utf-8"), "unrecognized worker")
             self.assertEqual(index.read_bytes(), before)
 
-    def test_workflow_is_explicit_six_shard_manual_canary(self):
+    def test_workflow_is_explicit_eight_shard_manual_canary(self):
         source = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("workflow_dispatch:", source)
         self.assertNotIn("pull_request:", source)
         self.assertNotIn("push:", source)
-        self.assertIn("shard: [1, 2, 3, 4, 5, 6]", source)
+        self.assertIn("shard: [1, 2, 3, 4, 5, 6, 7, 8]", source)
         self.assertIn("needs: preflight", source)
         self.assertIn("python -m scripts.e2e_classic_bundle_canary --preflight", source)
         self.assertIn("fail-fast: false", source)
