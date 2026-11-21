@@ -29,6 +29,7 @@ Field mapping, from the record's names to CSL 1.0.2 variables:
 
 from __future__ import annotations
 
+import calendar
 import re
 from typing import Any, Optional
 
@@ -57,8 +58,8 @@ _DATE_RE = re.compile(r"^\s*(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?")
 _ERA = r"(?:\s*(BCE|BC|CE|AD))?"
 #: The whole Year field as a year, ``950`` or ``399 BCE``; anything else (``19th century``) is not a date.
 _YEAR_RE = re.compile(r"^\s*(\d{1,4})" + _ERA + r"\s*$", re.IGNORECASE)
-#: A Year field holding an ISO year-month or date (``2020-05``, ``2020-05-02``) with a real month.
-_ISO_MONTH_RE = re.compile(r"^\s*\d{4}-(?:0?[1-9]|1[0-2])(?:-\d{1,2})?\s*$")
+#: A Year field holding an ISO year-month or date (``2020-05``, ``2020-05-02``): two-digit month, real month.
+_ISO_MONTH_RE = re.compile(r"^\s*\d{4}-(?:0[1-9]|1[0-2])(?:-\d{2})?\s*$")
 #: The whole Year field as a range of years: ``2020–2021``, ``1999–00``, ``950–951``, ``1914/1918``.
 _YEAR_RANGE_RE = re.compile(r"^\s*(\d{1,4})\s*[-–—/]\s*(\d{1,4})\s*$")
 
@@ -129,7 +130,7 @@ def _date(text: str) -> Optional[dict[str, Any]]:
     parts = [int(part) for part in match.groups() if part]
     if len(parts) > 1 and not 1 <= parts[1] <= 12:
         parts = parts[:1]
-    if len(parts) > 2 and not 1 <= parts[2] <= 31:
+    if len(parts) > 2 and not 1 <= parts[2] <= calendar.monthrange(parts[0], parts[1])[1]:
         parts = parts[:2]
     return {"date-parts": [parts]}
 
