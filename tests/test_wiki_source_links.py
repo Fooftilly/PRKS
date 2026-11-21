@@ -97,12 +97,22 @@ class WikiLinkRuleTests(unittest.TestCase):
             Path(tmp, "Bad.md").write_text(
                 "[guide](docs/admin-bootstrap.md)", encoding="utf-8"
             )
+            Path(tmp, "Worse.md").write_text("[x](../x.md)", encoding="utf-8")
             err = io.StringIO()
             with mock.patch.dict(os.environ, {"WIKI_BASE_URL": WIKI_BASE}), redirect_stderr(err):
                 self.assertEqual(main(["wiki_links.py", tmp]), 1)
+            self.assertEqual(err.getvalue(), (
+                "Published wiki still contains repository-style Markdown links:\n"
+                "Bad.md: ](docs/admin-bootstrap.md)\n"
+                "Worse.md: ](../x.md)\n"
+            ))
+            err = io.StringIO()
+            with redirect_stderr(err):
                 self.assertEqual(main(["wiki_links.py"]), 2)
-            self.assertIn("Bad.md: ](docs/admin-bootstrap.md)", err.getvalue())
-            self.assertIn("usage: wiki_links.py WIKI_DIR", err.getvalue())
+            self.assertEqual(
+                err.getvalue(), "usage: wiki_links.py WIKI_DIR (WIKI_BASE_URL in the environment)\n"
+            )
+            Path(tmp, "Worse.md").unlink()
             self.assertEqual(
                 good.read_text(encoding="utf-8"), f"[Testing]({WIKI_BASE}/Testing)"
             )

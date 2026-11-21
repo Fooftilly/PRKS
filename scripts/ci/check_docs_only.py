@@ -64,7 +64,7 @@ def _slug(text: str) -> str:
     return _PUNCT.sub("", text.lower().strip()).replace(" ", "-")
 
 
-def _unclosed_fences(content: str, tokens: list) -> list[str]:
+def _unclosed_fences(tokens: list) -> list[str]:
     """Use CommonMark's container-aware fence tokens, including list items."""
     missing = []
     for token in tokens:
@@ -185,7 +185,7 @@ def check_markdown(root: Path, relative: str) -> list[str]:
                 error = _check_link(root, current, relative, number, href, cache)
                 if error:
                     errors.append(error)
-    for open_fence in _unclosed_fences(content, tokens):
+    for open_fence in _unclosed_fences(tokens):
         errors.append(f"{relative}: unclosed {open_fence} fence")
     if _is_published_wiki_page(relative):
         errors.extend(publish_errors(content, WIKI_BASE, relative)[1])
