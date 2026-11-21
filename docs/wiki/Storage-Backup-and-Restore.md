@@ -6,7 +6,7 @@ PRKS stores canonical research data locally and provides an application-level ba
 
 `PRKS_STORAGE` selects the persistent-data root. Without it, normal repository runs use `data/`. `python prks_app.py --storage-root PATH` overrides both for one run.
 
-Each storage root has a `prks-root.json` marker that PRKS creates the first time it opens the root. It identifies the root's files (`storage_root_id`). PRKS will not start on a non-empty directory that is not a PRKS library, which catches a mistyped path or an unmounted disk. Only one PRKS web process can use a storage root at a time (the `worker` and `migrate` processes share it); a second web process stops at startup. The marker is not included in backups, and restoring into a root keeps that root's marker.
+Each storage root has a `prks-root.json` marker that PRKS creates the first time it opens the root. It identifies the root's files (`storage_root_id`). PRKS will not start on a non-empty directory that is not a PRKS library, which catches a mistyped path or an unmounted disk. Web processes, the `worker` and `migrate` share a storage root. The first web process to open a brand-new root binds it; a second web process started at that same moment stops at startup, so start more once the first is ready. The marker is not included in backups, and restoring into a root keeps that root's marker.
 
 Canonical data is the Library in the PostgreSQL database plus the managed research files in the storage root (PDFs and portraits, stored as immutable objects). Thumbnail caches, PDF text-search rows, research-reference rows, and similar rebuildable data are derived.
 

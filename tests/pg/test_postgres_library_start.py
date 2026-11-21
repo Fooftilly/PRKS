@@ -18,6 +18,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import uuid
 from typing import Any, Iterator, Optional
 
@@ -79,13 +80,19 @@ class PostgresLibraryStartTests(RootPairingTestCase):
         name = self.migrated()
         root = self.new_root()
         self.bootstrapped(name, root)
+        with self.started(name, root, **extra) as (port, headers):
+            yield name, root, port, headers
+
+    @contextlib.contextmanager
+    def started(self, name: str, root: str, **extra: str) -> Iterator[tuple[int, dict[str, str]]]:
+        """One more web process on a bootstrapped Library: its port and mutation headers."""
         port = _free_port()
         proc = self.web(self.environment(name, **extra), root, port)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
             _status, session, _headers = self.call(port, "GET", "/api/session")
-            yield name, root, port, {"Origin": f"http://127.0.0.1:{port}",
-                                     "PRKS-Library-Epoch": str(session["library"]["epoch"])}
+            yield port, {"Origin": f"http://127.0.0.1:{port}",
+                         "PRKS-Library-Epoch": str(session["library"]["epoch"])}
         finally:
             self.stop(proc)
 
@@ -362,6 +369,99 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             del later
         for catalogue in _CATALOGUES:
             self.assertFalse(os.path.lexists(os.path.join(root, catalogue)), catalogue)
+
+    def test_a_restore_in_one_web_process_fences_the_other(self) -> None:
+        """Two web processes on one Library (#1331): what one restores, the
+        other reads, and a write the other admitted at the old epoch is
+        refused, with no state shared between the two processes."""
+        with (self.serving(PRKS_EMBEDDED_WORKER="1") as (name, root, port_a, headers_a),
+              self.started(name, root) as (port_b, headers_b)):
+            self.assertEqual(headers_a["PRKS-Library-Epoch"], headers_b["PRKS-Library-Epoch"])
+            _status, kept, _headers = self.call(port_a, "POST", "/api/works", {"title": "In the backup"}, headers_a)
+            ready = self.ndjson(port_a, "/api/backups/progress", headers_a)[-1]
+            self.assertEqual(ready["phase"], "ready")
+            archive = self.raw(port_a, "GET", "/api/backups/download?token=" + ready["token"])
+            status, later, _headers = self.call(port_b, "POST", "/api/works", {"title": "After it"}, headers_b)
+            self.assertIn(status, (200, 201), later)
+            self.assertEqual(len(self.call(port_a, "GET", "/api/works")[1]), 2)
+            staged = self.raw_json(port_a, "/api/backups/stage", archive, headers_a)
+            status, restored, _headers = self.call(
+                port_a, "POST", "/api/backups/restore", {"token": staged["token"], "confirm": "RESTORE"}, headers_a)
+            self.assertEqual((status, restored["status"]), (200, "restored"), restored)
+            # The other process reads the restored Library at once...
+            self.assertEqual([w["id"] for w in self.call(port_b, "GET", "/api/works")[1]], [kept["id"]])
+            # ...refuses its old epoch before writing anything...
+            status, refused, _headers = self.call(port_b, "PATCH", f"/api/works/{kept['id']}",
+                                                  {"title": "Written at the old epoch"}, headers_b)
+            self.assertEqual((status, refused.get("code")), (409, "LIBRARY_EPOCH_CHANGED"), refused)
+            self.assertEqual(self.call(port_b, "GET", f"/api/works/{kept['id']}")[1]["title"], "In the backup")
+            # ...and takes writes at the new one.
+            fresh = dict(headers_b, **{"PRKS-Library-Epoch": str(restored["epoch"])})
+            status, _body, _headers = self.call(port_b, "PATCH", f"/api/works/{kept['id']}",
+                                                {"title": "Written after"}, fresh)
+            self.assertEqual(status, 200, _body)
+            self.assertEqual(self.call(port_a, "GET", f"/api/works/{kept['id']}")[1]["title"], "Written after")
+
+    def test_a_backup_in_one_web_process_keeps_its_snapshot_while_the_other_writes(self) -> None:
+        with (self.serving(PRKS_EMBEDDED_WORKER="1") as (name, root, port_a, headers_a),
+              self.started(name, root) as (port_b, headers_b)):
+            for n in range(3):
+                self.call(port_a, "POST", "/api/works", {"title": f"Before {n}"}, headers_a)
+            stop = threading.Event()
+            written: list[int] = []
+
+            def write() -> None:
+                while not stop.is_set():
+                    status, _body, _headers = self.call(port_b, "POST", "/api/works",
+                                                        {"title": f"During {len(written)}"}, headers_b)
+                    written.append(status)
+
+            writer = threading.Thread(target=write, daemon=True)
+            writer.start()
+            try:
+                ready = self.ndjson(port_a, "/api/backups/progress", headers_a)[-1]
+            finally:
+                stop.set()
+                writer.join(30)
+            self.assertEqual(ready["phase"], "ready")
+            self.assertTrue(written and all(status in (200, 201) for status in written), written)
+            archive = self.raw(port_a, "GET", "/api/backups/download?token=" + ready["token"])
+            staged = self.raw_json(port_b, "/api/backups/stage", archive, headers_b)
+            # One snapshot: verified, holding the Works from before and only
+            # some of those written meanwhile.
+            self.assertTrue(staged["verified"], staged)
+            self.assertGreaterEqual(staged["summary"]["works"], 3)
+            self.assertLessEqual(staged["summary"]["works"], 3 + len(written))
+
+    def test_one_field_edited_from_two_web_processes_is_acknowledged_once(self) -> None:
+        with (self.serving() as (name, root, port_a, headers_a),
+              self.started(name, root) as (port_b, headers_b)):
+            _status, work, _headers = self.call(port_a, "POST", "/api/works", {"title": "Shared"}, headers_a)
+            together = threading.Barrier(2, timeout=10)
+            answers: dict[int, tuple[int, Any]] = {}
+
+            def edit(port: int, headers: dict[str, str], title: str) -> None:
+                op = {"op_id": str(uuid.uuid4()), "device_id": str(uuid.uuid4()),
+                      "operation": "SET_WORK_METADATA_FIELD", "entity_type": "work", "entity_id": work["id"],
+                      "payload": {"field": "title", "value": title}, "base_revision": 0,
+                      "occurred_at": "2026-11-21T10:00:00Z", "created_at": "2026-11-21T10:00:00Z",
+                      "depends_on": []}
+                together.wait()
+                status, body, _headers = self.call(port, "POST", "/api/sync/operations", op, headers)
+                answers[port] = (status, body)
+
+            editors = [threading.Thread(target=edit, args=args, daemon=True)
+                       for args in ((port_a, headers_a, "From A"), (port_b, headers_b, "From B"))]
+            for editor in editors:
+                editor.start()
+            for editor in editors:
+                editor.join(30)
+            codes = sorted((status, body["code"]) for status, body in answers.values())
+            self.assertEqual(codes, [(200, "ACKNOWLEDGED"), (409, "REVISION_CONFLICT")], answers)
+            winner = next(port for port, (status, _body) in answers.items() if status == 200)
+            title = "From A" if winner == port_a else "From B"
+            for port in (port_a, port_b):
+                self.assertEqual(self.call(port, "GET", f"/api/works/{work['id']}")[1]["title"], title)
 
     def ndjson(self, port: int, path: str, headers: dict[str, str]) -> list[dict[str, Any]]:
         body = self.raw(port, "POST", path, b"{}", dict(headers, **{"Content-Type": "application/json"}))

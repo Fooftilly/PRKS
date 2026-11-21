@@ -21,7 +21,7 @@ if _PROJECT_DIR not in sys.path:
 from backend.domain.maintenance import jobs, staged
 from backend.storage import root_marker
 
-_ROOT_FILES = (root_marker.ROOT_LOCK_NAME, root_marker.CLAIM_LOCK_NAME, root_marker.CONTENT_LOCK_NAME)
+_ROOT_FILES = (root_marker.ROOT_LOCK_NAME, root_marker.CLAIM_LOCK_NAME, root_marker.OPEN_LOCK_NAME)
 
 
 class MaintenanceDirectoryTests(unittest.TestCase):
