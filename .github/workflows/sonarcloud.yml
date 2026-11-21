@@ -253,5 +253,10 @@ jobs:
 
       - name: SonarCloud scan
         uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
+        with:
+          # PRs import no coverage; without this Sonar counts every new line as
+          # uncovered and the new-code coverage condition fails.
+          args: >-
+            ${{ github.event_name == 'pull_request' && '-Dsonar.coverage.exclusions=**/*' || '' }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

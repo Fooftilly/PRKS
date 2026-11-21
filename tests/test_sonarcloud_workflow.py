@@ -55,6 +55,7 @@ class SonarCloudWorkflowTests(unittest.TestCase):
         scan = self.jobs["scan"]
         self.assertIn("needs: [python-unit-coverage, postgres-coverage, vitest-coverage]", scan)
         self.assertIn("!contains(needs.*.result, 'failure')", scan)
+        self.assertIn("github.event_name == 'pull_request' && '-Dsonar.coverage.exclusions=**/*'", scan)
         # Forks and Dependabot get no Actions secrets.
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", scan)
         self.assertIn("github.actor != 'dependabot[bot]'", scan)
