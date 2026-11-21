@@ -188,3 +188,32 @@ class SharedLogRotationTests(unittest.TestCase):
         (dated,) = self.dated()
         self.assertEqual(self.read(os.path.join(os.path.dirname(self.path), dated)), ["a1", "b1"])
         self.assertEqual(self.read(self.path), ["a2", "b2"])
+
+    def test_rotations_due_for_different_days_keep_every_record(self):
+        first, second = self.handlers
+        self.write(first, "a1")
+        self.write(second, "b1")
+        # A quiet writer is still due for an earlier day than a busy one.
+        first.rolloverAt = 0
+        second.rolloverAt = 86400
+        real_link = os.link
+        interleaved = []
+
+        def link_then_let_the_other_rotate(src, dst):
+            real_link(src, dst)
+            if not interleaved:
+                interleaved.append(dst)
+                # The other process rotates while this one is between its
+                # link and its unlink; it must wait for the lock instead.
+                self.write(second, "b2")
+
+        from unittest import mock
+
+        with (mock.patch("backend.log_config.os.link", link_then_let_the_other_rotate),
+              mock.patch("backend.log_config._ROTATE_LOCK_WAIT_SECONDS", 0.1)):
+            self.write(first, "a2")
+        self.write(second, "b3")
+        records = []
+        for name in os.listdir(os.path.dirname(self.path)):
+            records += self.read(os.path.join(os.path.dirname(self.path), name))
+        self.assertEqual(sorted(records), ["a1", "a2", "b1", "b2", "b3"])

@@ -4,6 +4,7 @@ import time
 from logging.handlers import TimedRotatingFileHandler
 
 from backend.log_safety import PrivacySafeFormatter, safe_error_type
+from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
 from backend.storage.config import StorageConfig
 
 
@@ -11,6 +12,8 @@ _DEFAULT_ROTATE_WHEN = "midnight"
 _DEFAULT_ROTATE_INTERVAL = 1
 _DEFAULT_RETENTION_DAYS = 7
 _OWNER_ONLY_MODE = 0o600
+# How long a rollover waits for another process that is rotating the same log.
+_ROTATE_LOCK_WAIT_SECONDS = 5.0
 LOGGER = logging.getLogger("prks.log_config")
 
 
@@ -107,32 +110,45 @@ class _OwnerOnlyTimedRotatingFileHandler(TimedRotatingFileHandler):
         _chmod_owner_only(self.baseFilename, report=True)
 
     def _rotate_once(self, dated: str) -> bool:
-        """Give the log its dated name unless a process already did; True when this one did."""
+        """Give the current log its dated name, under a lock on that file; True when this process did.
+
+        The lock is an OS lock on the log file itself, and ``acquire`` holds
+        it only while the name still points at the locked file (it retries
+        otherwise), so two processes rotating at
+        once (due for the same day or for different ones) take turns on the
+        same file, and the second finds it already rotated.
+        """
         try:
-            os.link(self.baseFilename, dated)
-        except (FileExistsError, FileNotFoundError):
-            return False  # rotated already, by another process
-        except OSError:
-            # No hard links here: rename, which only a process that still
-            # finds no dated file attempts.
+            lock = ExclusiveFileLock.acquire(self.baseFilename, timeout=_ROTATE_LOCK_WAIT_SECONDS)
+        except (LockBusy, LockUnavailable):
+            return False  # another process is rotating it, or it cannot be locked
+        try:
             if os.path.exists(dated):
-                return False
+                return False  # this day is rotated already, by another process
             try:
-                os.rename(self.baseFilename, dated)
+                os.link(self.baseFilename, dated)
+            except FileExistsError:
+                return False
             except OSError:
+                # No hard links here: rename instead.
+                try:
+                    os.rename(self.baseFilename, dated)
+                except OSError:
+                    return False
+                return True
+            try:
+                os.unlink(self.baseFilename)
+            except OSError:
+                # Another process still holds it open where that forbids the
+                # unlink (Windows): undo, and keep writing to one file today.
+                try:
+                    os.unlink(dated)
+                except OSError:
+                    pass
                 return False
             return True
-        try:
-            os.unlink(self.baseFilename)
-        except OSError:
-            # Another process still holds it open where that forbids the
-            # unlink (Windows): undo, and keep writing to one file today.
-            try:
-                os.unlink(dated)
-            except OSError:
-                pass
-            return False
-        return True
+        finally:
+            lock.release()
 
     def _open(self):
         if os.name == "posix":
