@@ -59,12 +59,13 @@ def prks_prune_thumbnail_page(thumbs_dir: str, work_id: str, page: int, keep: st
 
     Each render of new bytes publishes under a new name, so older names for
     the same page are dropped here instead of accumulating until the Work is
-    deleted. A late render of old bytes may still publish after this; the
-    next prune removes it.
+    deleted. Only a render of the Work's current PDF calls this, so a late
+    render of replaced bytes never evicts the current copy; it may still
+    publish its own after this, and the next prune removes it.
     """
+    prefix = f"{prks_thumb_cache_safe_wid(work_id)}_p{int(page)}"
     page_pat = re.compile(
-        r"^" + re.escape(prks_thumb_cache_safe_wid(work_id)) + r"_p" + str(int(page))
-        + r"(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
+        r"^" + re.escape(prefix) + r"(_a[A-Za-z0-9_-]*)?(_v\d+)?\.(webp|png|jpg|jpeg)$",
         re.IGNORECASE,
     )
     try:
@@ -72,7 +73,9 @@ def prks_prune_thumbnail_page(thumbs_dir: str, work_id: str, page: int, keep: st
     except OSError:
         return
     for fname in names:
-        if fname == keep or not page_pat.match(fname):
+        # A prefix test first: one directory read, and the pattern runs only
+        # on this page's own names.
+        if fname == keep or not fname.startswith(prefix) or not page_pat.match(fname):
             continue
         try:
             os.remove(os.path.join(thumbs_dir, fname))

@@ -107,8 +107,8 @@ class ManagedPdfTests(ManagedPdfTestCase):
 
     def test_a_thumbnail_rendered_from_replaced_bytes_is_never_served_for_the_new_ones(self) -> None:
         """A render that started before a replace and publishes after it (#1331:
-        no gate orders the two any more) is cached under the old bytes' name,
-        so the next view renders the new PDF instead of serving the late copy."""
+        no gate orders the two any more) is cached under the old bytes' name:
+        it is never served for the new PDF and never evicts the new copy."""
         import threading
 
         from backend.derived_caches import prks_thumb_cache_stem
@@ -134,20 +134,27 @@ class ManagedPdfTests(ManagedPdfTestCase):
             self.assertTrue(rendering.wait(10))
             new = self.ok(self.send("POST", f"/api/works/{work['id']}/pdf",
                                     {"file_b64": base64.b64encode(pdf_bytes("thumbracenew")).decode("ascii")}))
+            # The new PDF is viewed, and cached, before the old render ends.
+            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
             replaced.set()
             viewer.join(20)
             self.assertEqual(result["res"].status, 200)
-            assert self.storage is not None
-            names = set(os.listdir(self.storage.thumbs_dir))
-            primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
-            old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=work["file_path"].rsplit("/", 1)[1])
-            new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
-            self.assertNotEqual(old_stem, new_stem)
-            self.assertIn(f"{old_stem}.webp", names)
-            self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
+        assert self.storage is not None
+        primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
+        old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=work["file_path"].rsplit("/", 1)[1])
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        self.assertNotEqual(old_stem, new_stem)
+        names = set(os.listdir(self.storage.thumbs_dir))
+        # The late render landed under the old bytes' name and evicted nothing.
+        self.assertEqual({f"{old_stem}.webp", f"{new_stem}.webp"} - names, set())
+        with open(os.path.join(self.storage.thumbs_dir, f"{new_stem}.webp"), "rb") as handle:
+            current = handle.read()
+        self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").raw, current)
+        # A later render of the current PDF prunes the stale copy.
+        os.remove(os.path.join(self.storage.thumbs_dir, f"{new_stem}.webp"))
+        self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
         names = set(os.listdir(self.storage.thumbs_dir))
         self.assertIn(f"{new_stem}.webp", names)
-        # The late copy of the old bytes was pruned with the new render.
         self.assertNotIn(f"{old_stem}.webp", names)
 
     def test_the_pdf_route_validates_the_whole_suffix(self) -> None:

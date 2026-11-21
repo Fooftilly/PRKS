@@ -1584,15 +1584,19 @@ class PRKSHandler(HttpHandlerBase):
 
                 cache_path: str | None = None
                 serve_mime = "image/webp"
-                if os.path.exists(path_webp):
-                    try:
-                        if os.path.getmtime(path_webp) >= pdf_mtime:
+                generated_bytes: bytes | None = None
+                # Read a hit now: a prune may remove the file before it is
+                # sent, and a vanished file is then simply a miss.
+                try:
+                    if os.path.getmtime(path_webp) >= pdf_mtime:
+                        with open(path_webp, "rb") as cached:
+                            generated_bytes = cached.read() or None
+                        if generated_bytes is not None:
                             cache_path = path_webp
-                    except OSError:
-                        pass
+                except OSError:
+                    generated_bytes = None
 
                 cache_hit = cache_path is not None
-                generated_bytes: bytes | None = None
                 if cache_hit:
                     try:
                         record_counter("thumbnail_cache_hits")
@@ -1667,7 +1671,12 @@ class PRKSHandler(HttpHandlerBase):
                             publish_derived_cache_bytes(
                                 thumbs_root, f"{cache_base}.{ext}", generated_bytes
                             )
-                            prks_prune_thumbnail_page(thumbs_root, w_id, page, f"{cache_base}.{ext}")
+                            # Only a render of the Work's current PDF prunes: a
+                            # late render of replaced bytes must not evict the
+                            # current one's copy.
+                            current = works_api.thumbnail_fields(self, db, w_id) or {}
+                            if current.get('file_path') == thumb.get('file_path'):
+                                prks_prune_thumbnail_page(thumbs_root, w_id, page, f"{cache_base}.{ext}")
                         except Exception:
                             try:
                                 tmp_path = os.path.join(thumbs_root, tmp_name)
@@ -1687,7 +1696,7 @@ class PRKSHandler(HttpHandlerBase):
                         self.send_error(404, "Thumbnail unavailable")
                         return
 
-                if not (cache_path and os.path.exists(cache_path)) and not generated_bytes:
+                if not generated_bytes:
                     self.send_error(404, "Thumbnail unavailable")
                     return
                 try:
@@ -1695,12 +1704,7 @@ class PRKSHandler(HttpHandlerBase):
                     self.send_header("Content-Type", serve_mime)
                     self.send_header("Cache-Control", "public, max-age=86400")
                     self.end_headers()
-                    if cache_path and os.path.exists(cache_path):
-                        with open(cache_path, "rb") as f:
-                            self.wfile.write(f.read())
-                    elif generated_bytes:
-                        # Checked above: no usable cache file means bytes were generated.
-                        self.wfile.write(generated_bytes)
+                    self.wfile.write(generated_bytes)
                 except Exception as exc:
                     self._send_internal_error(exc)
             elif works_api.handle_state(self, db, path):
