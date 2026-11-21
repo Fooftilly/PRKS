@@ -46,7 +46,8 @@ _PY_FILES = ("prks_app.py",)
 
 _LOCK = threading.Lock()
 _SESSIONS: dict[Any, Any] = {}
-_SOURCE_LINES: dict[str, list[int]] = {}
+_SHA = re.compile(r"[0-9a-f]{40}\Z")
+_SOURCE_LINES: dict[str, tuple[str, list[int]]] = {}
 
 
 def enabled() -> bool:
@@ -113,15 +114,18 @@ def record_server(test_id: str, tmpdir: str) -> None:
 # --- Classic frontend (Chromium precise coverage) ----------------------------
 
 
-def _line_starts(rel: str) -> list[int]:
+def _source(rel: str) -> tuple[str, list[int]]:
+    """The file's text and line starts, indexed like V8's offsets (UTF-16 units)."""
     cached = _SOURCE_LINES.get(rel)
     if cached is None:
         text = (REPO / rel).read_text(encoding="utf-8")
-        cached = [0]
+        # A character outside the BMP is two UTF-16 units: pad it to match.
+        text = "".join(char if ord(char) <= 0xFFFF else char + "\uffff" for char in text)
+        starts = [0]
         for index, char in enumerate(text):
             if char == "\n":
-                cached.append(index + 1)
-        _SOURCE_LINES[rel] = cached
+                starts.append(index + 1)
+        cached = _SOURCE_LINES[rel] = (text, starts)
     return cached
 
 
@@ -136,22 +140,63 @@ def _line_of(starts: list[int], offset: int) -> int:
     return lo + 1
 
 
-def executed_lines(functions: list[Mapping[str, Any]], starts: list[int]) -> set[int]:
-    """Lines whose innermost enclosing function ran (precise coverage, function level).
+def _segments(functions: list[Mapping[str, Any]]) -> list[tuple[int, int, int]]:
+    """Split the script into pieces, each with the count of its innermost range.
 
-    Outer functions are applied first, so a nested function that never ran
-    marks its own lines unexecuted even inside a function that ran.
+    V8's ranges nest: a function's range holds its inner functions' ranges
+    (and, in detailed mode, block ranges). A piece takes the count of the
+    smallest range around it, so an uncalled callback only blanks its own
+    characters, not the rest of the line that ran.
     """
-    spans = []
-    for function in functions:
-        for rng in function.get("ranges") or ():
-            spans.append((int(rng["startOffset"]), int(rng["endOffset"]), int(rng.get("count") or 0)))
-    status: dict[int, bool] = {}
-    for start, end, count in sorted(spans, key=lambda s: s[0] - s[1]):
-        ran = count > 0
-        for line in range(_line_of(starts, start), _line_of(starts, max(start, end - 1)) + 1):
-            status[line] = ran
-    return {line for line, ran in status.items() if ran}
+    spans = sorted(
+        (
+            (int(rng["startOffset"]), int(rng["endOffset"]), int(rng.get("count") or 0))
+            for function in functions
+            for rng in function.get("ranges") or ()
+        ),
+        key=lambda span: (span[0], -span[1]),
+    )
+    pieces: list[tuple[int, int, int]] = []
+    stack: list[tuple[int, int, int]] = []
+    position = 0
+
+    def emit(upto: int) -> None:
+        nonlocal position
+        if stack and upto > position:
+            pieces.append((position, upto, stack[-1][2]))
+        position = max(position, upto)
+
+    for start, end, count in spans:
+        while stack and stack[-1][1] <= start:
+            emit(stack[-1][1])
+            stack.pop()
+        emit(start)
+        stack.append((start, end, count))
+    while stack:
+        emit(stack[-1][1])
+        stack.pop()
+    return pieces
+
+
+def executed_lines(functions: list[Mapping[str, Any]], starts: list[int], text: str | None = None) -> set[int]:
+    """Lines holding code that ran (precise coverage, innermost range wins).
+
+    With ``text``, only non-whitespace characters count, so the indentation
+    before an uncalled function does not mark its first line.
+    """
+    lines: set[int] = set()
+    for start, end, count in _segments(functions):
+        if count <= 0:
+            continue
+        if text is not None:
+            chunk = text[start:end]
+            stripped = chunk.lstrip()
+            if not stripped:
+                continue
+            start += len(chunk) - len(stripped)
+            end -= len(chunk) - len(chunk.rstrip())
+        lines.update(range(_line_of(starts, start), _line_of(starts, max(start, end - 1)) + 1))
+    return lines
 
 
 def _repo_path_for(url: str, origin_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")) -> str | None:
@@ -179,7 +224,8 @@ def _take(page) -> None:
         rel = _repo_path_for(script.get("url") or "")
         if rel is None:
             continue
-        files.setdefault(rel, set()).update(executed_lines(script.get("functions") or [], _line_starts(rel)))
+        text, starts = _source(rel)
+        files.setdefault(rel, set()).update(executed_lines(script.get("functions") or [], starts, text))
     from tests.e2e.harness import get_e2e_heartbeat
 
     _write(get_e2e_heartbeat().get("test_id") or "", "js", files)
@@ -207,6 +253,7 @@ def install_browser_hooks() -> None:
 
     original_new_page = BrowserContext.new_page
     original_close = BrowserContext.close
+    original_page_close = Page.close
 
     def new_page(self, *args, **kwargs):
         page = original_new_page(self, *args, **kwargs)
@@ -219,6 +266,15 @@ def install_browser_hooks() -> None:
             _SESSIONS.pop(page, None)
         return original_close(self, *args, **kwargs)
 
+    def page_close(self, *args, **kwargs):
+        # A closed tab leaves self.pages, so the context close cannot read it.
+        _take(self)
+        result = original_page_close(self, *args, **kwargs)
+        if self.is_closed():
+            _SESSIONS.pop(self, None)
+        return result
+
+    Page.close = page_close  # type: ignore[method-assign]
     BrowserContext.new_page = new_page  # type: ignore[method-assign]
     BrowserContext.close = close  # type: ignore[method-assign]
     for name in ("goto", "reload", "go_back", "go_forward"):
@@ -251,7 +307,7 @@ def _read_records(paths: Iterable[Path]) -> tuple[list[str], dict[str, dict[int,
     return sorted(tests), lines
 
 
-def build_map(record_paths: Iterable[Path], *, commit: str, failed_tests: Iterable[str] = ()) -> dict[str, Any]:
+def build_map(record_paths: Iterable[Path], *, commit: str) -> dict[str, Any]:
     """Merge records into ``{tests, sets, files: {path: [[first, last, set], ...]}}``.
 
     ``sets`` lists each distinct test set once (indexes into ``tests``); a file's
@@ -276,7 +332,6 @@ def build_map(record_paths: Iterable[Path], *, commit: str, failed_tests: Iterab
         "format": FORMAT,
         "commit": commit,
         "tests": tests,
-        "failed_tests": sorted(set(failed_tests) & set(tests)),
         "sets": sets,
         "files": files,
     }
@@ -393,8 +448,18 @@ def select_for_diff(
     if len(commits) != 1:
         raise ValueError("coverage maps come from different commits: %s" % ", ".join(sorted(commits)))
     (map_commit,) = commits
+    # The commit comes from a downloaded artifact: it reaches git only as a SHA.
+    if not isinstance(map_commit, str) or not _SHA.match(map_commit):
+        raise ValueError("coverage map commit is not a full SHA: %r" % (map_commit,))
+    for ref in (base, head):
+        if not ref or ref.startswith("-"):
+            raise ValueError("not a revision: %r" % (ref,))
     merge_base = _git(repo, "merge-base", base, head).strip()
-    changed = [p for p in _git(repo, "diff", "--name-only", f"{base}...{head}").splitlines() if p]
+    # Renames count both sides, so a production file moved into docs is
+    # still a production change (its old path diffs as a deletion).
+    changed = list(dict.fromkeys(
+        policy.paths_from_name_status_z(_git(repo, "diff", "--name-status", "-z", f"{base}...{head}", "--"))
+    ))
     tests: set[str] = set()
     fallback: list[str] = []
     files: dict[str, Any] = {}
@@ -409,6 +474,12 @@ def select_for_diff(
             picked = set().union(*(tests_for_lines(m, rel, wanted) for m in maps)) & known
             tests |= picked
             files[rel] = {"rule": "coverage-map", "tests": len(picked)}
+            continue
+        if policy.frontend_browser_change_requires_full_ci([rel]):
+            # Shipped browser code the map does not measure (CSS, Vue, HTML):
+            # the CI planner runs the full suite for it, so this does too.
+            files[rel] = {"rule": "full", "why": "frontend-full"}
+            fallback.append(rel)
             continue
         classified = policy.classify_affected_path(rel)
         if classified["skip"]:
