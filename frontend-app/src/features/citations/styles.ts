@@ -48,6 +48,8 @@ const importedListed = ref(false)
 let importedLoad: Promise<void> | null = null
 /** Counts list reads, so only the latest one started sets the list. */
 let importedGeneration = 0
+/** The latest read started; an earlier read settles as it does. */
+let latestRead: Promise<void> | null = null
 
 function toStyle(summary: ImportedStyleSummary): CitationStyle {
   return { id: summary.id, label: summary.title }
@@ -58,16 +60,19 @@ function toStyle(summary: ImportedStyleSummary): CitationStyle {
  * an import or a delete). Only the latest read started sets the list: an
  * earlier one that answers last (say, the list Settings read on opening,
  * after an import's own read) must not put back the list before the import.
+ * A superseded read settles as the latest one does.
  * A failed read leaves the last list and is retried on the next call.
  */
 export function loadImportedStyles(force = false): Promise<void> {
   if (importedLoad && !force) return importedLoad
   const generation = ++importedGeneration
-  const load = listImportedStyles().then((styles) => {
-    if (generation !== importedGeneration) return
+  const load: Promise<void> = listImportedStyles().then((styles) => {
+    // Superseded: settle as the latest read does, so its failure is not hidden.
+    if (generation !== importedGeneration) return latestRead ?? undefined
     importedStyles.value = styles.map(toStyle)
     importedListed.value = true
   })
+  latestRead = load
   importedLoad = load
   load.catch(() => {
     if (importedLoad === load) importedLoad = null
@@ -80,6 +85,7 @@ export function resetImportedStylesForTests(): void {
   importedStyles.value = []
   importedListed.value = false
   importedLoad = null
+  latestRead = null
   importedGeneration += 1
 }
 

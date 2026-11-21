@@ -86,4 +86,21 @@ describe('citation style registry', () => {
     await loadImportedStyles()
     expect(isCitationStyle(GONE)).toBe(true)
   })
+
+  it('fails an earlier read when the latest read fails, so the refusal is not hidden', async () => {
+    const answers: Array<(ok: boolean) => void> = []
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => {
+      answers.push((ok) => resolve(ok
+        ? new Response(JSON.stringify({ styles: listed }))
+        : new Response(JSON.stringify({ error: 'down' }), { status: 503 })))
+    })))
+    const earlier = loadImportedStyles(true)
+    const latest = loadImportedStyles(true)
+    await vi.waitFor(() => expect(answers).toHaveLength(2))
+    answers[1]?.(false)
+    await expect(latest).rejects.toBeTruthy()
+    answers[0]?.(true)
+    await expect(earlier).rejects.toBeTruthy()
+    expect(isCitationStyle(HOUSE)).toBe(false)
+  })
 })
