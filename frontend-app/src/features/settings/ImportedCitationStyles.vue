@@ -147,7 +147,9 @@ watch(settingsActiveCategory, (category) => {
         >{{ deleting === style.id ? 'Deleting…' : 'Delete' }}</PrksButton>
       </div>
     </div>
+    <label for="prks-import-citation-style-file" class="prks-sr-only" aria-hidden="true">Citation style file</label>
     <input
+      id="prks-import-citation-style-file"
       ref="fileInput"
       type="file"
       accept=".csl,application/vnd.citationstyles.style+xml,application/xml,text/xml"

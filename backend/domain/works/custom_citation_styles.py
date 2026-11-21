@@ -54,7 +54,7 @@ MAX_TITLE_CHARS = 300
 _CSL = "{http://purl.org/net/xbiblio/csl}"
 _DECLARATION_RE = re.compile(r"<!\s*(DOCTYPE|ENTITY)", re.IGNORECASE)
 # What citeproc-js's own XML parser misreads: a prefixed CSL element, and the ``&apos;`` entity.
-_PREFIXED_RE = re.compile(r"<\s*/?\s*[A-Za-z_][\w.-]*:")
+_PREFIXED_RE = re.compile(r"</?[A-Za-z_][\w.-]*:")  # XML allows no space after "<"
 _APOS = "&apos;"
 
 _LIST_SQL: LiteralString = """
