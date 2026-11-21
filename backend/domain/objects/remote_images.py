@@ -93,27 +93,34 @@ SUFFIXES = {"webp": ".webp", "jpeg": ".jpg"}
 # non-ASCII) and keeps the escapes it found, so a figure's text holds the
 # URL, its decoded form, or the form with only non-ASCII decoded (text that
 # mixes raw non-ASCII with escapes such as ``%20``), or its HTML-escaped form
-# (an inline ``<img src="...&amp;...">``).
-_NAMED: LiteralString = """
+# (an inline ``<img src="...&amp;...">``). The renderer also decodes
+# character references, so each text is matched a second time with its
+# ``'``, ``"`` and ``&`` references (``&#x27;``, ``&quot;``, ``&#38;``...)
+# decoded once, as an HTML parser reads them in an attribute: a numeric
+# reference may omit its ``;``, and so may ``&amp`` and ``&quot`` when no
+# letter, digit or ``=`` follows. Names are case-sensitive: HTML knows
+# ``&AMP;`` and ``&QUOT;`` but not ``&APOS;`` or ``&Amp;``. The HTML-escaped spelling is matched against the raw text
+# only: in decoded text it would name a URL that really contains ``&amp;``.
+_NAMED: LiteralString = r"""
+WITH texts AS (
+  SELECT body AS text FROM prks.work_notes WHERE library_id = %(library_id)s
+  UNION ALL SELECT description FROM prks.concepts WHERE library_id = %(library_id)s
+  UNION ALL SELECT description FROM prks.positions WHERE library_id = %(library_id)s
+  UNION ALL SELECT main_text FROM prks.arguments WHERE library_id = %(library_id)s
+)
 SELECT EXISTS (SELECT 1 FROM prks.assets
                WHERE library_id = %(library_id)s
                  AND (thumb_url = %(url)s OR split_part(thumb_url, '#', 1) = %(url)s))
-    OR EXISTS (SELECT 1 FROM prks.work_notes
-               WHERE library_id = %(library_id)s
-                 AND (strpos(body, %(url)s) > 0 OR strpos(body, %(decoded)s) > 0
-                      OR strpos(body, %(mixed)s) > 0 OR strpos(body, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.concepts
-               WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.positions
-               WHERE library_id = %(library_id)s
-                 AND (strpos(description, %(url)s) > 0 OR strpos(description, %(decoded)s) > 0
-                      OR strpos(description, %(mixed)s) > 0 OR strpos(description, %(escaped)s) > 0))
-    OR EXISTS (SELECT 1 FROM prks.arguments
-               WHERE library_id = %(library_id)s
-                 AND (strpos(main_text, %(url)s) > 0 OR strpos(main_text, %(decoded)s) > 0
-                      OR strpos(main_text, %(mixed)s) > 0 OR strpos(main_text, %(escaped)s) > 0)) AS named
+    OR EXISTS (SELECT 1 FROM texts CROSS JOIN unnest(%(raw)s::text[]) AS spelling
+               WHERE strpos(texts.text, spelling) > 0)
+    OR EXISTS (SELECT 1 FROM texts CROSS JOIN LATERAL (
+                 -- The & pass runs last, so no reference is decoded twice.
+                 SELECT regexp_replace(regexp_replace(regexp_replace(texts.text,
+                          '&(?:apos;|#0*39(?![0-9]);?|#[xX]0*27(?![0-9a-fA-F]);?)', '''', 'g'),
+                          '&(?:(?:quot|QUOT)(?:;|(?![0-9A-Za-z=]))|#0*34(?![0-9]);?|#[xX]0*22(?![0-9a-fA-F]);?)', '"', 'g'),
+                          '&(?:(?:amp|AMP)(?:;|(?![0-9A-Za-z=]))|#0*38(?![0-9]);?|#[xX]0*26(?![0-9a-fA-F]);?)', '&', 'g') AS text) AS decoded
+               CROSS JOIN unnest(%(decoded)s::text[]) AS spelling
+               WHERE strpos(decoded.text, spelling) > 0) AS named
 """
 _SAVED: LiteralString = """
 SELECT locator, sha256, byte_size FROM prks.remote_images
@@ -212,8 +219,8 @@ def named(scope: LibraryScope, url: str) -> bool:
     """Whether the Library's own content names ``url``; reads only."""
     mixed = _NON_ASCII_ESCAPES.sub(lambda match: unquote(match.group(0)), url)
     escaped = html.escape(url, quote=True)
-    row = scope.execute(_NAMED, {"url": url, "decoded": unquote(url), "mixed": mixed,
-                                 "escaped": escaped}).fetchone()
+    plain = [url, unquote(url), mixed]
+    row = scope.execute(_NAMED, {"url": url, "raw": [*plain, escaped], "decoded": plain}).fetchone()
     return bool(row is not None and row["named"])
 
 

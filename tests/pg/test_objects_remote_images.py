@@ -146,6 +146,27 @@ class SaveTests(RemoteImageTestCase):
         self.noted('<img src="https://example.org/chart.png?w=400&amp;format=png">')
         self.assertIsNotNone(self.save(url))
 
+    def test_an_ampersand_spelt_as_a_character_reference_matches(self) -> None:
+        for number, spelling in enumerate(("&#38;", "&#038;", "&#x26;", "&#X26;", "&AMP;",
+                                            "&#38", "&#0038")):
+            with self.subTest(spelling=spelling):
+                self.noted(f'<img src="https://example.org/chart{number}.png?w=400{spelling}format=png">')
+                self.assertIsNotNone(self.save(f"https://example.org/chart{number}.png?w=400&format=png"))
+
+    def test_quote_and_apostrophe_references_are_decoded_too(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&#38;label=O&#x27;Neil&amp;t=&quot;x&quot;">')
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=O'Neil&t=\"x\""))
+
+    def test_reference_names_are_case_sensitive(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&#38;label=&APOS;x&Amp;y">')
+        self.assertIsNone(self.save("https://example.org/chart.png?w=400&label='x&y"))
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&label=&APOS;x&Amp;y"))
+
+    def test_a_reference_is_decoded_only_once(self) -> None:
+        self.noted('<img src="https://example.org/chart.png?w=400&amp;amp;format=png">')
+        self.assertIsNone(self.save("https://example.org/chart.png?w=400&format=png"))
+        self.assertIsNotNone(self.save("https://example.org/chart.png?w=400&amp;format=png"))
+
     def test_an_uppercase_scheme_is_saved(self) -> None:
         url = "HTTPS://example.org/figures/Graph.png"
         self.noted(f"![x]({url})")
@@ -366,6 +387,26 @@ class LifecycleTests(RemoteImageTestCase):
                                          lambda scope: remote_images.prune_page(scope, ""))
         self.assertEqual(dropped, 1)  # the old figure
         self.assertEqual(set(self.rows()), {THUMB, recent})
+
+    def test_the_prune_keeps_a_figure_named_through_a_numeric_reference(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        work_id = self.noted(f"![x]({url})")
+        self.save(url)
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
+                 ('<img src="https://example.org/chart.png?w=400&#38;format=png">', work_id))
+        self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(set(self.rows()), {url})
+        self.assertEqual(self.claims(), set())
+
+    def test_the_prune_keeps_a_figure_named_through_a_reference_without_its_semicolon(self) -> None:
+        url = "https://example.org/chart.png?w=400&format=png"
+        work_id = self.noted(f"![x]({url})")
+        self.save(url)
+        self.sql("UPDATE prks.work_notes SET body = %s WHERE work_id = %s",
+                 ('<img src="https://example.org/chart.png?w=400&#38format=png">', work_id))
+        self.assertEqual(self.run_prune(), Outcome.SUCCEEDED)
+        self.assertEqual(set(self.rows()), {url})
+        self.assertEqual(self.claims(), set())
 
     def test_a_backup_carries_the_saved_copy(self) -> None:
         self.video()

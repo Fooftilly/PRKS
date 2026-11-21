@@ -33,14 +33,14 @@ Only the checks below run as tests. Anything not listed here has not been verifi
 
 These are open, tracked problems. Each fix belongs to its own issue.
 
-- **Contrast:** several text and control colors fail the AA contrast ratio in both Light and Dark, including primary buttons, tertiary and placeholder text, document-type badges and Light accent links ([#425](https://github.com/Fooftilly/PRKS/issues/425)). Accessibility-oriented themes are planned in [#423](https://github.com/Fooftilly/PRKS/issues/423).
+- **Contrast:** several text and control colors fail the AA contrast ratio in both Light and Dark, including primary buttons, tertiary and placeholder text, document-type badges and Light accent links. The measured pairs are in [#425](https://github.com/Fooftilly/PRKS/issues/425). That issue was closed so the fix could happen together with the Themes work in [#423](https://github.com/Fooftilly/PRKS/issues/423), which also plans accessibility-oriented themes. The failing colors are unchanged on master.
 - **Focus trapping:** create and settings modals do not keep keyboard focus inside the modal; Tab can reach the page behind ([#154](https://github.com/Fooftilly/PRKS/issues/154)).
 - **No skip link:** keyboard users pass about 27 sidebar, ribbon and tab controls before reaching page content ([#830](https://github.com/Fooftilly/PRKS/issues/830)).
 - **Forms that cannot be finished by keyboard:** New Folder, New Group and New Person ([#603](https://github.com/Fooftilly/PRKS/issues/603)), and New Playlist ([#589](https://github.com/Fooftilly/PRKS/issues/589)).
 - **Pickers that ignore ArrowDown and Enter:** parent pickers in New Folder, Move folder and New Group ([#467](https://github.com/Fooftilly/PRKS/issues/467)), and the Person Group member picker ([#709](https://github.com/Fooftilly/PRKS/issues/709)).
 - **Focus lost or misplaced after dialogs:** closing some prompts drops focus to the page body ([#487](https://github.com/Fooftilly/PRKS/issues/487)); a "Close without saving?" prompt focuses its destructive button ([#842](https://github.com/Fooftilly/PRKS/issues/842)).
 - **Missing state cues:** the Cards/List toggle has no visible selected state or focus ring ([#411](https://github.com/Fooftilly/PRKS/issues/411)).
-- **Other keyboard gaps:** Enter does not add a Tag alias ([#608](https://github.com/Fooftilly/PRKS/issues/608)); there are few keyboard shortcuts beyond Ctrl+K and no shortcut reference ([#566](https://github.com/Fooftilly/PRKS/issues/566)); a PDF reopened on its remembered page ignores keyboard paging for several seconds ([#377](https://github.com/Fooftilly/PRKS/issues/377)).
+- **Other keyboard gaps:** on the Publishers page, Enter does not add a publisher or an alias ([#1356](https://github.com/Fooftilly/PRKS/issues/1356)); there are few keyboard shortcuts beyond Ctrl+K and no shortcut reference ([#566](https://github.com/Fooftilly/PRKS/issues/566)); a PDF reopened on its remembered page ignores keyboard paging for several seconds ([#377](https://github.com/Fooftilly/PRKS/issues/377)).
 - **PDF content:** the reader shows PDFs as they are. PRKS does not add structure, tags or alternative text to a PDF that lacks them, and the accessibility of the PDF viewer with assistive technology is untested.
 
 This list may be incomplete. Search [open UX issues](https://github.com/Fooftilly/PRKS/issues?q=is%3Aissue+is%3Aopen+label%3Aux-finding) for the current set.
@@ -74,4 +74,4 @@ This statement is reviewed when any of these changes:
 
 Changes to this file go through ordinary pull requests, so its history shows each revision.
 
-_Last reviewed: 2026-11-06._
+_Last reviewed: 2026-11-21._
