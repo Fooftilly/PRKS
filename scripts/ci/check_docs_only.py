@@ -2,7 +2,10 @@
 
 Uses pinned markdown-it-py (CommonMark plus tables), not hand-written link
 regular expressions: references, parenthesized paths, escaped syntax and
-rendered heading content follow Markdown semantics.
+rendered heading content follow Markdown semantics. A changed page that the
+Publish Wiki workflow publishes (``docs/wiki/*.md`` except README) must also
+pass the publisher's own link validation, which the skipped unit suite would
+otherwise have run (tests/test_wiki_source_links.py).
 """
 
 from __future__ import annotations
@@ -16,6 +19,9 @@ from urllib.parse import unquote, urlsplit
 from markdown_it import MarkdownIt
 
 from scripts.ci.docs_only import changed_documentation, effective_base
+from scripts.ci.wiki_links import publish_errors
+
+WIKI_BASE = "https://github.com/Fooftilly/PRKS/wiki"
 
 _MARKDOWN = MarkdownIt("commonmark").enable("table")
 _PUNCT = re.compile(r"[^\w\- ]", re.UNICODE)
@@ -181,7 +187,18 @@ def check_markdown(root: Path, relative: str) -> list[str]:
                     errors.append(error)
     for open_fence in _unclosed_fences(content, tokens):
         errors.append(f"{relative}: unclosed {open_fence} fence")
+    if _is_published_wiki_page(relative):
+        errors.extend(publish_errors(content, WIKI_BASE, relative)[1])
     return errors
+
+
+def _is_published_wiki_page(relative: str) -> bool:
+    """A page the Publish Wiki workflow copies: docs/wiki/*.md except README."""
+    parts = relative.split("/")
+    return (
+        len(parts) == 3 and parts[:2] == ["docs", "wiki"]
+        and parts[2].endswith(".md") and parts[2] != "README.md"
+    )
 
 
 def main() -> int:

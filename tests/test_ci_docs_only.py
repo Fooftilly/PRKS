@@ -719,6 +719,23 @@ class DocsOnlyLinkValidationTests(unittest.TestCase):
             self.assertTrue(any("missing anchor" in x for x in errors))
             self.assertTrue(any("unclosed" in x for x in errors))
 
+    def test_published_wiki_page_must_pass_publisher_link_check(self):
+        # The skipped unit suite runs tests/test_wiki_source_links.py; a
+        # relative link to an existing repo file resolves in the checkout but
+        # 404s on the wiki, so the docs validator must reject it too.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            link = "[readme](../../README.md)\n"
+            _write(root, "README.md", "# Present\n")
+            _write(root, "docs/wiki/Page.md", link)
+            _write(root, "docs/wiki/README.md", link)
+            _write(root, "docs/other/guide.md", link)
+            errors = check_markdown(root, "docs/wiki/Page.md")
+            self.assertEqual(errors, ["docs/wiki/Page.md: ](../../README.md)"])
+            # README is not published; non-wiki pages keep checkout semantics.
+            self.assertEqual(check_markdown(root, "docs/wiki/README.md"), [])
+            self.assertEqual(check_markdown(root, "docs/other/guide.md"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
