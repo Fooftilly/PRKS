@@ -66,12 +66,14 @@ function toStyle(summary: ImportedStyleSummary): CitationStyle {
 export function loadImportedStyles(force = false): Promise<void> {
   if (importedLoad && !force) return importedLoad
   const generation = ++importedGeneration
+  // Superseded, by answer or by failure: settle as the latest read does.
+  const superseded = (): Promise<void> | null => (generation !== importedGeneration ? latestRead : null)
   const load: Promise<void> = listImportedStyles().then((styles) => {
-    // Superseded: settle as the latest read does, so its failure is not hidden.
-    if (generation !== importedGeneration) return latestRead ?? undefined
+    const latest = superseded()
+    if (latest) return latest
     importedStyles.value = styles.map(toStyle)
     importedListed.value = true
-  })
+  }, (error: unknown) => superseded() ?? Promise.reject(error))
   latestRead = load
   importedLoad = load
   load.catch(() => {
