@@ -116,7 +116,8 @@
         let k = i;
         while (k < n && text.charAt(k) === '`') k += 1;
         const run = k - i;
-        if (run >= 3 && atLineStart(text, i)) return null;
+        // No line-start case: liveMask opens a fence there first, and three or
+        // more backticks at a line start always open one.
         let j = k;
         while (j < n) {
             if (text.charAt(j) === '`') {

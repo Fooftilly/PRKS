@@ -9,11 +9,32 @@ target ``sync-envelope``) found those unpinned.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import os
+import time
 import unittest
+from collections.abc import Iterator
 from typing import Any
 
 from backend import sync_protocol as rules
+
+
+@contextlib.contextmanager
+def _local_time_zone(name: str) -> Iterator[None]:
+    """Run with ``name`` as the process's local time zone (POSIX ``TZ``)."""
+    previous = os.environ.get("TZ")
+    os.environ["TZ"] = name
+    time.tzset()
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = previous
+        time.tzset()
+
 
 OP_ID = "0000000a-0000-4000-8000-00000000000b"
 DEVICE_ID = "0000000c-0000-4000-8000-00000000000d"
@@ -109,6 +130,10 @@ class EnvelopeRuleTests(unittest.TestCase):
         forty = "2026-01-02T03:04:05.1234+00:00:00.000000"
         self.assertEqual(len(forty), 40)
         self.assertEqual(rules.normalize_timestamp(forty), "2026-01-02T03:04:05.123400+00:00")
+        # The canonical form is UTC whatever the server's local time zone is.
+        with _local_time_zone("PRKS-2"):  # POSIX: two hours east of UTC, no tzdata needed
+            self.assertEqual(rules.normalize_timestamp("2026-07-02T03:04:05+00:00"), "2026-07-02T03:04:05+00:00")
+            self.assertEqual(rules.normalize_timestamp("2026-07-02T05:04:05+02:00"), "2026-07-02T03:04:05+00:00")
         for bad in (None, "2026-01-02T03:04:05", "yesterday", forty + "0", "2026-01-02T03:04:05z"):
             with self.subTest(bad=bad), self.assertRaises(ValueError) as raised:
                 rules.normalize_timestamp(bad)
