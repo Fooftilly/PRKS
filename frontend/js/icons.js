@@ -227,16 +227,17 @@
         const key = name + '\n' + v;
         const known = cssVarClasses.get(key);
         if (known) return known;
+        // Without constructable stylesheets there is no CSP-safe way to set
+        // the value: return no class, and the element keeps its CSS default.
+        if (typeof document === 'undefined' || typeof CSSStyleSheet !== 'function' ||
+            !Array.isArray(document.adoptedStyleSheets)) return '';
         const cls = 'prks-var-' + (cssVarClasses.size + 1);
-        if (typeof document !== 'undefined' && typeof CSSStyleSheet === 'function' &&
-            Array.isArray(document.adoptedStyleSheets)) {
-            if (!cssVarSheet) {
-                cssVarSheet = new CSSStyleSheet();
-                document.adoptedStyleSheets = [...document.adoptedStyleSheets, cssVarSheet];
-            }
-            const index = cssVarSheet.insertRule('.' + cls + '{}', cssVarSheet.cssRules.length);
-            cssVarSheet.cssRules[index].style.setProperty(name, v, 'important');
+        if (!cssVarSheet) {
+            cssVarSheet = new CSSStyleSheet();
+            document.adoptedStyleSheets = [...document.adoptedStyleSheets, cssVarSheet];
         }
+        const index = cssVarSheet.insertRule('.' + cls + '{}', cssVarSheet.cssRules.length);
+        cssVarSheet.cssRules[index].style.setProperty(name, v, 'important');
         cssVarClasses.set(key, cls);
         return cls;
     }

@@ -63,7 +63,10 @@ class FrontendCspTests(unittest.TestCase):
         config = (ROOT / "frontend-app" / "vite.config.ts").read_text(encoding="utf-8")
         self.assertIn("cssInjectedByJsPlugin({ injectCodeFunction: injectPrksVueCss })", config)
         bundle = (FRONTEND / "vue" / "prks-vue.js").read_text(encoding="utf-8")
-        self.assertTrue(bundle.startswith("(function(){(function(e){let t=new CSSStyleSheet;"), bundle[:120])
+        prelude = bundle[: bundle.index("replaceSync(e)")]
+        self.assertTrue(bundle.startswith("(function(){(function(e){"), bundle[:120])
+        self.assertIn("new CSSStyleSheet", prelude)
+        self.assertNotIn("createElement", prelude)
 
     def test_cytoscape_finds_its_container_rule_already_present(self) -> None:
         index = (FRONTEND / "index.html").read_text(encoding="utf-8")
