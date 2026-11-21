@@ -5,6 +5,7 @@ Moved out of ``tests/test_work_deletion.py`` when PG-C2 (#641) retired its
 SQLite deletion tests; the PostgreSQL delete route uses the same helper.
 """
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -63,10 +64,8 @@ class ThumbnailStemTests(unittest.TestCase):
             prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
             prks_thumb_cache_stem("W-1", 1, "AS-A", source="b.pdf"),
         )
-        self.assertEqual(
-            prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
-            prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"),
-        )
+        digest = hashlib.sha256(b"a.pdf").hexdigest()[:16]
+        self.assertEqual(prks_thumb_cache_stem("W-1", 1, "AS-A", source="a.pdf"), f"W-1_p1_aAS-A_s{digest}_v2")
 
 
 class ThumbnailPruneTests(unittest.TestCase):
