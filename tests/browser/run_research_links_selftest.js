@@ -36,6 +36,11 @@ fixtures.forEach(function (row) {
     const okArgs = JSON.stringify(args) === JSON.stringify(row.arguments);
     record(row.id + ' concepts', okNames, okNames ? '' : JSON.stringify(names));
     record(row.id + ' arguments', okArgs, okArgs ? '' : JSON.stringify(args));
+    if (row.labels) {
+        const labels = markup.argumentRefs.map(function (r) { return r.label; });
+        const okLabels = JSON.stringify(labels) === JSON.stringify(row.labels);
+        record(row.id + ' labels', okLabels, okLabels ? '' : JSON.stringify(labels));
+    }
 });
 
 const xss = api.prksReplaceResearchRefs(

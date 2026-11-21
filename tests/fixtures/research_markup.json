@@ -52,6 +52,10 @@
     "arguments": [
       "A-12345",
       "A-99"
+    ],
+    "labels": [
+      "Adorno's standardization argument",
+      ""
     ]
   },
   {
@@ -469,6 +473,9 @@
     "concepts": [],
     "arguments": [
       "A-1"
+    ],
+    "labels": [
+      "a|b"
     ]
   },
   {

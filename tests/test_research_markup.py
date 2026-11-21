@@ -46,6 +46,8 @@ class ResearchMarkupTests(unittest.TestCase):
             args = [r.argument_id for r in markup.argument_refs]
             self.assertEqual(names, row["concepts"], row["id"])
             self.assertEqual(args, row["arguments"], row["id"])
+            if "labels" in row:
+                self.assertEqual([r.label for r in markup.argument_refs], row["labels"], row["id"])
 
     def test_bounds(self):
         too_long = "[[concept:" + ("A" * (CONCEPT_REF_MAX + 1)) + "]]"
