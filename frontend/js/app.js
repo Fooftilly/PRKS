@@ -4670,17 +4670,18 @@ window.handleRoute = handleRoute;
 
 
 /**
- * PDF creation is a plain request, so every Person it links must already be on
- * the server. A Person quick-created moment ago may still be queued locally:
- * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ * Wait (bounded) until this device's queued creations of ``ids`` retire,
+ * nudging sync while any is pending. ``pendingOf(ops)`` lists the unsettled
+ * creations; a refused (conflict) one will never reach the server, so it is
+ * not waited for.
  */
-async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
-    const ids = new Set(Array.from(personIds || []).filter(Boolean));
-    if (!ids.size || typeof prksPendingPersonCreates !== 'function') return true;
+async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
+    const wanted = new Set(Array.from(ids || []).filter(Boolean));
+    if (!wanted.size || typeof pendingOf !== 'function') return true;
     const deadline = Date.now() + (timeoutMs || 10000);
     for (;;) {
         const ops = await prksDurableOperationsOrNone();
-        const pending = prksPendingPersonCreates(ops).filter(op => ids.has(op.entity_id));
+        const pending = pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
         if (!pending.length) return true;
         if (Date.now() >= deadline) return false;
         if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
@@ -4690,6 +4691,26 @@ async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
             setTimeout(resolve, 200);
         });
     }
+}
+
+/**
+ * PDF creation is a plain request, so every Person it links must already be on
+ * the server. A Person quick-created moment ago may still be queued locally:
+ * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ */
+async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
+    return prksWaitForCreatesOnServer(personIds,
+        typeof prksPendingPersonCreates === 'function' ? prksPendingPersonCreates : null, timeoutMs);
+}
+
+/**
+ * The new Work's first Tags are attached with plain requests after it is
+ * created, so a Tag quick-created a moment ago must have reached the server
+ * first: its CREATE_TAG may still be queued locally.
+ */
+async function prksWaitForTagsOnServer(tagIds, timeoutMs) {
+    return prksWaitForCreatesOnServer(tagIds,
+        typeof prksPendingTagCreates === 'function' ? prksPendingTagCreates : null, timeoutMs);
 }
 
 /** A refused (4xx) create says plainly that no Work exists, so a retry is safe. */

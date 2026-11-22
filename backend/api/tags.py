@@ -145,10 +145,16 @@ def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
     if owner is None or not path.endswith("/tags"):
         return False
     owner_id = path.split("/")[3]
-    if owner == "work":
-        _commands().tag_work(*_actor(handler, db), owner_id, data.get("tag_id"))
-    else:
-        _commands().tag_folder(*_actor(handler, db), owner_id, data.get("tag_id"))
+    try:
+        if owner == "work":
+            _commands().tag_work(*_actor(handler, db), owner_id, data.get("tag_id"))
+        else:
+            _commands().tag_folder(*_actor(handler, db), owner_id, data.get("tag_id"))
+    except ValueError as e:
+        # A missing Work, Folder or Tag (e.g. a Tag whose creation is still
+        # queued on the client) is a refusal, not a server error.
+        handler.send_json(404, {"error": str(e)})
+        return True
     handler.send_json(200, {"status": "added"})
     return True
 

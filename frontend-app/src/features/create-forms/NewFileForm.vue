@@ -242,6 +242,7 @@ async function onSave(): Promise<void> {
     },
     offlineRefused: (message) => w.prksOfflineGuardMutation?.(message) === true,
     waitForPeople: (ids) => (typeof w.prksWaitForPeopleOnServer === 'function' ? w.prksWaitForPeopleOnServer(ids) : Promise.resolve(true)),
+    waitForTags: (ids) => (typeof w.prksWaitForTagsOnServer === 'function' ? w.prksWaitForTagsOnServer(ids) : Promise.resolve(true)),
     createPdfWork,
     attachTag: attachTagToWork,
     markCreated: (changes) => {

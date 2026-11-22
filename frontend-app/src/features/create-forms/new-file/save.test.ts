@@ -141,6 +141,7 @@ function recorder(overrides: Partial<NewFileSaveDeps> = {}, input: NewFileDraft 
     },
     offlineRefused: () => false,
     waitForPeople: async () => true,
+    waitForTags: async () => true,
     ...over(async (url, init) => {
       r.requests.push({ url, body: JSON.parse(init.body) as Record<string, unknown> })
       return url === '/api/works' ? json(200, { id: 'W-PDF' }) : json(200, { status: 'added' })
@@ -187,6 +188,37 @@ describe('validateDraft', () => {
 })
 
 describe('saveNewFile', () => {
+  it('attaches a quick-created Tag only once its creation reached the server', async () => {
+    const input = draft({ tags: [{ id: 'T-NEW', name: 'racetag' }] })
+    let release: (ready: boolean) => void = () => {}
+    const waited: string[][] = []
+    const r = recorder(
+      {
+        waitForTags: (ids) => {
+          waited.push(ids)
+          return new Promise<boolean>((resolve) => {
+            release = resolve
+          })
+        },
+      },
+      input,
+    )
+    const saving = saveNewFile(r.deps)
+    await vi.waitFor(() => expect(waited).toEqual([['T-NEW']]))
+    expect(r.requests.map((req) => req.url)).toEqual(['/api/works'])
+    release(true)
+    await saving
+    expect(r.requests.map((req) => req.url)).toEqual(['/api/works', '/api/works/W-PDF/tags'])
+    expect(r.alerts).toEqual([])
+  })
+
+  it('does not wait for Tags when the Work has none', async () => {
+    const waited: string[][] = []
+    const r = recorder({ waitForTags: async (ids) => (waited.push(ids), true) }, draft({ tags: [] }))
+    await saveNewFile(r.deps)
+    expect(waited).toEqual([])
+  })
+
   it('sends one PDF create with the roles, attaches tags, then opens the Work', async () => {
     const input = draft({
       roles: [{ person_id: 'P1', role_type: 'Editor', credit_name: 'A. N.' }],

@@ -111,6 +111,8 @@ export interface NewFileSaveDeps {
   ) => Promise<{ create?: { entity_id?: string } } | null>
   offlineRefused: (message: string) => boolean
   waitForPeople: (personIds: string[]) => Promise<boolean>
+  /** Resolves once the Tags' queued creations reached the server (false: timed out). */
+  waitForTags: (tagIds: string[]) => Promise<boolean>
   /** `POST /api/works` for a PDF (src/api/works-create.ts). */
   createPdfWork: (request: PdfWorkCreateRequest) => Promise<WorkCreated>
   /** `POST /api/works/:id/tags` for one of the new Work's first Tags. */
@@ -388,6 +390,10 @@ async function createWork(deps: NewFileSaveDeps, draft: NewFileDraft): Promise<v
   deps.markCreated({ people: roles.length > 0 })
 
   const newId = created.id
+  // A Tag quick-created a moment ago may still be queued on this device; its
+  // attach would find no such Tag on the server. A timeout still tries, and
+  // a refused attach is counted and said below.
+  if (tagsToAttach.length) await deps.waitForTags(tagsToAttach.map((tag) => tag.id))
   let tagsFailed = 0
   for (const tag of tagsToAttach) {
     try {
