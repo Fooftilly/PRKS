@@ -4673,16 +4673,20 @@ window.handleRoute = handleRoute;
  * Wait (bounded) until this device's queued creations of ``ids`` retire,
  * nudging sync while any is pending. ``pendingOf(ops)`` lists the unsettled
  * creations; a refused (conflict) one will never reach the server, so it is
- * not waited for.
+ * not waited for. A queue that cannot be read says nothing about them, so the
+ * read is retried until the deadline rather than taken as an empty queue.
+ * Without a local store nothing can be queued, so there is nothing to wait for.
  */
 async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
     const wanted = new Set(Array.from(ids || []).filter(Boolean));
     if (!wanted.size || typeof pendingOf !== 'function') return true;
+    if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store) return true;
     const deadline = Date.now() + (timeoutMs || 10000);
     for (;;) {
-        const ops = await prksDurableOperationsOrNone();
-        const pending = pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
-        if (!pending.length) return true;
+        const ops = await prksReadDurableOperations();
+        const pending = ops === null ? null
+            : pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
+        if (pending && !pending.length) return true;
         if (Date.now() >= deadline) return false;
         if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
             prksSync.changed();

@@ -388,6 +388,55 @@ async function usedTagCloudHidesMergingSourcesOnly() {
         'the source disappears but an unassigned new Tag is not added');
 }
 
+/* The New File form attaches its first Tags only once their CREATE_TAG has
+ * reached the server. A queue read that fails says nothing about that, so the
+ * shipped wait must read again rather than take the failure as an empty queue. */
+function tagWaitFor(store, changed) {
+    const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
+    const source = ['prksReadDurableOperations', 'prksWaitForCreatesOnServer', 'prksWaitForTagsOnServer']
+        .map(name => {
+            const marker = 'async function ' + name + '(';
+            const at = app.indexOf(marker);
+            assert.ok(at >= 0 && app.indexOf(marker, at + 1) < 0, 'one shipped ' + name);
+            const end = app.indexOf('\n}\n', at);
+            assert.ok(end > at);
+            return app.slice(at, end + 2);
+        }).join('\n');
+    const ctx = {
+        Set, Array, Date, Promise, setTimeout,
+        prksSync: store ? { store, changed } : null,
+        prksPendingTagCreates: globalThis.prksPendingTagCreates,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(source, ctx);
+    return ctx.prksWaitForTagsOnServer;
+}
+
+async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
+    const queued = { op_id: 'O-1', operation: 'CREATE_TAG', entity_type: 'tag', entity_id: 'T-NEW',
+        status: 'pending', payload: { name: 'New' } };
+    let reads = 0;
+    let nudges = 0;
+    const flaky = {
+        listOperations: async () => {
+            reads += 1;
+            if (reads === 1) throw new Error('IndexedDB read failed');
+            return reads === 2 ? [queued] : [];
+        },
+    };
+    const wait = tagWaitFor(flaky, () => { nudges += 1; });
+    assert.equal(await wait(['T-NEW'], 5000), true, 'the Tag arrives once its creation retires');
+    assert.equal(reads, 3, 'a failed read is read again, and a pending Tag is waited for');
+    assert.ok(nudges >= 2, 'sync is nudged while the answer is unknown or pending');
+
+    const broken = { listOperations: async () => { throw new Error('IndexedDB read failed'); } };
+    assert.equal(await tagWaitFor(broken, () => {})(['T-NEW'], 300), false,
+        'a queue that stays unreadable ends the wait unanswered, not as a success');
+
+    assert.equal(await tagWaitFor(null, () => {})(['T-NEW'], 300), true,
+        'without a local store nothing can be queued');
+}
+
 async function main() {
     await rapidTagCreateUsesOneDurableIdentity();
     await actualFolderTagEditorReportsQueueFailure();
@@ -402,6 +451,7 @@ async function main() {
     await mergeRefusesWhileTheSourceIsStillNamed();
     await aPendingMergeHidesTheSourceAndBlocksAttachment();
     await aRefusedCreationTakesItsAttachmentsDownVisibly();
+    await anUnreadableQueueIsNotTakenAsTheTagHavingArrived();
     console.log("All " + checks + " tag vocabulary checks passed");
 }
 
