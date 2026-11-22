@@ -1791,16 +1791,30 @@
          * resolution.
          */
         function savePdfAnnotation(workId, desired, observed) {
+            /* `observed` may be a function returning the observed base:
+             * it is then read inside the write, after the outbox is read, so
+             * an ACK of this annotation that lands meanwhile is in it (the
+             * sync runtime reconciles the caller's state before it marks the
+             * row acknowledged). A base read before the write could predate
+             * that ACK and send a stale revision. */
+            const given = observed;
+            const readObserved = typeof given === 'function'
+                ? given
+                : function () { return given; };
             const deleting = desired === null;
+            observed = readObserved();
             const annotationId = deleting
                 ? (observed && observed.annotation_id)
                 : (desired && desired.annotation_id);
             if (!isNonBlankString(workId) || !isNonBlankString(annotationId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid PDF annotation save.'));
             }
-            if (!isPlainObject(observed) ||
-                typeof observed.present !== 'boolean' ||
-                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+            function validObserved(value) {
+                return isPlainObject(value) &&
+                    typeof value.present === 'boolean' &&
+                    Number.isSafeInteger(value.revision) && value.revision >= 0;
+            }
+            if (!validObserved(observed)) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid observed annotation state.'));
             }
             if (!deleting) {
@@ -1866,6 +1880,11 @@
             return runIntent(async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(allRows, workId, 'annotated');
+                const fresh = readObserved();
+                if (!validObserved(fresh)) {
+                    throw localStoreError('invalid_base', 'Invalid observed annotation state.');
+                }
+                observed = fresh;
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
                 const neverSentRows = rows.filter(isNeverSent);

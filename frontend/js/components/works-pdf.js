@@ -3368,12 +3368,22 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         ));
         if (!annId && evt.kind !== 'delete') return null;
         const id = String(annId || '');
-        const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
-        const state = runtime.annotationState || null;
-        const observed = acknowledgedPdfAnnotationBase(ackList, state, id);
+        // The acknowledged base as the runtime holds it NOW. The store calls
+        // this inside its write, after it has read the outbox: an earlier
+        // ACK of this annotation can land between this intent and that write
+        // (sync reconciles the runtime before it marks the row acknowledged),
+        // and a base read before it would send a stale revision the server
+        // refuses with a 409 conflict.
+        function observe() {
+            const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
+            const state = runtime.annotationState || null;
+            const base = acknowledgedPdfAnnotationBase(ackList, state, id);
+            if (evt.kind === 'delete') base.annotation_id = id;
+            return base;
+        }
+        const observed = observe();
         if (evt.kind === 'delete') {
-            observed.annotation_id = id;
-            return { id: id, desired: null, observed: observed };
+            return { id: id, desired: null, observed: observed, observe: observe };
         }
         const raw = rawViewerAnnotation(evt, id);
         if (!raw) return null;
@@ -3381,6 +3391,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
             id: id,
             desired: { annotation_id: id, annotation: raw },
             observed: observed,
+            observe: observe,
         };
     }
 
@@ -3570,7 +3581,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                     const recorded = await window.prksSavePdfAnnotationDurably(
                         String(workId),
                         intent.desired,
-                        intent.observed
+                        intent.observe
                     );
                     if (!stillLive()) return;
                     adoptDurableAnnotationCache();

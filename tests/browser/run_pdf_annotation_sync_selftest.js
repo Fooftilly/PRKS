@@ -152,6 +152,43 @@ async function coalesceSetCancelAndSentSuccessor() {
     assert.equal(effective.find(a => a.id === 'ann-y').contents, 'again');
 }
 
+/* The back-to-back save E2E flake: the second save's base was read before the
+ * first save's ACK reached the runtime, and the write ran after it, so it sent
+ * the old revision and the server refused it with a 409 conflict. A base
+ * passed as a function is read inside the write, after the outbox is read. */
+async function observedBaseIsReadInsideTheWrite() {
+    const idb = createFakeIndexedDBFactory();
+    const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
+    await store.getOrCreateDeviceId();
+    const acked = highlight('ann-z', 'fourth');
+    let runtimeBase = { present: true, revision: 2, annotation: highlight('ann-z', 'third'), annotation_id: 'ann-z' };
+    const stale = runtimeBase;
+    const writing = store.savePdfAnnotation(
+        'W-1', { annotation_id: 'ann-z', annotation: highlight('ann-z', 'fifth') }, () => runtimeBase
+    );
+    /* The earlier save's ACK reconciles the runtime before this write runs. */
+    runtimeBase = { present: true, revision: 3, annotation: acked, annotation_id: 'ann-z' };
+    await writing;
+    let rows = await store.listOperations();
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].operation, 'SET_PDF_ANNOTATION');
+    assert.equal(rows[0].base_revision, 3, 'the base is the one the runtime holds when the write runs');
+    assert.equal(rows[0].payload.annotation.contents, 'fifth');
+
+    /* A plain object is still taken as given. */
+    await store.savePdfAnnotation('W-1', { annotation_id: 'ann-q', annotation: highlight('ann-q', 'x') },
+        Object.assign({}, stale, { annotation_id: 'ann-q', annotation: highlight('ann-q', 'y') }));
+    rows = await store.listOperations();
+    assert.equal(rows.find(r => r.payload.annotation_id === 'ann-q').base_revision, 2);
+
+    /* An invalid base read inside the write refuses the save. */
+    let calls = 0;
+    await assert.rejects(store.savePdfAnnotation(
+        'W-1', { annotation_id: 'ann-r', annotation: highlight('ann-r', 'x') },
+        () => (++calls === 1 ? { present: false, revision: 0, annotation: null, annotation_id: 'ann-r' } : null)
+    ), err => err && err.prksLocalStoreCode === 'invalid_base');
+}
+
 function handlerShapes() {
     const h = globalThis.prksPdfAnnotationSyncHandler;
     const createOp = {
@@ -381,6 +418,7 @@ async function main() {
     effectiveOverlay();
     await coalesceCreateSetDelete();
     await coalesceSetCancelAndSentSuccessor();
+    await observedBaseIsReadInsideTheWrite();
     handlerShapes();
     await conflictTerminalSettlesThroughStore();
     applyAckUpdatesLiveRuntimeRevision();
