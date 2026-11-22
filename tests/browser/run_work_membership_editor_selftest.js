@@ -37,16 +37,33 @@ global.prksOfflineRuntimeState = function () { return 'online'; };
 
 const syncListeners = [];
 const tagWrites = [];
+const outboxRows = [];
+const coalesceFailures = [];
+let onCoalesce = null;
 global.prksSync = {
     subscribe: function (fn) {
         syncListeners.push(fn);
-        return function () {};
+        return function () {
+            const at = syncListeners.indexOf(fn);
+            if (at !== -1) syncListeners.splice(at, 1);
+        };
     },
     changed: function () {},
     store: {
-        listOperations: async function () { return []; },
+        listOperations: async function () { return outboxRows.slice(); },
         coalesceWorkTag: async function () {
-            tagWrites.push(Array.prototype.slice.call(arguments));
+            const args = Array.prototype.slice.call(arguments);
+            tagWrites.push(args);
+            if (onCoalesce) onCoalesce(tagWrites.length);
+            if (coalesceFailures.length) throw coalesceFailures.shift();
+            /* The store's cancel: an opposite-direction draft that was never
+             * sent is deleted rather than followed by a second operation. */
+            const draft = outboxRows.findIndex(function (r) {
+                return r.entity_id === args[0] && r.payload.tag_id === args[1] &&
+                    r.status === 'pending' && !(r.attempt_count > 0) &&
+                    (r.operation === 'ADD_WORK_TAG') !== args[2];
+            });
+            if (draft !== -1) outboxRows.splice(draft, 1);
         },
     },
 };
@@ -121,7 +138,8 @@ global.__prksRefreshPlaylistSelects = async function () { refreshes += 1; };
 global.__prksRefreshAllPlaylistSelects = async function () { refreshes += 1; };
 global.prksEffectiveWorkTags = function (work) { return (work && work.tags) || []; };
 global.renderWorkTagsChips = function () { return '<span id="legacy-tags">Alpha</span>'; };
-global.prksWorkTagBase = function () { return { present: false, revision: 1 }; };
+const tagBase = { present: false, revision: 1 };
+global.prksWorkTagBase = function () { return tagBase; };
 global.prksOfflineDomainGeneration = function () { return 7; };
 
 let passed = 0;
@@ -400,6 +418,189 @@ async function tagBridgeAndOwner() {
     prksDestroyAllTabContexts();
 }
 
+function scopeBusy() {
+    const error = new Error('This Tag change is syncing or needs resolution.');
+    error.prksLocalStoreCode = 'scope_busy';
+    return error;
+}
+
+/* The real projection: the base comes from the editor's options, so an ACK
+ * only moves it through acceptAck. */
+function optionsBase(options, tagId) {
+    const row = options.assigned.find(function (t) { return t.tag_id === tagId; });
+    return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+}
+
+function ackAdd(listeners, add) {
+    listeners.forEach(function (fn) {
+        try {
+            fn({ operation: 'ADD_WORK_TAG', op: add, acknowledged: {
+                work_id: 'work-a', tag_id: 't1', present: true, server_revision: 2,
+                tag: { id: 't1', name: 'Alpha', color: null } } });
+        } catch (_) {}
+    });
+}
+function releaseAdd(add) {
+    add.status = 'pending';
+    add.attempt_count = 0;
+}
+function assertAcknowledgedRetry(outcome, t, retry, reads) {
+    assert('remove after the ADD is ' + outcome + ' records against the acknowledged base',
+        tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
+        retry[2] === false && retry[3] === true && retry[4] === 2,
+        JSON.stringify(tagWrites));
+    assert('remove after the ADD is ' + outcome + ' re-reads the base only without a local ACK',
+        t.reads() === reads, 'reads=' + t.reads());
+    assert('remove after the ADD is ' + outcome + ' leaves no error', !t.state.error,
+        String(t.state.error));
+}
+
+/* How each case settles the in-flight ADD, and what the remove must then do. */
+const IN_FLIGHT_OUTCOMES = {
+    acknowledged: {
+        settle: async function (t) { ackAdd(syncListeners.slice(t.before), t.add); outboxRows.length = 0; },
+        check: function (t, retry) { assertAcknowledgedRetry('acknowledged', t, retry, 0); },
+    },
+    'other-tab': {
+        /* Another tab's sender notifies only its own subscribers. */
+        settle: async function () { outboxRows.length = 0; },
+        check: function (t, retry) { assertAcknowledgedRetry('other-tab', t, retry, 1); },
+    },
+    'ack-during-read': {
+        settle: async function () { outboxRows.length = 0; },
+        check: function (t, retry) {
+            assert('a base read overtaken by an ACK is read again, not published',
+                t.reads() === 2 && tagWrites.length === 2 && retry[3] === true && retry[4] === 2,
+                'reads=' + t.reads() + ' ' + JSON.stringify(tagWrites));
+        },
+    },
+    released: {
+        settle: async function (t) { releaseAdd(t.add); t.emit({}); },
+        check: function (t, retry) {
+            assert('remove after a released claim rewrites the draft against the unchanged base',
+                t.reads() === 0 && tagWrites.length === 2 && retry[2] === false && retry[3] === false,
+                'reads=' + t.reads() + ' ' + JSON.stringify(tagWrites));
+            assert('remove after a released claim cancels the draft ADD', outboxRows.length === 0,
+                JSON.stringify(outboxRows));
+            assert('remove after a released claim leaves no error', !t.state.error, String(t.state.error));
+        },
+    },
+    reclaimed: {
+        /* Released, then claimed again before the retry lands: the retry is
+         * refused once more and waits, within the same budget, for the ACK. */
+        settle: async function (t) {
+            releaseAdd(t.add);
+            coalesceFailures.push(scopeBusy());
+            onCoalesce = function (n) { if (n === 2) { t.add.status = 'syncing'; t.add.attempt_count = 1; } };
+            t.emit({});
+            await until(function () { return tagWrites.length === 2 && syncListeners.length > t.mounted; },
+                'the reclaimed retry waits again');
+            onCoalesce = null;
+            ackAdd(syncListeners.slice(t.before), t.add);
+            outboxRows.length = 0;
+        },
+        check: function (t) {
+            const last = tagWrites[2] || [];
+            assert('a retry refused again keeps waiting and records against the acknowledged base',
+                tagWrites.length === 3 && last[2] === false && last[3] === true && last[4] === 2 && !t.state.error,
+                JSON.stringify(tagWrites) + ' ' + String(t.state.error));
+        },
+    },
+    conflict: {
+        settle: async function (t) { t.add.status = 'conflict'; t.emit({}); },
+        check: function (t) {
+            assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
+                JSON.stringify(tagWrites));
+            assert('remove after the ADD conflicts reports the failure', !!t.state.error,
+                String(t.state.error));
+        },
+    },
+    closed: {
+        settle: async function () { prksDestroyAllTabContexts(); },
+        check: function (t) {
+            assert('closing the editor removes the wait\'s sync listener',
+                syncListeners.length === t.before, 'listeners=' + syncListeners.length + ' before=' + t.before);
+            assert('closing the editor ends the wait without a retry',
+                tagWrites.length === 1 && Date.now() - t.started < 2000,
+                'writes=' + tagWrites.length + ' ms=' + (Date.now() - t.started));
+        },
+    },
+};
+
+/* The panel painted while the ADD was still a rewritable draft, so the chip's
+ * remove stayed enabled; the send then claimed the ADD. The remove waits for
+ * that ADD to leave the wire and records against the base it produced,
+ * instead of failing the click (the manage-tags add/remove E2E flake).
+ *
+ * acknowledged: the ACK reaches this editor's own subscriber (acceptAck).
+ * other-tab:    another tab sends it; the row vanishes with no event here at
+ *               all, so the wait finds it by polling and re-reads the base.
+ * released:     the claim goes back to an editable draft; the retry cancels it
+ *               against the unchanged base, with no re-read.
+ * conflict:     the ADD conflicts; the original failure stands.
+ * closed:       the editor closes mid-wait; the poll stops, nothing is retried.
+ * reclaimed:    sync claims it again before the retry; the retry waits again.
+ * ack-during-read: another ACK lands mid-read; the stale read is not used. */
+async function tagRemoveWaitsForInFlightAdd(outcome) {
+    resetCounts();
+    tagWrites.length = 0;
+    outboxRows.length = 0;
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    showWork(main, 'work-a', { tags: [] });
+    ownPanel(main);
+    main.ui.workDetailsMode = 'view';
+    global.prksVueRefreshWorkPanelRead = function () { return true; };
+    global.prksWorkTagBase = optionsBase;
+    let optionReads = 0;
+    global.prksReadWorkTagOptions = async function (workId) {
+        optionReads += 1;
+        if (outcome === 'ack-during-read' && optionReads === 1) {
+            /* Another Tag's ACK lands while this read is in flight: the
+             * snapshot predates it and must not replace state.options. */
+            syncListeners.slice(before).forEach(function (fn) {
+                try {
+                    fn({ operation: 'ADD_WORK_TAG', op: { op_id: 'op-other' }, acknowledged: {
+                        work_id: 'work-a', tag_id: 't2', present: true, server_revision: 5,
+                        tag: { id: 't2', name: 'Beta', color: null } } });
+                } catch (_) {}
+            });
+            return { value: { work_id: workId, assigned: [], known_absent: {} } };
+        }
+        return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }], known_absent: {} } };
+    };
+    panel().innerHTML = '<div id="work-tags-list"></div>';
+    const before = syncListeners.length;
+    prksMountWorkTags(main, 'work-a');
+    const state = main.getResource('workTagEditor');
+    state.options = { work_id: 'work-a', assigned: [], known_absent: {} };
+    state.catalog = [{ id: 't1', name: 'Alpha' }];
+    state.catalogGeneration = 7;
+    state.preparing = null;
+    const add = { op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
+        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1 };
+    outboxRows.push(add);
+    coalesceFailures.push(scopeBusy());
+    const mounted = syncListeners.length;
+    const edit = prksWorkTagEdit(main, 't1', false);
+    await until(function () { return syncListeners.length > mounted && tagWrites.length === 1; },
+        'remove waits on the in-flight ADD (' + outcome + ')');
+    assert('remove (' + outcome + ') does not retry while the ADD is still on the wire',
+        tagWrites.length === 1, 'writes=' + tagWrites.length);
+    const everyone = syncListeners.slice(before);
+    function emit(event) { everyone.forEach(function (fn) { try { fn(event); } catch (_) {} }); }
+    const t = { add: add, emit: emit, state: state, mounted: mounted, before: before,
+        reads: function () { return optionReads; } };
+    await IN_FLIGHT_OUTCOMES[outcome].settle(t);
+    t.started = Date.now();
+    await edit;
+    IN_FLIGHT_OUTCOMES[outcome].check(t, tagWrites[1] || []);
+    outboxRows.length = 0;
+    global.prksWorkTagBase = function () { return tagBase; };
+    delete global.prksReadWorkTagOptions;
+    prksDestroyAllTabContexts();
+}
+
 async function main() {
     try {
         await deferredFolder('set');
@@ -411,6 +612,13 @@ async function main() {
         await newPlaylistDuringRead('replaced');
         await newPlaylistDuringRead('secondary');
         await tagBridgeAndOwner();
+        await tagRemoveWaitsForInFlightAdd('acknowledged');
+        await tagRemoveWaitsForInFlightAdd('other-tab');
+        await tagRemoveWaitsForInFlightAdd('released');
+        await tagRemoveWaitsForInFlightAdd('conflict');
+        await tagRemoveWaitsForInFlightAdd('closed');
+        await tagRemoveWaitsForInFlightAdd('reclaimed');
+        await tagRemoveWaitsForInFlightAdd('ack-during-read');
     } catch (error) {
         failed += 1;
         console.log('FAIL  runtime exception ' + (error && error.stack || error));

@@ -273,6 +273,88 @@
             state.preparing = prepare(ctx, state);
         }
     }
+    /** This Work's unacknowledged change of `tagId` that can no longer be rewritten. */
+    function inFlightChange(rows, state, tagId) {
+        return rows.find(r => r.entity_type === 'work' && r.entity_id === state.workId &&
+            ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation) &&
+            r.payload && r.payload.tag_id === tagId && r.status !== 'acknowledged');
+    }
+    /**
+     * Wait (bounded) for this Tag's in-flight change on the Work to leave the
+     * wire. Resolves:
+     *  - 'acknowledged' when its ACK reached THIS runtime's subscribers, so
+     *    acceptAck has already moved state.options to the new base;
+     *  - 'draft' when the claim was released back to a never-sent draft: the
+     *    acknowledged base is unchanged and the retry rewrites the draft;
+     *  - 'settled' when it left the wire without this runtime seeing the ACK
+     *    (another tab sent it, or the ACK landed before this subscription).
+     *    state.options may be stale then, so the caller must re-read the base;
+     *  - false on a conflict, an unreadable store, or when the wait runs out.
+     *
+     * The subscription starts before the outbox is read, so no settle between
+     * the two is missed; a settle in another tab is found by a slow poll.
+     */
+    function inFlightSettled(ctx, state, tagId, timeoutMs) {
+        return new Promise(resolve => {
+            let finished = false;
+            let opId = null;
+            const timer = setTimeout(() => finish(false), timeoutMs || 10000);
+            /* Another tab's sender emits only to its own subscribers, so its
+             * settle is seen here by polling the shared outbox. */
+            const poll = setInterval(() => void look(), 250);
+            function finish(outcome) {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                clearInterval(poll);
+                stop();
+                resolve(outcome);
+            }
+            function look() {
+                /* A closed editor cannot save the retry: stop reading. */
+                if (!live(ctx, state)) { finish(false); return Promise.resolve(); }
+                return root.prksSync.store.listOperations().then(rows => {
+                    if (finished) return;
+                    if (opId === null) {
+                        const op = inFlightChange(rows, state, tagId);
+                        if (!op) { finish('settled'); return; }
+                        opId = op.op_id;
+                    }
+                    const row = rows.find(r => r.op_id === opId);
+                    if (!row || row.status === 'acknowledged') finish('settled');
+                    else if (row.status === 'conflict') finish(false);
+                    else if (row.status === 'pending' && !(row.attempt_count > 0)) finish('draft');
+                }, () => finish(false));
+            }
+            const stop = root.prksSync.subscribe(event => {
+                if (finished) return;
+                if (opId !== null && event && event.op && event.op.op_id === opId) {
+                    finish(event.acknowledged ? 'acknowledged' : false);
+                    return;
+                }
+                /* A terminal settle or a released claim emits without the op. */
+                void look();
+            });
+            void look();
+        });
+    }
+    /** The acknowledged base for `tagId` after its change left the wire. */
+    async function settledBase(ctx, state, tagId, outcome) {
+        for (let attempt = 0; outcome === 'settled' && attempt < 3; attempt += 1) {
+            const version = state.readVersion || 0;
+            const read = await root.prksReadWorkTagOptions(state.workId);
+            if (!read || !read.value || !live(ctx, state)) return null;
+            /* An ACK applied while reading (acceptAck bumps readVersion) is
+             * newer than this snapshot: read again rather than publish it. */
+            if ((state.readVersion || 0) !== version) continue;
+            /* Supersede any prepare() still reading the older projection. */
+            state.readVersion = version + 1;
+            state.options = read.value;
+            return root.prksWorkTagBase(state.options, tagId);
+        }
+        if (outcome === 'settled') return null;
+        return state.options ? root.prksWorkTagBase(state.options, tagId) : null;
+    }
     /**
      * `knownTag` is a Tag this device has just CREATED and not yet sent.
      *
@@ -303,7 +385,29 @@
             const base = root.prksWorkTagBase(state.options, tagId);
             if (!live(ctx, state)) return;
             if (!owns(ctx, state)) return;
-            await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
+            /* A click can race this Tag's earlier change going on the wire:
+             * the panel painted before the send disabled the chip. That
+             * envelope is immutable, so wait (within one budget, however
+             * often sync reclaims it) for it to leave the wire, and record
+             * this change against the base it produced rather than drop the
+             * click. */
+            const deadline = Date.now() + 10000;
+            let next = base;
+            for (;;) {
+                try {
+                    await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, next.present, next.revision, tag);
+                    break;
+                } catch (error) {
+                    const left = deadline - Date.now();
+                    if (!error || error.prksLocalStoreCode !== 'scope_busy' || left <= 0) throw error;
+                    const outcome = await inFlightSettled(ctx, state, tagId, left);
+                    if (!outcome) throw error;
+                    if (!live(ctx, state) || !owns(ctx, state)) return;
+                    next = await settledBase(ctx, state, tagId, outcome);
+                    if (!next) throw error;
+                    if (!live(ctx, state) || !owns(ctx, state)) return;
+                }
+            }
             queued = true;
             if (!live(ctx, state)) { root.prksSync.changed(); return true; }
             state.error = null;
