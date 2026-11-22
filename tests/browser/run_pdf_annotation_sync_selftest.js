@@ -270,27 +270,42 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     }
 }
 
-/* A save queued behind a sent predecessor whose ACK the runtime already holds
- * (after sync rebased dependents, before it marked the row acknowledged) takes
- * that ACK's exact revision, not the provisional base + 1. */
+/* A save queued behind a sent predecessor after sync's reconcile patched the
+ * runtime and rebased dependents, but before it marked the row acknowledged,
+ * takes that ACK's exact revision, not the provisional base + 1. A
+ * stale-identical ACK (changed: false) can land far above base + 1. */
 async function successorAfterTheRebaseUsesTheAckRevision() {
     const runtime = liveRuntime('ann-s', highlight('ann-s', 'v1'), 2);
     const { store } = await storeActingAfterOutboxRead();
     await store.savePdfAnnotation('W-1', { annotation_id: 'ann-s', annotation: highlight('ann-s', 'v2') },
         runtimeBase(runtime, 'ann-s'));
     const [first] = await store.listOperations();
-    await store.claimOperation(first.op_id);
+    const claimed = await store.claimOperation(first.op_id);
     await settle();
-    /* A stale-identical ACK can land far above base + 1. */
-    await withLiveRuntime(runtime, () => globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
-        ack('ann-s', highlight('ann-s', 'v2'), 9, 10), { op_id: first.op_id }
-    ));
-    await withLiveRuntime(runtime, () => store.savePdfAnnotation(
-        'W-1', { annotation_id: 'ann-s', annotation: highlight('ann-s', 'v3') }, writeBase(runtime, 'ann-s')
-    ));
-    const successor = (await store.listOperations()).find(r => r.op_id !== first.op_id);
-    assert.deepEqual(successor.depends_on, [first.op_id]);
-    assert.equal(successor.base_revision, 9);
+    const prevSync = globalThis.prksSync;
+    globalThis.prksSync = { store };
+    try {
+        await withLiveRuntime(runtime, async () => {
+            const ok = await globalThis.prksPdfAnnotationSyncHandler.reconcile({
+                code: 'ACKNOWLEDGED', work_id: 'W-1', annotation_id: 'ann-s', present: true,
+                annotation: highlight('ann-s', 'v2'), server_revision: 9, changed: false,
+                canonical_annotation_set_revision: 10,
+            }, claimed || first);
+            assert.equal(ok, true);
+            await store.savePdfAnnotation('W-1', { annotation_id: 'ann-s', annotation: highlight('ann-s', 'v3') },
+                writeBase(runtime, 'ann-s'));
+        });
+    } finally {
+        if (prevSync) globalThis.prksSync = prevSync;
+        else delete globalThis.prksSync;
+    }
+    /* Sync then settles the predecessor. */
+    await store.updateOperationSyncState(first.op_id, { status: 'acknowledged', last_error: null, server_revision: 9 });
+    const pending = (await store.listOperations()).filter(r => r.status === 'pending');
+    assert.equal(pending.length, 1);
+    assert.deepEqual(pending[0].depends_on, [first.op_id]);
+    assert.equal(pending[0].payload.annotation.contents, 'v3');
+    assert.equal(pending[0].base_revision, 9, 'the successor is sent with the ACK revision');
 }
 
 async function observedBaseForms() {
