@@ -73,12 +73,14 @@ from tests.e2e.policy import (
     merge_last_failed,
     per_test_watchdog_s,
     plan_ci_e2e,
+    plan_packaged_e2e,
     refine_ci_plan_with_tests,
     report_banner,
     save_failure_diagnostics,
     save_last_failed,
     select_affected,
     select_features,
+    select_packaged_routine,
     select_smoke,
     service_worker_diff_for_plan,
 )
@@ -1971,6 +1973,19 @@ def build_parser():
         help="Run the curated smoke suite (small essential shell + critical workflows).",
     )
     parser.add_argument(
+        "--packaged-routine",
+        action="store_true",
+        help=(
+            "Run the packaged gate's routine set: smoke plus every offline and "
+            "local-store durability module (used on the bundled frontend)."
+        ),
+    )
+    parser.add_argument(
+        "--packaged-plan",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--feature",
         action="append",
         default=[],
@@ -2096,6 +2111,7 @@ def _resolve_selection(args, all_ids):
         1
         for flag in (
             bool(args.smoke),
+            bool(args.packaged_routine),
             bool(args.feature),
             bool(args.affected),
             bool(args.last_failed),
@@ -2105,7 +2121,8 @@ def _resolve_selection(args, all_ids):
     )
     if selection_modes > 1:
         raise ValueError(
-            "use only one of: positional tests, --smoke, --feature, --affected, --last-failed"
+            "use only one of: positional tests, --smoke, --packaged-routine, --feature, "
+            "--affected, --last-failed"
         )
 
     if args.last_failed:
@@ -2149,6 +2166,10 @@ def _resolve_selection(args, all_ids):
     if args.smoke:
         ids = select_smoke(all_ids)
         return "smoke", ids, "%d curated smoke tests" % len(ids)
+
+    if args.packaged_routine:
+        ids = select_packaged_routine(all_ids)
+        return "packaged-routine", ids, "%d smoke and offline tests" % len(ids)
 
     if args.feature:
         names = []
@@ -2291,6 +2312,20 @@ def _main(argv=None) -> int:
             return 0
         print("::error::%s" % msg)
         return 1
+
+    if args.packaged_plan:
+        # Packaged gate: full when packaging paths change, else the routine
+        # set. An unusable comparison fails closed to the full run.
+        force = (os.environ.get("PRKS_E2E_CI_FORCE_FULL") or "").strip() in ("1", "true", "yes", "on")
+        try:
+            paths = [] if force else list_changed_paths(REPO, base=args.base, include_untracked=False)
+        except ChangeDiscoveryError as exc:
+            print("packaged-plan: change discovery failed, running the full set: %s" % exc, file=sys.stderr)
+            paths, force = [], True
+        plan = plan_packaged_e2e(paths, force_full=force)
+        plan["changed_paths"] = None if force else len(paths)
+        print(json.dumps(plan, sort_keys=True))
+        return 0
 
     if args.ci_plan:
         # Cheap-ish CI decision: no Chromium. Compare committed tree to --base

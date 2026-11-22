@@ -41,6 +41,7 @@ jobs:
           - codeql.yml
           - zizmor.yml
           - sonarcloud.yml
+          - e2e-classic-distribution-gate.yml
     steps:
       - name: Checkout PRKS
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

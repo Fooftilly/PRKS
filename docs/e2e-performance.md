@@ -74,6 +74,14 @@ Daily, `.github/workflows/e2e-selection-accuracy.yml` (advisory) runs `scripts/c
 
 The gate does not read the map. It is evidence for deciding whether it should. Not measured: vendored scripts, CSS and HTML, service and web workers, and app-side reloads no test call started.
 
+## Packaged distribution gate
+
+`.github/workflows/e2e-classic-distribution-gate.yml` (not required) re-runs browser tests on the bundled production frontend. Its `packaged-plan` job (`tests/e2e/run.py --packaged-plan`, rules in `plan_packaged_e2e` in `tests/e2e/policy.py`) picks the set:
+
+- a pull request that changes a `PACKAGED_FULL_PATHS` file (packaging scripts, `Dockerfile`, `frontend/sw.js`, the shell page, the manifest, the gate itself, `tests/e2e/run.py` or `tests/e2e/policy.py`) runs every test on 8 shards;
+- any other pull request that matches the gate's `paths` filter runs the routine set on 4 shards (`--packaged-routine`): smoke, the `offline` feature, every `*_offline` and `*_durable` module and the local-store modules in `PACKAGED_ROUTINE_MODULES`, the tests that depend on the bundles and on what the service worker precaches;
+- manual `full` and `compare` runs, including the nightly master CI (`master-ci.yml`, which dispatches `full`), run every test, so the rest of the suite still runs on the packaged frontend once per night after merges. Manual `smoke` runs only the curated smoke job.
+
 ## Moving coverage out of the browser
 
 Decide by coverage, never by duration. Classify each contract as KEEP, SPLIT or MOVE (`tests/e2e/AGENTS.md`). Land the faster replacement before removing the browser scenario, and never delete an E2E only because a similarly named unit test exists.

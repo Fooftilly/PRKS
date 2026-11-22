@@ -311,19 +311,18 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertEqual(len(SMOKE_TEST_IDS), 9)
         self.assertEqual(len(EXTRA_PACKAGED_SMOKE_IDS), 5)
 
-    def test_workflow_remains_full_on_every_pull_request(self):
+    def test_workflow_does_not_consume_this_dormant_planner(self):
+        # The gate's routine/full choice comes from tests/e2e/run.py
+        # --packaged-plan (policy.plan_packaged_e2e, pinned by
+        # tests/test_e2e_packaged_smoke_workflow.py); this smoke+affected
+        # candidate stays advisory and must not drive any job.
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        full = workflow.split("\n  packaged-frontend:\n", 1)[1].split("\n  packaged-smoke:\n", 1)[0]
         smoke = workflow.split("\n  packaged-smoke:\n", 1)[1]
-        self.assertIn(
-            "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
-            full,
-        )
-        self.assertIn("shard: [1, 2, 3, 4, 5, 6, 7, 8]", full)
+        self.assertIn("python tests/e2e/run.py --packaged-plan", workflow)
         self.assertIn("github.event_name == 'workflow_dispatch'", smoke)
-        self.assertNotIn("plan_packaged_e2e", workflow)
+        self.assertNotIn("scripts.ci.plan_packaged_e2e", workflow)
+        self.assertNotIn("scripts/ci/plan_packaged_e2e", workflow)
         self.assertNotIn("smoke_affected", workflow)
-
 
 if __name__ == "__main__":
     unittest.main()

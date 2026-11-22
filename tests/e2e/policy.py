@@ -1571,6 +1571,85 @@ def frontend_browser_change_requires_full_ci(changed_paths) -> bool:
     return False
 
 
+# Packaged classic distribution gate (e2e-classic-distribution-gate.yml).
+# It re-runs browser tests on the bundled production frontend, which differs
+# from the source tree in its classic-script bundles and in what the service
+# worker precaches. Routine pull requests run the tests that exercise those:
+# smoke plus every offline/durability module. A change to the packaging, the
+# service worker, the shell page or the gate itself runs every test, and so do
+# master (nightly master CI) and manual runs.
+PACKAGED_FULL_PATHS = (
+    "frontend/sw.js",
+    "frontend/index.html",
+    "frontend/manifest.webmanifest",
+    "Dockerfile",
+    "scripts/build_classic_distribution.py",
+    "scripts/e2e_classic_sw_transitions.py",
+    "scripts/benchmark_classic_script_bundle.py",
+    "tests/e2e/test_classic_sw_transitions.py",
+    "tests/test_classic_distribution.py",
+    "tests/test_e2e_classic_sw_transitions.py",
+    ".github/workflows/e2e-classic-distribution-gate.yml",
+    # The runner and planner that pick and run the packaged set.
+    "tests/e2e/run.py",
+    "tests/e2e/policy.py",
+)
+PACKAGED_FULL_SHARDS = 8
+PACKAGED_ROUTINE_SHARDS = 4
+# Modules whose tests depend on what the packaged service worker and local
+# stores hold, beside every ``*_offline`` and ``*_durable`` module.
+PACKAGED_ROUTINE_MODULES = (
+    "tests.e2e.test_browser_scope",
+    "tests.e2e.test_editor_recovery_store",
+    "tests.e2e.test_library_epoch",
+    "tests.e2e.test_local_store_durability",
+)
+
+
+def _is_packaged_routine_test(test_id: str) -> bool:
+    module = test_id.split(".")[:3]
+    if len(module) < 3 or module[:2] != ["tests", "e2e"]:
+        return False
+    name = ".".join(module)
+    return (
+        module[2].endswith(("_offline", "_durable"))
+        or module[2] == "test_offline"
+        or name in PACKAGED_ROUTINE_MODULES
+    )
+
+
+def select_packaged_routine(all_ids):
+    """Smoke, the offline feature and every offline/durable module, in suite order.
+
+    A module that fails to import shows up as a ``unittest.loader._FailedTest``
+    entry, which no filter would keep; refuse the selection instead, so a broken
+    module fails the shard as it does on a full run.
+    """
+    broken = [tid for tid in all_ids if not str(tid).startswith("tests.e2e.")]
+    if broken:
+        raise ValueError("E2E discovery failed: %s" % ", ".join(broken[:8]))
+    chosen = set(select_smoke(all_ids)) | set(select_features(all_ids, ["offline"]))
+    chosen |= {tid for tid in all_ids if _is_packaged_routine_test(tid)}
+    return [tid for tid in all_ids if tid in chosen]
+
+
+def plan_packaged_e2e(changed_paths, *, force_full: bool = False) -> dict:
+    """Full or routine packaged run for one pull request (never skip: the path filter decides that)."""
+    risky = [p for p in (_posix(path) for path in changed_paths)
+             if any(_path_matches(p, pattern) for pattern in PACKAGED_FULL_PATHS)]
+    if force_full or risky:
+        reason = "full packaged run requested" if force_full else "packaging paths changed: " + ", ".join(risky[:8])
+        mode, shards = "full", PACKAGED_FULL_SHARDS
+    else:
+        reason = "routine packaged run: smoke and offline modules"
+        mode, shards = "routine", PACKAGED_ROUTINE_SHARDS
+    return {
+        "mode": mode,
+        "reason": reason,
+        "matrix": {"include": [{"shard": i, "total": shards} for i in range(1, shards + 1)]},
+    }
+
+
 def plan_ci_e2e(changed_paths, *, force_full: bool = False, path_diffs=None):
     """Authoritative CI gate plan for ``--ci-plan`` / e2e-gate.yml.
 

@@ -16,7 +16,9 @@ import requests
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-8])/8\)\Z")
 SMOKE_JOB = "Packaged classic smoke (manual pilot)"
-SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/8)"
+# Smoke runs skip the plan job, so the matrix-named job stays unexpanded.
+SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/${{ matrix.total }})"
+PLAN_JOB = "Packaged E2E plan"
 SHARED_JOBS = (
     "Docker classic bundle and rollback build smoke",
     "Classic bundle SW upgrade and rollback (real Chromium)",
@@ -152,15 +154,17 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
     shard_ids = sorted(_shard_number(j) for j in shards)
     if shard_ids != list(range(1, 9)) or len(smoke) != 1:
         raise InvalidBenchmark("Paired run requires all eight full shards and one smoke job")
-    permitted = {*(j["name"] for j in shards), SMOKE_JOB, *SHARED_JOBS}
+    permitted = {*(j["name"] for j in shards), SMOKE_JOB, PLAN_JOB, *SHARED_JOBS}
     if any(j.get("name") not in permitted for j in active):
         raise InvalidBenchmark("Unexpected successful job in paired run")
     skipped = {j.get("name") for j in jobs if j.get("conclusion") == "skipped"}
     if SMOKE_JOB in skipped or SKIPPED_FULL_MATRIX in skipped:
         raise InvalidBenchmark("Paired run contains a skipped browser mode")
     guard_jobs = [j for j in active if j.get("name") in SHARED_JOBS]
+    # A standalone full dispatch pays for the plan job; standalone smoke skips it.
+    plan_jobs = [j for j in active if j.get("name") == PLAN_JOB]
 
-    def select(mode: str, browser_jobs: list[dict]) -> dict:
+    def select(mode: str, browser_jobs: list[dict], extra: list[dict]) -> dict:
         def minutes(selected: list[dict]) -> float:
             return sum(_seconds(j["started_at"], j["completed_at"]) for j in selected) / 60
         return {
@@ -170,12 +174,12 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
             "browser_count": len(browser_jobs),
             "browser_minutes": minutes(browser_jobs),
             "shared_minutes": minutes(guard_jobs),
-            "all_job_minutes": minutes(browser_jobs + guard_jobs),
+            "all_job_minutes": minutes(browser_jobs + guard_jobs + extra),
             "longest_browser_minutes": max(
                 _seconds(j["started_at"], j["completed_at"]) for j in browser_jobs
             ) / 60,
         }
-    return select("full", shards), select("smoke", smoke)
+    return select("full", shards, plan_jobs), select("smoke", smoke, [])
 
 
 def compare(full: dict, smoke: dict, *, paired: bool = False) -> str:

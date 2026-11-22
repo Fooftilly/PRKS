@@ -25,20 +25,34 @@ def job_source(workflow: str, job: str) -> str:
 
 
 class PackagedSmokeWorkflowTests(unittest.TestCase):
-    def test_pull_requests_always_run_all_eight_packaged_shards(self):
+    def test_pull_requests_run_the_planned_packaged_shards(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        plan = job_source(workflow, "packaged-plan")
         full = job_source(workflow, "packaged-frontend")
         self.assertIn("  pull_request:\n", workflow)
         self.assertIn(
             "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
-            full,
+            plan,
         )
-        self.assertIn("shard: [1, 2, 3, 4, 5, 6, 7, 8]", full)
-        self.assertIn("PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}", full)
+        # Manual runs (including the nightly master CI) always run every test.
         self.assertIn(
-            'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/8" --no-pointer-capture',
+            "PRKS_E2E_CI_FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}",
+            plan,
+        )
+        self.assertIn('--packaged-plan --base "origin/${BASE_REF}"', plan)
+        # A failed base fetch runs every test rather than no plan at all.
+        self.assertIn('plan="$(PRKS_E2E_CI_FORCE_FULL=1 python tests/e2e/run.py --packaged-plan)"', plan)
+        self.assertIn('if mode not in ("full", "routine") or not include:', plan)
+        self.assertIn("needs: packaged-plan", full)
+        self.assertIn("matrix: ${{ fromJSON(needs.packaged-plan.outputs.matrix) }}", full)
+        self.assertIn("PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}", full)
+        self.assertIn("PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}", full)
+        self.assertIn(
+            'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}"',
             full,
         )
+        self.assertIn('if [[ "${PRKS_E2E_PACKAGED_MODE}" == "routine" ]]; then', full)
+        self.assertIn("selection=(--packaged-routine)", full)
 
         # Both real Docker packaging/rollback and browser SW transitions
         # remain standalone jobs on PRs and both manual modes.
@@ -53,7 +67,7 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             "format('{0}-{1}', github.ref, inputs.packaged_mode) }}",
             workflow,
         )
-        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
 
     def test_smoke_is_explicit_manual_only_and_stages_real_distribution(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -85,8 +99,9 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
         )
         self.assertIn(
             "if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'",
-            full,
+            job_source(workflow, "packaged-plan"),
         )
+        self.assertIn("needs: packaged-plan", full)
         # Conditions must be attached to their actual job, not merely
         # present somewhere in the workflow. Both independent guard jobs
         # remain unconditional for PRs, full, smoke and paired runs.

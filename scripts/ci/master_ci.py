@@ -52,6 +52,8 @@ WORKFLOWS = (
     "zizmor.yml",
     # Coverage for SonarCloud is measured here only, not on pull requests.
     "sonarcloud.yml",
+    # Pull requests run a routine packaged set; master runs every test there.
+    "e2e-classic-distribution-gate.yml",
 )
 POLL_SECONDS = 60
 # How long a dispatched run may take to appear in the run list.
