@@ -196,10 +196,22 @@ class BrowseOfflineTests(unittest.TestCase):
     def test_recent_renders_offline_from_its_own_snapshot(self):
         server, page, context, _c = self.start()
         ids = server.ids
-        o._open_work_from_home(page, WORK_A_TITLE)
-        o._wait_entity_cached(page, 'work', ids['work_a'])
         # The Work-open ACK bumps Recent's generation; fetch Recent after it
-        # retires, or its cache write is refused (see cache_all).
+        # retires, or its cache write is refused (see cache_all). The open is
+        # recorded fire-and-forget, so an empty outbox alone can mean it is not
+        # stored YET: wait for its acknowledgement first, as cache_all does.
+        with page.expect_response(
+            lambda response: (
+                urlparse(response.url).path == '/api/sync/operations'
+                and response.request.method == 'POST'
+                and (response.request.post_data_json or {}).get('operation') == 'MARK_WORK_OPENED'
+                and (response.request.post_data_json or {}).get('entity_id') == ids['work_a']
+            ),
+        ) as opened:
+            o._open_work_from_home(page, WORK_A_TITLE)
+        self.assertEqual(opened.value.json().get('code'), 'ACKNOWLEDGED',
+                         'Work-open event must be acknowledged before Recent warm-up')
+        o._wait_entity_cached(page, 'work', ids['work_a'])
         o._drain_durable(page, message='Work-open operation did not retire before Recent warm-up')
         self.recent(page)
         o._wait_list_cached(page, 'recent:index')
