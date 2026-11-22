@@ -92,7 +92,9 @@ Compares the working tree (+ relevant untracked production/E2E paths) to
 `HEAD`, or to `--base <ref>` when given. Prints every changed path, the rule
 that matched, and the selected features. Per path, **every matching non-skip
 rule contributes features** (union; prefer over-test). Skip rules apply only
-when no take rule matches. Unmapped production files fall back to **smoke**
+when no take rule matches, except `frontend-unit-tests` (the files Vitest runs,
+mirroring `test.include` in `frontend-app/vite.config.ts`), which always skips:
+those files never enter the Vue bundle. Unmapped production files fall back to **smoke**
 (not the full suite) locally; CI fails closed to **full**. Unmapped Python
 under `tests/e2e/` (support modules such as `inventory.py`) is treated the
 same way. Shared core (`app.js`, `server.py`, `prks_app.py`, …) and other

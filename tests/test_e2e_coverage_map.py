@@ -370,6 +370,15 @@ class SelectForDiffTests(unittest.TestCase):
         self._commit()
         self.assertEqual(self._select(**overrides)["files"][VUE]["why"], "vue-style")
 
+    def test_a_vitest_only_change_selects_nothing(self):
+        overrides = self._vue_repo()
+        spec = self.repo / "frontend-app" / "src" / "components" / "Card.test.ts"
+        spec.write_text("it('renders', () => {})\n")
+        self._commit()
+        result = self._select(**overrides)
+        self.assertEqual(result["mode"], "skip")
+        self.assertEqual(result["files"]["frontend-app/src/components/Card.test.ts"]["rule"], "skip")
+
     def test_any_other_sw_change_is_not_derived(self):
         overrides = self._vue_repo()
         sw = self.repo / "frontend" / "sw.js"
