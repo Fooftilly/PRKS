@@ -80,7 +80,7 @@ The gate does not read the map. It is evidence for deciding whether it should. N
 
 - a pull request that changes a `PACKAGED_FULL_PATHS` file (packaging scripts, `Dockerfile`, `frontend/sw.js`, the shell page, the manifest, the gate itself, `tests/e2e/run.py` or `tests/e2e/policy.py`) runs every test on 8 shards;
 - any other pull request that matches the gate's `paths` filter runs the routine set on 4 shards (`--packaged-routine`): smoke, the `offline` feature, every `*_offline` and `*_durable` module and the local-store modules in `PACKAGED_ROUTINE_MODULES`, the tests that depend on the bundles and on what the service worker precaches;
-- manual runs, including the nightly master CI (`master-ci.yml`), run every test, so the rest of the suite still runs on the packaged frontend once per night after merges.
+- manual `full` and `compare` runs, including the nightly master CI (`master-ci.yml`, which dispatches `full`), run every test, so the rest of the suite still runs on the packaged frontend once per night after merges. Manual `smoke` runs only the curated smoke job.
 
 ## Moving coverage out of the browser
 
