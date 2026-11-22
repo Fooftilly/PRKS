@@ -234,6 +234,27 @@ class MainWithMapTests(unittest.TestCase):
                              "--output", str(Path(raw) / "r.json")])
 
 
+class RefTests(unittest.TestCase):
+    def test_plain_revisions_are_accepted(self):
+        for ref in ("origin/master", "HEAD", "a" * 40, "HEAD~1", "v1.0^{commit}"):
+            with self.subTest(ref=ref):
+                self.assertEqual(shadow.checked_ref(ref), ref)
+
+    def test_options_and_odd_names_never_reach_git_or_the_planner(self):
+        for ref in ("--output=/tmp/x", "-c", "", "a b", "base..head", "x;rm"):
+            with self.subTest(ref=ref), \
+                    mock.patch.object(shadow.subprocess, "run", side_effect=AssertionError("ran")):
+                with self.assertRaises(ValueError):
+                    shadow._rev(ref)
+                with self.assertRaises(ValueError):
+                    shadow.planner(ref)
+
+    def test_the_command_line_refuses_an_option_as_base(self):
+        with tempfile.TemporaryDirectory() as raw, mock.patch("sys.stderr"), \
+                self.assertRaises(SystemExit):
+            shadow.main(["--base=--upload-pack=x", "--plan-only", "--output", str(Path(raw) / "p.json")])
+
+
 class WiringTests(unittest.TestCase):
     def test_the_workflow_is_advisory_and_reads_actions_only(self):
         text = (ROOT / ".github/workflows/e2e-selection-shadow.yml").read_text(encoding="utf-8")

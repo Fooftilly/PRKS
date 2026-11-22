@@ -118,8 +118,28 @@ def read_map(zipped: bytes, name: str) -> dict[str, Any]:
     return json.loads(gzip.decompress(raw).decode("utf-8"))
 
 
+# A revision name for git: never empty, never an option (no leading "-"),
+# and only the characters branch names, SHAs and rev suffixes use.
+_REF_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./@^~{}-]*")
+
+
+def checked_ref(ref: str) -> str:
+    """Return ``ref`` when it is a plain revision name, else raise ValueError."""
+    if not _REF_RE.fullmatch(ref) or ".." in ref:
+        raise ValueError(f"not a plain git revision: {ref!r}")
+    return ref
+
+
+def _ref_argument(value: str) -> str:
+    try:
+        return checked_ref(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
 def planner(base: str) -> dict[str, Any]:
     """What the E2E gate runs for this PR (the same call as e2e-gate.yml's plan step)."""
+    base = checked_ref(base)
     env = {**os.environ, "PRKS_E2E": "1", "PRKS_E2E_CI_FRONTEND_FULL": "1"}
     env.pop("PRKS_E2E_CI_FORCE_FULL", None)
     out = subprocess.run(  # nosec B603 - fixed argv
@@ -130,8 +150,9 @@ def planner(base: str) -> dict[str, Any]:
 
 
 def _rev(ref: str) -> str:
+    ref = checked_ref(ref)
     return subprocess.run(  # nosec B603 B607 - fixed argv
-        ["git", "rev-parse", ref], cwd=ROOT, check=True, capture_output=True, text=True,
+        ["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.strip()
 
 
@@ -161,7 +182,7 @@ def summarize(shadow: dict[str, Any] | None, plan: dict[str, Any], why: str, map
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--base", required=True)
+    parser.add_argument("--base", required=True, type=_ref_argument)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan-only", action="store_true",
                         help="write only the gate plan to --output (run in the gate's plan-time environment)")
