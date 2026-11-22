@@ -558,7 +558,13 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
         if (outcome === 'ack-during-read' && optionReads === 1) {
             /* Another Tag's ACK lands while this read is in flight: the
              * snapshot predates it and must not replace state.options. */
-            state.readVersion = (state.readVersion || 0) + 1;
+            syncListeners.slice(before).forEach(function (fn) {
+                try {
+                    fn({ operation: 'ADD_WORK_TAG', op: { op_id: 'op-other' }, acknowledged: {
+                        work_id: 'work-a', tag_id: 't2', present: true, server_revision: 5,
+                        tag: { id: 't2', name: 'Beta', color: null } } });
+                } catch (_) {}
+            });
             return { value: { work_id: workId, assigned: [], known_absent: {} } };
         }
         return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }], known_absent: {} } };
