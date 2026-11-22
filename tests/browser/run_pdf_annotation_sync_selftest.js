@@ -281,6 +281,11 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     base = globalThis.prksPdfAnnotationBaseForWrite(fresh, 'ann-n', freshBase, runtimeBase(fresh, 'ann-n'));
     assert.equal(base.present, true);
     assert.equal(base.acknowledged_op_id, 'op-create');
+    /* The same CREATE ACK does not explain a write captured at a tombstone. */
+    const tombstone = { annotation_id: 'ann-n', present: false, revision: 5, annotation: null };
+    base = globalThis.prksPdfAnnotationBaseForWrite(fresh, 'ann-n', tombstone, runtimeBase(fresh, 'ann-n'));
+    assert.equal(base.present, false, 'a CREATE step starts only at absent revision 0');
+    assert.equal(base.revision, 5);
 
     /* Any id string works, including ones an object inherits. */
     for (const id of ['__proto__', 'constructor', 'toString']) {
