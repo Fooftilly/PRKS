@@ -152,33 +152,140 @@ async function coalesceSetCancelAndSentSuccessor() {
     assert.equal(effective.find(a => a.id === 'ann-y').contents, 'again');
 }
 
-/* The back-to-back save E2E flake: the second save's base was read before the
- * first save's ACK reached the runtime, and the write ran after it, so it sent
- * the old revision and the server refused it with a 409 conflict. A base
- * passed as a function is read inside the write, after the outbox is read. */
-async function observedBaseIsReadInsideTheWrite() {
+function liveRuntime(id, body, revision) {
+    return {
+        workId: 'W-1',
+        annotationCache: { items: [body], allItems: [body], rawItems: [body] },
+        annotationState: { work_id: 'W-1', annotations: [{ annotation_id: id, revision: revision }], known_absent: {} },
+    };
+}
+
+function runtimeBase(runtime, id) {
+    return globalThis.prksAcknowledgedPdfAnnotationBase(runtime.annotationCache.items, runtime.annotationState, id);
+}
+
+async function withLiveRuntime(runtime, fn) {
+    const prev = globalThis.prksForEachLiveTabContext;
+    globalThis.prksForEachLiveTabContext = function (visit) { visit({ getResource: () => runtime }); };
+    try {
+        return await fn();
+    } finally {
+        if (prev) globalThis.prksForEachLiveTabContext = prev;
+        else delete globalThis.prksForEachLiveTabContext;
+    }
+}
+
+/* Builds the store the way the app does, and runs `act` once, right after the
+ * save's transaction has read the outbox and before it reads the base. */
+async function storeActingAfterOutboxRead() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
     await store.getOrCreateDeviceId();
-    const acked = highlight('ann-z', 'fourth');
-    let runtimeBase = { present: true, revision: 2, annotation: highlight('ann-z', 'third'), annotation_id: 'ann-z' };
-    const stale = runtimeBase;
-    const writing = store.savePdfAnnotation(
-        'W-1', { annotation_id: 'ann-z', annotation: highlight('ann-z', 'fifth') }, () => runtimeBase
-    );
-    /* The earlier save's ACK reconciles the runtime before this write runs. */
-    runtimeBase = { present: true, revision: 3, annotation: acked, annotation_id: 'ann-z' };
-    await writing;
-    let rows = await store.listOperations();
+    const operations = idb.__databases.get('prks-local-v2:test')._stores.get('operations');
+    return {
+        store,
+        once(act) {
+            operations.afterGetAll = function () {
+                operations.afterGetAll = null;
+                act();
+            };
+        },
+    };
+}
+
+function writeBase(runtime, id) {
+    const captured = runtimeBase(runtime, id);
+    return () => globalThis.prksPdfAnnotationBaseForWrite(runtime, id, captured, runtimeBase(runtime, id));
+}
+
+function ack(id, body, revision, setRevision) {
+    return {
+        work_id: 'W-1', annotation_id: id, present: true, annotation: body,
+        server_revision: revision, changed: true, canonical_annotation_set_revision: setRevision,
+    };
+}
+
+/* The back-to-back save E2E flake: the second save's base was read before the
+ * first save's ACK reached the runtime, and the write ran after it, so it sent
+ * the old revision and the server refused it with a 409 conflict. The base is
+ * read inside the write, after the outbox, and this device's own ACK moves it. */
+async function ownAckDuringTheWriteMovesTheBase() {
+    const runtime = liveRuntime('ann-z', highlight('ann-z', 'third'), 2);
+    const { store, once } = await storeActingAfterOutboxRead();
+    once(() => globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+        ack('ann-z', highlight('ann-z', 'fourth'), 3, 7), { op_id: 'op-earlier' }
+    ));
+    await withLiveRuntime(runtime, () => store.savePdfAnnotation(
+        'W-1', { annotation_id: 'ann-z', annotation: highlight('ann-z', 'fifth') }, writeBase(runtime, 'ann-z')
+    ));
+    const rows = await store.listOperations();
     assert.equal(rows.length, 1);
     assert.equal(rows[0].operation, 'SET_PDF_ANNOTATION');
-    assert.equal(rows[0].base_revision, 3, 'the base is the one the runtime holds when the write runs');
+    assert.equal(rows[0].base_revision, 3, 'the own ACK that landed during the write is the base');
     assert.equal(rows[0].payload.annotation.contents, 'fifth');
+}
 
+/* Another device's edit that a catch-up snapshot loads during the write is not
+ * this device's ACK: the write keeps the base the user edited, so the server
+ * reports the conflict instead of the save overwriting an edit never seen. */
+async function catchUpDuringTheWriteKeepsTheBase() {
+    const runtime = liveRuntime('ann-c', highlight('ann-c', 'mine'), 2);
+    const { store, once } = await storeActingAfterOutboxRead();
+    once(() => {
+        const theirs = highlight('ann-c', 'theirs');
+        runtime.annotationCache = { items: [theirs], allItems: [theirs], rawItems: [theirs] };
+        runtime.annotationState = { work_id: 'W-1', annotations: [{ annotation_id: 'ann-c', revision: 3 }], known_absent: {} };
+    });
+    await withLiveRuntime(runtime, () => store.savePdfAnnotation(
+        'W-1', { annotation_id: 'ann-c', annotation: highlight('ann-c', 'edited') }, writeBase(runtime, 'ann-c')
+    ));
+    const row = (await store.listOperations()).find(r => r.payload.annotation_id === 'ann-c');
+    assert.equal(row.base_revision, 2, 'a snapshot revision is never taken as the base');
+
+    /* Own ACKs chain: 2 -> 3 -> 4 is explained, a snapshot step after it is not. */
+    const chained = liveRuntime('ann-k', highlight('ann-k', 'a'), 2);
+    const captured = runtimeBase(chained, 'ann-k');
+    await withLiveRuntime(chained, () => {
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'b'), 3, 8), { op_id: 'op-1' });
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'c'), 4, 9), { op_id: 'op-2' });
+    });
+    let base = globalThis.prksPdfAnnotationBaseForWrite(chained, 'ann-k', captured, runtimeBase(chained, 'ann-k'));
+    assert.equal(base.revision, 4);
+    assert.equal(base.acknowledged_op_id, 'op-2');
+    chained.annotationState = { work_id: 'W-1', annotations: [{ annotation_id: 'ann-k', revision: 6 }], known_absent: {} };
+    base = globalThis.prksPdfAnnotationBaseForWrite(chained, 'ann-k', captured, runtimeBase(chained, 'ann-k'));
+    assert.equal(base.revision, 2, 'an unexplained step keeps the captured base');
+}
+
+/* A save queued behind a sent predecessor whose ACK the runtime already holds
+ * (after sync rebased dependents, before it marked the row acknowledged) takes
+ * that ACK's exact revision, not the provisional base + 1. */
+async function successorAfterTheRebaseUsesTheAckRevision() {
+    const runtime = liveRuntime('ann-s', highlight('ann-s', 'v1'), 2);
+    const { store } = await storeActingAfterOutboxRead();
+    await store.savePdfAnnotation('W-1', { annotation_id: 'ann-s', annotation: highlight('ann-s', 'v2') },
+        runtimeBase(runtime, 'ann-s'));
+    const [first] = await store.listOperations();
+    await store.claimOperation(first.op_id);
+    await settle();
+    /* A stale-identical ACK can land far above base + 1. */
+    await withLiveRuntime(runtime, () => globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+        ack('ann-s', highlight('ann-s', 'v2'), 9, 10), { op_id: first.op_id }
+    ));
+    await withLiveRuntime(runtime, () => store.savePdfAnnotation(
+        'W-1', { annotation_id: 'ann-s', annotation: highlight('ann-s', 'v3') }, writeBase(runtime, 'ann-s')
+    ));
+    const successor = (await store.listOperations()).find(r => r.op_id !== first.op_id);
+    assert.deepEqual(successor.depends_on, [first.op_id]);
+    assert.equal(successor.base_revision, 9);
+}
+
+async function observedBaseForms() {
+    const { store } = await storeActingAfterOutboxRead();
     /* A plain object is still taken as given. */
     await store.savePdfAnnotation('W-1', { annotation_id: 'ann-q', annotation: highlight('ann-q', 'x') },
-        Object.assign({}, stale, { annotation_id: 'ann-q', annotation: highlight('ann-q', 'y') }));
-    rows = await store.listOperations();
+        { present: true, revision: 2, annotation: highlight('ann-q', 'y'), annotation_id: 'ann-q' });
+    const rows = await store.listOperations();
     assert.equal(rows.find(r => r.payload.annotation_id === 'ann-q').base_revision, 2);
 
     /* An invalid base read inside the write refuses the save. */
@@ -418,7 +525,10 @@ async function main() {
     effectiveOverlay();
     await coalesceCreateSetDelete();
     await coalesceSetCancelAndSentSuccessor();
-    await observedBaseIsReadInsideTheWrite();
+    await ownAckDuringTheWriteMovesTheBase();
+    await catchUpDuringTheWriteKeepsTheBase();
+    await successorAfterTheRebaseUsesTheAckRevision();
+    await observedBaseForms();
     handlerShapes();
     await conflictTerminalSettlesThroughStore();
     applyAckUpdatesLiveRuntimeRevision();

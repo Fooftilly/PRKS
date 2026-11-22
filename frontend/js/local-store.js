@@ -1938,7 +1938,14 @@
                      * successor with a provisional base. Rebase against the
                      * predecessor's actual ACK server_revision before SENT. */
                     dependsOn = [existingAttempted.op_id];
-                    const afterRev = provisionalRevisionAfterAttempted(existingAttempted);
+                    /* The runtime can already hold this predecessor's ACK
+                     * (sync patches the runtime, then rebases dependents, then
+                     * marks the row acknowledged). Its exact revision is the
+                     * base then; a rebase that runs after this write leaves
+                     * a matching base as it is. */
+                    const afterRev = observed.acknowledged_op_id === existingAttempted.op_id
+                        ? observed.revision
+                        : provisionalRevisionAfterAttempted(existingAttempted);
                     if (!desiredPresent) {
                         operation = 'DELETE_PDF_ANNOTATION';
                         payload = { annotation_id: annotationId };

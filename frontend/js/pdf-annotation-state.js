@@ -524,7 +524,81 @@
         return held.present && !present;
     }
 
-    function patchRuntimeAcknowledged(runtime, data) {
+    function baseKey(base) {
+        return (base && base.present ? 'present:' : 'absent:') +
+            (base && Number.isSafeInteger(base.revision) ? base.revision : 0);
+    }
+
+    function runtimeBase(runtime, annotationId) {
+        return acknowledgedBase(
+            (runtime && runtime.annotationCache && runtime.annotationCache.items) || [],
+            runtime && runtime.annotationState,
+            annotationId
+        );
+    }
+
+    const OWN_ACK_STEPS_KEPT = 8;
+
+    /** Record that this device's own operation moved the runtime's base for
+     * one annotation from one revision to the next. A catch-up snapshot moves
+     * it too, but records nothing: only these steps let a pending write take
+     * the newer base (see baseForWrite). */
+    function noteOwnAckStep(runtime, annotationId, from, op) {
+        if (!op || !op.op_id) return;
+        const all = runtime._annotationOwnAckSteps || (runtime._annotationOwnAckSteps = {});
+        const steps = (all[annotationId] || []).concat([{
+            op_id: String(op.op_id),
+            from: baseKey(from),
+            to: baseKey(runtimeBase(runtime, annotationId)),
+        }]);
+        all[annotationId] = steps.slice(-OWN_ACK_STEPS_KEPT);
+    }
+
+    /**
+     * The base a pending local write sends, read when the write runs.
+     * `captured` is the base the runtime held when the user made the change,
+     * `fresh` the one it holds now. The write takes `fresh` only when this
+     * device's own ACKs explain every step from `captured` to it: an earlier
+     * save of this annotation that the server acknowledged in between. Any
+     * other change (another device's edit loaded by a catch-up snapshot)
+     * keeps `captured`, so the server reports the conflict instead of the
+     * write overwriting an edit the user never saw.
+     *
+     * The result names the operation whose ACK the base is
+     * (`acknowledged_op_id`), so a write queued behind that operation can use
+     * its exact revision instead of a provisional prediction.
+     */
+    function baseForWrite(runtime, annotationId, captured, fresh) {
+        const steps = (runtime && runtime._annotationOwnAckSteps &&
+            runtime._annotationOwnAckSteps[annotationId]) || [];
+        const freshKey = baseKey(fresh);
+        let key = baseKey(captured);
+        let chosen = captured;
+        if (key === freshKey) {
+            chosen = fresh;
+        } else {
+            for (let hops = 0; hops < steps.length && key !== freshKey; hops += 1) {
+                let next = null;
+                for (let i = steps.length - 1; i >= 0; i -= 1) {
+                    if (steps[i].from === key && steps[i].to !== key) { next = steps[i]; break; }
+                }
+                if (!next) break;
+                key = next.to;
+            }
+            if (key === freshKey) chosen = fresh;
+        }
+        const out = Object.assign({}, chosen);
+        const chosenKey = baseKey(chosen);
+        for (let i = steps.length - 1; i >= 0; i -= 1) {
+            if (steps[i].to === chosenKey) {
+                out.acknowledged_op_id = steps[i].op_id;
+                break;
+            }
+        }
+        return out;
+    }
+
+    function patchRuntimeAcknowledged(runtime, data, op) {
         if (!runtime || !data || !data.annotation_id) return false;
         // A snapshot newer than this ACK already holds its change and any
         // later one: patching it in would revert them.
@@ -542,6 +616,7 @@
             }
         }
         const annotationId = String(data.annotation_id);
+        const before = runtimeBase(runtime, annotationId);
         const present = data.present !== false && !!data.annotation;
         const ackList =
             (runtime.annotationCache && Array.isArray(runtime.annotationCache.items))
@@ -600,6 +675,7 @@
                 runtime.acknowledgedAnnotationSetRevision = nextGen;
             }
         }
+        noteOwnAckStep(runtime, annotationId, before, op);
         return true;
     }
 
@@ -607,7 +683,7 @@
      * After ACK: update every mounted Work PDF runtime for this Work so the
      * next mutation uses the new base_revision without reopening the PDF.
      */
-    function applyAckToLiveRuntimes(data) {
+    function applyAckToLiveRuntimes(data, op) {
         if (!data || !data.work_id || !Number.isSafeInteger(data.server_revision)) {
             return [];
         }
@@ -618,7 +694,7 @@
                 : null;
             if (!runtime || runtime._destroyed) return;
             if (String(runtime.workId) !== String(data.work_id)) return;
-            if (!patchRuntimeAcknowledged(runtime, data)) return;
+            if (!patchRuntimeAcknowledged(runtime, data, op)) return;
             touched.push(runtime);
             if (typeof root.prksReconcileViewerAnnotations === 'function' && runtime.viewer) {
                 const effective = effectiveWorkAnnotations(
@@ -703,7 +779,7 @@
         terminal: terminal,
         reconcile: function (data, op) {
             function afterAck() {
-                applyAckToLiveRuntimes(data);
+                applyAckToLiveRuntimes(data, op);
                 // Re-envelope never-sent successors against the actual ACK
                 // server_revision before they can be claimed/SENT. Provisional
                 // base+1 is not safe for stale-identical convergent ACKs.
@@ -740,6 +816,7 @@
         prksRoundTripPdfAnnotation: roundTripAnnotation,
         prksEffectiveWorkAnnotations: effectiveWorkAnnotations,
         prksAcknowledgedPdfAnnotationBase: acknowledgedBase,
+        prksPdfAnnotationBaseForWrite: baseForWrite,
         prksPdfAnnotationBaseUnavailable: pdfAnnotationBaseUnavailable,
         prksSavePdfAnnotationDurably: savePdfAnnotationDurably,
         prksHasCachedManagedPdf: hasCachedManagedPdf,

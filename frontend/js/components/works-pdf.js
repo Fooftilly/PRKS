@@ -3368,18 +3368,25 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         ));
         if (!annId && evt.kind !== 'delete') return null;
         const id = String(annId || '');
-        // The acknowledged base as the runtime holds it NOW. The store calls
-        // this inside its write, after it has read the outbox: an earlier
-        // ACK of this annotation can land between this intent and that write
-        // (sync reconciles the runtime before it marks the row acknowledged),
-        // and a base read before it would send a stale revision the server
-        // refuses with a 409 conflict.
-        function observe() {
+        function currentBase() {
             const ackList = (runtime.annotationCache && runtime.annotationCache.items) || [];
             const state = runtime.annotationState || null;
             const base = acknowledgedPdfAnnotationBase(ackList, state, id);
             if (evt.kind === 'delete') base.annotation_id = id;
             return base;
+        }
+        const captured = currentBase();
+        // The store calls this again inside its write, after it has read the
+        // outbox. An earlier save of this annotation can be acknowledged in
+        // between (sync reconciles the runtime before it marks the row
+        // acknowledged), and the base captured here would then send a stale
+        // revision the server refuses with a 409 conflict. The newer base is
+        // taken only when this device's own ACKs explain it: a catch-up
+        // snapshot with another device's edit keeps the captured base, so
+        // the server reports that conflict instead of losing the edit.
+        function observe() {
+            if (typeof window.prksPdfAnnotationBaseForWrite !== 'function') return captured;
+            return window.prksPdfAnnotationBaseForWrite(runtime, id, captured, currentBase());
         }
         const observed = observe();
         if (evt.kind === 'delete') {
@@ -3790,9 +3797,9 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                 return isPdfAck ? ack : null;
             }
 
-            function applyLivePdfAnnotationAck(ack) {
+            function applyLivePdfAnnotationAck(ack, op) {
                 if (typeof window.prksApplyPdfAnnotationAckToLiveRuntimes !== 'function') return;
-                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack);
+                window.prksApplyPdfAnnotationAckToLiveRuntimes(ack, op);
             }
 
             async function unresolvedPdfAnnotationOps() {
@@ -3827,7 +3834,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
                         if (!stillLive()) return;
                         const ack = pdfAnnotationAckForWork(event);
                         if (ack) {
-                            applyLivePdfAnnotationAck(ack);
+                            applyLivePdfAnnotationAck(ack, event.op);
                             const dirty = await unresolvedPdfAnnotationOps();
                             if (!stillLive()) return;
                             // Every materialization — including the normal
