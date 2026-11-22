@@ -293,7 +293,7 @@
      * The subscription starts before the outbox is read, so no settle between
      * the two is missed; a settle in another tab is found by a slow poll.
      */
-    function inFlightSettled(state, tagId, timeoutMs) {
+    function inFlightSettled(ctx, state, tagId, timeoutMs) {
         return new Promise(resolve => {
             let finished = false;
             let opId = null;
@@ -310,6 +310,8 @@
                 resolve(outcome);
             }
             function look() {
+                /* A closed editor cannot save the retry: stop reading. */
+                if (!live(ctx, state)) { finish(false); return Promise.resolve(); }
                 return root.prksSync.store.listOperations().then(rows => {
                     if (finished) return;
                     if (opId === null) {
@@ -386,7 +388,7 @@
                  * record this change against the base it produced, rather
                  * than drop the click. */
                 if (!error || error.prksLocalStoreCode !== 'scope_busy') throw error;
-                const outcome = await inFlightSettled(state, tagId);
+                const outcome = await inFlightSettled(ctx, state, tagId);
                 if (!outcome) throw error;
                 if (!live(ctx, state) || !owns(ctx, state)) return;
                 const fresh = await settledBase(ctx, state, tagId, outcome);

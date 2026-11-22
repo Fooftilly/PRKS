@@ -435,7 +435,8 @@ function optionsBase(options, tagId) {
  * other-tab:    another tab sends it; the row vanishes with no event here at
  *               all, so the wait finds it by polling and re-reads the base.
  * released:     the claim goes back to an editable draft; the retry cancels it.
- * conflict:     the ADD conflicts; the original failure stands. */
+ * conflict:     the ADD conflicts; the original failure stands.
+ * closed:       the editor closes mid-wait; the poll stops, nothing is retried. */
 async function tagRemoveWaitsForInFlightAdd(outcome) {
     resetCounts();
     tagWrites.length = 0;
@@ -484,13 +485,20 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
         add.status = 'pending';
         add.attempt_count = 0;
         emit({});
+    } else if (outcome === 'closed') {
+        prksDestroyAllTabContexts();
     } else {
         add.status = 'conflict';
         emit({});
     }
+    const started = Date.now();
     await edit;
     const retry = tagWrites[1] || [];
-    if (outcome === 'conflict') {
+    if (outcome === 'closed') {
+        assert('closing the editor ends the wait without a retry',
+            tagWrites.length === 1 && Date.now() - started < 2000,
+            'writes=' + tagWrites.length + ' ms=' + (Date.now() - started));
+    } else if (outcome === 'conflict') {
         assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
             JSON.stringify(tagWrites));
         assert('remove after the ADD conflicts reports the failure', !!state.error,
@@ -533,6 +541,7 @@ async function main() {
         await tagRemoveWaitsForInFlightAdd('other-tab');
         await tagRemoveWaitsForInFlightAdd('released');
         await tagRemoveWaitsForInFlightAdd('conflict');
+        await tagRemoveWaitsForInFlightAdd('closed');
     } catch (error) {
         failed += 1;
         console.log('FAIL  runtime exception ' + (error && error.stack || error));
