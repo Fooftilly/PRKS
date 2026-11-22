@@ -13885,9 +13885,40 @@ class WorkCreateWorkflowTests(_BrowserE2E):
         self.assertTrue(page.evaluate(
             "() => document.querySelector('#work-modal .modal-body--scroll').hasAttribute('inert')"))
         self.assertTrue(page.locator("#work-modal-cancel").is_enabled())
-        page.evaluate("() => window.__e2eReleaseTag()")
+        # Hold sync so the Tag's CREATE_TAG reaches the server only when
+        # released: the Work's Tag link must wait for it, never race it (the
+        # link used to be refused with a 500 when it got there first).
+        held = []
+        tag_links = []
+
+        def hold_sync(route):
+            held.append(route)
+
+        def record(request):
+            if request.method == "POST" and urlparse(request.url).path.endswith("/tags"):
+                tag_links.append(request.url)
+
+        page.route("**/api/sync/operations", hold_sync)
+        page.on("request", record)
+        try:
+            with page.expect_response(
+                lambda r: r.request.method == "POST" and urlparse(r.url).path == "/api/works"
+            ):
+                page.evaluate("() => window.__e2eReleaseTag()")
+            wait_for_async(
+                page,
+                """() => prksSync.store.listOperations().then(rows => rows.some(
+                    r => r && r.operation === 'CREATE_TAG' && r.status !== 'acknowledged'))""",
+            )
+            self.assertEqual(tag_links, [])
+        finally:
+            page.unroute("**/api/sync/operations", hold_sync)
+            for route in held:
+                route.continue_()
         work = self._work_detail(page, self._created_work_id(page))
         self.assertEqual([t.get("name") for t in work.get("tags") or []], ["racetag"])
+        self.assertEqual(len(tag_links), 1)
+        page.remove_listener("request", record)
 
     def test_submit_waiting_on_a_person_never_touches_the_reopened_form(self):
         """Owner review on #151: Create waiting on a Person quick-create, then
