@@ -89,6 +89,11 @@ the server — not a claim that the rest of PRKS is read-only offline.
   PRKS is unreachable. The Library citation style is a server setting. A Work's
   own `citation_style` is a synced metadata field like the others, so changing
   it offline is durable.
+* **Imported citation styles (#41).** `/api/citation-styles` (import, list,
+  read, delete a Library's own `.csl` styles) is connection-required and Library
+  administration. A Work may name an imported style offline (the id is checked
+  by shape only); a style that is gone, or not listed yet, is cited in the
+  Library's style.
 * **Publishers vocabulary.** `#/publishers` create/delete/aliases are
   connection-required; the route refuses offline.
 * **Bulk Organize.** `POST /api/works/bulk` (status / folder / tags) stays

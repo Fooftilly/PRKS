@@ -1,10 +1,13 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { CITATION_STYLE_EVENT } from '../citations/styles'
+import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from '../citations/styles'
+import { settingsActiveCategory } from './navigation'
 import SettingsExport from './SettingsExport.vue'
 
 type StyleWindow = Window & {
   __prksCitationStyle?: string
+  prksLoadAppSettings?: () => Promise<unknown>
+  prksConfirmDestructive?: (options: unknown) => Promise<boolean>
   prksSetCitationStyleCache?: (style: string) => void
   prksPatchAppSettings?: (partial: { citation_style?: string }) => Promise<unknown>
 }
@@ -19,7 +22,20 @@ function setCache(style: string): void {
   window.dispatchEvent(new CustomEvent(CITATION_STYLE_EVENT))
 }
 
+const HOUSE = `custom-${'a'.repeat(32)}`
+let imported: Array<{ id: string; title: string; created_at: string }>
+
 beforeEach(() => {
+  resetImportedStylesForTests()
+  settingsActiveCategory.value = 'export'
+  imported = []
+  vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+    if (init?.method === 'DELETE') {
+      imported = imported.filter((style) => !path.endsWith(style.id))
+      return new Response(JSON.stringify({ deleted: HOUSE }))
+    }
+    return new Response(JSON.stringify({ styles: imported }))
+  }))
   sent = []
   answer = (chosen) => chosen
   win.__prksCitationStyle = 'apa'
@@ -33,6 +49,10 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  settingsActiveCategory.value = 'general'
+  vi.unstubAllGlobals()
+  delete win.prksLoadAppSettings
+  delete win.prksConfirmDestructive
   delete win.__prksCitationStyle
   delete win.prksSetCitationStyleCache
   delete win.prksPatchAppSettings
@@ -62,5 +82,25 @@ describe('SettingsExport citation style', () => {
     expect(sent).toEqual(['ieee', 'ieee'])
     expect(win.__prksCitationStyle).toBe('ieee')
     wrapper.unmount()
+  })
+
+  it('offers imported styles, and shows the default after the Library style is deleted', async () => {
+    imported = [{ id: HOUSE, title: 'House Style', created_at: 'x' }]
+    setCache(HOUSE)
+    // As api.js does: PRKS answers the default once the Library style is gone.
+    win.prksLoadAppSettings = vi.fn(async () => {
+      setCache(imported.some((style) => style.id === HOUSE) ? HOUSE : 'apa')
+    })
+    win.prksConfirmDestructive = vi.fn(async () => true)
+    const wrapper = mount(SettingsExport, { attachTo: document.body })
+    await flushPromises()
+    const select = wrapper.get('#prks-citation-style').element as HTMLSelectElement
+    expect([...select.querySelectorAll('optgroup option')].map((option) => option.textContent)).toEqual(['House Style'])
+    expect(select.value).toBe(HOUSE)
+    await wrapper.get(`[data-prks-style-id="${HOUSE}"] button`).trigger('click')
+    await flushPromises()
+    expect(select.value).toBe('apa')
+    expect(select.querySelector('optgroup')).toBeNull()
+    expect(sent).toEqual([])
   })
 })

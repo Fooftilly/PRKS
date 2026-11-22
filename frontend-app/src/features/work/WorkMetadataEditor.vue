@@ -4,7 +4,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksField from '../../components/PrksField.vue'
 import PrksIconButton from '../../components/PrksIconButton.vue'
 import { WORK_STATUSES } from '../../domain/work-status'
-import { CITATION_STYLES, citationStyleLabel, libraryCitationStyle } from '../citations/styles'
+import { CITATION_STYLES, citationStyleLabel, importedStyles, isCitationStyle, libraryCitationStyle, loadImportedStyles } from '../citations/styles'
 import type { WorkMetaDraft, WorkMetaField } from './metadata-draft'
 import type { WorkMetadataChrome, WorkMetadataConflict, WorkMetadataGroupChrome } from './metadata-session'
 
@@ -83,6 +83,11 @@ function onSelect(field: WorkMetaField, event: Event): void {
 }
 
 const libraryStyleLabel = computed(() => citationStyleLabel(libraryCitationStyle()))
+/** A Work naming an imported style that is gone (or not listed yet) still shows a choice for it. */
+const unlistedStyle = computed(() => {
+  const value = props.draft.citation_style
+  return value && !isCitationStyle(value) ? value : ''
+})
 
 function chooseStatus(value: string): void {
   if (fieldOff('status')) return
@@ -142,6 +147,8 @@ function syncDocTypeMenu(): void {
 }
 
 onMounted(() => {
+  // The picker lists the Library's imported styles; without a connection it lists the shipped ones.
+  loadImportedStyles().catch(() => undefined)
   syncDocTypeMenu()
   const hidden = document.getElementById('meta-doc-type')
   const wrap = hidden?.closest('.prks-doc-type-menu')
@@ -494,6 +501,10 @@ watch(() => props.draft.doc_type, () => {
       >
         <option value="">Library default ({{ libraryStyleLabel }})</option>
         <option v-for="style in CITATION_STYLES" :key="style.id" :value="style.id">{{ style.label }}</option>
+        <optgroup v-if="importedStyles.length" label="Imported">
+          <option v-for="style in importedStyles" :key="style.id" :value="style.id">{{ style.label }}</option>
+        </optgroup>
+        <option v-if="unlistedStyle" :value="unlistedStyle" disabled>An imported style that is not available (cited in the library default)</option>
       </select>
       </PrksField>
 

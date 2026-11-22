@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
-import { CITATION_STYLES, libraryCitationStyle } from '../citations/styles'
+import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
+import ImportedCitationStyles from './ImportedCitationStyles.vue'
 import { bibtexExportSummary } from './bibtex-summary'
 import { createSerialSave } from './serial-save'
 import SettingsSwitch from './SettingsSwitch.vue'
@@ -48,6 +49,20 @@ function onStyleChange(event: Event): void {
     styleSave.reset(confirmed)
     style.value = confirmed
   })
+}
+
+/** After an import or a delete: a deleted Library style makes PRKS answer the default again. */
+async function onStylesChanged(deleted: string | null): Promise<void> {
+  if (!deleted || style.value !== deleted) return
+  try {
+    await window.prksLoadAppSettings?.()
+  } catch {
+    /* The picker keeps its value until the settings can be read. */
+  }
+  if (style.value !== deleted) return
+  const current = libraryCitationStyle()
+  styleSave.reset(current)
+  style.value = current
 }
 
 function fieldDefs(): Array<readonly [string, string]> {
@@ -135,9 +150,13 @@ onBeforeUnmount(() => {
     <label for="prks-citation-style" class="prks-sr-only">Default citation style</label>
     <select id="prks-citation-style" class="prks-settings-text-input" :value="style" @change="onStyleChange">
       <option v-for="option in CITATION_STYLES" :key="option.id" :value="option.id">{{ option.label }}</option>
+      <optgroup v-if="importedStyles.length" label="Imported">
+        <option v-for="option in importedStyles" :key="option.id" :value="option.id">{{ option.label }}</option>
+      </optgroup>
     </select>
     <p class="prks-settings-hint">Used when you copy a formatted citation or bibliography. A file can use its own style instead (Edit metadata).</p>
     <p v-if="styleStatus" class="prks-settings-hint prks-inline-message--error" role="alert">{{ styleStatus }}</p>
+    <ImportedCitationStyles @changed="onStylesChanged" />
   </section>
   <section class="prks-settings-section" aria-labelledby="prks-settings-bibtex-heading">
     <PrksSectionHeader id="prks-settings-bibtex-heading">

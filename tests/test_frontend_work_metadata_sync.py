@@ -18,6 +18,8 @@ require(process.argv[1] + '/frontend/js/work-metadata-state.js');
 process.stdout.write(JSON.stringify({
     fields: globalThis.PRKS_SYNCED_WORK_FIELDS,
     citationStyles: globalThis.PRKS_CITATION_STYLE_IDS,
+    styleValues: ['', 'apa', 'custom-' + 'a'.repeat(32), 'custom-x', 'harvard1', 'custom-' + 'A'.repeat(32)]
+        .map(value => globalThis.prksWorkFieldToCanonical('citation_style', value)),
     projections: globalThis.PRKS_SYNCED_WORK_FIELD_PROJECTIONS,
     summary: globalThis.PRKS_WORK_SUMMARY_FIELDS,
     byteLimited: Array.from(globalThis.PRKS_BYTE_LIMITED_WORK_FIELDS),
@@ -60,6 +62,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_client_and_server_agree_on_the_citation_styles(self):
         from backend.domain.works.citation_styles import CITATION_STYLES
         self.assertEqual(client_registries()['citationStyles'], list(CITATION_STYLES))
+
+    def test_client_and_server_accept_the_same_citation_style_values(self):
+        """An imported style's id passes by shape on both sides (#41)."""
+        from backend import work_metadata_sync
+        values = ['', 'apa', 'custom-' + 'a' * 32, 'custom-x', 'harvard1', 'custom-' + 'A' * 32]
+        expected = [v if work_metadata_sync.is_valid_field_value('citation_style', v) else None for v in values]
+        self.assertEqual(client_registries()['styleValues'], expected)
+        self.assertEqual(expected, ['', 'apa', 'custom-' + 'a' * 32, None, None, None])
 
     def test_no_user_editable_work_metadata_saves_over_http_any_more(self):
         """The end state of the local-first metadata program.

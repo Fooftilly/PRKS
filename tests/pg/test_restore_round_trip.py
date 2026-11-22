@@ -89,6 +89,8 @@ class EveryTableRoundTripTests(RestoreTestCase):
         lib.create_saved_view("Culture", {"mode": "all", "q": "culture", "tag": "", "author": "",
                                           "publisher": ""})
         lib.patch_app_settings({"annotation_author": "Ada"})
+        self.sql("INSERT INTO prks.citation_styles (library_id, id, title, csl) VALUES (%s, %s, 'House', '<style/>')",
+                 (self.actor.library_id, "custom-" + "a" * 32))
         # Research.
         engines = lib.create_concept("Engines")["id"]
         lib.save_work_notes(first, "On [[concept:Engines]] ![figure](https://example.org/figure.png)")
@@ -145,6 +147,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.library.delete_tag(ids["tag"])
         self.library.add_person("Later", "Person")
         self.sql("DELETE FROM prks.library_settings")
+        self.sql("DELETE FROM prks.citation_styles")
         self.sql("DELETE FROM prks.sync_operations")
         self.assertNotEqual(self.snapshot(), before)
         # Lose every archived object, so the restore must write each one back from the archive.

@@ -36,11 +36,14 @@
         'citation_style']);
     const FIELD_SET = new Set(FIELDS);
     /* Mirrors `backend/domain/works/citation_styles.CITATION_STYLES`: the
-     * styles PRKS ships. A Work's `citation_style` is one of them, or '' for
-     * the Library's default. */
+     * styles PRKS ships. A Work's `citation_style` is one of them, '' for
+     * the Library's default, or an imported style's id (`custom-` and 32 hex
+     * digits), checked by shape only like the server's
+     * `WORK_CITATION_STYLE_VALUES`. */
     const CITATION_STYLE_IDS = Object.freeze(['apa', 'chicago-author-date',
         'chicago-notes-bibliography', 'modern-language-association',
         'harvard-cite-them-right', 'ieee', 'nlm-citation-sequence']);
+    const IMPORTED_STYLE_ID = /^custom-[0-9a-f]{32}$/;
     /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
      * value outside it is not "too long", it is not a status at all. */
@@ -70,7 +73,8 @@
             const allowed = allowedDocTypes();
             return allowed ? allowed.has(value) : false;
         } },
-        citation_style: { has: value => value === '' || CITATION_STYLE_IDS.includes(value) },
+        citation_style: { has: value => value === '' || CITATION_STYLE_IDS.includes(value)
+            || (typeof value === 'string' && IMPORTED_STYLE_ID.test(value)) },
     });
     const LABELS = Object.freeze({
         title: 'Title', status: 'Progress', doc_type: 'Document type',

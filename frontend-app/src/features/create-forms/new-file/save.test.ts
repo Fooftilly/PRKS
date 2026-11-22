@@ -9,6 +9,9 @@ import {
   BAD_PDF_READ,
   BAD_YOUTUBE_URL,
   CHOOSE_PDF,
+  EMPTY_PDF,
+  NOT_A_PDF,
+  pdfFileProblem,
   ENRICHMENT_NOT_ADDED,
   NOTHING_SAVED,
   PERSON_NOT_ADDED,
@@ -396,5 +399,14 @@ describe('saveNewFile', () => {
     await saveNewFile(r.deps)
     expect(r.opened).toEqual(['W-2'])
     expect(r.alerts[0]).toContain('2 tags could not be attached')
+  })
+})
+
+describe('pdfFileProblem', () => {
+  it('refuses an empty file and one without a PDF header, as the server does (#772)', async () => {
+    expect(await pdfFileProblem(new Blob([]))).toBe(EMPTY_PDF)
+    expect(await pdfFileProblem(new Blob(['This is not a PDF at all']))).toBe(NOT_A_PDF)
+    expect(await pdfFileProblem(new Blob([' %PDF-1.7']))).toBe(NOT_A_PDF)
+    expect(await pdfFileProblem(new Blob(['%PDF-1.7\n%…']))).toBe('')
   })
 })

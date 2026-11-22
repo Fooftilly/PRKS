@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { fieldValue, setFieldValue } from '../dom'
-import { CHOOSE_PDF, BAD_YOUTUBE_URL, type SourceKind } from './save'
+import { CHOOSE_PDF, BAD_YOUTUBE_URL, pdfFileProblem, type SourceKind } from './save'
 import { alertMessage, runtime, type VideoMeta } from './runtime'
 import { useNewFileState } from './state'
 
@@ -82,18 +82,35 @@ function onKindKeydown(event: KeyboardEvent): void {
   })
 }
 
-function handleFile(file: File | null | undefined): void {
+/** Each pick's number: a slow check of an earlier pick never overrides a later one. */
+let pickSeq = 0
+
+function refuseFile(message: string): void {
+  state.clearErrors()
+  state.errors.file = message
+  // A refused replacement leaves no file chosen, not the earlier one under the refusal.
+  clearPdf()
+  props.focusControl(dropZone.value)
+}
+
+async function handleFile(file: File | null | undefined): Promise<void> {
   if (state.kind.value === 'video') {
     void alertMessage('In YouTube URL mode, paste the link in Source.', 'Notice')
     return
   }
   if (!file) return
+  const pick = ++pickSeq
   const name = String(file.name || '').toLowerCase()
   const isPdf = name.endsWith('.pdf') || file.type === 'application/pdf'
   if (!isPdf) {
-    state.clearErrors()
-    state.errors.file = CHOOSE_PDF
-    props.focusControl(dropZone.value)
+    refuseFile(CHOOSE_PDF)
+    return
+  }
+  // An empty file, or one without a PDF header, is refused here, as the server would (#772).
+  const problem = await pdfFileProblem(file)
+  if (pick !== pickSeq || state.kind.value !== 'pdf') return
+  if (problem) {
+    refuseFile(problem)
     return
   }
   state.pdf.value = file
@@ -118,12 +135,12 @@ function onZoneKeydown(event: KeyboardEvent): void {
 function onDrop(event: DragEvent): void {
   dragActive.value = false
   const files = event.dataTransfer?.files
-  if (files && files.length) handleFile(files[0])
+  if (files && files.length) void handleFile(files[0])
 }
 
 function onFileChange(event: Event): void {
   const input = event.target
-  if (input instanceof HTMLInputElement && input.files && input.files.length) handleFile(input.files[0])
+  if (input instanceof HTMLInputElement && input.files && input.files.length) void handleFile(input.files[0])
 }
 
 /** Editing the URL voids the last preview; it is fetched again on blur. */

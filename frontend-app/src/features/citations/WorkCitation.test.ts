@@ -12,8 +12,9 @@ vi.mock('../../api/citations', () => ({
 }))
 vi.mock('./engine', () => ({ formatCitations }))
 
+import { PrksApiError } from '../../api/http'
 import WorkCitation from './WorkCitation.vue'
-import { CITATION_STYLE_EVENT } from './styles'
+import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from './styles'
 
 type StyleGlobal = { __prksCitationStyle?: string }
 
@@ -28,6 +29,8 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.unstubAllGlobals()
+  resetImportedStylesForTests()
   delete (globalThis as StyleGlobal).__prksCitationStyle
   document.body.innerHTML = ''
 })
@@ -57,6 +60,23 @@ describe('WorkCitation', () => {
     await flushPromises()
     expect(wrapper.get('[data-prks-role="work-citation-style"]').text()).toContain('MLA')
     expect(formatCitations.mock.calls.length).toBe(calls)
+    wrapper.unmount()
+  })
+
+  it('cites in the Library style when another session deleted the Work’s imported style', async () => {
+    const house = `custom-${'d'.repeat(32)}`
+    let listed = [{ id: house, title: 'House', created_at: 'x' }]
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ styles: listed }))))
+    formatCitations.mockImplementationOnce(async () => {
+      listed = []
+      throw new PrksApiError('Citation style not found.', 404)
+    })
+    const wrapper = mount(WorkCitation, { props: { workId: 'W-1', workStyle: house, revision: 'r1' } })
+    await flushPromises()
+    expect(formatCitations.mock.calls[0]?.[1]).toBe(house)
+    expect(formatCitations).toHaveBeenLastCalledWith(expect.any(Array), 'apa')
+    expect(wrapper.get('[data-prks-role="work-citation-text"]').text()).toBe('Cited in apa')
+    expect(wrapper.get('[data-prks-role="work-citation-style"]').text()).toContain('APA')
     wrapper.unmount()
   })
 })

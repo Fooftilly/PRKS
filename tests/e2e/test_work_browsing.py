@@ -420,3 +420,46 @@ class WorkCitationTests(unittest.TestCase):
         )
         copied = page.evaluate("() => navigator.clipboard.readText()")
         self.assertIn(WORK_A_TITLE, copied)
+
+    def test_an_imported_style_is_chosen_in_settings_and_cites_the_work(self):
+        """Settings imports a .csl file; choosing it makes the Work cite in it (#41)."""
+        server = AppServer(seed_fn=seed_folders_library)
+        self.addCleanup(server.stop)
+        server.start()
+        page, context, collector = open_app_page(_BROWSER, server.origin)
+        self.addCleanup(context.close)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        ieee = os.path.join(root, "frontend", "vendor", "csl", "ieee.csl")
+        with open(ieee, encoding="utf-8") as handle:
+            house = handle.read().replace(
+                "<title>IEEE Reference Guide version 11.29.2023</title>", "<title>House Numbered</title>", 1)
+
+        page.locator("button.settings-btn").click()
+        page.wait_for_selector("#settings-modal:not(.hidden)")
+        page.locator("#prks-settings-tab-export").click()
+        page.set_input_files("[data-prks-role='import-citation-style-file']",
+                             {"name": "house.csl", "mimeType": "application/xml", "buffer": house.encode("utf-8")})
+        page.locator("[data-prks-role='imported-citation-styles'] [role='status']",
+                     has_text="Imported “House Numbered”").wait_for(timeout=15000)
+        style_id = page.locator("#prks-citation-style optgroup option").get_attribute("value")
+        self.assertRegex(style_id or "", r"^custom-[0-9a-f]{32}$")
+        # The picker updates its cache before the PATCH answers, so wait for the saved setting itself.
+        with page.expect_response(lambda r: r.request.method == "PATCH" and r.url.endswith("/api/settings")
+                                  and r.ok, timeout=10000):
+            page.locator("#prks-citation-style").select_option(style_id)
+        saved = page.evaluate("() => fetch('/api/settings', {credentials: 'same-origin'}).then(r => r.json())")
+        self.assertEqual(saved["citation_style"], style_id)
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#settings-modal.hidden", state="attached")
+
+        page.evaluate("id => prksNavigate('#/works/' + encodeURIComponent(id))", server.ids["work_a"])
+        page.wait_for_selector("#right-panel details.work-details-metadata", timeout=15000)
+        page.locator("#right-panel details.work-details-metadata > summary").click()
+        page.wait_for_function(
+            "() => /^\\[1\\]/.test((document.querySelector(\"#right-panel [data-prks-role='work-citation-text']\")"
+            " || {}).textContent?.trim() || '')",
+            timeout=15000,
+        )
+        self.assertEqual(
+            page.locator("#right-panel [data-prks-role='work-citation-style']").inner_text().strip(), "House Numbered")

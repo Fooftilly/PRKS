@@ -36,7 +36,7 @@ Nothing in this module imports the database layer; the handler is handed the
 `db` it needs, so the ordinary PATCH boundary can share the same helpers.
 """
 import json
-from backend.domain.works.citation_styles import CITATION_STYLE_SET
+from backend.domain.works.citation_styles import WORK_CITATION_STYLE_VALUES
 
 
 # Field -> maximum accepted length. The bound is the only validation this layer
@@ -145,7 +145,8 @@ FIELD_ALLOWLISTS = {
     "status": WORK_STATUS_SET,
     "doc_type": DOC_TYPE_SET,
     # A Work's own citation style; the empty string means the Library's default.
-    "citation_style": CITATION_STYLE_SET | {""},
+    # An imported style's id is checked by shape only (citation_styles).
+    "citation_style": WORK_CITATION_STYLE_VALUES,
 }
 
 # A field's entry is its size limit -- in UTF-8 BYTES for a field listed in

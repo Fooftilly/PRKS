@@ -286,6 +286,19 @@ CREATE TABLE prks.library_settings (
   PRIMARY KEY (library_id, key)
 );
 
+-- Citation styles a Library imported (Citation V1, #41): independent CSL 1.0
+-- styles, checked by backend/domain/works/custom_citation_styles.py before
+-- they are stored. The id is what the `citation_style` setting and a Work's
+-- `citation_style` field name; a deleted id reads as the Library default.
+CREATE TABLE prks.citation_styles (
+  library_id text NOT NULL REFERENCES prks.libraries,
+  id         text NOT NULL CHECK (id ~ '^custom-[0-9a-f]{32}$'),
+  title      text NOT NULL CHECK (char_length(title) BETWEEN 1 AND 300),
+  csl        text NOT NULL CHECK (octet_length(csl) <= 1048576),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (library_id, id)
+);
+
 CREATE TABLE prks.instance_settings (
   key        text PRIMARY KEY CHECK (key ~ '^[a-z][a-z0-9_]{0,63}$'),
   value      text NOT NULL DEFAULT '',

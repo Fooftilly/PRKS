@@ -88,6 +88,18 @@ describe('formatCitations', () => {
     expect(texts.find((text) => text.includes('Diaries'))).toMatch(/1915.1941/)
   })
 
+  it('formats with an imported style read from PRKS', async () => {
+    const id = `custom-${'b'.repeat(32)}`
+    FILES[`/api/citation-styles/${id}`] = JSON.stringify({ id, title: 'House IEEE', csl: ieeeStyle })
+    try {
+      const { entries } = await formatCitations([article], id)
+      expect(entries[0].text).toMatch(/^\[1\] J\. Doe and J\. Roe, /)
+      expect(fetchMock.mock.calls.map(([path]) => path)).toContain(`/api/citation-styles/${id}`)
+    } finally {
+      delete FILES[`/api/citation-styles/${id}`]
+    }
+  })
+
   it('answers an empty bibliography for no items', async () => {
     await expect(formatCitations([], 'apa')).resolves.toEqual({ entries: [], html: '', text: '' })
   })
