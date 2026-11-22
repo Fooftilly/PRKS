@@ -91,7 +91,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
         self.assertEqual(full["run_id"], smoke["run_id"])
         self.assertAlmostEqual(full["shared_minutes"], 43 / 60)
         self.assertAlmostEqual(smoke["shared_minutes"], 43 / 60)
-        self.assertAlmostEqual(full["all_job_minutes"], full["browser_minutes"] + 43 / 60)
+        self.assertAlmostEqual(full["all_job_minutes"], full["browser_minutes"] + (43 + 12) / 60)
         self.assertAlmostEqual(smoke["all_job_minutes"], smoke["browser_minutes"] + 43 / 60)
         report = compare(full, smoke, paired=True)
         self.assertIn("BOTH modes on one SHA", report)

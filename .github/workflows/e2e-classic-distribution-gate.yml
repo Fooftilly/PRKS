@@ -280,7 +280,7 @@ jobs:
           node --check frontend/sw.js
           python -m unittest tests.test_frontend_service_worker
 
-      - name: Run E2E shard on the packaged frontend
+      - name: Run complete E2E shard on the packaged frontend
         env:
           PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
           PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}

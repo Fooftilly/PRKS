@@ -161,8 +161,10 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
     if SMOKE_JOB in skipped or SKIPPED_FULL_MATRIX in skipped:
         raise InvalidBenchmark("Paired run contains a skipped browser mode")
     guard_jobs = [j for j in active if j.get("name") in SHARED_JOBS]
+    # A standalone full dispatch pays for the plan job; standalone smoke skips it.
+    plan_jobs = [j for j in active if j.get("name") == PLAN_JOB]
 
-    def select(mode: str, browser_jobs: list[dict]) -> dict:
+    def select(mode: str, browser_jobs: list[dict], extra: list[dict]) -> dict:
         def minutes(selected: list[dict]) -> float:
             return sum(_seconds(j["started_at"], j["completed_at"]) for j in selected) / 60
         return {
@@ -172,12 +174,12 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
             "browser_count": len(browser_jobs),
             "browser_minutes": minutes(browser_jobs),
             "shared_minutes": minutes(guard_jobs),
-            "all_job_minutes": minutes(browser_jobs + guard_jobs),
+            "all_job_minutes": minutes(browser_jobs + guard_jobs + extra),
             "longest_browser_minutes": max(
                 _seconds(j["started_at"], j["completed_at"]) for j in browser_jobs
             ) / 60,
         }
-    return select("full", shards), select("smoke", smoke)
+    return select("full", shards, plan_jobs), select("smoke", smoke, [])
 
 
 def compare(full: dict, smoke: dict, *, paired: bool = False) -> str:

@@ -1594,7 +1594,7 @@ PACKAGED_FULL_PATHS = (
 PACKAGED_FULL_SHARDS = 8
 PACKAGED_ROUTINE_SHARDS = 4
 # Modules whose tests depend on what the packaged service worker and local
-# stores hold, beside every ``*_offline`` module.
+# stores hold, beside every ``*_offline`` and ``*_durable`` module.
 PACKAGED_ROUTINE_MODULES = (
     "tests.e2e.test_browser_scope",
     "tests.e2e.test_editor_recovery_store",
@@ -1608,11 +1608,15 @@ def _is_packaged_routine_test(test_id: str) -> bool:
     if len(module) < 3 or module[:2] != ["tests", "e2e"]:
         return False
     name = ".".join(module)
-    return module[2].endswith("_offline") or module[2] == "test_offline" or name in PACKAGED_ROUTINE_MODULES
+    return (
+        module[2].endswith(("_offline", "_durable"))
+        or module[2] == "test_offline"
+        or name in PACKAGED_ROUTINE_MODULES
+    )
 
 
 def select_packaged_routine(all_ids):
-    """Smoke, the offline feature and every offline/durability module, in suite order.
+    """Smoke, the offline feature and every offline/durable module, in suite order.
 
     A module that fails to import shows up as a ``unittest.loader._FailedTest``
     entry, which no filter would keep; refuse the selection instead, so a broken

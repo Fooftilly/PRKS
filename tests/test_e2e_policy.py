@@ -225,7 +225,7 @@ class PackagedGatePlanTests(unittest.TestCase):
             "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
             "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
             "tests.e2e.test_library_epoch.EpochTests.test_reset",
-            "tests.e2e.test_offline_extra_helpers_not_e2e",
+            "tests.e2e.test_folders_durable.DurableFolderTests.test_create",
         ]
 
     def test_routine_set_is_smoke_plus_offline_and_durability_modules_in_order(self):
@@ -237,6 +237,7 @@ class PackagedGatePlanTests(unittest.TestCase):
             "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
             "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
             "tests.e2e.test_library_epoch.EpochTests.test_reset",
+            "tests.e2e.test_folders_durable.DurableFolderTests.test_create",
         ):
             self.assertIn(tid, selected)
         for tid in policy.SMOKE_TEST_IDS:
