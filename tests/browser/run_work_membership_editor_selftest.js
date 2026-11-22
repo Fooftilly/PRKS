@@ -431,6 +431,102 @@ function optionsBase(options, tagId) {
     return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
 }
 
+function ackAdd(listeners, add) {
+    listeners.forEach(function (fn) {
+        try {
+            fn({ operation: 'ADD_WORK_TAG', op: add, acknowledged: {
+                work_id: 'work-a', tag_id: 't1', present: true, server_revision: 2,
+                tag: { id: 't1', name: 'Alpha', color: null } } });
+        } catch (_) {}
+    });
+}
+function releaseAdd(add) {
+    add.status = 'pending';
+    add.attempt_count = 0;
+}
+function assertAcknowledgedRetry(outcome, t, retry, reads) {
+    assert('remove after the ADD is ' + outcome + ' records against the acknowledged base',
+        tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
+        retry[2] === false && retry[3] === true && retry[4] === 2,
+        JSON.stringify(tagWrites));
+    assert('remove after the ADD is ' + outcome + ' re-reads the base only without a local ACK',
+        t.reads() === reads, 'reads=' + t.reads());
+    assert('remove after the ADD is ' + outcome + ' leaves no error', !t.state.error,
+        String(t.state.error));
+}
+
+/* How each case settles the in-flight ADD, and what the remove must then do. */
+const IN_FLIGHT_OUTCOMES = {
+    acknowledged: {
+        settle: async function (t) { ackAdd(syncListeners.slice(t.before), t.add); outboxRows.length = 0; },
+        check: function (t, retry) { assertAcknowledgedRetry('acknowledged', t, retry, 0); },
+    },
+    'other-tab': {
+        /* Another tab's sender notifies only its own subscribers. */
+        settle: async function () { outboxRows.length = 0; },
+        check: function (t, retry) { assertAcknowledgedRetry('other-tab', t, retry, 1); },
+    },
+    'ack-during-read': {
+        settle: async function () { outboxRows.length = 0; },
+        check: function (t, retry) {
+            assert('a base read overtaken by an ACK is read again, not published',
+                t.reads() === 2 && tagWrites.length === 2 && retry[3] === true && retry[4] === 2,
+                'reads=' + t.reads() + ' ' + JSON.stringify(tagWrites));
+        },
+    },
+    released: {
+        settle: async function (t) { releaseAdd(t.add); t.emit({}); },
+        check: function (t, retry) {
+            assert('remove after a released claim rewrites the draft against the unchanged base',
+                t.reads() === 0 && tagWrites.length === 2 && retry[2] === false && retry[3] === false,
+                'reads=' + t.reads() + ' ' + JSON.stringify(tagWrites));
+            assert('remove after a released claim cancels the draft ADD', outboxRows.length === 0,
+                JSON.stringify(outboxRows));
+            assert('remove after a released claim leaves no error', !t.state.error, String(t.state.error));
+        },
+    },
+    reclaimed: {
+        /* Released, then claimed again before the retry lands: the retry is
+         * refused once more and waits, within the same budget, for the ACK. */
+        settle: async function (t) {
+            releaseAdd(t.add);
+            coalesceFailures.push(scopeBusy());
+            onCoalesce = function (n) { if (n === 2) { t.add.status = 'syncing'; t.add.attempt_count = 1; } };
+            t.emit({});
+            await until(function () { return tagWrites.length === 2 && syncListeners.length > t.mounted; },
+                'the reclaimed retry waits again');
+            onCoalesce = null;
+            ackAdd(syncListeners.slice(t.before), t.add);
+            outboxRows.length = 0;
+        },
+        check: function (t) {
+            const last = tagWrites[2] || [];
+            assert('a retry refused again keeps waiting and records against the acknowledged base',
+                tagWrites.length === 3 && last[2] === false && last[3] === true && last[4] === 2 && !t.state.error,
+                JSON.stringify(tagWrites) + ' ' + String(t.state.error));
+        },
+    },
+    conflict: {
+        settle: async function (t) { t.add.status = 'conflict'; t.emit({}); },
+        check: function (t) {
+            assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
+                JSON.stringify(tagWrites));
+            assert('remove after the ADD conflicts reports the failure', !!t.state.error,
+                String(t.state.error));
+        },
+    },
+    closed: {
+        settle: async function () { prksDestroyAllTabContexts(); },
+        check: function (t) {
+            assert('closing the editor removes the wait\'s sync listener',
+                syncListeners.length <= t.mounted, 'listeners=' + syncListeners.length + ' mounted=' + t.mounted);
+            assert('closing the editor ends the wait without a retry',
+                tagWrites.length === 1 && Date.now() - t.started < 2000,
+                'writes=' + tagWrites.length + ' ms=' + (Date.now() - t.started));
+        },
+    },
+};
+
 /* The panel painted while the ADD was still a rewritable draft, so the chip's
  * remove stayed enabled; the send then claimed the ADD. The remove waits for
  * that ADD to leave the wire and records against the base it produced,
@@ -487,83 +583,12 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
         tagWrites.length === 1, 'writes=' + tagWrites.length);
     const everyone = syncListeners.slice(before);
     function emit(event) { everyone.forEach(function (fn) { try { fn(event); } catch (_) {} }); }
-    if (outcome === 'acknowledged') {
-        emit({ operation: 'ADD_WORK_TAG', op: add, acknowledged: {
-            work_id: 'work-a', tag_id: 't1', present: true, server_revision: 2,
-            tag: { id: 't1', name: 'Alpha', color: null } } });
-        outboxRows.length = 0;
-    } else if (outcome === 'reclaimed') {
-        /* Released, then claimed again before the retry lands: the retry is
-         * refused once more and waits, within the same budget, for the ACK. */
-        add.status = 'pending';
-        add.attempt_count = 0;
-        coalesceFailures.push(scopeBusy());
-        onCoalesce = function (n) { if (n === 2) { add.status = 'syncing'; add.attempt_count = 1; } };
-        emit({});
-        await until(function () { return tagWrites.length === 2 && syncListeners.length > mounted; },
-            'the reclaimed retry waits again');
-        onCoalesce = null;
-        syncListeners.slice(before).forEach(function (fn) {
-            try {
-                fn({ operation: 'ADD_WORK_TAG', op: add, acknowledged: {
-                    work_id: 'work-a', tag_id: 't1', present: true, server_revision: 2,
-                    tag: { id: 't1', name: 'Alpha', color: null } } });
-            } catch (_) {}
-        });
-        outboxRows.length = 0;
-    } else if (outcome === 'other-tab' || outcome === 'ack-during-read') {
-        /* Another tab's sender notifies only its own subscribers. */
-        outboxRows.length = 0;
-    } else if (outcome === 'released') {
-        add.status = 'pending';
-        add.attempt_count = 0;
-        emit({});
-    } else if (outcome === 'closed') {
-        prksDestroyAllTabContexts();
-    } else {
-        add.status = 'conflict';
-        emit({});
-    }
-    const started = Date.now();
+    const t = { add: add, emit: emit, state: state, mounted: mounted, before: before,
+        reads: function () { return optionReads; } };
+    await IN_FLIGHT_OUTCOMES[outcome].settle(t);
+    t.started = Date.now();
     await edit;
-    const retry = tagWrites[1] || [];
-    if (outcome === 'closed') {
-        assert('closing the editor removes the wait\'s sync listener',
-            syncListeners.length <= mounted, 'listeners=' + syncListeners.length + ' mounted=' + mounted);
-        assert('closing the editor ends the wait without a retry',
-            tagWrites.length === 1 && Date.now() - started < 2000,
-            'writes=' + tagWrites.length + ' ms=' + (Date.now() - started));
-    } else if (outcome === 'conflict') {
-        assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
-            JSON.stringify(tagWrites));
-        assert('remove after the ADD conflicts reports the failure', !!state.error,
-            String(state.error));
-    } else if (outcome === 'reclaimed') {
-        const last = tagWrites[2] || [];
-        assert('a retry refused again keeps waiting and records against the acknowledged base',
-            tagWrites.length === 3 && last[2] === false && last[3] === true && last[4] === 2 && !state.error,
-            JSON.stringify(tagWrites) + ' ' + String(state.error));
-    } else if (outcome === 'ack-during-read') {
-        assert('a base read overtaken by an ACK is read again, not published',
-            optionReads === 2 && tagWrites.length === 2 && retry[3] === true && retry[4] === 2,
-            'reads=' + optionReads + ' ' + JSON.stringify(tagWrites));
-    } else if (outcome === 'released') {
-        assert('remove after a released claim rewrites the draft against the unchanged base',
-            optionReads === 0 && tagWrites.length === 2 && retry[2] === false && retry[3] === false,
-            'reads=' + optionReads + ' ' + JSON.stringify(tagWrites));
-        assert('remove after a released claim cancels the draft ADD', outboxRows.length === 0,
-            JSON.stringify(outboxRows));
-        assert('remove after a released claim leaves no error', !state.error, String(state.error));
-    } else {
-        assert('remove after the ADD is ' + outcome + ' records against the acknowledged base',
-            tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
-            retry[2] === false && retry[3] === true && retry[4] === 2,
-            JSON.stringify(tagWrites));
-        assert('remove after the ADD is ' + outcome + ' re-reads the base only without a local ACK',
-            optionReads === (outcome === 'other-tab' ? 1 : 0), 'reads=' + optionReads);
-        assert('remove after the ADD is ' + outcome + ' leaves no error', !state.error,
-            String(state.error));
-    }
+    IN_FLIGHT_OUTCOMES[outcome].check(t, tagWrites[1] || []);
     outboxRows.length = 0;
     global.prksWorkTagBase = function () { return tagBase; };
     delete global.prksReadWorkTagOptions;
