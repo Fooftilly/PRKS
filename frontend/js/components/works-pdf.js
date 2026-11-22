@@ -3251,11 +3251,17 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
 
     // The server already committed the ACK the stale snapshot predates, so a
     // fresh read catches up; the bound only stops a misbehaving server.
+    // Single-flight like the projection retry: one scheduled catch-up reads
+    // a fresh snapshot for every caller, and its flag stays observable (a
+    // catch-up is still to come) until that one retry is dispatched.
     function scheduleStaleSnapshotCatchUp() {
+        if (runtime._annotationStaleSnapshotRetryScheduled) return;
         const attempt = Number(runtime._annotationStaleSnapshotRetries) || 0;
         if (attempt >= 5) return;
         runtime._annotationStaleSnapshotRetries = attempt + 1;
+        runtime._annotationStaleSnapshotRetryScheduled = true;
         setTimeout(function () {
+            runtime._annotationStaleSnapshotRetryScheduled = false;
             if (stillLive()) void maybeCatchUpMaterialization();
         }, 50 * (attempt + 1));
     }

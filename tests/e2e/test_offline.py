@@ -499,7 +499,13 @@ _PDF_MARKUP_TOOLS_AVAILABLE_JS = """() => {
     // Coherent catch-up / materialization holds a gate and flips
     // setMutationEnabled(false) — mode may still be 'work' while tools are
     // hidden. Settlement requires the gate released AND tools reachable.
-    if (pdf && pdf._annotationMaterializing) return false;
+    // Catch-up releases its gate before materialization takes its own; the
+    // handoff and the catch-up block cover that interval, and a scheduled
+    // stale-snapshot retry is a catch-up still to come. Settled means none of
+    // the PDF's annotation gates is held or about to be.
+    if (pdf && (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff ||
+        pdf._annotationCatchUpBlocksMutation || pdf._annotationMaterializationGate ||
+        pdf._annotationStaleSnapshotRetryScheduled)) return false;
     const root = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
     if (!root) return false;
     const primary = root.querySelector(
@@ -1684,6 +1690,11 @@ class OfflineFoundationTests(unittest.TestCase):
             # Reconnect can leave mode===work while catch-up still locks input
             # and hides markup tools. Sibling reconnect tests wait for tools;
             # asserting immediately races remount under parallel load (#64).
+            # The drained annotation raises the canonical revision, so a
+            # catch-up materialization follows the drain; the tools could look
+            # settled before it took its gate. Wait for the server to report
+            # the PDF materialized first.
+            _wait_pdf_materialized(page, work_a)
             page.wait_for_function(_PDF_WORK_CAPABLE_ONLINE_JS, timeout=20000)
             _wait_pdf_markup_tools_settled(page)
             self.assertEqual(_pdf_mode(page), "work")
