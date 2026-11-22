@@ -124,7 +124,7 @@ global.__prksRefreshPlaylistSelects = async function () { refreshes += 1; };
 global.__prksRefreshAllPlaylistSelects = async function () { refreshes += 1; };
 global.prksEffectiveWorkTags = function (work) { return (work && work.tags) || []; };
 global.renderWorkTagsChips = function () { return '<span id="legacy-tags">Alpha</span>'; };
-let tagBase = { present: false, revision: 1 };
+const tagBase = { present: false, revision: 1 };
 global.prksWorkTagBase = function () { return tagBase; };
 global.prksOfflineDomainGeneration = function () { return 7; };
 
@@ -410,66 +410,100 @@ function scopeBusy() {
     return error;
 }
 
+/* The real projection: the base comes from the editor's options, so an ACK
+ * only moves it through acceptAck. */
+function optionsBase(options, tagId) {
+    const row = options.assigned.find(function (t) { return t.tag_id === tagId; });
+    return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+}
+
 /* The panel painted while the ADD was still a rewritable draft, so the chip's
  * remove stayed enabled; the send then claimed the ADD. The remove waits for
- * that ADD's acknowledgement and records against the base it produces,
- * instead of failing the click (the manage-tags add/remove E2E flake). */
+ * that ADD to leave the wire and records against the base it produced,
+ * instead of failing the click (the manage-tags add/remove E2E flake).
+ *
+ * acknowledged: the ACK reaches this editor's own subscriber (acceptAck).
+ * other-tab:    another tab sends it; the row vanishes with no ACK here, so
+ *               the base must be re-read, not taken from stale options.
+ * released:     the claim goes back to an editable draft; the retry cancels it.
+ * conflict:     the ADD conflicts; the original failure stands. */
 async function tagRemoveWaitsForInFlightAdd(outcome) {
     resetCounts();
     tagWrites.length = 0;
     outboxRows.length = 0;
     focus('main');
     const main = prksMountTabContext('main', document.getElementById('main-host'));
-    showWork(main, 'work-a');
+    showWork(main, 'work-a', { tags: [] });
     ownPanel(main);
     main.ui.workDetailsMode = 'view';
     global.prksVueRefreshWorkPanelRead = function () { return true; };
+    global.prksWorkTagBase = optionsBase;
+    let optionReads = 0;
+    global.prksReadWorkTagOptions = async function (workId) {
+        optionReads += 1;
+        return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }], known_absent: {} } };
+    };
     panel().innerHTML = '<div id="work-tags-list"></div>';
+    const before = syncListeners.length;
     prksMountWorkTags(main, 'work-a');
     const state = main.getResource('workTagEditor');
-    state.options = { assigned: [], known_absent: {} };
+    state.options = { work_id: 'work-a', assigned: [], known_absent: {} };
     state.catalog = [{ id: 't1', name: 'Alpha' }];
     state.catalogGeneration = 7;
     state.preparing = null;
-    tagBase = { present: false, revision: 1 };
     const add = { op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
-        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing' };
+        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1 };
     outboxRows.push(add);
     coalesceFailures.push(scopeBusy());
-    const before = syncListeners.length;
+    const mounted = syncListeners.length;
     const edit = prksWorkTagEdit(main, 't1', false);
-    await until(function () { return syncListeners.length > before && tagWrites.length === 1; },
-        'remove waits on the in-flight ADD');
+    await until(function () { return syncListeners.length > mounted && tagWrites.length === 1; },
+        'remove waits on the in-flight ADD (' + outcome + ')');
     assert('remove (' + outcome + ') does not retry while the ADD is still on the wire',
         tagWrites.length === 1, 'writes=' + tagWrites.length);
-    const waiting = syncListeners.slice(before);
+    const everyone = syncListeners.slice(before);
+    function emit(event) { everyone.forEach(function (fn) { try { fn(event); } catch (_) {} }); }
     if (outcome === 'acknowledged') {
-        tagBase = { present: true, revision: 2 };
+        emit({ operation: 'ADD_WORK_TAG', op: add, acknowledged: {
+            work_id: 'work-a', tag_id: 't1', present: true, server_revision: 2,
+            tag: { id: 't1', name: 'Alpha', color: null } } });
         outboxRows.length = 0;
-        waiting.forEach(function (fn) {
-            try { fn({ acknowledged: true, operation: 'ADD_WORK_TAG', op: add }); } catch (_) {}
-        });
+    } else if (outcome === 'other-tab') {
+        outboxRows.length = 0;
+        emit({});
+    } else if (outcome === 'released') {
+        add.status = 'pending';
+        add.attempt_count = 0;
+        emit({});
     } else {
         add.status = 'conflict';
-        waiting.forEach(function (fn) { try { fn({}); } catch (_) {} });
+        emit({});
     }
     await edit;
-    if (outcome === 'acknowledged') {
-        const retry = tagWrites[1] || [];
-        assert('remove after the ADD is acknowledged records against the acknowledged base',
-            tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
-            retry[2] === false && retry[3] === true && retry[4] === 2,
-            JSON.stringify(tagWrites));
-        assert('remove after the ADD is acknowledged leaves no error', !state.error,
-            String(state.error));
-    } else {
+    const retry = tagWrites[1] || [];
+    if (outcome === 'conflict') {
         assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
             JSON.stringify(tagWrites));
         assert('remove after the ADD conflicts reports the failure', !!state.error,
             String(state.error));
+    } else if (outcome === 'released') {
+        assert('remove after a released claim rewrites the draft against the re-read base',
+            optionReads === 1 && tagWrites.length === 2 && retry[2] === false,
+            'reads=' + optionReads + ' ' + JSON.stringify(tagWrites));
+        assert('remove after a released claim leaves no error', !state.error, String(state.error));
+    } else {
+        assert('remove after the ADD is ' + outcome + ' records against the acknowledged base',
+            tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
+            retry[2] === false && retry[3] === true && retry[4] === 2,
+            JSON.stringify(tagWrites));
+        assert('remove after the ADD is ' + outcome + ' re-reads the base only without a local ACK',
+            optionReads === (outcome === 'other-tab' ? 1 : 0), 'reads=' + optionReads);
+        assert('remove after the ADD is ' + outcome + ' leaves no error', !state.error,
+            String(state.error));
     }
     outboxRows.length = 0;
-    tagBase = { present: false, revision: 1 };
+    global.prksWorkTagBase = function () { return tagBase; };
+    delete global.prksReadWorkTagOptions;
     prksDestroyAllTabContexts();
 }
 
@@ -485,6 +519,8 @@ async function main() {
         await newPlaylistDuringRead('secondary');
         await tagBridgeAndOwner();
         await tagRemoveWaitsForInFlightAdd('acknowledged');
+        await tagRemoveWaitsForInFlightAdd('other-tab');
+        await tagRemoveWaitsForInFlightAdd('released');
         await tagRemoveWaitsForInFlightAdd('conflict');
     } catch (error) {
         failed += 1;

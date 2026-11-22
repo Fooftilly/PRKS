@@ -280,51 +280,68 @@
             r.payload && r.payload.tag_id === tagId && r.status !== 'acknowledged');
     }
     /**
-     * Wait (bounded) for this Tag's in-flight change on the Work to be
-     * acknowledged. True once its ACK has reached the subscribers (so
-     * acceptAck has updated state.options), false when it settles any other
-     * way (a conflict), the store cannot be read, or the wait runs out.
+     * Wait (bounded) for this Tag's in-flight change on the Work to leave the
+     * wire. Resolves:
+     *  - 'acknowledged' when its ACK reached THIS runtime's subscribers, so
+     *    acceptAck has already moved state.options to the new base;
+     *  - 'settled' when it left the wire without this runtime seeing the ACK
+     *    (another tab sent it, the ACK landed before this subscription, or the
+     *    claim was released back to an editable draft). state.options may be
+     *    stale then, so the caller must re-read the base;
+     *  - false on a conflict, an unreadable store, or when the wait runs out.
      *
-     * The subscription starts before the outbox is read, so an ACK that lands
-     * in between is not missed: the ACK is emitted before its row is retired,
-     * so a row that is already gone (or acknowledged) has been applied.
+     * The subscription starts before the outbox is read, so no settle between
+     * the two is missed.
      */
-    function inFlightAcknowledged(state, tagId, timeoutMs) {
+    function inFlightSettled(state, tagId, timeoutMs) {
         return new Promise(resolve => {
             let finished = false;
             let opId = null;
             const timer = setTimeout(() => finish(false), timeoutMs || 10000);
-            function finish(ok) {
+            function finish(outcome) {
                 if (finished) return;
                 finished = true;
                 clearTimeout(timer);
                 stop();
-                resolve(ok);
+                resolve(outcome);
             }
             function look() {
                 return root.prksSync.store.listOperations().then(rows => {
                     if (finished) return;
                     if (opId === null) {
                         const op = inFlightChange(rows, state, tagId);
-                        if (!op) { finish(true); return; }
+                        if (!op) { finish('settled'); return; }
                         opId = op.op_id;
                     }
                     const row = rows.find(r => r.op_id === opId);
-                    if (!row || row.status === 'acknowledged') finish(true);
+                    if (!row || row.status === 'acknowledged') finish('settled');
                     else if (row.status === 'conflict') finish(false);
+                    else if (row.status === 'pending' && !(row.attempt_count > 0)) finish('settled');
                 }, () => finish(false));
             }
             const stop = root.prksSync.subscribe(event => {
                 if (finished) return;
                 if (opId !== null && event && event.op && event.op.op_id === opId) {
-                    finish(!!event.acknowledged);
+                    finish(event.acknowledged ? 'acknowledged' : false);
                     return;
                 }
-                /* A terminal settle emits without the op: look again. */
+                /* A terminal settle or a released claim emits without the op. */
                 void look();
             });
             void look();
         });
+    }
+    /** The acknowledged base for `tagId` after its change left the wire. */
+    async function settledBase(ctx, state, tagId, outcome) {
+        if (outcome === 'settled') {
+            const read = await root.prksReadWorkTagOptions(state.workId);
+            if (!read || !read.value) return null;
+            if (!live(ctx, state)) return null;
+            /* Supersede any prepare() still reading the older projection. */
+            state.readVersion = (state.readVersion || 0) + 1;
+            state.options = read.value;
+        }
+        return state.options ? root.prksWorkTagBase(state.options, tagId) : null;
     }
     /**
      * `knownTag` is a Tag this device has just CREATED and not yet sent.
@@ -361,14 +378,16 @@
             } catch (error) {
                 /* The click raced this Tag's earlier change going on the wire:
                  * the panel painted before the send disabled the chip. That
-                 * envelope is immutable, so wait for its acknowledgement
-                 * (applied to state.options by the subscriber) and record this
-                 * change against the base it produces, rather than drop the
-                 * click. */
-                if (!error || error.prksLocalStoreCode !== 'scope_busy' ||
-                    !await inFlightAcknowledged(state, tagId)) throw error;
+                 * envelope is immutable, so wait for it to leave the wire and
+                 * record this change against the base it produced, rather
+                 * than drop the click. */
+                if (!error || error.prksLocalStoreCode !== 'scope_busy') throw error;
+                const outcome = await inFlightSettled(state, tagId);
+                if (!outcome) throw error;
                 if (!live(ctx, state) || !owns(ctx, state)) return;
-                const fresh = root.prksWorkTagBase(state.options, tagId);
+                const fresh = await settledBase(ctx, state, tagId, outcome);
+                if (!fresh) throw error;
+                if (!live(ctx, state) || !owns(ctx, state)) return;
                 await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, fresh.present, fresh.revision, tag);
             }
             queued = true;
