@@ -270,12 +270,12 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     base = globalThis.prksPdfAnnotationBaseForWrite(behind, 'ann-b', behindBase, runtimeBase(behind, 'ann-b'));
     assert.equal(base.revision, 2, 'an ACK sent against an unseen revision keeps the captured base');
 
-    /* A CREATE's ACK starts from any absent base. */
+    /* A CREATE's ACK starts from a never-held annotation (absent, revision 0). */
     const fresh = { workId: 'W-1', annotationCache: { items: [] },
-        annotationState: { work_id: 'W-1', annotations: [], known_absent: { 'ann-n': 5 } } };
+        annotationState: { work_id: 'W-1', annotations: [], known_absent: {} } };
     const freshBase = runtimeBase(fresh, 'ann-n');
     await withLiveRuntime(fresh, () => {
-        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-n', highlight('ann-n', 'new'), 6, 13),
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-n', highlight('ann-n', 'new'), 0, 13),
             { op_id: 'op-create', operation: 'CREATE_PDF_ANNOTATION', base_revision: null });
     });
     base = globalThis.prksPdfAnnotationBaseForWrite(fresh, 'ann-n', freshBase, runtimeBase(fresh, 'ann-n'));

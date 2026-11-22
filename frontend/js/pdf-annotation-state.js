@@ -539,17 +539,13 @@
 
     const OWN_ACK_STEPS_KEPT = 8;
 
-    /** The base an operation was sent against, as a base key. A CREATE's
-     * ACK proves only that the server had no such annotation, at whatever
-     * revision its tombstone held. */
+    /** The base an operation was sent against, as a base key. The server
+     * creates only an id it has never held (a tombstoned id is refused), so a
+     * CREATE starts from an absent annotation at revision 0. */
     function opInputKey(op) {
-        if (op.operation === 'CREATE_PDF_ANNOTATION') return 'absent:*';
+        if (op.operation === 'CREATE_PDF_ANNOTATION') return 'absent:0';
         if (Number.isSafeInteger(op.base_revision)) return 'present:' + op.base_revision;
         return null;
-    }
-
-    function stepStartsAt(step, key) {
-        return step.from === key || (step.from === 'absent:*' && key.indexOf('absent:') === 0);
     }
 
     /** Record that this device's own operation moved one annotation from the
@@ -603,7 +599,7 @@
             for (let hops = 0; hops < steps.length && key !== freshKey; hops += 1) {
                 let next = null;
                 for (let i = steps.length - 1; i >= 0; i -= 1) {
-                    if (stepStartsAt(steps[i], key) && steps[i].to !== key) { next = steps[i]; break; }
+                    if (steps[i].from === key && steps[i].to !== key) { next = steps[i]; break; }
                 }
                 if (!next) break;
                 key = next.to;
