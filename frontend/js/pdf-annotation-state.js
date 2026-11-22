@@ -545,13 +545,17 @@
      * the newer base (see baseForWrite). */
     function noteOwnAckStep(runtime, annotationId, from, op) {
         if (!op || !op.op_id) return;
-        const all = runtime._annotationOwnAckSteps || (runtime._annotationOwnAckSteps = {});
-        const steps = (all[annotationId] || []).concat([{
+        // A Map: an annotation id can be any string, "__proto__" included.
+        if (!(runtime._annotationOwnAckSteps instanceof Map)) {
+            runtime._annotationOwnAckSteps = new Map();
+        }
+        const all = runtime._annotationOwnAckSteps;
+        const steps = (all.get(annotationId) || []).concat([{
             op_id: String(op.op_id),
             from: baseKey(from),
             to: baseKey(runtimeBase(runtime, annotationId)),
         }]);
-        all[annotationId] = steps.slice(-OWN_ACK_STEPS_KEPT);
+        all.set(annotationId, steps.slice(-OWN_ACK_STEPS_KEPT));
     }
 
     /**
@@ -569,8 +573,8 @@
      * its exact revision instead of a provisional prediction.
      */
     function baseForWrite(runtime, annotationId, captured, fresh) {
-        const steps = (runtime && runtime._annotationOwnAckSteps &&
-            runtime._annotationOwnAckSteps[annotationId]) || [];
+        const all = runtime && runtime._annotationOwnAckSteps;
+        const steps = (all instanceof Map && all.get(annotationId)) || [];
         const freshKey = baseKey(fresh);
         let key = baseKey(captured);
         let chosen = captured;

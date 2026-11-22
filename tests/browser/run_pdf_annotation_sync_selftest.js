@@ -255,6 +255,19 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     chained.annotationState = { work_id: 'W-1', annotations: [{ annotation_id: 'ann-k', revision: 6 }], known_absent: {} };
     base = globalThis.prksPdfAnnotationBaseForWrite(chained, 'ann-k', captured, runtimeBase(chained, 'ann-k'));
     assert.equal(base.revision, 2, 'an unexplained step keeps the captured base');
+
+    /* Any id string works, including ones an object inherits. */
+    for (const id of ['__proto__', 'constructor', 'toString']) {
+        const odd = liveRuntime(id, highlight(id, 'a'), 1);
+        const before = runtimeBase(odd, id);
+        await withLiveRuntime(odd, () => {
+            assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
+                ack(id, highlight(id, 'b'), 2, 11), { op_id: 'op-' + id }).length, 1);
+        });
+        base = globalThis.prksPdfAnnotationBaseForWrite(odd, id, before, runtimeBase(odd, id));
+        assert.equal(base.revision, 2);
+        assert.equal(base.acknowledged_op_id, 'op-' + id);
+    }
 }
 
 /* A save queued behind a sent predecessor whose ACK the runtime already holds
