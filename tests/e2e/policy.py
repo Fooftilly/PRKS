@@ -1590,6 +1590,9 @@ PACKAGED_FULL_PATHS = (
     "tests/test_classic_distribution.py",
     "tests/test_e2e_classic_sw_transitions.py",
     ".github/workflows/e2e-classic-distribution-gate.yml",
+    # The runner and planner that pick and run the packaged set.
+    "tests/e2e/run.py",
+    "tests/e2e/policy.py",
 )
 PACKAGED_FULL_SHARDS = 8
 PACKAGED_ROUTINE_SHARDS = 4

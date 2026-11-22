@@ -40,6 +40,8 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             plan,
         )
         self.assertIn('--packaged-plan --base "origin/${BASE_REF}"', plan)
+        # A failed base fetch runs every test rather than no plan at all.
+        self.assertIn('plan="$(PRKS_E2E_CI_FORCE_FULL=1 python tests/e2e/run.py --packaged-plan)"', plan)
         self.assertIn('if mode not in ("full", "routine") or not include:', plan)
         self.assertIn("needs: packaged-plan", full)
         self.assertIn("matrix: ${{ fromJSON(needs.packaged-plan.outputs.matrix) }}", full)
@@ -65,7 +67,7 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             "format('{0}-{1}', github.ref, inputs.packaged_mode) }}",
             workflow,
         )
-        self.assertIn("cancel-in-progress: true", workflow)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
 
     def test_smoke_is_explicit_manual_only_and_stages_real_distribution(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
