@@ -393,7 +393,7 @@ async function usedTagCloudHidesMergingSourcesOnly() {
  * shipped wait must read again rather than take the failure as an empty queue. */
 function tagWaitFor(store, changed) {
     const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
-    const source = ['prksReadDurableOperations', 'prksWaitForCreatesOnServer', 'prksWaitForTagsOnServer']
+    const source = ['prksReadDurableOperations', 'prksDurableStoreCannotOpen', 'prksWaitForCreatesOnServer', 'prksWaitForTagsOnServer']
         .map(name => {
             const marker = 'async function ' + name + '(';
             const at = app.indexOf(marker);
@@ -432,6 +432,22 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     const broken = { listOperations: async () => { throw new Error('IndexedDB read failed'); } };
     assert.equal(await tagWaitFor(broken, () => {})(['T-NEW'], 300), false,
         'a queue that stays unreadable ends the wait unanswered, not as a success');
+
+    const unopenable = {
+        isAvailable: async () => false,
+        listOperations: async () => { throw new Error('IndexedDB is unavailable.'); },
+    };
+    const started = Date.now();
+    assert.equal(await tagWaitFor(unopenable, () => {})(['P-EXISTING'], 5000), true,
+        'storage that cannot open at all never queued a creation, so nothing is waited for');
+    assert.ok(Date.now() - started < 1000, 'and the save does not sit out the deadline');
+
+    const openButFlaky = {
+        isAvailable: async () => true,
+        listOperations: async () => { throw new Error('transaction aborted'); },
+    };
+    assert.equal(await tagWaitFor(openButFlaky, () => {})(['T-NEW'], 300), false,
+        'a failed read on storage that opened is still unknown, not empty');
 
     assert.equal(await tagWaitFor(null, () => {})(['T-NEW'], 300), true,
         'without a local store nothing can be queued');

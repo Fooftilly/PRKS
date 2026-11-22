@@ -4675,8 +4675,22 @@ window.handleRoute = handleRoute;
  * creations; a refused (conflict) one will never reach the server, so it is
  * not waited for. A queue that cannot be read says nothing about them, so the
  * read is retried until the deadline rather than taken as an empty queue.
- * Without a local store nothing can be queued, so there is nothing to wait for.
+ * Without a local store, or with one that cannot open at all, nothing can be
+ * queued, so there is nothing to wait for.
  */
+/** True only when durable storage cannot be opened at all (IndexedDB is
+ *  unavailable or nobody is signed in): such a store never held a creation, so
+ *  there is nothing to wait for. A read that failed on an open store is not this. */
+async function prksDurableStoreCannotOpen() {
+    try {
+        const store = typeof prksSync !== 'undefined' && prksSync ? prksSync.store : null;
+        if (!store || typeof store.isAvailable !== 'function') return false;
+        return (await store.isAvailable()) === false;
+    } catch (_e) {
+        return false;
+    }
+}
+
 async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
     const wanted = new Set(Array.from(ids || []).filter(Boolean));
     if (!wanted.size || typeof pendingOf !== 'function') return true;
@@ -4684,6 +4698,7 @@ async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
     const deadline = Date.now() + (timeoutMs || 10000);
     for (;;) {
         const ops = await prksReadDurableOperations();
+        if (ops === null && await prksDurableStoreCannotOpen()) return true;
         const pending = ops === null ? null
             : pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
         if (pending && !pending.length) return true;
