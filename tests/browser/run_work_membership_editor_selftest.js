@@ -37,6 +37,8 @@ global.prksOfflineRuntimeState = function () { return 'online'; };
 
 const syncListeners = [];
 const tagWrites = [];
+const outboxRows = [];
+const coalesceFailures = [];
 global.prksSync = {
     subscribe: function (fn) {
         syncListeners.push(fn);
@@ -44,9 +46,10 @@ global.prksSync = {
     },
     changed: function () {},
     store: {
-        listOperations: async function () { return []; },
+        listOperations: async function () { return outboxRows.slice(); },
         coalesceWorkTag: async function () {
             tagWrites.push(Array.prototype.slice.call(arguments));
+            if (coalesceFailures.length) throw coalesceFailures.shift();
         },
     },
 };
@@ -121,7 +124,8 @@ global.__prksRefreshPlaylistSelects = async function () { refreshes += 1; };
 global.__prksRefreshAllPlaylistSelects = async function () { refreshes += 1; };
 global.prksEffectiveWorkTags = function (work) { return (work && work.tags) || []; };
 global.renderWorkTagsChips = function () { return '<span id="legacy-tags">Alpha</span>'; };
-global.prksWorkTagBase = function () { return { present: false, revision: 1 }; };
+let tagBase = { present: false, revision: 1 };
+global.prksWorkTagBase = function () { return tagBase; };
 global.prksOfflineDomainGeneration = function () { return 7; };
 
 let passed = 0;
@@ -400,6 +404,75 @@ async function tagBridgeAndOwner() {
     prksDestroyAllTabContexts();
 }
 
+function scopeBusy() {
+    const error = new Error('This Tag change is syncing or needs resolution.');
+    error.prksLocalStoreCode = 'scope_busy';
+    return error;
+}
+
+/* The panel painted while the ADD was still a rewritable draft, so the chip's
+ * remove stayed enabled; the send then claimed the ADD. The remove waits for
+ * that ADD's acknowledgement and records against the base it produces,
+ * instead of failing the click (the manage-tags add/remove E2E flake). */
+async function tagRemoveWaitsForInFlightAdd(outcome) {
+    resetCounts();
+    tagWrites.length = 0;
+    outboxRows.length = 0;
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    showWork(main, 'work-a');
+    ownPanel(main);
+    main.ui.workDetailsMode = 'view';
+    global.prksVueRefreshWorkPanelRead = function () { return true; };
+    panel().innerHTML = '<div id="work-tags-list"></div>';
+    prksMountWorkTags(main, 'work-a');
+    const state = main.getResource('workTagEditor');
+    state.options = { assigned: [], known_absent: {} };
+    state.catalog = [{ id: 't1', name: 'Alpha' }];
+    state.catalogGeneration = 7;
+    state.preparing = null;
+    tagBase = { present: false, revision: 1 };
+    const add = { op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
+        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing' };
+    outboxRows.push(add);
+    coalesceFailures.push(scopeBusy());
+    const before = syncListeners.length;
+    const edit = prksWorkTagEdit(main, 't1', false);
+    await until(function () { return syncListeners.length > before && tagWrites.length === 1; },
+        'remove waits on the in-flight ADD');
+    assert('remove (' + outcome + ') does not retry while the ADD is still on the wire',
+        tagWrites.length === 1, 'writes=' + tagWrites.length);
+    const waiting = syncListeners.slice(before);
+    if (outcome === 'acknowledged') {
+        tagBase = { present: true, revision: 2 };
+        outboxRows.length = 0;
+        waiting.forEach(function (fn) {
+            try { fn({ acknowledged: true, operation: 'ADD_WORK_TAG', op: add }); } catch (_) {}
+        });
+    } else {
+        add.status = 'conflict';
+        waiting.forEach(function (fn) { try { fn({}); } catch (_) {} });
+    }
+    await edit;
+    if (outcome === 'acknowledged') {
+        const retry = tagWrites[1] || [];
+        assert('remove after the ADD is acknowledged records against the acknowledged base',
+            tagWrites.length === 2 && retry[0] === 'work-a' && retry[1] === 't1' &&
+            retry[2] === false && retry[3] === true && retry[4] === 2,
+            JSON.stringify(tagWrites));
+        assert('remove after the ADD is acknowledged leaves no error', !state.error,
+            String(state.error));
+    } else {
+        assert('remove after the ADD conflicts does not retry', tagWrites.length === 1,
+            JSON.stringify(tagWrites));
+        assert('remove after the ADD conflicts reports the failure', !!state.error,
+            String(state.error));
+    }
+    outboxRows.length = 0;
+    tagBase = { present: false, revision: 1 };
+    prksDestroyAllTabContexts();
+}
+
 async function main() {
     try {
         await deferredFolder('set');
@@ -411,6 +484,8 @@ async function main() {
         await newPlaylistDuringRead('replaced');
         await newPlaylistDuringRead('secondary');
         await tagBridgeAndOwner();
+        await tagRemoveWaitsForInFlightAdd('acknowledged');
+        await tagRemoveWaitsForInFlightAdd('conflict');
     } catch (error) {
         failed += 1;
         console.log('FAIL  runtime exception ' + (error && error.stack || error));

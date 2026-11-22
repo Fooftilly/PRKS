@@ -273,6 +273,59 @@
             state.preparing = prepare(ctx, state);
         }
     }
+    /** This Work's unacknowledged change of `tagId` that can no longer be rewritten. */
+    function inFlightChange(rows, state, tagId) {
+        return rows.find(r => r.entity_type === 'work' && r.entity_id === state.workId &&
+            ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(r.operation) &&
+            r.payload && r.payload.tag_id === tagId && r.status !== 'acknowledged');
+    }
+    /**
+     * Wait (bounded) for this Tag's in-flight change on the Work to be
+     * acknowledged. True once its ACK has reached the subscribers (so
+     * acceptAck has updated state.options), false when it settles any other
+     * way (a conflict), the store cannot be read, or the wait runs out.
+     *
+     * The subscription starts before the outbox is read, so an ACK that lands
+     * in between is not missed: the ACK is emitted before its row is retired,
+     * so a row that is already gone (or acknowledged) has been applied.
+     */
+    function inFlightAcknowledged(state, tagId, timeoutMs) {
+        return new Promise(resolve => {
+            let finished = false;
+            let opId = null;
+            const timer = setTimeout(() => finish(false), timeoutMs || 10000);
+            function finish(ok) {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                stop();
+                resolve(ok);
+            }
+            function look() {
+                return root.prksSync.store.listOperations().then(rows => {
+                    if (finished) return;
+                    if (opId === null) {
+                        const op = inFlightChange(rows, state, tagId);
+                        if (!op) { finish(true); return; }
+                        opId = op.op_id;
+                    }
+                    const row = rows.find(r => r.op_id === opId);
+                    if (!row || row.status === 'acknowledged') finish(true);
+                    else if (row.status === 'conflict') finish(false);
+                }, () => finish(false));
+            }
+            const stop = root.prksSync.subscribe(event => {
+                if (finished) return;
+                if (opId !== null && event && event.op && event.op.op_id === opId) {
+                    finish(!!event.acknowledged);
+                    return;
+                }
+                /* A terminal settle emits without the op: look again. */
+                void look();
+            });
+            void look();
+        });
+    }
     /**
      * `knownTag` is a Tag this device has just CREATED and not yet sent.
      *
@@ -303,7 +356,21 @@
             const base = root.prksWorkTagBase(state.options, tagId);
             if (!live(ctx, state)) return;
             if (!owns(ctx, state)) return;
-            await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
+            try {
+                await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, base.present, base.revision, tag);
+            } catch (error) {
+                /* The click raced this Tag's earlier change going on the wire:
+                 * the panel painted before the send disabled the chip. That
+                 * envelope is immutable, so wait for its acknowledgement
+                 * (applied to state.options by the subscriber) and record this
+                 * change against the base it produces, rather than drop the
+                 * click. */
+                if (!error || error.prksLocalStoreCode !== 'scope_busy' ||
+                    !await inFlightAcknowledged(state, tagId)) throw error;
+                if (!live(ctx, state) || !owns(ctx, state)) return;
+                const fresh = root.prksWorkTagBase(state.options, tagId);
+                await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, fresh.present, fresh.revision, tag);
+            }
             queued = true;
             if (!live(ctx, state)) { root.prksSync.changed(); return true; }
             state.error = null;
