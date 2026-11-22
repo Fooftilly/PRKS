@@ -391,6 +391,12 @@ async function usedTagCloudHidesMergingSourcesOnly() {
 /* The New File form attaches its first Tags only once their CREATE_TAG has
  * reached the server. A queue read that fails says nothing about that, so the
  * shipped wait must read again rather than take the failure as an empty queue. */
+function unreadableBudget(app) {
+    const found = /const PRKS_UNREADABLE_QUEUE_WAIT_MS = (\d+);/.exec(app);
+    assert.ok(found, 'the shipped unreadable-queue budget');
+    return Number(found[1]);
+}
+
 function tagWaitFor(store, changed) {
     const app = fs.readFileSync(path.join(__dirname, '../../frontend/js/app.js'), 'utf8');
     const source = ['prksDurableQueueForWait', 'prksWaitForCreatesOnServer', 'prksWaitForTagsOnServer']
@@ -401,9 +407,9 @@ function tagWaitFor(store, changed) {
             const end = app.indexOf('\n}\n', at);
             assert.ok(end > at);
             return app.slice(at, end + 2);
-        }).join('\n');
+        }).join('\n') + '\nvar PRKS_UNREADABLE_QUEUE_WAIT_MS = ' + unreadableBudget(app) + ';';
     const ctx = {
-        Set, Array, Date, Promise, setTimeout,
+        Set, Array, Date, Math, Promise, setTimeout,
         prksSync: store ? { store, changed } : null,
         prksPendingTagCreates: globalThis.prksPendingTagCreates,
     };
@@ -429,9 +435,30 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     assert.equal(reads, 3, 'a failed read is read again, and a pending Tag is waited for');
     assert.ok(nudges >= 2, 'sync is nudged while the answer is unknown or pending');
 
-    const broken = { listOperations: async () => { throw new Error('IndexedDB read failed'); } };
-    assert.equal(await tagWaitFor(broken, () => {})(['T-NEW'], 300), false,
-        'a queue that stays unreadable ends the wait unanswered, not as a success');
+    /* A queue that never becomes readable cannot be drained by sync either:
+     * after the short unreadable budget the save goes ahead, and the server
+     * refuses what it does not have. Before that budget it is still waited on. */
+    let brokenReads = 0;
+    const broken = { listOperations: async () => { brokenReads += 1; throw new Error('IndexedDB read failed'); } };
+    const brokenStart = Date.now();
+    assert.equal(await tagWaitFor(broken, () => {})(['P-EXISTING'], 10000), true,
+        'a queue that stays unreadable lets the save go ahead');
+    const tookMs = Date.now() - brokenStart;
+    assert.ok(tookMs >= 1900 && tookMs < 4000, 'after the short budget, not the full deadline: ' + tookMs);
+    assert.ok(brokenReads >= 5, 'having kept reading through the budget, not after one failure');
+
+    /* Once a read succeeded, its answer stands: a later failure does not let a
+     * still-pending Tag through early. */
+    let laterReads = 0;
+    const thenBroken = {
+        listOperations: async () => {
+            laterReads += 1;
+            if (laterReads === 1) return [queued];
+            throw new Error('IndexedDB read failed');
+        },
+    };
+    assert.equal(await tagWaitFor(thenBroken, () => {})(['T-NEW'], 2600), false,
+        'a pending Tag seen once is waited for until the deadline');
 
     /* The real store with no IndexedDB: its reads fail as 'unavailable'. */
     const unopenable = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: null, uuid });
@@ -462,13 +489,23 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     const failure = await failing.listOperations().then(() => null, error => error);
     assert.equal(failure && failure.prksLocalStoreCode, 'unavailable');
     assert.notEqual(failure.prksLocalStoreAbsent, true, 'a failed open is not marked absent');
-    assert.equal(await tagWaitFor(failing, () => {})(['T-NEW'], 300), false,
-        'so the real store failing to open does not end the wait as a success');
+    const failingStart = Date.now();
+    assert.equal(await tagWaitFor(failing, () => {})(['T-NEW'], 10000), true);
+    assert.ok(Date.now() - failingStart >= 1900,
+        'so the real store failing to open is read through the budget, not taken as an empty queue');
 
     const blocked = new Error('Local storage is blocked by another tab.');
     blocked.prksLocalStoreCode = 'blocked';
-    assert.equal(await tagWaitFor({ listOperations: async () => { throw blocked; } }, () => {})(['T-NEW'], 300),
-        false, 'a blocked open says nothing about the queue, so it is not taken as empty');
+    let blockedReads = 0;
+    const blockedThenReadable = {
+        listOperations: async () => {
+            blockedReads += 1;
+            if (blockedReads === 1) throw blocked;
+            return blockedReads === 2 ? [queued] : [];
+        },
+    };
+    assert.equal(await tagWaitFor(blockedThenReadable, () => {})(['T-NEW'], 5000), true);
+    assert.equal(blockedReads, 3, 'a blocked open is not taken as empty: the pending Tag is waited for');
 
     assert.equal(await tagWaitFor(null, () => {})(['T-NEW'], 300), true,
         'without a local store nothing can be queued');

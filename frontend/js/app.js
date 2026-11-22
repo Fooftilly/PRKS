@@ -4674,7 +4674,9 @@ window.handleRoute = handleRoute;
  * nudging sync while any is pending. ``pendingOf(ops)`` lists the unsettled
  * creations; a refused (conflict) one will never reach the server, so it is
  * not waited for. A queue that cannot be read says nothing about them, so the
- * read is retried until the deadline rather than taken as an empty queue.
+ * read is retried rather than taken as an empty queue; if it never becomes
+ * readable within PRKS_UNREADABLE_QUEUE_WAIT_MS the wait gives up and lets the
+ * caller go ahead (the server is the backstop).
  * Without a local store, or with one that reports storage unavailable, nothing
  * can be queued, so there is nothing to wait for.
  */
@@ -4683,6 +4685,9 @@ window.handleRoute = handleRoute;
  *  store never held a creation; or null when the read failed for any other
  *  reason (a failed or blocked open of an existing database, an aborted
  *  transaction), which says nothing either way. */
+/** How long the quick-create wait reads a queue that never becomes readable. */
+const PRKS_UNREADABLE_QUEUE_WAIT_MS = 2000;
+
 async function prksDurableQueueForWait() {
     try {
         const ops = await prksSync.store.listOperations();
@@ -4697,12 +4702,23 @@ async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
     if (!wanted.size || typeof pendingOf !== 'function') return true;
     if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store ||
         typeof prksSync.store.listOperations !== 'function') return true;
-    const deadline = Date.now() + (timeoutMs || 10000);
+    const started = Date.now();
+    const deadline = started + (timeoutMs || 10000);
+    const unreadableDeadline = Math.min(deadline, started + PRKS_UNREADABLE_QUEUE_WAIT_MS);
+    let everRead = false;
     for (;;) {
         const ops = await prksDurableQueueForWait();
-        const pending = ops === null ? null
-            : pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
-        if (pending && !pending.length) return true;
+        if (ops !== null) {
+            everRead = true;
+            const pending = pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
+            if (!pending.length) return true;
+        } else if (!everRead && Date.now() >= unreadableDeadline) {
+            /* A queue that never became readable cannot be drained by sync
+             * either, so waiting longer cannot help. Go ahead: the server
+             * refuses a Person or Tag it does not have, and a refused create
+             * saves nothing. */
+            return true;
+        }
         if (Date.now() >= deadline) return false;
         if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
             prksSync.changed();
