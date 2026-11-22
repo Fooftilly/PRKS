@@ -4675,30 +4675,30 @@ window.handleRoute = handleRoute;
  * creations; a refused (conflict) one will never reach the server, so it is
  * not waited for. A queue that cannot be read says nothing about them, so the
  * read is retried until the deadline rather than taken as an empty queue.
- * Without a local store, or with one that cannot open at all, nothing can be
- * queued, so there is nothing to wait for.
+ * Without a local store, or with one that reports storage unavailable, nothing
+ * can be queued, so there is nothing to wait for.
  */
-/** True only when durable storage cannot be opened at all (IndexedDB is
- *  unavailable or nobody is signed in): such a store never held a creation, so
- *  there is nothing to wait for. A read that failed on an open store is not this. */
-async function prksDurableStoreCannotOpen() {
+/** The queue as the quick-create wait reads it: the operations; [] when durable
+ *  storage is unavailable (no IndexedDB, nobody signed in), because such a store
+ *  never held a creation; or null when the read failed for any other reason
+ *  (a blocked open, an aborted transaction), which says nothing either way. */
+async function prksDurableQueueForWait() {
     try {
-        const store = typeof prksSync !== 'undefined' && prksSync ? prksSync.store : null;
-        if (!store || typeof store.isAvailable !== 'function') return false;
-        return (await store.isAvailable()) === false;
-    } catch (_e) {
-        return false;
+        const ops = await prksSync.store.listOperations();
+        return Array.isArray(ops) ? ops : null;
+    } catch (e) {
+        return e && e.prksLocalStoreCode === 'unavailable' ? [] : null;
     }
 }
 
 async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
     const wanted = new Set(Array.from(ids || []).filter(Boolean));
     if (!wanted.size || typeof pendingOf !== 'function') return true;
-    if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store) return true;
+    if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store ||
+        typeof prksSync.store.listOperations !== 'function') return true;
     const deadline = Date.now() + (timeoutMs || 10000);
     for (;;) {
-        const ops = await prksReadDurableOperations();
-        if (ops === null && await prksDurableStoreCannotOpen()) return true;
+        const ops = await prksDurableQueueForWait();
         const pending = ops === null ? null
             : pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
         if (pending && !pending.length) return true;
