@@ -3255,7 +3255,10 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         const attempt = Number(runtime._annotationStaleSnapshotRetries) || 0;
         if (attempt >= 5) return;
         runtime._annotationStaleSnapshotRetries = attempt + 1;
+        // Observable like the projection retry: a catch-up is still to come.
+        runtime._annotationStaleSnapshotRetryScheduled = true;
         setTimeout(function () {
+            runtime._annotationStaleSnapshotRetryScheduled = false;
             if (stillLive()) void maybeCatchUpMaterialization();
         }, 50 * (attempt + 1));
     }

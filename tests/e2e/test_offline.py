@@ -500,10 +500,12 @@ _PDF_MARKUP_TOOLS_AVAILABLE_JS = """() => {
     // setMutationEnabled(false) — mode may still be 'work' while tools are
     // hidden. Settlement requires the gate released AND tools reachable.
     // Catch-up releases its gate before materialization takes its own; the
-    // handoff and the catch-up block cover that interval. Settled means
-    // none of the PDF's annotation gates is held or about to be.
+    // handoff and the catch-up block cover that interval, and a scheduled
+    // stale-snapshot retry is a catch-up still to come. Settled means none of
+    // the PDF's annotation gates is held or about to be.
     if (pdf && (pdf._annotationMaterializing || pdf._annotationMaterializationHandoff ||
-        pdf._annotationCatchUpBlocksMutation || pdf._annotationMaterializationGate)) return false;
+        pdf._annotationCatchUpBlocksMutation || pdf._annotationMaterializationGate ||
+        pdf._annotationStaleSnapshotRetryScheduled)) return false;
     const root = document.querySelector('[data-prks-role="pdf-viewer"] .prks-pdf-toolbar');
     if (!root) return false;
     const primary = root.querySelector(
