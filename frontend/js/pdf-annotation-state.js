@@ -524,7 +524,100 @@
         return held.present && !present;
     }
 
-    function patchRuntimeAcknowledged(runtime, data) {
+    function baseKey(base) {
+        return (base && base.present ? 'present:' : 'absent:') +
+            (base && Number.isSafeInteger(base.revision) ? base.revision : 0);
+    }
+
+    function runtimeBase(runtime, annotationId) {
+        return acknowledgedBase(
+            (runtime && runtime.annotationCache && runtime.annotationCache.items) || [],
+            runtime && runtime.annotationState,
+            annotationId
+        );
+    }
+
+    const OWN_ACK_STEPS_KEPT = 8;
+
+    /** The base an operation was sent against, as a base key. The server
+     * creates only an id it has never held (a tombstoned id is refused), so a
+     * CREATE starts from an absent annotation at revision 0. */
+    function opInputKey(op) {
+        if (op.operation === 'CREATE_PDF_ANNOTATION') return 'absent:0';
+        if (Number.isSafeInteger(op.base_revision)) return 'present:' + op.base_revision;
+        return null;
+    }
+
+    /** Record that this device's own operation moved one annotation from the
+     * base it was sent against to the ACK's revision. The step starts at the
+     * operation's own base, not at whatever the runtime held before the ACK:
+     * a runtime still at an older revision has not seen the change between
+     * the two, and must not take the ACK as its own. A catch-up snapshot
+     * moves the runtime too, but records nothing: only these steps let a
+     * pending write take the newer base (see baseForWrite). */
+    function noteOwnAckStep(runtime, annotationId, data, op) {
+        if (!op || !op.op_id) return;
+        const from = opInputKey(op);
+        if (!from) return;
+        // A Map: an annotation id can be any string, "__proto__" included.
+        if (!(runtime._annotationOwnAckSteps instanceof Map)) {
+            runtime._annotationOwnAckSteps = new Map();
+        }
+        const all = runtime._annotationOwnAckSteps;
+        const present = data.present !== false && !!data.annotation;
+        const steps = (all.get(annotationId) || []).concat([{
+            op_id: String(op.op_id),
+            from: from,
+            to: baseKey({ present: present, revision: data.server_revision }),
+        }]);
+        all.set(annotationId, steps.slice(-OWN_ACK_STEPS_KEPT));
+    }
+
+    /**
+     * The base a pending local write sends, read when the write runs.
+     * `captured` is the base the runtime held when the user made the change,
+     * `fresh` the one it holds now. The write takes `fresh` only when this
+     * device's own ACKs explain every step from `captured` to it: an earlier
+     * save of this annotation that the server acknowledged in between. Any
+     * other change (another device's edit loaded by a catch-up snapshot)
+     * keeps `captured`, so the server reports the conflict instead of the
+     * write overwriting an edit the user never saw.
+     *
+     * The result names the operation whose ACK the base is
+     * (`acknowledged_op_id`), so a write queued behind that operation can use
+     * its exact revision instead of a provisional prediction.
+     */
+    function baseForWrite(runtime, annotationId, captured, fresh) {
+        const all = runtime && runtime._annotationOwnAckSteps;
+        const steps = (all instanceof Map && all.get(annotationId)) || [];
+        const freshKey = baseKey(fresh);
+        let key = baseKey(captured);
+        let chosen = captured;
+        if (key === freshKey) {
+            chosen = fresh;
+        } else {
+            for (let hops = 0; hops < steps.length && key !== freshKey; hops += 1) {
+                let next = null;
+                for (let i = steps.length - 1; i >= 0; i -= 1) {
+                    if (steps[i].from === key && steps[i].to !== key) { next = steps[i]; break; }
+                }
+                if (!next) break;
+                key = next.to;
+            }
+            if (key === freshKey) chosen = fresh;
+        }
+        const out = Object.assign({}, chosen);
+        const chosenKey = baseKey(chosen);
+        for (let i = steps.length - 1; i >= 0; i -= 1) {
+            if (steps[i].to === chosenKey) {
+                out.acknowledged_op_id = steps[i].op_id;
+                break;
+            }
+        }
+        return out;
+    }
+
+    function patchRuntimeAcknowledged(runtime, data, op) {
         if (!runtime || !data || !data.annotation_id) return false;
         // A snapshot newer than this ACK already holds its change and any
         // later one: patching it in would revert them.
@@ -600,6 +693,7 @@
                 runtime.acknowledgedAnnotationSetRevision = nextGen;
             }
         }
+        noteOwnAckStep(runtime, annotationId, data, op);
         return true;
     }
 
@@ -607,7 +701,7 @@
      * After ACK: update every mounted Work PDF runtime for this Work so the
      * next mutation uses the new base_revision without reopening the PDF.
      */
-    function applyAckToLiveRuntimes(data) {
+    function applyAckToLiveRuntimes(data, op) {
         if (!data || !data.work_id || !Number.isSafeInteger(data.server_revision)) {
             return [];
         }
@@ -618,7 +712,7 @@
                 : null;
             if (!runtime || runtime._destroyed) return;
             if (String(runtime.workId) !== String(data.work_id)) return;
-            if (!patchRuntimeAcknowledged(runtime, data)) return;
+            if (!patchRuntimeAcknowledged(runtime, data, op)) return;
             touched.push(runtime);
             if (typeof root.prksReconcileViewerAnnotations === 'function' && runtime.viewer) {
                 const effective = effectiveWorkAnnotations(
@@ -703,7 +797,7 @@
         terminal: terminal,
         reconcile: function (data, op) {
             function afterAck() {
-                applyAckToLiveRuntimes(data);
+                applyAckToLiveRuntimes(data, op);
                 // Re-envelope never-sent successors against the actual ACK
                 // server_revision before they can be claimed/SENT. Provisional
                 // base+1 is not safe for stale-identical convergent ACKs.
@@ -740,6 +834,7 @@
         prksRoundTripPdfAnnotation: roundTripAnnotation,
         prksEffectiveWorkAnnotations: effectiveWorkAnnotations,
         prksAcknowledgedPdfAnnotationBase: acknowledgedBase,
+        prksPdfAnnotationBaseForWrite: baseForWrite,
         prksPdfAnnotationBaseUnavailable: pdfAnnotationBaseUnavailable,
         prksSavePdfAnnotationDurably: savePdfAnnotationDurably,
         prksHasCachedManagedPdf: hasCachedManagedPdf,

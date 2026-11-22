@@ -1791,16 +1791,30 @@
          * resolution.
          */
         function savePdfAnnotation(workId, desired, observed) {
+            /* `observed` may be a function returning the observed base:
+             * it is then read inside the write, after the outbox is read, so
+             * an ACK of this annotation that lands meanwhile is in it (the
+             * sync runtime reconciles the caller's state before it marks the
+             * row acknowledged). A base read before the write could predate
+             * that ACK and send a stale revision. */
+            const given = observed;
+            const readObserved = typeof given === 'function'
+                ? given
+                : function () { return given; };
             const deleting = desired === null;
+            observed = readObserved();
             const annotationId = deleting
                 ? (observed && observed.annotation_id)
                 : (desired && desired.annotation_id);
             if (!isNonBlankString(workId) || !isNonBlankString(annotationId)) {
                 return Promise.reject(localStoreError('invalid_envelope', 'Invalid PDF annotation save.'));
             }
-            if (!isPlainObject(observed) ||
-                typeof observed.present !== 'boolean' ||
-                !Number.isSafeInteger(observed.revision) || observed.revision < 0) {
+            function validObserved(value) {
+                return isPlainObject(value) &&
+                    typeof value.present === 'boolean' &&
+                    Number.isSafeInteger(value.revision) && value.revision >= 0;
+            }
+            if (!validObserved(observed)) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid observed annotation state.'));
             }
             if (!deleting) {
@@ -1866,6 +1880,11 @@
             return runIntent(async (request, setResult) => {
                 const allRows = await request(STORE_OPERATIONS, s => s.getAll());
                 assertWorkIsNotBeingDeleted(allRows, workId, 'annotated');
+                const fresh = readObserved();
+                if (!validObserved(fresh)) {
+                    throw localStoreError('invalid_base', 'Invalid observed annotation state.');
+                }
+                observed = fresh;
                 const rows = allRows.filter(matches)
                     .sort((a, b) => (a.sequence || 0) - (b.sequence || 0));
                 const neverSentRows = rows.filter(isNeverSent);
@@ -1919,7 +1938,14 @@
                      * successor with a provisional base. Rebase against the
                      * predecessor's actual ACK server_revision before SENT. */
                     dependsOn = [existingAttempted.op_id];
-                    const afterRev = provisionalRevisionAfterAttempted(existingAttempted);
+                    /* The runtime can already hold this predecessor's ACK
+                     * (sync patches the runtime, then rebases dependents, then
+                     * marks the row acknowledged). Its exact revision is the
+                     * base then; a rebase that runs after this write leaves
+                     * a matching base as it is. */
+                    const afterRev = observed.acknowledged_op_id === existingAttempted.op_id
+                        ? observed.revision
+                        : provisionalRevisionAfterAttempted(existingAttempted);
                     if (!desiredPresent) {
                         operation = 'DELETE_PDF_ANNOTATION';
                         payload = { annotation_id: annotationId };

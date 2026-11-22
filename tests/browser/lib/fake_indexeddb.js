@@ -365,6 +365,9 @@ function makeStoreHandle(store, tx) {
                 .sort(function (a, b) {
                     return compareKeys(keyOf(store.keyPath, a), keyOf(store.keyPath, b));
                 });
+            // A test can act at the exact point a transaction has read the
+            // store, before the code that read it continues.
+            if (typeof store.afterGetAll === 'function') store.afterGetAll();
             return typeof count === 'number' ? rows.slice(0, count) : rows;
         });
     };
