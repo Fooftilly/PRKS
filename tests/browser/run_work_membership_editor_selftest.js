@@ -42,7 +42,10 @@ const coalesceFailures = [];
 global.prksSync = {
     subscribe: function (fn) {
         syncListeners.push(fn);
-        return function () {};
+        return function () {
+            const at = syncListeners.indexOf(fn);
+            if (at !== -1) syncListeners.splice(at, 1);
+        };
     },
     changed: function () {},
     store: {
@@ -495,6 +498,8 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
     await edit;
     const retry = tagWrites[1] || [];
     if (outcome === 'closed') {
+        assert('closing the editor removes the wait\'s sync listener',
+            syncListeners.length <= mounted, 'listeners=' + syncListeners.length + ' mounted=' + mounted);
         assert('closing the editor ends the wait without a retry',
             tagWrites.length === 1 && Date.now() - started < 2000,
             'writes=' + tagWrites.length + ' ms=' + (Date.now() - started));
