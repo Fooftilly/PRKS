@@ -13900,11 +13900,23 @@ class WorkCreateWorkflowTests(_BrowserE2E):
 
         page.route("**/api/sync/operations", hold_sync)
         page.on("request", record)
+        # Count the form reaching its Tag step, so the check below runs
+        # after it, not before.
+        page.evaluate(
+            """() => {
+                const real = window.prksWaitForTagsOnServer;
+                window.__e2eTagWaits = 0;
+                window.prksWaitForTagsOnServer = (...args) => {
+                    window.__e2eTagWaits += 1;
+                    return real(...args);
+                };
+            }"""
+        )
         try:
-            with page.expect_response(
-                lambda r: r.request.method == "POST" and urlparse(r.url).path == "/api/works"
-            ):
-                page.evaluate("() => window.__e2eReleaseTag()")
+            page.evaluate("() => window.__e2eReleaseTag()")
+            # The Work exists and the form is at its Tag step while sync is
+            # held, so the CREATE_TAG cannot have been acknowledged.
+            page.wait_for_function("() => window.__e2eTagWaits >= 1")
             wait_for_async(
                 page,
                 """() => prksSync.store.listOperations().then(rows => rows.some(
