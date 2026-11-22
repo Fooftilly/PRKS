@@ -291,17 +291,21 @@
      *  - false on a conflict, an unreadable store, or when the wait runs out.
      *
      * The subscription starts before the outbox is read, so no settle between
-     * the two is missed.
+     * the two is missed; a settle in another tab is found by a slow poll.
      */
     function inFlightSettled(state, tagId, timeoutMs) {
         return new Promise(resolve => {
             let finished = false;
             let opId = null;
             const timer = setTimeout(() => finish(false), timeoutMs || 10000);
+            /* Another tab's sender emits only to its own subscribers, so its
+             * settle is seen here by polling the shared outbox. */
+            const poll = setInterval(() => void look(), 250);
             function finish(outcome) {
                 if (finished) return;
                 finished = true;
                 clearTimeout(timer);
+                clearInterval(poll);
                 stop();
                 resolve(outcome);
             }

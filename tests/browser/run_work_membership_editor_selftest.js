@@ -48,8 +48,17 @@ global.prksSync = {
     store: {
         listOperations: async function () { return outboxRows.slice(); },
         coalesceWorkTag: async function () {
-            tagWrites.push(Array.prototype.slice.call(arguments));
+            const args = Array.prototype.slice.call(arguments);
+            tagWrites.push(args);
             if (coalesceFailures.length) throw coalesceFailures.shift();
+            /* The store's cancel: an opposite-direction draft that was never
+             * sent is deleted rather than followed by a second operation. */
+            const draft = outboxRows.findIndex(function (r) {
+                return r.entity_id === args[0] && r.payload.tag_id === args[1] &&
+                    r.status === 'pending' && !(r.attempt_count > 0) &&
+                    (r.operation === 'ADD_WORK_TAG') !== args[2];
+            });
+            if (draft !== -1) outboxRows.splice(draft, 1);
         },
     },
 };
@@ -423,8 +432,8 @@ function optionsBase(options, tagId) {
  * instead of failing the click (the manage-tags add/remove E2E flake).
  *
  * acknowledged: the ACK reaches this editor's own subscriber (acceptAck).
- * other-tab:    another tab sends it; the row vanishes with no ACK here, so
- *               the base must be re-read, not taken from stale options.
+ * other-tab:    another tab sends it; the row vanishes with no event here at
+ *               all, so the wait finds it by polling and re-reads the base.
  * released:     the claim goes back to an editable draft; the retry cancels it.
  * conflict:     the ADD conflicts; the original failure stands. */
 async function tagRemoveWaitsForInFlightAdd(outcome) {
@@ -469,8 +478,8 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
             tag: { id: 't1', name: 'Alpha', color: null } } });
         outboxRows.length = 0;
     } else if (outcome === 'other-tab') {
+        /* Another tab's sender notifies only its own subscribers. */
         outboxRows.length = 0;
-        emit({});
     } else if (outcome === 'released') {
         add.status = 'pending';
         add.attempt_count = 0;
@@ -490,6 +499,8 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
         assert('remove after a released claim rewrites the draft against the re-read base',
             optionReads === 1 && tagWrites.length === 2 && retry[2] === false,
             'reads=' + optionReads + ' ' + JSON.stringify(tagWrites));
+        assert('remove after a released claim cancels the draft ADD', outboxRows.length === 0,
+            JSON.stringify(outboxRows));
         assert('remove after a released claim leaves no error', !state.error, String(state.error));
     } else {
         assert('remove after the ADD is ' + outcome + ' records against the acknowledged base',
