@@ -1,7 +1,8 @@
 name: E2E Classic Production Distribution Gate
 
-# Non-required, exact packaged candidate validation for #736. This separate
-# workflow does not change normal PRKS E2E selection or required check names.
+# Non-required packaged production-distribution validation for #736 and #740.
+# This separate workflow does not change the required Full E2E gate or its
+# check names; pull requests run a routine set (see packaged-plan).
 on:
   pull_request:
     paths:
@@ -144,12 +145,72 @@ jobs:
           python tests/e2e/run.py --jobs 1 --no-pointer-capture
           tests.e2e.test_classic_sw_transitions.ClassicSWTransitionTests.test_unbundled_bundled_unbundled
 
-  packaged-frontend:
-    name: Packaged classic bundles (${{ matrix.shard }}/8)
-    # Pull requests always keep the eight-shard packaged regression matrix.
-    # Explicit manual smoke omits full shards; manual compare runs BOTH modes
-    # against one SHA. PR/release coverage remains the full eight-shard matrix.
+  packaged-plan:
+    name: Packaged E2E plan
+    # A pull request that changes packaging, the service worker, the shell
+    # page or this gate runs every test on the packaged frontend (8 shards).
+    # Any other pull request runs the routine set: smoke plus every offline
+    # and local-store durability module (4 shards), the tests that depend on
+    # the bundles and what the service worker precaches. Manual runs, which
+    # include the nightly master CI, always run every test.
     if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install plan-time dependencies
+        run: python scripts/ci/install_pinned_python.py plan
+
+      - name: Decide the packaged test set
+        id: plan
+        shell: bash
+        env:
+          PRKS_E2E: "1"
+          PRKS_E2E_CI_FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && '1' || '' }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${BASE_REF}" ]]; then
+            git fetch --no-tags --depth=1 origin "${BASE_REF}"
+            plan="$(python tests/e2e/run.py --packaged-plan --base "origin/${BASE_REF}")"
+          else
+            plan="$(python tests/e2e/run.py --packaged-plan)"
+          fi
+          echo "$plan"
+          export PLAN_JSON="$plan"
+          python <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["PLAN_JSON"])
+          mode = plan.get("mode")
+          include = (plan.get("matrix") or {}).get("include") or []
+          if mode not in ("full", "routine") or not include:
+              raise SystemExit("malformed packaged plan: %r" % (plan,))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("mode=%s\n" % mode)
+              handle.write("matrix=%s\n" % json.dumps({"include": include}, separators=(",", ":")))
+          print("mode=%s shards=%d: %s" % (mode, len(include), plan.get("reason", "")))
+          PY
+
+  packaged-frontend:
+    name: Packaged classic bundles (${{ matrix.shard }}/${{ matrix.total }})
+    # Explicit manual smoke omits these shards; manual compare runs BOTH modes
+    # against one SHA. The plan job picks the routine or the full set.
+    needs: packaged-plan
     runs-on: ubuntu-latest
     # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
     # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
@@ -171,8 +232,7 @@ jobs:
     timeout-minutes: 25
     strategy:
       fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+      matrix: ${{ fromJSON(needs.packaged-plan.outputs.matrix) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -220,14 +280,21 @@ jobs:
           node --check frontend/sw.js
           python -m unittest tests.test_frontend_service_worker
 
-      - name: Run complete E2E shard on the packaged frontend
+      - name: Run E2E shard on the packaged frontend
         env:
           PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
+          PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}
+          PRKS_E2E_PACKAGED_MODE: ${{ needs.packaged-plan.outputs.mode }}
           PRKS_E2E_ROUTE_FASTPATH: "0"
         shell: bash
         run: |
           set -euo pipefail
-          python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/8" --no-pointer-capture
+          selection=()
+          if [[ "${PRKS_E2E_PACKAGED_MODE}" == "routine" ]]; then
+            selection=(--packaged-routine)
+          fi
+          python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}" \
+            --no-pointer-capture "${selection[@]}"
 
       # Exact test ID → elapsed seconds for a complete manual bundled run.
       # Keep this manual-only; ordinary PRs continue without extra artifacts.
@@ -248,7 +315,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: classic-distribution-shard-${{ matrix.shard }}-failure
+          name: classic-distribution-shard-${{ matrix.shard }}-of-${{ matrix.total }}-failure
           path: |
             .tests/e2e-failure-diagnostics.json
             .tests/e2e-last-failed.json

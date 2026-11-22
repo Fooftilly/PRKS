@@ -217,6 +217,63 @@ class SmokeSelectionTests(unittest.TestCase):
         self.assertIn("WorkspaceTabsTests", str(ctx.exception))
 
 
+class PackagedGatePlanTests(unittest.TestCase):
+    def _ids(self):
+        return list(policy.SMOKE_TEST_IDS) + [
+            "tests.e2e.test_app.LibraryTests.test_unrelated",
+            "tests.e2e.test_folders_offline.FoldersOfflineTests.test_cached",
+            "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
+            "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
+            "tests.e2e.test_library_epoch.EpochTests.test_reset",
+            "tests.e2e.test_offline_extra_helpers_not_e2e",
+        ]
+
+    def test_routine_set_is_smoke_plus_offline_and_durability_modules_in_order(self):
+        ids = self._ids()
+        selected = policy.select_packaged_routine(ids)
+        self.assertNotIn("tests.e2e.test_app.LibraryTests.test_unrelated", selected)
+        for tid in (
+            "tests.e2e.test_folders_offline.FoldersOfflineTests.test_cached",
+            "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
+            "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
+            "tests.e2e.test_library_epoch.EpochTests.test_reset",
+        ):
+            self.assertIn(tid, selected)
+        for tid in policy.SMOKE_TEST_IDS:
+            self.assertIn(tid, selected)
+        self.assertEqual(selected, [tid for tid in ids if tid in set(selected)])
+
+    def test_routine_modules_exist(self):
+        root = Path(_PROJECT_DIR)
+        for module in policy.PACKAGED_ROUTINE_MODULES:
+            with self.subTest(module=module):
+                self.assertTrue((root / (module.replace(".", "/") + ".py")).is_file())
+
+    def test_packaging_paths_exist_and_force_the_full_run(self):
+        root = Path(_PROJECT_DIR)
+        for path in policy.PACKAGED_FULL_PATHS:
+            with self.subTest(path=path):
+                self.assertTrue((root / path).is_file())
+                plan = policy.plan_packaged_e2e(["backend/x.py", path])
+                self.assertEqual(plan["mode"], "full")
+                self.assertIn(path, plan["reason"])
+                self.assertEqual(
+                    plan["matrix"]["include"],
+                    [{"shard": i, "total": policy.PACKAGED_FULL_SHARDS} for i in range(1, 9)],
+                )
+
+    def test_other_changes_run_the_routine_set_and_force_wins(self):
+        plan = policy.plan_packaged_e2e(["frontend/js/app.js", "backend/api/works.py"])
+        self.assertEqual(plan["mode"], "routine")
+        self.assertEqual(
+            plan["matrix"]["include"],
+            [{"shard": i, "total": policy.PACKAGED_ROUTINE_SHARDS} for i in range(1, 5)],
+        )
+        forced = policy.plan_packaged_e2e([], force_full=True)
+        self.assertEqual(forced["mode"], "full")
+        self.assertEqual(len(forced["matrix"]["include"]), policy.PACKAGED_FULL_SHARDS)
+
+
 class FeatureSelectionTests(unittest.TestCase):
     @staticmethod
     def _is_exact_method_selector(selector: str) -> bool:
