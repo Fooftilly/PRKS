@@ -539,21 +539,40 @@
 
     const OWN_ACK_STEPS_KEPT = 8;
 
-    /** Record that this device's own operation moved the runtime's base for
-     * one annotation from one revision to the next. A catch-up snapshot moves
-     * it too, but records nothing: only these steps let a pending write take
-     * the newer base (see baseForWrite). */
-    function noteOwnAckStep(runtime, annotationId, from, op) {
+    /** The base an operation was sent against, as a base key. A CREATE's
+     * ACK proves only that the server had no such annotation, at whatever
+     * revision its tombstone held. */
+    function opInputKey(op) {
+        if (op.operation === 'CREATE_PDF_ANNOTATION') return 'absent:*';
+        if (Number.isSafeInteger(op.base_revision)) return 'present:' + op.base_revision;
+        return null;
+    }
+
+    function stepStartsAt(step, key) {
+        return step.from === key || (step.from === 'absent:*' && key.indexOf('absent:') === 0);
+    }
+
+    /** Record that this device's own operation moved one annotation from the
+     * base it was sent against to the ACK's revision. The step starts at the
+     * operation's own base, not at whatever the runtime held before the ACK:
+     * a runtime still at an older revision has not seen the change between
+     * the two, and must not take the ACK as its own. A catch-up snapshot
+     * moves the runtime too, but records nothing: only these steps let a
+     * pending write take the newer base (see baseForWrite). */
+    function noteOwnAckStep(runtime, annotationId, data, op) {
         if (!op || !op.op_id) return;
+        const from = opInputKey(op);
+        if (!from) return;
         // A Map: an annotation id can be any string, "__proto__" included.
         if (!(runtime._annotationOwnAckSteps instanceof Map)) {
             runtime._annotationOwnAckSteps = new Map();
         }
         const all = runtime._annotationOwnAckSteps;
+        const present = data.present !== false && !!data.annotation;
         const steps = (all.get(annotationId) || []).concat([{
             op_id: String(op.op_id),
-            from: baseKey(from),
-            to: baseKey(runtimeBase(runtime, annotationId)),
+            from: from,
+            to: baseKey({ present: present, revision: data.server_revision }),
         }]);
         all.set(annotationId, steps.slice(-OWN_ACK_STEPS_KEPT));
     }
@@ -584,7 +603,7 @@
             for (let hops = 0; hops < steps.length && key !== freshKey; hops += 1) {
                 let next = null;
                 for (let i = steps.length - 1; i >= 0; i -= 1) {
-                    if (steps[i].from === key && steps[i].to !== key) { next = steps[i]; break; }
+                    if (stepStartsAt(steps[i], key) && steps[i].to !== key) { next = steps[i]; break; }
                 }
                 if (!next) break;
                 key = next.to;
@@ -620,7 +639,6 @@
             }
         }
         const annotationId = String(data.annotation_id);
-        const before = runtimeBase(runtime, annotationId);
         const present = data.present !== false && !!data.annotation;
         const ackList =
             (runtime.annotationCache && Array.isArray(runtime.annotationCache.items))
@@ -679,7 +697,7 @@
                 runtime.acknowledgedAnnotationSetRevision = nextGen;
             }
         }
-        noteOwnAckStep(runtime, annotationId, before, op);
+        noteOwnAckStep(runtime, annotationId, data, op);
         return true;
     }
 

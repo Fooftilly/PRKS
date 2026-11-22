@@ -181,6 +181,9 @@ async function storeActingAfterOutboxRead() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid: uuid, now: () => Date.now() });
     await store.getOrCreateDeviceId();
+    /* Record the page's epoch now, so the save's first outbox read is its own
+     * and not the epoch move's. */
+    await store.advanceEpoch('1');
     const operations = idb.__databases.get('prks-local-v2:test')._stores.get('operations');
     return {
         store,
@@ -213,7 +216,7 @@ async function ownAckDuringTheWriteMovesTheBase() {
     const runtime = liveRuntime('ann-z', highlight('ann-z', 'third'), 2);
     const { store, once } = await storeActingAfterOutboxRead();
     once(() => globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
-        ack('ann-z', highlight('ann-z', 'fourth'), 3, 7), { op_id: 'op-earlier' }
+        ack('ann-z', highlight('ann-z', 'fourth'), 3, 7), { op_id: 'op-earlier', operation: 'SET_PDF_ANNOTATION', base_revision: 2 }
     ));
     await withLiveRuntime(runtime, () => store.savePdfAnnotation(
         'W-1', { annotation_id: 'ann-z', annotation: highlight('ann-z', 'fifth') }, writeBase(runtime, 'ann-z')
@@ -246,8 +249,8 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     const chained = liveRuntime('ann-k', highlight('ann-k', 'a'), 2);
     const captured = runtimeBase(chained, 'ann-k');
     await withLiveRuntime(chained, () => {
-        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'b'), 3, 8), { op_id: 'op-1' });
-        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'c'), 4, 9), { op_id: 'op-2' });
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'b'), 3, 8), { op_id: 'op-1', operation: 'SET_PDF_ANNOTATION', base_revision: 2 });
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-k', highlight('ann-k', 'c'), 4, 9), { op_id: 'op-2', operation: 'SET_PDF_ANNOTATION', base_revision: 3 });
     });
     let base = globalThis.prksPdfAnnotationBaseForWrite(chained, 'ann-k', captured, runtimeBase(chained, 'ann-k'));
     assert.equal(base.revision, 4);
@@ -256,13 +259,36 @@ async function catchUpDuringTheWriteKeepsTheBase() {
     base = globalThis.prksPdfAnnotationBaseForWrite(chained, 'ann-k', captured, runtimeBase(chained, 'ann-k'));
     assert.equal(base.revision, 2, 'an unexplained step keeps the captured base');
 
+    /* Another pane's save went out against revision 3, which this pane (still
+     * at 2) never saw: its ACK at 4 is not this pane's step from 2. */
+    const behind = liveRuntime('ann-b', highlight('ann-b', 'a'), 2);
+    const behindBase = runtimeBase(behind, 'ann-b');
+    await withLiveRuntime(behind, () => {
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-b', highlight('ann-b', 'c'), 4, 12),
+            { op_id: 'op-other-pane', operation: 'SET_PDF_ANNOTATION', base_revision: 3 });
+    });
+    base = globalThis.prksPdfAnnotationBaseForWrite(behind, 'ann-b', behindBase, runtimeBase(behind, 'ann-b'));
+    assert.equal(base.revision, 2, 'an ACK sent against an unseen revision keeps the captured base');
+
+    /* A CREATE's ACK starts from any absent base. */
+    const fresh = { workId: 'W-1', annotationCache: { items: [] },
+        annotationState: { work_id: 'W-1', annotations: [], known_absent: { 'ann-n': 5 } } };
+    const freshBase = runtimeBase(fresh, 'ann-n');
+    await withLiveRuntime(fresh, () => {
+        globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(ack('ann-n', highlight('ann-n', 'new'), 6, 13),
+            { op_id: 'op-create', operation: 'CREATE_PDF_ANNOTATION', base_revision: null });
+    });
+    base = globalThis.prksPdfAnnotationBaseForWrite(fresh, 'ann-n', freshBase, runtimeBase(fresh, 'ann-n'));
+    assert.equal(base.present, true);
+    assert.equal(base.acknowledged_op_id, 'op-create');
+
     /* Any id string works, including ones an object inherits. */
     for (const id of ['__proto__', 'constructor', 'toString']) {
         const odd = liveRuntime(id, highlight(id, 'a'), 1);
         const before = runtimeBase(odd, id);
         await withLiveRuntime(odd, () => {
             assert.equal(globalThis.prksApplyPdfAnnotationAckToLiveRuntimes(
-                ack(id, highlight(id, 'b'), 2, 11), { op_id: 'op-' + id }).length, 1);
+                ack(id, highlight(id, 'b'), 2, 11), { op_id: 'op-' + id, operation: 'SET_PDF_ANNOTATION', base_revision: 1 }).length, 1);
         });
         base = globalThis.prksPdfAnnotationBaseForWrite(odd, id, before, runtimeBase(odd, id));
         assert.equal(base.revision, 2);
