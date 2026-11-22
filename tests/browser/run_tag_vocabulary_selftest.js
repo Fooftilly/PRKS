@@ -408,14 +408,21 @@ function tagWaitFor(store, changed) {
             assert.ok(end > at);
             return app.slice(at, end + 2);
         }).join('\n') + '\nvar PRKS_UNREADABLE_QUEUE_WAIT_MS = ' + unreadableBudget(app) + ';';
+    /* A virtual clock: each poll's sleep advances time by exactly its delay, so
+     * the budget and deadline are checked deterministically and instantly. */
+    let now = 0;
     const ctx = {
-        Set, Array, Date, Math, Promise, setTimeout,
+        Set, Array, Math, Promise,
+        Date: { now: () => now },
+        setTimeout: (fn, ms) => { now += ms; setImmediate(fn); },
         prksSync: store ? { store, changed } : null,
         prksPendingTagCreates: globalThis.prksPendingTagCreates,
     };
     vm.createContext(ctx);
     vm.runInContext(source, ctx);
-    return ctx.prksWaitForTagsOnServer;
+    const wait = (...args) => ctx.prksWaitForTagsOnServer(...args);
+    wait.elapsed = () => now;
+    return wait;
 }
 
 async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
@@ -440,12 +447,11 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
      * refuses what it does not have. Before that budget it is still waited on. */
     let brokenReads = 0;
     const broken = { listOperations: async () => { brokenReads += 1; throw new Error('IndexedDB read failed'); } };
-    const brokenStart = Date.now();
-    assert.equal(await tagWaitFor(broken, () => {})(['P-EXISTING'], 10000), true,
+    const brokenWait = tagWaitFor(broken, () => {});
+    assert.equal(await brokenWait(['P-EXISTING'], 10000), true,
         'a queue that stays unreadable lets the save go ahead');
-    const tookMs = Date.now() - brokenStart;
-    assert.ok(tookMs >= 1900 && tookMs < 4000, 'after the short budget, not the full deadline: ' + tookMs);
-    assert.ok(brokenReads >= 5, 'having kept reading through the budget, not after one failure');
+    assert.equal(brokenWait.elapsed(), 2000, 'after the short budget, not the full deadline');
+    assert.equal(brokenReads, 11, 'having kept reading through the budget, not after one failure');
 
     /* Once a read succeeded, its answer stands: a later failure does not let a
      * still-pending Tag through early. */
@@ -457,15 +463,17 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
             throw new Error('IndexedDB read failed');
         },
     };
-    assert.equal(await tagWaitFor(thenBroken, () => {})(['T-NEW'], 2600), false,
+    const thenBrokenWait = tagWaitFor(thenBroken, () => {});
+    assert.equal(await thenBrokenWait(['T-NEW'], 2600), false,
         'a pending Tag seen once is waited for until the deadline');
+    assert.equal(thenBrokenWait.elapsed(), 2600, 'the full deadline, not the unreadable budget');
 
     /* The real store with no IndexedDB: its reads fail as 'unavailable'. */
     const unopenable = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: null, uuid });
-    const started = Date.now();
-    assert.equal(await tagWaitFor(unopenable, () => {})(['P-EXISTING'], 5000), true,
+    const unopenableWait = tagWaitFor(unopenable, () => {});
+    assert.equal(await unopenableWait(['P-EXISTING'], 5000), true,
         'storage that does not exist here never queued a creation, so nothing is waited for');
-    assert.ok(Date.now() - started < 1000, 'and the save does not sit out the deadline');
+    assert.equal(unopenableWait.elapsed(), 0, 'and the save does not wait at all');
 
     /* A failed (re)open of a database that may hold the Tag is also 'unavailable',
      * but it is not absence: the next read can still find the Tag pending. */
@@ -489,9 +497,9 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     const failure = await failing.listOperations().then(() => null, error => error);
     assert.equal(failure && failure.prksLocalStoreCode, 'unavailable');
     assert.notEqual(failure.prksLocalStoreAbsent, true, 'a failed open is not marked absent');
-    const failingStart = Date.now();
-    assert.equal(await tagWaitFor(failing, () => {})(['T-NEW'], 10000), true);
-    assert.ok(Date.now() - failingStart >= 1900,
+    const failingWait = tagWaitFor(failing, () => {});
+    assert.equal(await failingWait(['T-NEW'], 10000), true);
+    assert.equal(failingWait.elapsed(), 2000,
         'so the real store failing to open is read through the budget, not taken as an empty queue');
 
     const blocked = new Error('Local storage is blocked by another tab.');
