@@ -722,6 +722,15 @@
         return err;
     }
 
+    /** Storage that does not exist here at all (no IndexedDB, nobody signed in),
+     *  as opposed to a database that exists but failed to open: such a store has
+     *  never held an operation, so a caller may take its queue as empty. */
+    function absentStoreError(message) {
+        const err = localStoreError('unavailable', message);
+        err.prksLocalStoreAbsent = true;
+        return err;
+    }
+
     /**
      * Normalizes and validates an operation envelope before it can be
      * persisted. Deliberately strict: durable user data with a malformed
@@ -913,12 +922,16 @@
             if (dbPromise) return dbPromise;
             const generation = openGeneration;
             dbPromise = resolveDbName().then(function (dbName) { return new Promise(function (resolve, reject) {
-                if (!dbName || generation !== openGeneration) {
+                if (!dbName) {
+                    reject(absentStoreError('Sign in to keep changes on this device.'));
+                    return;
+                }
+                if (generation !== openGeneration) {
                     reject(localStoreError('unavailable', 'Sign in to keep changes on this device.'));
                     return;
                 }
                 if (!idbFactory) {
-                    reject(localStoreError('unavailable', 'IndexedDB is unavailable.'));
+                    reject(absentStoreError('IndexedDB is unavailable.'));
                     return;
                 }
                 let req;

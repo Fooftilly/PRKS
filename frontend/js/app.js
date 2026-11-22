@@ -4679,15 +4679,16 @@ window.handleRoute = handleRoute;
  * can be queued, so there is nothing to wait for.
  */
 /** The queue as the quick-create wait reads it: the operations; [] when durable
- *  storage is unavailable (no IndexedDB, nobody signed in), because such a store
- *  never held a creation; or null when the read failed for any other reason
- *  (a blocked open, an aborted transaction), which says nothing either way. */
+ *  storage does not exist here (no IndexedDB, nobody signed in), because such a
+ *  store never held a creation; or null when the read failed for any other
+ *  reason (a failed or blocked open of an existing database, an aborted
+ *  transaction), which says nothing either way. */
 async function prksDurableQueueForWait() {
     try {
         const ops = await prksSync.store.listOperations();
         return Array.isArray(ops) ? ops : null;
     } catch (e) {
-        return e && e.prksLocalStoreCode === 'unavailable' ? [] : null;
+        return e && e.prksLocalStoreAbsent === true ? [] : null;
     }
 }
 

@@ -437,8 +437,23 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     const unopenable = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: null, uuid });
     const started = Date.now();
     assert.equal(await tagWaitFor(unopenable, () => {})(['P-EXISTING'], 5000), true,
-        'storage that is unavailable never queued a creation, so nothing is waited for');
+        'storage that does not exist here never queued a creation, so nothing is waited for');
     assert.ok(Date.now() - started < 1000, 'and the save does not sit out the deadline');
+
+    /* A failed (re)open of a database that may hold the Tag is also 'unavailable',
+     * but it is not absence: the next read can still find the Tag pending. */
+    const failedOpen = new Error('Could not open local storage.');
+    failedOpen.prksLocalStoreCode = 'unavailable';
+    let reopenReads = 0;
+    const reopening = {
+        listOperations: async () => {
+            reopenReads += 1;
+            if (reopenReads === 1) throw failedOpen;
+            return reopenReads === 2 ? [queued] : [];
+        },
+    };
+    assert.equal(await tagWaitFor(reopening, () => {})(['T-NEW'], 5000), true);
+    assert.equal(reopenReads, 3, 'a failed open is read again and the pending Tag is waited for');
 
     const blocked = new Error('Local storage is blocked by another tab.');
     blocked.prksLocalStoreCode = 'blocked';
