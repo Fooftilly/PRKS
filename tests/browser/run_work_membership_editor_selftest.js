@@ -519,7 +519,7 @@ const IN_FLIGHT_OUTCOMES = {
         settle: async function () { prksDestroyAllTabContexts(); },
         check: function (t) {
             assert('closing the editor removes the wait\'s sync listener',
-                syncListeners.length <= t.mounted, 'listeners=' + syncListeners.length + ' mounted=' + t.mounted);
+                syncListeners.length === t.before, 'listeners=' + syncListeners.length + ' before=' + t.before);
             assert('closing the editor ends the wait without a retry',
                 tagWrites.length === 1 && Date.now() - t.started < 2000,
                 'writes=' + tagWrites.length + ' ms=' + (Date.now() - t.started));
