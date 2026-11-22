@@ -16,7 +16,9 @@ import requests
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-8])/8\)\Z")
 SMOKE_JOB = "Packaged classic smoke (manual pilot)"
-SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/8)"
+# Smoke runs skip the plan job, so the matrix-named job stays unexpanded.
+SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/${{ matrix.total }})"
+PLAN_JOB = "Packaged E2E plan"
 SHARED_JOBS = (
     "Docker classic bundle and rollback build smoke",
     "Classic bundle SW upgrade and rollback (real Chromium)",
@@ -152,7 +154,7 @@ def summarize_paired(run: dict, jobs: list[dict]) -> tuple[dict, dict]:
     shard_ids = sorted(_shard_number(j) for j in shards)
     if shard_ids != list(range(1, 9)) or len(smoke) != 1:
         raise InvalidBenchmark("Paired run requires all eight full shards and one smoke job")
-    permitted = {*(j["name"] for j in shards), SMOKE_JOB, *SHARED_JOBS}
+    permitted = {*(j["name"] for j in shards), SMOKE_JOB, PLAN_JOB, *SHARED_JOBS}
     if any(j.get("name") not in permitted for j in active):
         raise InvalidBenchmark("Unexpected successful job in paired run")
     skipped = {j.get("name") for j in jobs if j.get("conclusion") == "skipped"}

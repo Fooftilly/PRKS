@@ -46,6 +46,7 @@ def full_jobs() -> list[dict]:
     return [
         job("Docker classic bundle and rollback build smoke", 23),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 20),
+        job("Packaged E2E plan", 12),
         *(job(f"Packaged classic bundles ({n}/8)", seconds)
           for n, seconds in enumerate((371, 372, 371, 372, 372, 371, 372, 372), start=1)),
         job("Packaged classic smoke (manual pilot)", 0, "skipped"),
@@ -57,6 +58,7 @@ def smoke_jobs() -> list[dict]:
         job("Docker classic bundle and rollback build smoke", 18),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 21),
         job("Packaged classic smoke (manual pilot)", 53),
+        job("Packaged E2E plan", 0, "skipped"),
         job(SKIPPED_FULL_MATRIX, 0, "skipped"),
     ]
 
@@ -69,7 +71,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
         self.assertEqual(smoke["browser_count"], 1)
         self.assertAlmostEqual(full["browser_minutes"], 49.55)
         self.assertAlmostEqual(smoke["browser_minutes"], 53 / 60)
-        self.assertAlmostEqual(full["all_job_minutes"], (2973 + 43) / 60)
+        self.assertAlmostEqual(full["all_job_minutes"], (2973 + 43 + 12) / 60)
         self.assertAlmostEqual(smoke["all_job_minutes"], 92 / 60)
         report = compare(full, smoke)
         self.assertIn("98.2%", report)
@@ -138,7 +140,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
 
     def test_missing_or_duplicate_shard_fails_closed(self):
         for altered in (full_jobs()[:-2] + [full_jobs()[-1]],
-                        full_jobs() + [full_jobs()[2]]):
+                        full_jobs() + [full_jobs()[3]]):
             with self.subTest(job_count=len(altered)):
                 with self.assertRaises(InvalidBenchmark):
                     summarize(run(1), altered, "full")
