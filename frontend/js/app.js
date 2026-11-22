@@ -4670,18 +4670,55 @@ window.handleRoute = handleRoute;
 
 
 /**
- * PDF creation is a plain request, so every Person it links must already be on
- * the server. A Person quick-created moment ago may still be queued locally:
- * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ * Wait (bounded) until this device's queued creations of ``ids`` retire,
+ * nudging sync while any is pending. ``pendingOf(ops)`` lists the unsettled
+ * creations; a refused (conflict) one will never reach the server, so it is
+ * not waited for. A queue that cannot be read says nothing about them, so the
+ * read is retried rather than taken as an empty queue; if it never becomes
+ * readable within PRKS_UNREADABLE_QUEUE_WAIT_MS the wait gives up and lets the
+ * caller go ahead (the server is the backstop).
+ * Without a local store, or with one that reports storage unavailable, nothing
+ * can be queued, so there is nothing to wait for.
  */
-async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
-    const ids = new Set(Array.from(personIds || []).filter(Boolean));
-    if (!ids.size || typeof prksPendingPersonCreates !== 'function') return true;
-    const deadline = Date.now() + (timeoutMs || 10000);
+/** The queue as the quick-create wait reads it: the operations; [] when durable
+ *  storage does not exist here (no IndexedDB, nobody signed in), because such a
+ *  store never held a creation; or null when the read failed for any other
+ *  reason (a failed or blocked open of an existing database, an aborted
+ *  transaction), which says nothing either way. */
+/** How long the quick-create wait reads a queue that never becomes readable. */
+const PRKS_UNREADABLE_QUEUE_WAIT_MS = 2000;
+
+async function prksDurableQueueForWait() {
+    try {
+        const ops = await prksSync.store.listOperations();
+        return Array.isArray(ops) ? ops : null;
+    } catch (e) {
+        return e && e.prksLocalStoreAbsent === true ? [] : null;
+    }
+}
+
+async function prksWaitForCreatesOnServer(ids, pendingOf, timeoutMs) {
+    const wanted = new Set(Array.from(ids || []).filter(Boolean));
+    if (!wanted.size || typeof pendingOf !== 'function') return true;
+    if (typeof prksSync === 'undefined' || !prksSync || !prksSync.store ||
+        typeof prksSync.store.listOperations !== 'function') return true;
+    const started = Date.now();
+    const deadline = started + (timeoutMs || 10000);
+    const unreadableDeadline = Math.min(deadline, started + PRKS_UNREADABLE_QUEUE_WAIT_MS);
+    let everRead = false;
     for (;;) {
-        const ops = await prksDurableOperationsOrNone();
-        const pending = prksPendingPersonCreates(ops).filter(op => ids.has(op.entity_id));
-        if (!pending.length) return true;
+        const ops = await prksDurableQueueForWait();
+        if (ops !== null) {
+            everRead = true;
+            const pending = pendingOf(ops).filter(op => wanted.has(op.entity_id) && op.status !== 'conflict');
+            if (!pending.length) return true;
+        } else if (!everRead && Date.now() >= unreadableDeadline) {
+            /* A queue that never became readable cannot be drained by sync
+             * either, so waiting longer cannot help. Go ahead: the server
+             * refuses a Person or Tag it does not have, and a refused create
+             * saves nothing. */
+            return true;
+        }
         if (Date.now() >= deadline) return false;
         if (typeof prksSync !== 'undefined' && prksSync && typeof prksSync.changed === 'function') {
             prksSync.changed();
@@ -4690,6 +4727,26 @@ async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
             setTimeout(resolve, 200);
         });
     }
+}
+
+/**
+ * PDF creation is a plain request, so every Person it links must already be on
+ * the server. A Person quick-created moment ago may still be queued locally:
+ * nudge sync and wait (bounded) until those CREATE_PERSON operations retire.
+ */
+async function prksWaitForPeopleOnServer(personIds, timeoutMs) {
+    return prksWaitForCreatesOnServer(personIds,
+        typeof prksPendingPersonCreates === 'function' ? prksPendingPersonCreates : null, timeoutMs);
+}
+
+/**
+ * The new Work's first Tags are attached with plain requests after it is
+ * created, so a Tag quick-created a moment ago must have reached the server
+ * first: its CREATE_TAG may still be queued locally.
+ */
+async function prksWaitForTagsOnServer(tagIds, timeoutMs) {
+    return prksWaitForCreatesOnServer(tagIds,
+        typeof prksPendingTagCreates === 'function' ? prksPendingTagCreates : null, timeoutMs);
 }
 
 /** A refused (4xx) create says plainly that no Work exists, so a retry is safe. */

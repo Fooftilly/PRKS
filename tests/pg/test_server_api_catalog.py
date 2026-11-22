@@ -14,6 +14,7 @@ import base64
 import json
 from typing import Any
 
+from backend.entity_ids import generate
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 
@@ -64,6 +65,22 @@ class CatalogTests(ServerApiTestCase):
     def test_a_tag_is_created_and_listed(self) -> None:
         tag = self.ok(self.send("POST", "/api/tags", {"name": "api-tag", "color": "#123abc"}))
         self.assertIn(tag["id"], self.tag_ids())
+
+    def test_attaching_a_missing_tag_or_owner_is_refused_not_a_server_error(self) -> None:
+        # A Tag whose creation is still queued on the client is not on the
+        # server yet: its attach must be a 404 the form can report, never 500.
+        work_id = self.create_work("API Missing Tag Work")["id"]
+        folder_id = self.ok(self.send("POST", "/api/folders", {"title": "Missing Tag Folder", "description": ""}))["id"]
+        tag_id = self.ok(self.send("POST", "/api/tags", {"name": "api-attach"}))["id"]
+        for path, tag, error in (
+            (f"/api/works/{work_id}/tags", generate("T"), "tag not found"),
+            (f"/api/folders/{folder_id}/tags", generate("T"), "tag not found"),
+            (f"/api/works/{generate('W')}/tags", tag_id, "work not found"),
+            (f"/api/folders/{generate('F')}/tags", tag_id, "folder not found"),
+        ):
+            with self.subTest(path=path, error=error):
+                self.assertEqual(self.refused(self.send("POST", path, {"tag_id": tag}), 404), {"error": error})
+        self.assertEqual(self.work_tag_ids(work_id), [])
 
     def test_a_tag_merge_moves_its_works_and_a_self_merge_is_refused(self) -> None:
         work_id = self.create_work("API Merge Work")["id"]
