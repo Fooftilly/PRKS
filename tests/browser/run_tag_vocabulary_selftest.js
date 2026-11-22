@@ -455,6 +455,16 @@ async function anUnreadableQueueIsNotTakenAsTheTagHavingArrived() {
     assert.equal(await tagWaitFor(reopening, () => {})(['T-NEW'], 5000), true);
     assert.equal(reopenReads, 3, 'a failed open is read again and the pending Tag is waited for');
 
+    /* And the real store's own classification: an IndexedDB whose open throws is
+     * a failed open, not absent storage, so the wait is not skipped. */
+    const throwingFactory = { open: () => { throw new Error('QuotaExceededError'); } };
+    const failing = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: throwingFactory, uuid });
+    const failure = await failing.listOperations().then(() => null, error => error);
+    assert.equal(failure && failure.prksLocalStoreCode, 'unavailable');
+    assert.notEqual(failure.prksLocalStoreAbsent, true, 'a failed open is not marked absent');
+    assert.equal(await tagWaitFor(failing, () => {})(['T-NEW'], 300), false,
+        'so the real store failing to open does not end the wait as a success');
+
     const blocked = new Error('Local storage is blocked by another tab.');
     blocked.prksLocalStoreCode = 'blocked';
     assert.equal(await tagWaitFor({ listOperations: async () => { throw blocked; } }, () => {})(['T-NEW'], 300),
