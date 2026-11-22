@@ -56,6 +56,17 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertIn("checks passed", proc.stdout)
 
+    def test_stale_snapshot_retry_is_single_flight(self):
+        proc = subprocess.run(
+            ["node", str(ROOT / "tests" / "browser" / "run_pdf_stale_snapshot_retry_selftest.js")],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("checks passed", proc.stdout)
+
     def test_durable_write_does_not_wait_on_materialization_handoff(self):
         proc = subprocess.run(
             ["node", str(ROOT / "tests" / "browser" / "run_pdf_annotation_write_handoff_selftest.js")],
