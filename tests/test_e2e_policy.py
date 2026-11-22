@@ -243,6 +243,12 @@ class PackagedGatePlanTests(unittest.TestCase):
             self.assertIn(tid, selected)
         self.assertEqual(selected, [tid for tid in ids if tid in set(selected)])
 
+    def test_routine_set_refuses_a_module_that_failed_to_import(self):
+        ids = self._ids() + ["unittest.loader._FailedTest.tests.e2e.test_library_epoch"]
+        with self.assertRaises(ValueError) as ctx:
+            policy.select_packaged_routine(ids)
+        self.assertIn("_FailedTest", str(ctx.exception))
+
     def test_routine_modules_exist(self):
         root = Path(_PROJECT_DIR)
         for module in policy.PACKAGED_ROUTINE_MODULES:

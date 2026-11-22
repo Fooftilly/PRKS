@@ -1612,7 +1612,15 @@ def _is_packaged_routine_test(test_id: str) -> bool:
 
 
 def select_packaged_routine(all_ids):
-    """Smoke, the offline feature and every offline/durability module, in suite order."""
+    """Smoke, the offline feature and every offline/durability module, in suite order.
+
+    A module that fails to import shows up as a ``unittest.loader._FailedTest``
+    entry, which no filter would keep; refuse the selection instead, so a broken
+    module fails the shard as it does on a full run.
+    """
+    broken = [tid for tid in all_ids if not str(tid).startswith("tests.e2e.")]
+    if broken:
+        raise ValueError("E2E discovery failed: %s" % ", ".join(broken[:8]))
     chosen = set(select_smoke(all_ids)) | set(select_features(all_ids, ["offline"]))
     chosen |= {tid for tid in all_ids if _is_packaged_routine_test(tid)}
     return [tid for tid in all_ids if tid in chosen]
