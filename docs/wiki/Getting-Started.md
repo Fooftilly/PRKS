@@ -20,7 +20,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 
 If the venv has no pip (for example one made by `uv venv`, or on Arch Linux), install with [uv](https://docs.astral.sh/uv/) instead: `uv pip install --python ./.venv/bin/python -r requirements.txt`. The dependency gate prints the right command for your interpreter.
 
-On a first run the server applies the schema and waits for setup: create the owner account and the Library with [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) (the README's "Quick start" has the two commands). Then open `http://127.0.0.1:8080` and sign in.
+On a first run the server applies the schema and waits for setup, serving only a setup page. Get a one-time setup token with `./.venv/bin/python prks_app.py admin bootstrap issue-token --root data` (the server prints the exact command), open `http://127.0.0.1:8080`, enter the token and create the owner account and the Library. PRKS then opens the Library, signed in. [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) also covers terminal-only and unattended setup.
 
 A different loopback port can be selected with `--port`. To make PRKS reachable on another interface, pass an explicit host such as `--host 0.0.0.0`. Every account signs in with its password, but do not expose PRKS to an untrusted network without an HTTPS reverse proxy; see [Security and Operations](Security-and-Operations.md).
 

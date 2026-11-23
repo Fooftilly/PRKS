@@ -29,10 +29,16 @@ import { registerWorkDetailBridge } from './features/work/session'
 import { registerWorkPdfAnnotationPopupBridge } from './features/work/pdf-annotation-popup'
 import { registerWorkPdfAnnotationDrawerBridge } from './features/work/pdf-annotation-drawer'
 import { registerCitationsBridge } from './features/citations/session'
+import { mountPrksSetup, PRKS_SETUP_ROOT_ID } from './features/setup/mount'
 
 const target = document.getElementById(PRKS_VUE_ROOT_ID)
 if (target) {
   mountPrksVue(target)
+}
+// frontend/setup.html: a first run waiting for setup serves only this (#612).
+const setupTarget = document.getElementById(PRKS_SETUP_ROOT_ID)
+if (setupTarget) {
+  mountPrksSetup(setupTarget)
 }
 
 registerPerformanceDiagnosticsBridge(window)

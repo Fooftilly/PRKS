@@ -335,6 +335,23 @@ async function run() {
         }
     }
 
+    /* A first run's setup page (#612) is served at '/' but never becomes the offline shell. */
+    {
+        const caches = makeFakeCacheStorage();
+        const shell = await caches.open(sw.PRKS_SW_SHELL_CACHE);
+        await shell.put('/', new Response('<html>good</html>', { headers: { 'Content-Type': 'text/html' } }));
+        const handlers = sw.createHandlers({
+            caches: caches,
+            fetchImpl: () => Promise.resolve(new Response('<html>setup</html>', {
+                headers: { 'Content-Type': 'text/html', 'X-PRKS-Shell': 'setup' },
+            })),
+        });
+        await handlers.handleNavigation(fakeRequest({ url: 'https://prks.example/', mode: 'navigate' }));
+        const offline = sw.createHandlers({ caches: caches, fetchImpl: () => Promise.reject(new Error('offline')) });
+        const recovered = await offline.handleNavigation(fakeRequest({ mode: 'navigate' }));
+        assertEq('the setup page does not replace the offline shell', await recovered.text(), '<html>good</html>');
+    }
+
     /* ---- saved note figures: cached per scope; thumbnails never ---- */
     {
         const fig = '/api/remote-images?url=' + encodeURIComponent('https://figures.example/a.png') + '&figure=1';
@@ -893,6 +910,26 @@ async function run() {
             return Promise.resolve(new Response('body:' + path, { status: 200 }));
         });
     });
+    await assertRejectsOrThrows('performInstall rejects a setup page served in place of the shell (#612)', async function () {
+        const cacheStorage = makeFakeCacheStorage();
+        await sw.performInstall(cacheStorage, function (path) {
+            const headers = path === '/' || path === '/index.html' ? { 'X-PRKS-Shell': 'setup' } : {};
+            return Promise.resolve(new Response('body:' + path, { status: 200, headers: headers }));
+        });
+    });
+    for (const setupPath of ['/', '/index.html']) {
+        // Mid-handoff, one shell URL may still answer with the setup page.
+        await assertRejectsOrThrows(
+            'performInstall rejects when only ' + setupPath + ' is the setup page (#612)',
+            async function () {
+                const cacheStorage = makeFakeCacheStorage();
+                await sw.performInstall(cacheStorage, function (path) {
+                    const headers = path === setupPath ? { 'X-PRKS-Shell': 'setup' } : {};
+                    return Promise.resolve(new Response('body:' + path, { status: 200, headers: headers }));
+                });
+            }
+        );
+    }
     {
         // The inverse: a failing *optional* decorative asset (manifest/icon)
         // must never fail the install, and every required asset still lands

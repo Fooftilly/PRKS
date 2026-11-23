@@ -62,6 +62,9 @@ class DependabotWeeklyBatchTests(unittest.TestCase):
         self.assertIn(
             "codemirror", ignored_majors(self.entries[("npm", "/tools/frontend-vendor")])
         )
+        # typescript-eslint and openapi-typescript do not support TS 6+ yet.
+        for directory in ("/frontend-app", "/tools/pdf-viewer"):
+            self.assertIn("typescript", ignored_majors(self.entries[("npm", directory)]))
 
     def test_docker_python_stays_below_unsupported_release(self):
         rules = self.entries[("docker", "/")]["ignore"]

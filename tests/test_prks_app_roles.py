@@ -76,6 +76,11 @@ class SplitRoleTests(unittest.TestCase):
 
 
 
+# What serve_identity reads to print the browser setup address (#612).
+_HTTP = SimpleNamespace(tls=None)
+_SETTINGS = SimpleNamespace(public_origin=None)
+
+
 class ServeIdentityClosesThePoolTests(unittest.TestCase):
     """Every exit after the pool opens closes it (Python 3.14 refuses the finaliser's join)."""
 
@@ -85,7 +90,7 @@ class ServeIdentityClosesThePoolTests(unittest.TestCase):
         config = SimpleNamespace(mode="testing")
         with patch.multiple(prks_app, **patches):
             try:
-                prks_app.serve_identity(args, config, (db, object()), http_settings=None)
+                prks_app.serve_identity(args, config, (db, _SETTINGS), http_settings=_HTTP)
             except SystemExit as exc:
                 return db, exc.code
         return db, None
@@ -97,7 +102,7 @@ class ServeIdentityClosesThePoolTests(unittest.TestCase):
 
     def test_a_start_check_refusal_closes_the_pool(self) -> None:
         db, code = self.run_serve(
-            open_storage=MagicMock(), refuse_sqlite_catalogue=MagicMock(),
+            open_storage=MagicMock(return_value=MagicMock(root_real="/srv/prks")), refuse_sqlite_catalogue=MagicMock(),
             start_identity=MagicMock(side_effect=SystemExit(2)),
         )
         self.assertEqual(code, 2)
@@ -107,15 +112,15 @@ class ServeIdentityClosesThePoolTests(unittest.TestCase):
         db = MagicMock()
         args = SimpleNamespace(port=None, testing=True, host="127.0.0.1")
         with patch.multiple(
-            prks_app, open_storage=MagicMock(), refuse_sqlite_catalogue=MagicMock(),
+            prks_app, open_storage=MagicMock(return_value=MagicMock(root_real="/srv/prks")), refuse_sqlite_catalogue=MagicMock(),
             start_identity=MagicMock(), start_jobs=MagicMock(side_effect=RuntimeError("jobs")),
         ), self.assertRaises(RuntimeError):
-            prks_app.serve_identity(args, SimpleNamespace(mode="testing"), (db, object()), http_settings=None)
+            prks_app.serve_identity(args, SimpleNamespace(mode="testing"), (db, _SETTINGS), http_settings=_HTTP)
         db.close.assert_called_once_with()
 
     def test_a_normal_stop_closes_the_pool(self) -> None:
         db, code = self.run_serve(
-            open_storage=MagicMock(), refuse_sqlite_catalogue=MagicMock(), start_identity=MagicMock(),
+            open_storage=MagicMock(return_value=MagicMock(root_real="/srv/prks")), refuse_sqlite_catalogue=MagicMock(), start_identity=MagicMock(),
             start_jobs=MagicMock(return_value=None), bind_storage=MagicMock(),
             setup_logging=MagicMock(), readiness_for=MagicMock(), run_server=MagicMock(),
         )

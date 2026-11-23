@@ -348,9 +348,11 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         self.assertIn("[[concept:Culture Industry]]", saved)
         # NOTES carries an `<img onerror>` probe. EasyMDE and DOMPurify parse
         # the rendered HTML in a DOMParser document, which shares the page's
-        # CSP, so Chromium reports the probe's handler as refused (#1305).
-        # That refusal is the policy working; any other console error still
-        # fails the test.
+        # CSP, so Chromium up to 158 reports the probe's handler as refused
+        # (#1305); Chromium 159 (Playwright 1.65) no longer reports handlers in
+        # that inert document. Either way the refusal is the policy working,
+        # and the probe never reaches the page (no img[onerror] in the preview,
+        # asserted above). Any other console error still fails the test.
         # Only the two parsers' reports count (the classic head bundle carries
         # both in the packaged build); a refusal from anywhere else still fails.
         parsers = ("/vendor/dompurify/purify.min.js)", "/vendor/easymde/easymde.min.js)",
@@ -358,7 +360,6 @@ class ResearchNoteConceptGraphTests(_BrowserE2E):
         refused = [entry for entry in collector.console_errors
                    if entry.startswith("Executing inline event handler violates")
                    and entry.endswith(parsers)]
-        self.assertTrue(refused, "the CSP never saw the probe's inline handler")
         collector.console_errors[:] = [
             entry for entry in collector.console_errors if entry not in refused
         ]
