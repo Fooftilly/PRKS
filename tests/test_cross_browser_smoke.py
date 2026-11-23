@@ -202,7 +202,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertEqual(older.pageerrors, [])
         self.assertEqual(older._webkit_resize_notices, 1)
 
-    def test_webkit_select_style_notice_is_excused_only_against_select_violations(self):
+    def test_webkit_select_style_notice_is_excused_only_against_unstyled_select_violations(self):
         from tests.e2e.harness import WEBKIT_SELECT_STYLE_NOTICE, PageCollector
 
         notice = WEBKIT_SELECT_STYLE_NOTICE + " (http://127.0.0.1:1/#/folders)"
@@ -218,7 +218,7 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
             instance.external = []
             return instance
 
-        select = {"tag": "SELECT", "sample": ""}
+        select = {"tag": "SELECT", "styled": False}
         # One notice per <select> violation is excused; the rest still fail.
         webkit = collector(True, [select], [notice, notice, "other error"])
         with self.assertRaises(AssertionError):
@@ -228,9 +228,11 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         clean = collector(True, [select, select], [notice, notice])
         clean.assert_clean()
 
-        # A violation from anything but a <select>, or one with an inline
-        # sample (a real inline style), excuses nothing.
-        for violation in ({"tag": "DIV", "sample": ""}, {"tag": "SELECT", "sample": "color:red"}):
+        # A violation from anything but a <select>, or from a <select> that
+        # carries a style attribute (a real blocked inline style), or an
+        # unknown record, excuses nothing.
+        for violation in ({"tag": "DIV", "styled": False}, {"tag": "SELECT", "styled": True},
+                          {"tag": "SELECT"}):
             with self.subTest(violation=violation):
                 mixed = collector(True, [select, violation], [notice])
                 with self.assertRaises(AssertionError):

@@ -824,7 +824,9 @@ _TRANSIENT_WEBKIT_RESIZE_NOTICES = frozenset({
 # violation at the element, for the user-agent styles of every <select> it
 # creates under PRKS's no-inline-style CSP (backend/server.py). The text names
 # no source, so it is excused only one-for-one against recorded violations
-# that all target a <select> and carry no inline sample.
+# that all target a <select> with no style attribute. A blocked inline style
+# keeps its attribute in the DOM; the CSP has no 'report-sample', so the
+# violation's sample is always empty and cannot tell the two apart.
 WEBKIT_SELECT_STYLE_NOTICE = (
     "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' "
     "does not appear in the style-src directive of the Content Security Policy."
@@ -833,8 +835,9 @@ _RECORD_STYLE_VIOLATIONS = """
 document.addEventListener('securitypolicyviolation', (event) => {
   if (!String(event.effectiveDirective || event.violatedDirective).startsWith('style-src')) return;
   const target = event.target;
-  window.__prksReportStyleViolation(target && target.tagName ? String(target.tagName) : '',
-                                    String(event.sample || ''));
+  window.__prksReportStyleViolation(
+    target && target.tagName ? String(target.tagName) : '',
+    !!(target && target.hasAttribute && target.hasAttribute('style')));
 }, true);
 """
 
@@ -852,7 +855,7 @@ class PageCollector:
         if allow_webkit_select_style_notices:
             page.expose_function(
                 "__prksReportStyleViolation",
-                lambda tag, sample: self.style_violations.append({"tag": tag, "sample": sample}),
+                lambda tag, styled: self.style_violations.append({"tag": tag, "styled": bool(styled)}),
             )
             page.add_init_script(_RECORD_STYLE_VIOLATIONS)
         self.pageerrors = []
@@ -1058,7 +1061,7 @@ class PageCollector:
         if not getattr(self, "_allow_webkit_select_style_notices", False):
             return
         violations, self.style_violations = self.style_violations, []
-        if not violations or any(v.get("tag") != "SELECT" or v.get("sample") for v in violations):
+        if not violations or any(v.get("tag") != "SELECT" or v.get("styled") is not False for v in violations):
             return
         budget = len(violations)
         kept = []
