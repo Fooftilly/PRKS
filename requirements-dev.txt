@@ -27,7 +27,7 @@ pytest==9.2.0
 
 # Read-only, manual/path-scoped synthetic OpenAPI fuzz pilot (#855).
 # Installed only by the dedicated Schemathesis workflow.
-schemathesis==4.33.1
+schemathesis==4.33.4
 
 # Read-only, manual synthetic Locust load pilot (#859, #765 T08).
 # Installed only by the dedicated Locust workflow.
