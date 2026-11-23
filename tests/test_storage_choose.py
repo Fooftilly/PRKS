@@ -8,6 +8,7 @@ bootstrap file does not name (the two-process race is a refusal test).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import multiprocessing
 import os
@@ -15,12 +16,14 @@ import sys
 import tempfile
 import unittest
 import uuid
+from unittest.mock import patch
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-from backend.storage import root_binding, root_marker  # noqa: E402
+from backend.storage import choose as choose_mod  # noqa: E402
+from backend.storage import resolver, root_binding, root_marker  # noqa: E402
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent, read_bootstrap_config  # noqa: E402
 from backend.storage.choose import choose_root  # noqa: E402
 from backend.storage.config import StorageConfig  # noqa: E402
@@ -200,6 +203,45 @@ class SelectionRaceTests(ChooseTestCase):
                                   register=False)
         self.assertEqual(bound.root, self.path("new"))
         bound.release()
+
+    def test_a_default_start_refuses_after_a_first_choice(self) -> None:
+        os.remove(self.config_file)  # no selection yet: the default applies
+        start = StorageConfig.from_env(cli_root=self.default_root, environ=self.environ)
+        for source in (resolver.SOURCE_DEVELOPMENT_DEFAULT, resolver.SOURCE_PLATFORM_DEFAULT):
+            with self.subTest(source=source):
+                starting = dataclasses.replace(start, root_source=source)
+                # Unchanged while nothing is recorded.
+                open_storage_root(starting, config_file_path=self.config_file, register=False).release()
+                BootstrapConfigStore(self.config_file).compare_and_set(
+                    expect=expect_absent(), local_root=self.path("first-choice"))
+                with self.assertRaises(StorageRootError) as caught:
+                    open_storage_root(starting, config_file_path=self.config_file, register=False)
+                self.assertEqual(caught.exception.reason, "storage_selection_changed")
+                os.remove(self.config_file)
+
+    def test_a_choice_that_waited_sees_the_folder_another_choice_committed_and_setup_claimed(self) -> None:
+        real = choose_mod.refusal_before_target
+        calls = []
+
+        def interleave(environ, current_root):
+            if not calls:
+                calls.append(current_root)
+                # While this choice is still outside the config lock, another
+                # commits B and setup claims it.
+                choose_root(self.path("b"), environ=self.environ)
+                self.make_root(self.path("b"), claimed=True)
+            return real(environ, current_root)
+
+        with patch.object(choose_mod, "refusal_before_target", side_effect=interleave):
+            with self.assertRaises(StorageRootError) as caught:
+                choose_root(self.path("c"), environ=self.environ)
+        self.assertEqual(calls, [self.default_root])
+        self.assertEqual(caught.exception.reason, "choose_root_claimed")
+        self.assertEqual(self.selected(), self.path("b"))
+
+    def test_setup_page_process_refuses_once_another_process_chose(self) -> None:
+        choose_root(self.path("b"), environ=self.environ)
+        self.assert_refused("storage_selection_changed", self.path("c"), held_current_root=self.default_root)
 
     def test_two_processes_choosing_different_folders_leave_one_committed_selection(self) -> None:
         ctx = multiprocessing.get_context("spawn")

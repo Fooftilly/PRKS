@@ -17,6 +17,8 @@ Refusals (``StorageRootRefused`` with a stable ``reason``; nothing written):
   Library restore.
 - ``choose_move_unresolved``: the bootstrap file records a storage move.
 - ``choose_same_root``: the target is the current root.
+- ``storage_selection_changed``: the setup page's process no longer serves
+  the folder the bootstrap file selects (another process chose one).
 - ``open_another_library_refused``: the target already belongs to a
   database. "Open another library" is not offered under PostgreSQL: only a
   copy of this root could pass the start check, and switching to a copy
@@ -33,18 +35,22 @@ lease in and the caller stops offering setup until a restart. A process that
 read the bootstrap file before a write and leased the old root after it
 refuses to start (``root_binding``: the selection is re-read under the
 lease), so no process serves a root the committed selection does not name.
+Setup claims a root inside :func:`selection_fence`, under the same config
+lock, so a choice never replaces a root that setup is claiming, and setup
+never claims a root another process's choice replaced.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from backend.storage import paths, resolver
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_unchanged
-from backend.storage.errors import StorageRootRefused
+from backend.storage.errors import StorageRootError, StorageRootRefused
 from backend.storage.root_binding import acquire_root_lease, open_storage_root
 from backend.storage.root_marker import RootMarker, read_marker
 
@@ -110,6 +116,50 @@ def _target_config(target: str, environ: Mapping[str, str]) -> Any:
     return StorageConfig.from_env(cli_root=target, environ=env)
 
 
+def _selection_changed() -> StorageRootRefused:
+    return _refuse(
+        "storage_selection_changed",
+        "The Library folder in the PRKS bootstrap configuration changed after this PRKS process started. "
+        "Restart PRKS to use the folder it selects now.",
+    )
+
+
+def _current_root(environ: Mapping[str, str]) -> str:
+    return resolver.resolve_storage_root(cli_root=None, environ=environ, testing=False).root
+
+
+@contextlib.contextmanager
+def selection_fence(environ: Mapping[str, str], root: str, *, require_selected: bool) -> Iterator[None]:
+    """Hold the config lock while setup claims ``root`` (§8.1).
+
+    A choice writes under the same lock and refuses a claimed root, so a
+    claim and a choice never interleave: whichever takes the lock second sees
+    the other. ``require_selected`` (a process whose root came from a
+    choosable source) also refuses a root the committed selection stopped
+    naming: another process chose a folder after this one started
+    (``storage_selection_changed``). A no-op in testing mode and when
+    ``--storage-root``/``PRKS_STORAGE`` selects the root: nothing can choose then.
+    """
+    if paths.testing_from_value(environ.get("PRKS_TESTING", "")):
+        yield
+        return
+    try:
+        source = resolver.resolve_storage_root(cli_root=None, environ=environ, testing=False).source
+        path = resolver.bootstrap_config_path(environ) if source in CHOOSABLE_SOURCES else None
+    except StorageRootError:
+        if require_selected:
+            raise
+        path = None  # nothing selects a root this process could be fenced from
+    if path is None:
+        yield
+        return
+    store = BootstrapConfigStore(path)
+    with store.transaction():
+        if require_selected and os.path.realpath(_current_root(environ)) != os.path.realpath(root):
+            raise _selection_changed()
+        yield
+
+
 def choose_root(
     target: str,
     *,
@@ -122,19 +172,18 @@ def choose_root(
     ``held_current_root`` is the resolved current root when the caller is the
     process serving it (the setup page); otherwise the current root's lease is
     taken here, exclusively and without waiting, for the whole write.
+
+    The current root is resolved again under the config lock and checked
+    again under its lease: a choice that committed while this one waited, or
+    a setup that claimed the root meanwhile, is seen before anything is written.
     """
     env = dict(os.environ if environ is None else environ)
     if paths.testing_from_value(env.get("PRKS_TESTING", "")):
         raise _refuse("choose_testing", "A testing instance never uses the bootstrap file, so it cannot choose a folder.")
-    current_root = resolver.resolve_storage_root(cli_root=None, environ=env, testing=False).root
-    early = refusal_before_target(env, current_root)
+    early = refusal_before_target(env, _current_root(env))
     if early is not None:
         raise early
-    if held_current_root is not None and os.path.realpath(held_current_root) != os.path.realpath(current_root):
-        raise _refuse("choose_set_by_host", "This process does not serve the folder the bootstrap file selects.")
     folder = resolver.normalize_root_spelling(target, environ=env, what="the Library folder", cwd=cwd)
-    if os.path.realpath(folder) == os.path.realpath(current_root):
-        raise _refuse("choose_same_root", "That folder is already the Library folder.")
     store = BootstrapConfigStore(resolver.bootstrap_config_path(env))
     with store.transaction() as txn:
         snapshot = txn.read()
@@ -143,14 +192,21 @@ def choose_root(
                 "choose_move_unresolved",
                 "The bootstrap file records a storage move. Finish or abort the move first.",
             )
-        # Re-check under the config lock: another writer may have moved on.
-        again = refusal_before_target(env, current_root)
-        if again is not None:
-            raise again
+        # Under the config lock the selection cannot change: resolve it here.
+        current_root = _current_root(env)
+        if held_current_root is not None and os.path.realpath(held_current_root) != os.path.realpath(current_root):
+            raise _selection_changed()
+        if os.path.realpath(folder) == os.path.realpath(current_root):
+            raise _refuse("choose_same_root", "That folder is already the Library folder.")
         current_lease = None
         if held_current_root is None and _read_marker_or_none(current_root) is not None:
             current_lease = acquire_root_lease(os.path.realpath(current_root))
         try:
+            # Under the lease too: a setup that claimed the root before it
+            # was taken shows in the marker now.
+            again = refusal_before_target(env, current_root)
+            if again is not None:
+                raise again
             target_marker = _read_marker_or_none(folder)
             if _claimed(target_marker):
                 raise _refuse(

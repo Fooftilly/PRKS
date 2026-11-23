@@ -59,7 +59,7 @@ from backend.storage.file_lock import (
     is_link_or_reparse_point,
 )
 from backend.storage.bootstrap_config import LOCK_SUFFIX
-from backend.storage.resolver import SOURCE_CONFIG_FILE
+from backend.storage.resolver import SOURCE_CONFIG_FILE, SOURCE_DEVELOPMENT_DEFAULT, SOURCE_PLATFORM_DEFAULT
 from backend.storage.preflight import (
     PREFLIGHT_DIRNAME,
     preflight_is_scaffold,
@@ -1300,6 +1300,9 @@ def _open_storage_root(
     return bound
 
 
+_SELECTION_SOURCES = frozenset({SOURCE_CONFIG_FILE, SOURCE_PLATFORM_DEFAULT, SOURCE_DEVELOPMENT_DEFAULT})
+
+
 def _check_selection_unchanged(config: Any, config_file_path: Optional[str]) -> None:
     """Refuse a root the bootstrap file stopped selecting while this process leased it (§8.1).
 
@@ -1308,13 +1311,19 @@ def _check_selection_unchanged(config: Any, config_file_path: Optional[str]) -> 
     root's lease while it writes, so it finishes before this lease is taken,
     and this re-read, under the lease, sees it. No process then serves a
     root the committed selection does not name.
+
+    A default root is checked too: a first choice writes the file a default
+    start found empty, and from then on the file, not the default, selects.
     """
-    if getattr(config, "root_source", None) != SOURCE_CONFIG_FILE or not config_file_path:
+    source = getattr(config, "root_source", None)
+    if source not in _SELECTION_SOURCES or not config_file_path:
         return
     from backend.storage.bootstrap_config import read_bootstrap_config
 
     current = read_bootstrap_config(config_file_path)
     selected = current.local_root if current is not None else None
+    if source != SOURCE_CONFIG_FILE and selected is None:
+        return  # still no selection: the default still applies
     if selected is None or os.path.normpath(selected) != os.path.normpath(config.root):
         raise StorageRootRefused(
             "storage_selection_changed",

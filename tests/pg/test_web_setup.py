@@ -377,6 +377,26 @@ class SetupStorageChoiceTests(SetupHttpTests):
         config = read_bootstrap_config(self.environ["PRKS_CONFIG_FILE"])
         return config.local_root if config is not None else None
 
+    def test_another_process_waiting_for_setup_cannot_claim_the_old_folder(self) -> None:
+        name = self.database()
+        chooser, root = self.choosable_phase(name)
+        other = SetupPhase(
+            self.db(name), self.settings(), root=root, lease=self.lease(root), testing=False,
+            environ=self.environ, root_source="config_file",
+        )
+        token = self.issue(name).reveal()
+        chooser_port, other_port = self.serve(chooser), self.serve(other)
+        target = os.path.join(self.tmp, "chosen-elsewhere")
+        self.assertEqual(self.choose(chooser_port, {"token": token, "folder": target})[0], 200)
+        # The other process never saw the choice, yet it offers no setup on the old folder.
+        self.assertEqual(json.loads(self.request(other_port, "GET", "/api/setup")[2]),
+                         {"state": "unconfigured", "storage": "restart_required"})
+        status, got, _ = self.post(other_port, body(token))
+        self.assertEqual((status, got), (409, {"error": "restart_required"}))
+        self.assertIsNone(self.instance(name))
+        self.assertIsNone(_marker(root).instance_id)
+        self.assertEqual(self.selected(), target)
+
     def test_the_token_holder_chooses_a_folder_and_setup_waits_for_a_restart(self) -> None:
         name = self.database()
         phase, root = self.choosable_phase(name)

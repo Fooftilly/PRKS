@@ -49,7 +49,7 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.identity.sessions import NewSession
 from backend.domain.identity.web_start import WebAuthSettings
-from backend.storage.choose import CHOOSABLE_SOURCES, Chosen, choose_root
+from backend.storage.choose import CHOOSABLE_SOURCES, Chosen, choose_root, selection_fence
 from backend.storage.errors import StorageRootError, StorageRootRefused
 from backend.storage.file_lock import SharedFileLock
 
@@ -275,11 +275,18 @@ class SetupPhase:
             return STORAGE_RESTART_REQUIRED
         if self._testing or self._root_source not in CHOOSABLE_SOURCES:
             return STORAGE_FIXED
+        from backend.storage import resolver
         from backend.storage.choose import refusal_before_target
 
         try:
+            current = resolver.resolve_storage_root(cli_root=None, environ=self._environ, testing=False).root
+            if os.path.realpath(current) != os.path.realpath(self._root):
+                # Another process chose a folder after this one started.
+                return STORAGE_RESTART_REQUIRED
             refusal = refusal_before_target(self._environ, self._root)
-        except StorageRootError:
+            if refusal is None and read_state(self.db) != STATE_UNCONFIGURED:
+                return STORAGE_FIXED  # setup has started: choose_folder would refuse
+        except (StorageRootError, DatabaseError):
             return STORAGE_FIXED
         return STORAGE_FIXED if refusal is not None else STORAGE_CHOOSABLE
 
@@ -375,10 +382,21 @@ class SetupPhase:
             password_hash=passwords.hash_password(request.password, hasher=self._hasher),
         )
         with self._settle:
-            result = root_pairing.bootstrap(
-                self.db, owner, token=request.token, root=self._root, lease=self._lease,
-                testing=self._testing,
-            )
+            # Under the config lock, so no choice interleaves with the claim,
+            # and only while the bootstrap file still selects this root.
+            try:
+                with selection_fence(
+                    self._environ, self._root,
+                    require_selected=not self._testing and self._root_source in CHOOSABLE_SOURCES,
+                ):
+                    result = root_pairing.bootstrap(
+                        self.db, owner, token=request.token, root=self._root, lease=self._lease,
+                        testing=self._testing,
+                    )
+            except StorageRootError as exc:
+                if exc.reason == "storage_selection_changed":
+                    raise RootPairingRefused("restart_required", _RESTART_MESSAGE) from None
+                raise RootPairingRefused(exc.reason, exc.message, retryable=True) from None
             self.done.set()
         self._remove_token_files(request.token)
         if not result.created:
