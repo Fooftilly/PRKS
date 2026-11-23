@@ -89,6 +89,35 @@ class TokenAttemptsTests(unittest.TestCase):
         attempts.check()
 
 
+class AfterSetupTests(unittest.TestCase):
+    """``/api/setup`` on the normal server, once the root is claimed (#612)."""
+
+    def answer(self, method: str, path: str = "/api/setup") -> Any:
+        from email.message import Message
+
+        from backend.api.session import HttpRequest
+        from backend.api.setup import handle_after_setup
+
+        def unread() -> object:
+            raise AssertionError("the body is never read after setup")
+
+        return handle_after_setup(HttpRequest(
+            method=method, path=path, headers=Message(), peer="127.0.0.1",
+            request_host=("127.0.0.1", 8000), scheme="http", parse_origin=parse_request_origin,
+            read_json=unread,
+        ))
+
+    def test_ready_for_a_read_and_already_ready_for_a_post(self) -> None:
+        for method in ("GET", "HEAD"):
+            reply = self.answer(method)
+            self.assertEqual((reply.status, reply.body), (200, {"state": "ready"}))
+        reply = self.answer("POST")
+        self.assertEqual((reply.status, reply.body), (409, {"error": "already_ready"}))
+        reply = self.answer("DELETE")
+        self.assertEqual(reply.status, 405)
+        self.assertIsNone(self.answer("GET", "/api/setup/x"))
+
+
 class SetupTestCase(RootPairingTestCase):
     def setUp(self) -> None:
         super().setUp()

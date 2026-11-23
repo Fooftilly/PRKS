@@ -917,6 +917,19 @@ async function run() {
             return Promise.resolve(new Response('body:' + path, { status: 200, headers: headers }));
         });
     });
+    for (const setupPath of ['/', '/index.html']) {
+        // Mid-handoff, one shell URL may still answer with the setup page.
+        await assertRejectsOrThrows(
+            'performInstall rejects when only ' + setupPath + ' is the setup page (#612)',
+            async function () {
+                const cacheStorage = makeFakeCacheStorage();
+                await sw.performInstall(cacheStorage, function (path) {
+                    const headers = path === setupPath ? { 'X-PRKS-Shell': 'setup' } : {};
+                    return Promise.resolve(new Response('body:' + path, { status: 200, headers: headers }));
+                });
+            }
+        );
+    }
     {
         // The inverse: a failing *optional* decorative asset (manifest/icon)
         // must never fail the install, and every required asset still lands
