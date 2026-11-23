@@ -10,7 +10,7 @@ Every setting, with its scope (deployment, Compose, Library), default and whethe
 
 ## Configuration and data layout
 
-On/off settings take `1`, `true`, `yes` or `on` for true and `0`, `false`, `no` or `off` for false; anything else stops the start.
+On/off settings take `1`, `true`, `yes` or `on` for true and `0`, `false`, `no` or `off` for false; anything else stops the start. `PRKS_MIGRATE_ON_START` and `PRKS_EMBEDDED_WORKER` take only `0` or `1`.
 
 | Variable | Purpose |
 | -------- | ------- |
@@ -19,7 +19,7 @@ On/off settings take `1`, `true`, `yes` or `on` for true and `0`, `false`, `no` 
 | `PRKS_THUMB_LOSSLESS` | When true, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
 | `PRKS_HTTP_THREADS` | Requests that run PRKS work at the same time under Uvicorn, from 1 to 256. Default `16`. Up to 8 more requests per thread wait for a free one; past that the server answers 503 with `Retry-After`. Idle keep-alive connections and clients still sending their headers hold no thread; a request whose body is being read (an upload) holds its thread until the body has arrived or the route's idle timeout ends it. The request head (request line and headers) may be up to 64 KiB, however it arrives. A larger one is refused: with 431 from PRKS, or with 400 when a head well past the limit (over 128 KiB) is still arriving and the HTTP parser stops it first. |
 | `PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE` | PEM certificate chain and unencrypted private key; set both to serve HTTPS directly. A missing, unreadable or mismatched pair, or only one of the two, refuses to start. With TLS on, cookies are `Secure`, responses PRKS writes send HSTS (not the `400` Uvicorn sends itself for a request it cannot parse) and the cross-site check expects `https`. The certificate is read at start only: restart after renewing it. For internet exposure prefer a reverse proxy such as Caddy ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)). |
-| `PRKS_LOG_LEVEL` | Stderr log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. Default `INFO`. Changes volume, not what kinds of data may be logged. |
+| `PRKS_LOG_LEVEL` | Stderr log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` or `NOTSET` (`WARN` and `FATAL` are accepted aliases). Default `INFO`; a worker reads it too. Changes volume, not what kinds of data may be logged. |
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level, same values. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep, 1 to 3650. Default `7`. |
 | `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |

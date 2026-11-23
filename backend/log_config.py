@@ -21,7 +21,8 @@ _ROTATE_LOCK_SUFFIX = ".rotate.lock"
 LOGGER = logging.getLogger("prks.log_config")
 
 
-def _resolve_log_level() -> int:
+def stderr_log_level() -> int:
+    """``PRKS_LOG_LEVEL``: the stderr level of the web process and of a worker."""
     raw = (os.environ.get("PRKS_LOG_LEVEL") or "INFO").strip().upper()
     return getattr(logging, raw, logging.INFO)
 
@@ -244,7 +245,7 @@ def setup_logging(config: StorageConfig) -> None:
     if getattr(root, "_prks_logging_configured", False):
         return
 
-    level = _resolve_log_level()
+    level = stderr_log_level()
     file_level = _resolve_file_log_level()
     log_file = config.log_file
     retention_days = _resolve_retention_days()

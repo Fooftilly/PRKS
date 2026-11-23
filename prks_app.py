@@ -301,7 +301,7 @@ def migrate_on_start(db, environ, *, testing=False):
     """
     from backend.db.migrate import MigrationError, migrate, verify_schema
 
-    value = (environ.get("PRKS_MIGRATE_ON_START") or "1").strip()
+    value = (environ.get("PRKS_MIGRATE_ON_START") or "").strip() or "1"
     if value not in ("0", "1"):
         db.close()
         print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
@@ -387,7 +387,9 @@ def run_role(role, argv):
         return process_roles.run_migrate(root=root, testing=testing)
     import logging
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from backend.log_config import stderr_log_level
+
+    logging.basicConfig(level=stderr_log_level(), format="%(asctime)s %(levelname)s %(message)s")
     return process_roles.run_worker(root=root, testing=testing)
 
 
@@ -430,7 +432,7 @@ def run_config(argv, environ=None, *, out=None):
     effective deployment values and their source, secrets hidden. Exit 0
     when a start would accept the configuration, 2 otherwise.
     """
-    from backend.config_reference import effective, problems
+    from backend.config_reference import Effective, effective, problems
 
     parser = argparse.ArgumentParser(
         prog="prks_app.py config", description="Validate and show this deployment's configuration."
@@ -445,31 +447,69 @@ def run_config(argv, environ=None, *, out=None):
     if args.testing:
         env["PRKS_TESTING"] = "1"
     stdout = out or sys.stdout
-    found = list(problems(env)) + _parser_problems(env, args)
+    storage, delegated, invalid = _delegated_checks(env, args)
+    found = list(problems(env))
+    found += [problem for problem in delegated if problem not in found]
     for problem in found:
         print(f"problem: {problem}", file=stdout)
-    width = max(len(row.key) for row in effective(env))
-    for row in effective(env):
+    rows = effective(env, invalid)
+    if storage is not None:
+        # The root a start would select: the CLI flag, PRKS_STORAGE, the
+        # bootstrap file or a default, whichever wins (§5.2).
+        rows = [Effective(row.key, storage.root, f"selected by {storage.root_source}")
+                if row.key == "PRKS_STORAGE" else row for row in rows]
+    width = max(len(row.key) for row in rows)
+    for row in rows:
         print(f"{row.key.ljust(width)}  {row.shown}  ({row.source})", file=stdout)
     print("configuration: OK" if not found else f"configuration: {len(found)} problem(s)", file=stdout)
     return 0 if not found else 2
 
 
+def _delegated_checks(environ, args):
+    """``(storage, problems, invalid keys)`` from the parsers a start runs.
+
+    A parser stops at its first problem, so each set value that only its
+    owner's parser checks is first checked alone (on the environment without
+    the other such values): one pass then names every independent problem,
+    and every refused value is known and shown as ``(invalid)``, never echoed.
+    A last pass on the whole environment adds the problems of combinations.
+    """
+    from backend.config_reference import Scope, in_scope
+
+    delegated = [
+        setting.key for setting in in_scope(Scope.DEPLOYMENT)
+        if setting.check is None and (environ.get(setting.key) or "").strip()
+    ]
+    bare = {key: value for key, value in environ.items() if key not in delegated}
+    baseline, _ = _parser_problems(bare, args)
+    found, invalid = [], set()
+    for key in delegated:
+        alone, _ = _parser_problems({**bare, key: environ[key]}, args)
+        own = [problem for problem in alone if problem not in baseline]
+        if own:
+            invalid.add(key)
+            found.extend(problem for problem in own if problem not in found)
+    combined, storage = _parser_problems(environ, args)
+    found.extend(problem for problem in combined if problem not in found)
+    return storage, found, invalid
+
+
 def _parser_problems(environ, args):
-    """The messages of the parsers a start runs, each in its own words (no value echoed)."""
+    """``(problems, storage)``: the messages of the parsers a start runs, each in its own words (no value echoed)."""
     from backend.db.config import load_database_config, with_testing_default
     from backend.db.errors import DatabaseConfigError
     from backend.domain.identity.login_limiter import LimiterConfigError
     from backend.domain.identity.sessions import SessionConfigError
     from backend.domain.identity.web_start import WebAuthConfigError, settings_from_env
     from backend.jobs.embedded import EmbeddedWorkerConfigError, embedded_worker_enabled
-    from backend.server import parse_trusted_hosts
     from backend.web.settings import HttpServerSettings, HttpSettingsError
 
     testing = bool(args.testing)
-    found = []
+    found, storage = [], None
     try:
-        StorageConfig.from_env(cli_root=args.storage_root, environ=environ)
+        # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
+        storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
+        storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
     except StorageRootError as exc:
         found.append(f"storage root: {exc.message}")
     try:
@@ -485,14 +525,10 @@ def _parser_problems(environ, args):
     except EmbeddedWorkerConfigError as exc:
         found.append(str(exc))
     try:
-        parse_trusted_hosts(environ.get("PRKS_TRUSTED_HOSTS", ""))
-    except (ValueError, RuntimeError) as exc:
-        found.append(str(exc))
-    try:
         load_database_config(with_testing_default(environ) if testing else environ, role="web")
     except DatabaseConfigError as exc:
         found.append(exc.message)
-    return found
+    return found, storage
 
 
 def select_config(args):

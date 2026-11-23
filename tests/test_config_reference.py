@@ -11,7 +11,9 @@ from __future__ import annotations
 import ast
 import contextlib
 import io
+import os
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -140,6 +142,55 @@ class AppTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
         self.assertIn("configuration: 6 problem(s)", text)
+
+    def test_config_check_hides_values_its_parsers_refuse(self) -> None:
+        code, text = self.run_check({
+            "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+            "PRKS_HTTP_THREADS": "hunter2", "PRKS_AUTH": "hunter3",
+        })
+        self.assertEqual(code, 2)
+        self.assertNotIn("hunter2", text)
+        self.assertNotIn("hunter3", text)
+        self.assertRegex(text, r"PRKS_HTTP_THREADS +\(invalid\)")
+
+    def test_config_check_names_every_problem_of_one_parser(self) -> None:
+        code, text = self.run_check({
+            "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+            "PRKS_SESSION_IDLE_DAYS": "bad", "PRKS_TRUSTED_PROXIES": "bad",
+        })
+        self.assertEqual(code, 2)
+        lines = [line for line in text.splitlines() if line.startswith("problem: ")]
+        self.assertEqual(len(lines), 2, text)
+        self.assertTrue(any("PRKS_SESSION_IDLE_DAYS" in line for line in lines), text)
+        self.assertTrue(any("PRKS_TRUSTED_PROXIES" in line for line in lines), text)
+
+    def test_config_check_reports_a_malformed_public_origin(self) -> None:
+        code, text = self.run_check({
+            "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_PUBLIC_ORIGIN": "https://[::1",
+        })
+        self.assertEqual(code, 2)
+        self.assertIn("problem: PRKS_PUBLIC_ORIGIN must be an origin", text)
+
+    def test_config_check_shows_the_selected_storage_root(self) -> None:
+        with tempfile.TemporaryDirectory() as chosen:
+            code, text = self.run_check(
+                {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_STORAGE": "/srv/library-a"},
+                "--storage-root", chosen,
+            )
+        self.assertEqual(code, 0, text)
+        self.assertRegex(text, r"PRKS_STORAGE +" + re.escape(os.path.abspath(chosen)) + r" +\(selected by cli\)")
+        self.assertNotIn("/srv/library-a", text)
+
+    def test_log_levels_accept_the_logging_aliases(self) -> None:
+        for name in ("warn", "FATAL", "NOTSET", "Warning"):
+            with self.subTest(name=name):
+                self.assertEqual(problems({"PRKS_LOG_LEVEL": name, "PRKS_LOG_FILE_LEVEL": name}), [])
+        self.assertEqual(len(problems({"PRKS_LOG_LEVEL": "BASIC_FORMAT"})), 1)
+
+    def test_config_check_reports_a_retired_key_once(self) -> None:
+        code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_FOR_PROCESSING_DIR": "/x"})
+        self.assertEqual(code, 2)
+        self.assertEqual(text.count("problem: "), 1, text)
 
     def test_config_check_testing_uses_the_testing_defaults(self) -> None:
         code, text = self.run_check({}, "--testing")

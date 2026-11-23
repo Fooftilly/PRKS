@@ -36,7 +36,7 @@ import argparse
 import math
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
@@ -54,7 +54,8 @@ Check = Callable[[str], Optional[str]]
 
 _TRUE = ("1", "true", "yes", "on")
 _FALSE = ("0", "false", "no", "off")
-_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+# logging.getLevelName knows these names; WARN and FATAL are its aliases.
+_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "WARN", "ERROR", "CRITICAL", "FATAL", "NOTSET")
 
 
 def boolean(text: str) -> Optional[str]:
@@ -89,6 +90,16 @@ def number(low: float, high: float) -> Check:
         return None
 
     return check
+
+
+def trusted_hosts(text: str) -> Optional[str]:
+    from backend.server import parse_trusted_hosts
+
+    try:
+        parse_trusted_hosts(text)
+    except ValueError:
+        return "must be host names separated by commas (no ports, paths or wildcards)"
+    return None
 
 
 def log_level(text: str) -> Optional[str]:
@@ -150,7 +161,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_TRUSTED_PROXIES", _D, "Proxy addresses or networks whose X-Forwarded-For is believed.",
             "none", ("serve",), owner="backend.domain.identity.login_limiter"),
     Setting("PRKS_TRUSTED_HOSTS", _D, "Extra Host header names the server accepts, comma-separated.",
-            "none", ("serve",), owner="backend.server"),
+            "none", ("serve",), check=trusted_hosts, owner="backend.server"),
     Setting("PRKS_SESSION_IDLE_DAYS", _D, "Days a session stays valid without use, 1 to 365.",
             "30", ("serve",), owner="backend.domain.identity.sessions"),
     Setting("PRKS_LOGIN_WINDOW_SECONDS", _D, "Length of the sign-in rate-limit window.",
@@ -164,7 +175,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_BOOTSTRAP_TOKEN_FILE", _D, "An owner-only file holding the setup token an installer chose.",
             "unset", ("admin",), owner="backend.domain.identity.admin"),
     # --- logging and diagnostics ------------------------------------------------------
-    Setting("PRKS_LOG_LEVEL", _D, "Stderr log level.", "INFO", _ALL_ROLES, check=log_level,
+    Setting("PRKS_LOG_LEVEL", _D, "Stderr log level.", "INFO", ("serve", "worker"), check=log_level,
             owner="backend.log_config"),
     Setting("PRKS_LOG_FILE_LEVEL", _D, "Persistent file log level.", "ERROR", ("serve",), check=log_level,
             owner="backend.log_config"),
@@ -257,11 +268,12 @@ class Effective:
     source: str  # "environment" or "default"
 
 
-def effective(environ: Mapping[str, str]) -> list[Effective]:
+def effective(environ: Mapping[str, str], invalid: Collection[str] = ()) -> list[Effective]:
     """The deployment settings as this environment sets them.
 
     A secret shows only that it is set, and an invalid value only that it is
-    invalid (it may be a secret typed into the wrong variable).
+    invalid (it may be a secret typed into the wrong variable). ``invalid``
+    names the keys their owner's parser refused (settings without a ``check``).
     """
     rows: list[Effective] = []
     for setting in in_scope(Scope.DEPLOYMENT):
@@ -270,7 +282,7 @@ def effective(environ: Mapping[str, str]) -> list[Effective]:
             rows.append(Effective(setting.key, setting.default, "default"))
         elif setting.secret:
             rows.append(Effective(setting.key, "(set, hidden)", "environment"))
-        elif setting.check is not None and setting.check(raw) is not None:
+        elif setting.key in invalid or (setting.check is not None and setting.check(raw) is not None):
             rows.append(Effective(setting.key, "(invalid)", "environment"))
         else:
             rows.append(Effective(setting.key, raw, "environment"))

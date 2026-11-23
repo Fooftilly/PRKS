@@ -32,7 +32,7 @@ Set in the host's environment, Compose `.env` or a secret file, by whoever runs 
 | `PRKS_LOGIN_ADDRESS_LIMIT` | `serve` | 20 | no | Sign-in attempts per client address per window. |
 | `PRKS_LOGIN_DEVICE_LIMIT` | `serve` | 5 | no | Sign-in attempts per known sign-in device per window. |
 | `PRKS_BOOTSTRAP_TOKEN_FILE` | `admin` | unset | no | An owner-only file holding the setup token an installer chose. |
-| `PRKS_LOG_LEVEL` | `serve`, `migrate`, `worker`, `admin` | INFO | no | Stderr log level. |
+| `PRKS_LOG_LEVEL` | `serve`, `worker` | INFO | no | Stderr log level. |
 | `PRKS_LOG_FILE_LEVEL` | `serve` | ERROR | no | Persistent file log level. |
 | `PRKS_LOG_RETENTION_DAYS` | `serve` | 7 | no | Rotated persistent log copies to keep, 1 to 3650. |
 | `PRKS_LOG_FILE` | `serve` | <data root>/prks-errors.log | no | Path of the rotating error log. |
