@@ -1344,7 +1344,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/text_identity.py",
                 "backend/pdf_byte_mentions.py",
                 "backend/fs_durability.py",
-                "backend/library_backend.py",
+                "backend/config_reference.py",
                 "backend/log_safety.py",
                 "backend/person_image.py",
                 "backend/derived_caches.py",

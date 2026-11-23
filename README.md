@@ -154,6 +154,8 @@ docker compose exec web python /app/prks_app.py admin bootstrap complete --root 
 
 ## Configuration and data layout
 
+Every setting, its scope and default is in the [configuration reference](docs/configuration-reference.md). `python prks_app.py config check` validates the configuration as a start would and shows the effective values, secrets hidden; an invalid or retired setting stops every role with exit status 2.
+
 | Variable | Purpose |
 | -------- | ------- |
 | `PRKS_DATABASE_URL` | The PostgreSQL 18 database of the Library (`PRKS_DATABASE_URL_FILE`: a file holding it). Required by every role, except that `--testing` defaults to the `scripts/dev-postgres` database. |

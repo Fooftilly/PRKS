@@ -29,7 +29,7 @@ def parse_host(value):
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-ROLES = ("serve", "migrate", "worker", "admin")
+ROLES = ("serve", "migrate", "worker", "admin", "config")
 
 
 def split_role(argv):
@@ -404,20 +404,95 @@ def enter_testing_mode(environ=None):
     env.update(with_testing_default(env))
 
 
-def refuse_stale_library_backend(environ=None):
-    """Exit with status 2 while the retired ``PRKS_LIBRARY_BACKEND`` is set (``backend.library_backend``).
+def refuse_invalid_environment(environ=None):
+    """Exit with status 2 while any setting is invalid or retired (``backend.config_reference``, #612).
 
-    Every role runs it first: the variable chooses nothing now that
-    PostgreSQL is the only backend, and a process that ignored it would hide
-    configuration written for an earlier release.
+    Every role runs it first, before the database, the storage root or the
+    network: a deployment never runs on a value PRKS would otherwise replace
+    with a default, nor with configuration written for an earlier release.
     """
-    from backend.library_backend import LibraryBackendError, refuse_stale_selection
+    from backend.config_reference import problems
 
+    found = problems(os.environ if environ is None else environ)
+    if found:
+        for problem in found:
+            print(f"PRKS cannot start: {problem}", file=sys.stderr)
+        print("Check the whole configuration with: python prks_app.py config check", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def run_config(argv, environ=None, *, out=None):
+    """``config check``: validate the configuration the way a start does, and show it (#612).
+
+    Runs every parser a ``serve`` start runs before it touches anything
+    (settings, storage selection, HTTP, authentication, database), without
+    connecting, binding or opening the root. Prints each problem, then the
+    effective deployment values and their source, secrets hidden. Exit 0
+    when a start would accept the configuration, 2 otherwise.
+    """
+    from backend.config_reference import effective, problems
+
+    parser = argparse.ArgumentParser(
+        prog="prks_app.py config", description="Validate and show this deployment's configuration."
+    )
+    steps = parser.add_subparsers(dest="command", required=True)
+    check = steps.add_parser("check", help="validate every setting and print the effective values")
+    check.add_argument("--testing", action="store_true", help="check as a --testing run would")
+    check.add_argument("--host", type=parse_host, default=DEFAULT_HOST, help="the address serve would bind")
+    check.add_argument("--storage-root", metavar="PATH", help="the storage root serve would use")
+    args = parser.parse_args(argv)
+    env = dict(os.environ if environ is None else environ)
+    if args.testing:
+        env["PRKS_TESTING"] = "1"
+    stdout = out or sys.stdout
+    found = list(problems(env)) + _parser_problems(env, args)
+    for problem in found:
+        print(f"problem: {problem}", file=stdout)
+    width = max(len(row.key) for row in effective(env))
+    for row in effective(env):
+        print(f"{row.key.ljust(width)}  {row.shown}  ({row.source})", file=stdout)
+    print("configuration: OK" if not found else f"configuration: {len(found)} problem(s)", file=stdout)
+    return 0 if not found else 2
+
+
+def _parser_problems(environ, args):
+    """The messages of the parsers a start runs, each in its own words (no value echoed)."""
+    from backend.db.config import load_database_config, with_testing_default
+    from backend.db.errors import DatabaseConfigError
+    from backend.domain.identity.login_limiter import LimiterConfigError
+    from backend.domain.identity.sessions import SessionConfigError
+    from backend.domain.identity.web_start import WebAuthConfigError, settings_from_env
+    from backend.jobs.embedded import EmbeddedWorkerConfigError, embedded_worker_enabled
+    from backend.server import parse_trusted_hosts
+    from backend.web.settings import HttpServerSettings, HttpSettingsError
+
+    testing = bool(args.testing)
+    found = []
     try:
-        refuse_stale_selection(os.environ if environ is None else environ)
-    except LibraryBackendError as exc:
-        print(f"PRKS cannot start: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
+        StorageConfig.from_env(cli_root=args.storage_root, environ=environ)
+    except StorageRootError as exc:
+        found.append(f"storage root: {exc.message}")
+    try:
+        HttpServerSettings.from_env(environ)
+    except HttpSettingsError as exc:
+        found.append(exc.message)
+    try:
+        settings_from_env(environ, testing=testing, host=args.host, parse_origin=parse_request_origin)
+    except (WebAuthConfigError, LimiterConfigError, SessionConfigError) as exc:
+        found.append(str(exc))
+    try:
+        embedded_worker_enabled(environ)
+    except EmbeddedWorkerConfigError as exc:
+        found.append(str(exc))
+    try:
+        parse_trusted_hosts(environ.get("PRKS_TRUSTED_HOSTS", ""))
+    except (ValueError, RuntimeError) as exc:
+        found.append(str(exc))
+    try:
+        load_database_config(with_testing_default(environ) if testing else environ, role="web")
+    except DatabaseConfigError as exc:
+        found.append(exc.message)
+    return found
 
 
 def select_config(args):
@@ -434,7 +509,9 @@ if __name__ == "__main__":
 
     record_imports(_IMPORT_STARTED)
     role, role_argv = split_role(sys.argv[1:])
-    refuse_stale_library_backend()
+    if role == "config":
+        raise SystemExit(run_config(role_argv))
+    refuse_invalid_environment()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
     args = build_parser().parse_args(role_argv)

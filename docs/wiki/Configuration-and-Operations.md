@@ -4,25 +4,31 @@ This page is the detailed operational reference for PRKS runtime configuration, 
 
 For a first run, start with [Getting Started](Getting-Started.md). For backup/recovery semantics, see [Storage, Backup, and Restore](Storage-Backup-and-Restore.md).
 
+Every setting, with its scope (deployment, Compose, Library), default and whether it is a secret, is listed in the [configuration reference](https://github.com/Fooftilly/PRKS/blob/master/docs/configuration-reference.md), generated from `backend/config_reference.py`. Deployment settings are read once at start and only the operator changes them; Library settings are edited in Settings.
+
+**Check before you start.** `python prks_app.py config check` validates every setting exactly as a start would, without connecting to the database or touching the data root, and prints the effective values and where each comes from (environment or default). Secrets show only that they are set. It exits 0 when a start would accept the configuration, 2 otherwise; add `--testing`, `--host` or `--storage-root` to check as that run would. Every role refuses an invalid or retired setting the same way at start, with exit status 2: no value falls back to a default.
+
 ## Configuration and data layout
+
+On/off settings take `1`, `true`, `yes` or `on` for true and `0`, `false`, `no` or `off` for false; anything else stops the start.
 
 | Variable | Purpose |
 | -------- | ------- |
 | `PRKS_STORAGE` | If set, the data root: managed PDFs in `$PRKS_STORAGE/pdfs/`, portraits in `people/`, thumbnails in `thumbs/`, plus the `prks-root.json` marker and `.prks-maintenance/`. The Library database is PostgreSQL (`PRKS_DATABASE_URL`), never a file in the root. |
 | `PRKS_TESTING` | When truthy (`1`, `true`, `yes`), uses testing paths and stricter checks. Port **8070**, `data_testing/` when `PRKS_STORAGE` is unset, and refusal of `/data` and the repository `data/` tree are described in [Testing mode](Getting-Started.md#testing-mode). |
-| `PRKS_THUMB_LOSSLESS` | When truthy, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
+| `PRKS_THUMB_LOSSLESS` | When true, PDF card thumbnails use lossless WebP/PNG cache encoding (debugging). Default is card-optimized lossy WebP; cache filenames use rev `_v2`. |
 | `PRKS_HTTP_THREADS` | Requests that run PRKS work at the same time under Uvicorn, from 1 to 256. Default `16`. Up to 8 more requests per thread wait for a free one; past that the server answers 503 with `Retry-After`. Idle keep-alive connections and clients still sending their headers hold no thread; a request whose body is being read (an upload) holds its thread until the body has arrived or the route's idle timeout ends it. The request head (request line and headers) may be up to 64 KiB, however it arrives. A larger one is refused: with 431 from PRKS, or with 400 when a head well past the limit (over 128 KiB) is still arriving and the HTTP parser stops it first. |
 | `PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE` | PEM certificate chain and unencrypted private key; set both to serve HTTPS directly. A missing, unreadable or mismatched pair, or only one of the two, refuses to start. With TLS on, cookies are `Secure`, responses PRKS writes send HSTS (not the `400` Uvicorn sends itself for a request it cannot parse) and the cross-site check expects `https`. The certificate is read at start only: restart after renewing it. For internet exposure prefer a reverse proxy such as Caddy ([HTTPS](https://github.com/Fooftilly/PRKS/blob/master/docs/https.md)). |
-| `PRKS_LOG_LEVEL` | Stderr log level. Default `INFO`. Changes volume, not what kinds of data may be logged. |
-| `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
-| `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
+| `PRKS_LOG_LEVEL` | Stderr log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` or `CRITICAL`. Default `INFO`. Changes volume, not what kinds of data may be logged. |
+| `PRKS_LOG_FILE_LEVEL` | Persistent file log level, same values. Default `ERROR`. |
+| `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep, 1 to 3650. Default `7`. |
 | `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |
-| `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. Clamped to 10–60000. Does not timeout requests. |
-| `PRKS_PERF_LOG_SLOW` | When truthy (`1`, `true`, `yes`, `on`), emit a privacy-safe `slow_request` INFO log for slow API requests. Default off. |
-| `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
+| `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. From 10 to 60000. Does not timeout requests. |
+| `PRKS_PERF_LOG_SLOW` | When true, emit a privacy-safe `slow_request` INFO log for slow API requests. Default off. |
+| `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. A whole number of bytes, at least 1. Default 64 GiB. A valid `Content-Length` is required. |
 | `PRKS_CONFIG_FILE` | Override path of the bootstrap configuration file (default: `~/.config/prks/config.json` on Linux, `~/Library/Application Support/PRKS/config.json` on macOS, `%LOCALAPPDATA%\PRKS\config.json` on Windows). Ignored in testing mode. |
 | `PRKS_TRUSTED_HOSTS` | Extra `Host` header names the server accepts, comma-separated, beyond `localhost`, IP literals and the bind host. Hostnames only: no port, scheme, path or wildcard. An invalid entry stops startup. |
-| `PRKS_PDF_LINEARIZE` | `1`/`true` or `0`/`false` turns PDF linearization on or off. Unset, it runs when `qpdf` is installed. |
+| `PRKS_PDF_LINEARIZE` | True or false turns PDF linearization on or off. Unset, it runs when `qpdf` is installed. |
 
 If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: `data/pdfs/`, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
@@ -55,7 +61,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 | `PRKS_DB_POOL_MAX` | `serve`, `migrate` | Largest connection pool of the web process (and of `migrate`, which opens the same pool), at least 1. Default `10`. The worker's pool stays at `4`. |
 | `PRKS_MIGRATE_ON_START` | `serve` | `1` (default) applies the schema at start. `0` leaves that to `migrate` and only verifies it: the web process still refuses a schema other than its code's. `worker` never applies the schema and always verifies it. Compose sets `0`. |
 | `PRKS_EMBEDDED_WORKER` | `serve` | `1` (default) runs a job worker inside the web process. `0` runs none, for a separate `worker`. Compose sets `0`. |
-| `PRKS_LIBRARY_BACKEND` | every role | Retired (PG-C2 #641): PostgreSQL is the only Library backend. A process that finds it set, to any value, refuses to start with exit status 2; remove it. |
+| `PRKS_LIBRARY_BACKEND` | every role | Retired (PG-C2 #641): PostgreSQL is the only Library backend. A process that finds it set, to any value, refuses to start with exit status 2; remove it. `PRKS_FOR_PROCESSING_DIR` is retired the same way. |
 | `PRKS_PUBLIC_ORIGIN` | `serve` | The origin browsers use behind an HTTPS reverse proxy, such as `https://prks.example.org`: scheme, host and optional port only. Sign-in checks `Origin` against it, and its host is accepted as a `Host`. Unset, the expected origin is the request's own (`https` with PRKS's own TLS, `http` otherwise). |
 | `PRKS_TRUSTED_PROXIES` | `serve` | Comma-separated proxy addresses or networks whose `X-Forwarded-For` is believed for sign-in rate limiting. Name only your proxy, by the address PRKS sees its connections come from (in Compose, its address on a Compose network; a proxy on the host appears as the Docker bridge gateway, not `127.0.0.1`), and make the web port reachable only by it. Anyone who reaches the port from a trusted address can spread sign-in attempts over invented addresses. |
 | `PRKS_SESSION_IDLE_DAYS` | `serve` | Days a session stays valid without use, 1 to 365. Default `30`. |
