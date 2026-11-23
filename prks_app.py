@@ -82,6 +82,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "With --testing only: after you type RESET, permanently delete the testing "
+            "database's PRKS schemas and the testing data root's files, then start on a "
+            "new, empty testing instance."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=None,
@@ -174,6 +183,26 @@ def prepare_identity(args, config, environ=None):
     db = Database(db_config)
     migrate_on_start(db, env, testing=testing)
     return db, settings
+
+
+def reset_testing_instance(config, environ=None):
+    """``--testing --reset-db``: empty the testing database and data root once the person confirms.
+
+    Returns when the instance was reset, so the start that follows applies the
+    schema and bootstraps a new owner; exits 1 when the person cancels and 2
+    on any refusal (``backend.testing_reset``).
+    """
+    from backend.db.config import load_database_config
+    from backend.db.errors import DatabaseConfigError
+    from backend.testing_reset import main_reset
+
+    env = os.environ if environ is None else environ
+    try:
+        conninfo = load_database_config(env, role="web").conninfo
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+    main_reset(conninfo, config.root)
 
 
 def refuse_untested_database(conninfo):
@@ -289,6 +318,12 @@ def refuse_sqlite_catalogue(library_database, bound_root):
         raise SystemExit(2)
 
 
+# The schema refusals that only a new instance fixes (backend.db.migrate).
+RECREATE_REASONS = frozenset(
+    {"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order", "foreign_schema"}
+)
+
+
 def migrate_on_start(db, environ, *, testing=False):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
@@ -318,6 +353,11 @@ def migrate_on_start(db, environ, *, testing=False):
         message = exc.message
         if testing and exc.reason == "database_unavailable":
             message += " For --testing, start the local database with scripts/dev-postgres."
+        if testing and exc.reason in RECREATE_REASONS:
+            message += (
+                " For --testing, run prks_app.py --testing --reset-db to delete this testing "
+                "instance and start on a new, empty one."
+            )
         print(f"PRKS cannot start: {message}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -437,7 +477,10 @@ if __name__ == "__main__":
     refuse_stale_library_backend()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
-    args = build_parser().parse_args(role_argv)
+    parser = build_parser()
+    args = parser.parse_args(role_argv)
+    if args.reset_db and not args.testing:
+        parser.error("--reset-db only resets a testing instance: use it with --testing.")
     if args.testing:
         enter_testing_mode()
 
@@ -460,6 +503,9 @@ if __name__ == "__main__":
         except HttpSettingsError as exc:
             print(f"PRKS cannot start its HTTP server: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
+    if args.reset_db:
+        # Before the schema step, which refuses a changed schema file.
+        reset_testing_instance(config)
     # Authentication settings, the pool and the schema, before the root is
     # touched.
     with startup_phase("startup_identity_config"):
