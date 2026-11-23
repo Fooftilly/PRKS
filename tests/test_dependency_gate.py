@@ -813,9 +813,9 @@ class RemediationMessageTests(unittest.TestCase):
 
     def test_too_old_venv_recommends_new_venv_not_reinstall(self):
         ctx = detect_platform_context(
-            prefix="/tmp/.venv",
+            prefix="/srv/prks/.venv",
             base_prefix="/usr",
-            executable="/tmp/.venv/bin/python",
+            executable="/srv/prks/.venv/bin/python",
             system="Linux",
             environ={},
             externally_managed=False,
@@ -823,7 +823,7 @@ class RemediationMessageTests(unittest.TestCase):
         )
         msg = remediation_message(python_too_old=((3, 12, 3), (3, 14)), ctx=ctx)
         self.assertIn('uv venv --python ">=3.14" .venv', msg)
-        self.assertNotIn("/tmp/.venv/bin/python -m pip install", msg)
+        self.assertNotIn("/srv/prks/.venv/bin/python -m pip install", msg)
         assert_remediation_is_safe(msg)
 
     def test_windows_quotes_paths(self):
