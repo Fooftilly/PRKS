@@ -53,7 +53,7 @@ from backend.db.testing_guard import TestingDatabaseRefused, prove_testing_conne
 from backend.storage import paths
 from backend.storage.errors import StorageRootError
 from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
-from backend.storage.root_binding import check_no_foreign_tree
+from backend.storage.root_binding import check_no_foreign_tree, is_top_level_os_metadata
 from backend.storage.root_marker import (
     CLAIM_LOCK_NAME,
     MAINTENANCE_DIRNAME,
@@ -86,8 +86,13 @@ class ResetRefused(Exception):
 
 @dataclass(frozen=True)
 class Instance:
+    """The instance row; any change (a start, setup finishing) means it is not the one confirmed."""
+
     id: str
     storage_root_id: str
+    setup_state: str
+    start_generation: int
+    start_token: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -132,9 +137,17 @@ def _read_state(conn: psycopg.Connection[Any]) -> DatabaseState:
     instance = None
     row = conn.execute("SELECT to_regclass('prks.instance') IS NOT NULL").fetchone()
     if row and row[0]:
-        found = conn.execute("SELECT id, storage_root_id FROM prks.instance").fetchone()
+        found = conn.execute(
+            "SELECT id, storage_root_id, setup_state, start_generation, start_token FROM prks.instance"
+        ).fetchone()
         if found:
-            instance = Instance(id=str(found[0]), storage_root_id=str(found[1]))
+            instance = Instance(
+                id=str(found[0]),
+                storage_root_id=str(found[1]),
+                setup_state=str(found[2]),
+                start_generation=int(found[3]),
+                start_token=None if found[4] is None else str(found[4]),
+            )
     schemas = tuple(str(name) for (name,) in conn.execute(_SCHEMAS_SQL).fetchall())
     return DatabaseState(instance=instance, schemas=schemas)
 
@@ -277,8 +290,8 @@ def _drop_schemas(plan: ResetPlan) -> None:
                     if _read_state(conn) != plan.database:
                         raise ResetRefused(
                             "database_changed",
-                            "The testing database changed after you confirmed (its PRKS instance or "
-                            "its schemas). Nothing was deleted. Run --reset-db again.",
+                            "The testing database changed after you confirmed (its PRKS instance was "
+                            "started or set up, or its schemas changed). Nothing was deleted. Run --reset-db again.",
                         )
                     for name in plan.database.schemas:
                         conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(name)))
@@ -304,30 +317,69 @@ def _drop_schemas(plan: ResetPlan) -> None:
         ) from None
 
 
-def _remove(path: str, root_dev: int) -> None:
-    """Delete ``path``; never follow a link or descend into another device or a mount point."""
-    st = os.lstat(path)
+_DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+
+
+def _fd_delete_supported() -> bool:
+    return {os.open, os.stat, os.unlink, os.rmdir} <= os.supports_dir_fd and os.scandir in os.supports_fd
+
+
+def _remove_at(dir_fd: int, name: str, path: str, root_dev: int) -> None:
+    """Delete ``name`` inside the open directory ``dir_fd`` (``path`` is for the mount check only).
+
+    Every step is relative to a directory handle that was opened without
+    following links and checked to be the directory that was inspected, so a
+    directory swapped for a link mid-delete is never followed.
+    """
+    st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
     if not stat.S_ISDIR(st.st_mode):
-        os.unlink(path)
+        os.unlink(name, dir_fd=dir_fd)
         return
     if st.st_dev != root_dev or os.path.ismount(path):
         raise OSError(f"{path} is a mount point")
-    for name in os.listdir(path):
-        _remove(os.path.join(path, name), root_dev)
-    os.rmdir(path)
+    fd = os.open(name, _DIR_FLAGS, dir_fd=dir_fd)
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+            raise OSError(f"{path} changed during the reset")
+        with os.scandir(fd) as entries:
+            names = [entry.name for entry in entries]
+        for child in names:
+            _remove_at(fd, child, os.path.join(path, child), root_dev)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=dir_fd)
 
 
 def _empty_root(root_real: str) -> None:
-    """Delete everything in the root except its lock files, which other processes may open."""
-    root_dev = os.stat(root_real).st_dev
-    for entry in os.listdir(root_real):
-        path = os.path.join(root_real, entry)
-        if entry == MAINTENANCE_DIRNAME and os.path.isdir(path) and not os.path.islink(path):
-            for inner in os.listdir(path):
-                if inner not in _LOCK_FILES:
-                    _remove(os.path.join(path, inner), root_dev)
-            continue
-        _remove(path, root_dev)
+    """Delete everything in the root except its lock files and volume metadata (``lost+found``)."""
+    root_fd = os.open(root_real, _DIR_FLAGS)
+    try:
+        root_dev = os.fstat(root_fd).st_dev
+        with os.scandir(root_fd) as entries:
+            names = [entry.name for entry in entries]
+        for name in names:
+            path = os.path.join(root_real, name)
+            if is_top_level_os_metadata(name):
+                continue
+            st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            if name == MAINTENANCE_DIRNAME and stat.S_ISDIR(st.st_mode):
+                inner_fd = os.open(name, _DIR_FLAGS, dir_fd=root_fd)
+                try:
+                    opened = os.fstat(inner_fd)
+                    if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino) or opened.st_dev != root_dev:
+                        raise OSError(f"{path} changed during the reset")
+                    with os.scandir(inner_fd) as entries:
+                        inner_names = [entry.name for entry in entries]
+                    for inner in inner_names:
+                        if inner not in _LOCK_FILES:
+                            _remove_at(inner_fd, inner, os.path.join(path, inner), root_dev)
+                finally:
+                    os.close(inner_fd)
+                continue
+            _remove_at(root_fd, name, path, root_dev)
+    finally:
+        os.close(root_fd)
 
 
 def _lease(root_real: str) -> Optional[ExclusiveFileLock]:
@@ -360,6 +412,12 @@ def _recheck_root(plan: ResetPlan) -> None:
 
 def execute(plan: ResetPlan) -> None:
     """Check the tree, empty the database, then the data root, holding the root's lease throughout."""
+    if not _fd_delete_supported():
+        raise ResetRefused(
+            "unsupported_platform",
+            "--reset-db deletes only through directory handles, which this platform does not offer. "
+            "Nothing was deleted.",
+        )
     _recheck_root(plan)
     lease = _lease(plan.root_real)
     try:

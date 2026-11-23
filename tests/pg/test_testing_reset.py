@@ -280,6 +280,42 @@ class TestingResetTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(empty, "someone.pdf")))
         self.assert_untouched()
 
+    def test_a_start_while_the_prompt_is_open_is_not_dropped(self) -> None:
+        # A testing server started (and stopped) meanwhile bumps the start generation.
+        def start_then_confirm() -> str:
+            with psycopg.connect(self.conninfo, autocommit=True) as conn:
+                conn.execute("UPDATE prks.instance SET start_generation = start_generation + 1")
+            return CONFIRM_WORD
+        with self.assertRaises(ResetRefused) as caught:
+            run(self.conninfo, self.root, stdin=io.StringIO(), stdout=io.StringIO(), read=start_then_confirm)
+        self.assertEqual(caught.exception.reason, "database_changed")
+        self.assert_untouched()
+
+    def test_the_delete_never_follows_a_directory_swapped_for_a_link(self) -> None:
+        outside = tempfile.mkdtemp(prefix="prks-reset-outside-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, ignore_errors=True))
+        with open(os.path.join(outside, "keep.pdf"), "wb") as handle:
+            handle.write(b"%PDF")
+        real_stat = os.stat
+
+        def stat_then_swap(name: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+            result = real_stat(name, *args, **kwargs)
+            if name == "pdfs" and kwargs.get("dir_fd") is not None:
+                os.rename(os.path.join(self.root, "pdfs"), os.path.join(outside, "moved"))
+                os.symlink(outside, os.path.join(self.root, "pdfs"))
+            return result
+        with mock.patch.object(testing_reset.os, "stat", side_effect=stat_then_swap):
+            with self.assertRaises(OSError):
+                testing_reset._empty_root(os.path.realpath(self.root))
+        self.assertTrue(os.path.exists(os.path.join(outside, "keep.pdf")))
+        self.assertTrue(os.path.exists(os.path.join(outside, "moved", "a.pdf")))
+
+    def test_volume_metadata_at_the_top_is_left_alone(self) -> None:
+        os.mkdir(os.path.join(self.root, "lost+found"))
+        self.assertTrue(self.reset(CONFIRM_WORD))
+        self.assertTrue(os.path.isdir(os.path.join(self.root, "lost+found")))
+        self.assertEqual(self.files(), [os.path.join(MAINTENANCE_DIRNAME, ROOT_LOCK_NAME)])
+
     def test_an_unmarked_root_with_files_is_refused(self) -> None:
         os.unlink(marker_path(self.root))
         with self.assertRaises(ResetRefused) as caught:
