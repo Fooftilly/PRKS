@@ -181,6 +181,48 @@ class AppTests(unittest.TestCase):
         self.assertRegex(text, r"PRKS_STORAGE +" + re.escape(os.path.abspath(chosen)) + r" +\(selected by cli\)")
         self.assertNotIn("/srv/library-a", text)
 
+    def test_config_check_probes_a_certificate_with_its_key(self) -> None:
+        from tests.tls_certificate import self_signed
+
+        with tempfile.TemporaryDirectory() as directory:
+            cert, key = self_signed(directory)
+            base = {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks"}
+            code, text = self.run_check({**base, "PRKS_TLS_CERT_FILE": cert, "PRKS_TLS_KEY_FILE": key})
+            self.assertEqual(code, 0, text)
+            code, text = self.run_check({**base, "PRKS_TLS_CERT_FILE": cert})
+        self.assertEqual(code, 2)
+        self.assertEqual(text.count("problem: "), 1, text)
+        self.assertIn("must be set together", text)
+        self.assertRegex(text, r"PRKS_TLS_CERT_FILE +\(invalid\)")
+
+    def test_config_check_keeps_the_storage_precedence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            malformed = os.path.join(directory, "config.json")
+            Path(malformed).write_text("{not json", encoding="utf-8")
+            base = {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_CONFIG_FILE": malformed}
+            code, text = self.run_check({**base, "PRKS_STORAGE": directory})
+            self.assertEqual(code, 0, text)  # PRKS_STORAGE wins; the bootstrap file is never read
+            code, text = self.run_check(base)
+        self.assertEqual(code, 2)
+        self.assertIn("bootstrap configuration file is not usable", text)
+
+    def test_config_check_never_echoes_a_value_another_problem_hides(self) -> None:
+        # Loopback-owner on a public address stops the auth parser before it
+        # reads PRKS_TRUSTED_PROXIES, so that value is not checked, not shown.
+        code, text = self.run_check(
+            {"PRKS_TRUSTED_PROXIES": "hunter9"}, "--testing", "--host", "0.0.0.0",
+        )
+        self.assertEqual(code, 2)
+        self.assertNotIn("hunter9", text)
+        self.assertRegex(text, r"PRKS_TRUSTED_PROXIES +\(not checked\)")
+        code, text = self.run_check(
+            {"PRKS_TRUSTED_PROXIES": "hunter9", "PRKS_AUTH": "session"}, "--testing", "--host", "0.0.0.0",
+        )
+        self.assertEqual(code, 2)
+        self.assertNotIn("hunter9", text)
+        self.assertIn("problem: PRKS_TRUSTED_PROXIES", text)
+        self.assertRegex(text, r"PRKS_TRUSTED_PROXIES +\(invalid\)")
+
     def test_log_levels_accept_the_logging_aliases(self) -> None:
         for name in ("warn", "FATAL", "NOTSET", "Warning"):
             with self.subTest(name=name):
