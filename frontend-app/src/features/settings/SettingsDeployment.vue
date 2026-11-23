@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import { deploymentSettingsErrorMessage, getDeploymentSettings } from '../../api/deployment-settings'
 import PrksButton from '../../components/PrksButton.vue'
@@ -21,6 +21,12 @@ const query = useQuery({
   refetchOnWindowFocus: false,
   retry: false,
   queryFn: ({ signal }) => getDeploymentSettings(signal),
+})
+
+// The panel stays mounted while other categories show, and the host may have
+// restarted PRKS with new values since: read again each time it reopens.
+watch(settingsActiveCategory, (now, before) => {
+  if (now === 'deployment' && before !== 'deployment' && query.data.value) void query.refetch()
 })
 
 const settings = computed(() => query.data.value?.settings ?? [])

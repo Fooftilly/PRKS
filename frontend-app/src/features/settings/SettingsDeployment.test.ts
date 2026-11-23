@@ -79,4 +79,27 @@ describe('SettingsDeployment', () => {
     expect(() => parseDeploymentSettings({ ...BODY, editable_in_browser: true })).toThrow()
     expect(() => parseDeploymentSettings({ settings: [{ ...BODY.settings[0], source: 'browser' }], editable_in_browser: false })).toThrow()
   })
+
+  it('reads again when the category reopens, so a restart with new values shows', async () => {
+    const after = { ...BODY, settings: [{ ...BODY.settings[0], value: '4' }, ...BODY.settings.slice(1)] }
+    let body: unknown = BODY
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    activateSettingsCategory('deployment')
+    const wrapper = mountPanel()
+    await flushPromises()
+    const threads = () => wrapper.get('[data-prks-setting="PRKS_HTTP_THREADS"] .prks-deployment-list__value').text()
+    expect(threads()).toBe('8')
+    activateSettingsCategory('diagnostics')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    body = after
+    activateSettingsCategory('deployment')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(threads()).toBe('4')
+  })
 })
