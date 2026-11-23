@@ -111,6 +111,8 @@ ROWS: tuple[Row, ...] = (
     Row("maintenance", ADMIN, "GET", "/api/backups/download", allowed=(404,)),
     # The stage route takes the archive as the raw body; a JSON body is refused after admission.
     Row("maintenance", ADMIN, "POST", "/api/backups/stage", {}, allowed=(415,)),
+    # How this PRKS is deployed, read-only (#612): the owner only.
+    Row("deployment", ADMIN, "GET", "/api/deployment-settings"),
     # An empty envelope is the protocol's own refusal, after admission.
     Row("session", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
 )
@@ -119,7 +121,7 @@ _NOT_FAMILIES = frozenset({"__init__"})
 # Families with no mutating route.
 # Families with no mutating route. A saved remote image is written only by a
 # read (``GET /api/remote-images`` fills it, as the portrait route does).
-_READ_ONLY = frozenset({"search", "remote_images"})
+_READ_ONLY = frozenset({"search", "remote_images", "deployment"})
 
 
 class AuthorizationMatrixTests(HttpAuthTestCase):
