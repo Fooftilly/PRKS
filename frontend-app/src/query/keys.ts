@@ -26,6 +26,10 @@ export const prksQueryKeys = {
     all: () => ['publishers'] as const,
     inUse: () => ['publishers', 'in-use'] as const,
   },
+  storageStatus: {
+    all: () => ['storage-status'] as const,
+    status: () => ['storage-status', 'status'] as const,
+  },
   savedViews: {
     all: () => ['saved-views'] as const,
     list: () => ['saved-views', 'list'] as const,

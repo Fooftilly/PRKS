@@ -14,6 +14,14 @@ from backend.api_contract.citations import (
     CitationsRequest,
 )
 from backend.api_contract.deployment import DeploymentSetting, DeploymentSettings
+from backend.api_contract.storage import (
+    StorageDatabase,
+    StorageFilesystem,
+    StorageIdentity,
+    StorageObjects,
+    StorageRoot,
+    StorageStatus,
+)
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.jobs import (
     EmbeddedJobWorker,
@@ -513,6 +521,65 @@ def deployment_settings_openapi_document() -> dict[str, Any]:
             "description": (
                 "Vertical-slice OpenAPI for the deployment settings Settings shows (#612). "
                 "Read-only: deployment values are set on the host and need a restart."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+STORAGE_STATUS_CONTRACT_VERSION = "0.1.0"
+
+
+def storage_status_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the owner's storage status (storage-architecture §11.1, #720)."""
+    schemas: dict[str, Any] = {}
+    for model in (StorageRoot, StorageIdentity, StorageFilesystem, StorageObjects, StorageDatabase, StorageStatus):
+        _merge_defs(schemas, _schema(model))
+
+    paths: dict[str, Any] = {
+        "/api/storage-status": {
+            "get": {
+                "operationId": "getStorageStatus",
+                "summary": "Storage status, read-only",
+                "tags": ["settings"],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "Where the Library's files are, the source that chose that place, the root "
+                            "marker's identity, filesystem facts, object counts and the paired database. "
+                            "Carries host paths, so it is sent Cache-Control: no-store."
+                        ),
+                        "headers": {
+                            "Cache-Control": {
+                                "description": "Always no-store.",
+                                "schema": {"type": "string", "const": "no-store"},
+                            }
+                        },
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/StorageStatus"}
+                            }
+                        },
+                    },
+                    "401": {"description": "No live session (not_authenticated)."},
+                    "403": {"description": "The session's role is not the Library owner."},
+                    "503": {"description": "Storage is not bound (unavailable)."},
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Storage status slice",
+            "version": STORAGE_STATUS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the storage status Settings shows (#720). Read-only: "
+                "under PostgreSQL the data root is paired with the database and changes only on the host."
             ),
         },
         "paths": paths,

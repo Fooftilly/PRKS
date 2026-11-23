@@ -1,0 +1,398 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Storage status slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the storage status Settings shows (#720). Read-only: under PostgreSQL the data root is paired with the database and changes only on the host."
+  },
+  "paths": {
+    "/api/storage-status": {
+      "get": {
+        "operationId": "getStorageStatus",
+        "summary": "Storage status, read-only",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the Library's files are, the source that chose that place, the root marker's identity, filesystem facts, object counts and the paired database. Carries host paths, so it is sent Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's role is not the Library owner."
+          },
+          "503": {
+            "description": "Storage is not bound (unavailable)."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StorageRoot": {
+        "additionalProperties": false,
+        "description": "Where the Library's files are, and what chose that place.",
+        "properties": {
+          "configured": {
+            "description": "The root as it was configured, before links were resolved.",
+            "title": "Configured",
+            "type": "string"
+          },
+          "resolved": {
+            "description": "The directory PRKS uses: the configured root with links resolved.",
+            "title": "Resolved",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cli",
+                  "env",
+                  "config_file",
+                  "platform_default",
+                  "development_default"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which setting selected the root (storage-architecture \u00a75.2); null for a test binding.",
+            "title": "Source"
+          },
+          "editable_in_app": {
+            "const": false,
+            "description": "Always false: the root is paired with the database, so it changes only on the host, with a storage move or a new installation and a Library restore.",
+            "title": "Editable In App",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "resolved",
+          "source",
+          "editable_in_app"
+        ],
+        "type": "object"
+      },
+      "StorageIdentity": {
+        "additionalProperties": false,
+        "description": "The root marker (prks-root.json) as it is now.",
+        "properties": {
+          "storage_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SR- plus 32 hex; null when the marker cannot be read.",
+            "title": "Storage Root Id"
+          },
+          "layout_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Version"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The marker state; active for a served root.",
+            "title": "State"
+          },
+          "relocation_state": {
+            "description": "none, or the phase of a storage move the marker records (unknown when it names none).",
+            "title": "Relocation State",
+            "type": "string"
+          },
+          "backend_type": {
+            "const": "local",
+            "title": "Backend Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "storage_root_id",
+          "layout_version",
+          "state",
+          "relocation_state",
+          "backend_type"
+        ],
+        "type": "object"
+      },
+      "StorageFilesystem": {
+        "additionalProperties": false,
+        "description": "Facts about the filesystem that holds the root, measured, not assumed.",
+        "properties": {
+          "free_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "total_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Bytes"
+          },
+          "filesystem_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The type the platform reports, such as ext4 or apfs.",
+            "title": "Filesystem Type"
+          },
+          "network": {
+            "description": "Whether the type is known to be a network mount (\u00a77.4); FUSE types are uncertain.",
+            "enum": [
+              "local",
+              "network",
+              "uncertain",
+              "unknown"
+            ],
+            "title": "Network",
+            "type": "string"
+          },
+          "case_sensitive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Measured with probe files; null when not measured.",
+            "title": "Case Sensitive"
+          },
+          "normalization": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preserved",
+                  "insensitive",
+                  "normalized"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unicode names: preserved (NFC and NFD are two names), insensitive (either finds the other), normalized (the filesystem rewrites names). Null when not measured.",
+            "title": "Normalization"
+          },
+          "directory_fsync": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether directory fsync works here, as the root's first probe recorded it.",
+            "title": "Directory Fsync"
+          }
+        },
+        "required": [
+          "free_bytes",
+          "total_bytes",
+          "filesystem_type",
+          "network",
+          "case_sensitive",
+          "normalization",
+          "directory_fsync"
+        ],
+        "type": "object"
+      },
+      "StorageObjects": {
+        "additionalProperties": false,
+        "description": "Counts across the instance; never key names.",
+        "properties": {
+          "referenced": {
+            "description": "Objects the catalogue names.",
+            "minimum": 0,
+            "title": "Referenced",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Named objects the data root does not have.",
+            "minimum": 0,
+            "title": "Missing",
+            "type": "integer"
+          },
+          "pending_cleanup": {
+            "description": "Released objects waiting for cleanup.",
+            "minimum": 0,
+            "title": "Pending Cleanup",
+            "type": "integer"
+          },
+          "orphans": {
+            "description": "Objects nothing ever named, found by the orphan sweep, waiting for cleanup.",
+            "minimum": 0,
+            "title": "Orphans",
+            "type": "integer"
+          },
+          "held": {
+            "description": "Objects a restore keeps; never removed automatically.",
+            "minimum": 0,
+            "title": "Held",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "referenced",
+          "missing",
+          "pending_cleanup",
+          "orphans",
+          "held"
+        ],
+        "type": "object"
+      },
+      "StorageDatabase": {
+        "additionalProperties": false,
+        "description": "The database half of the Library (storage-architecture \u00a79.2), read-only.",
+        "properties": {
+          "engine": {
+            "const": "PostgreSQL",
+            "title": "Engine",
+            "type": "string"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Host name or address; 'local socket' for a Unix socket.",
+            "title": "Host"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The database name.",
+            "title": "Name"
+          }
+        },
+        "required": [
+          "engine",
+          "host",
+          "port",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StorageStatus": {
+        "additionalProperties": false,
+        "description": "GET /api/storage-status body (Library owner only, never cached).",
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/StorageRoot"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/StorageIdentity"
+          },
+          "filesystem": {
+            "$ref": "#/components/schemas/StorageFilesystem"
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageObjects"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the counts could not be read (the database or the store was unavailable)."
+          },
+          "database": {
+            "$ref": "#/components/schemas/StorageDatabase"
+          }
+        },
+        "required": [
+          "root",
+          "identity",
+          "filesystem",
+          "objects",
+          "database"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}

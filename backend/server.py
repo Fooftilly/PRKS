@@ -42,6 +42,7 @@ from backend.api import remote_images as remote_images_api
 from backend.api import search as search_api
 from backend.api import publishers as publishers_api
 from backend.api import deployment as deployment_api
+from backend.api import storage as storage_api
 from backend.api import settings as settings_api
 from backend.api import citation_styles as citation_styles_api
 from backend.api import tags as tags_api
@@ -52,6 +53,7 @@ from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import (
     citations_openapi_document,
     deployment_settings_openapi_document,
+    storage_status_openapi_document,
     job_diagnostics_openapi_document,
     performance_diagnostics_openapi_document,
     positions_openapi_document,
@@ -1482,6 +1484,8 @@ class PRKSHandler(HttpHandlerBase):
                 self, path, root_source=_bound_storage.root_source if _bound_storage is not None else None
             ):
                 return
+            elif storage_api.handle_get(self, path, config=_bound_storage, library=db):
+                return
             elif works_api.handle_catalog(self, db, path, query):
                 return
             elif playlists_api.handle_get(self, db, path):
@@ -1721,6 +1725,8 @@ class PRKSHandler(HttpHandlerBase):
                 self.send_json(200, performance_diagnostics_openapi_document())
             elif path == '/api/openapi/deployment-settings.json':
                 self.send_json(200, deployment_settings_openapi_document())
+            elif path == '/api/openapi/storage-status.json':
+                self.send_json(200, storage_status_openapi_document())
             elif path == '/api/openapi/job-diagnostics.json':
                 self.send_json(200, job_diagnostics_openapi_document())
             elif path == '/api/openapi/publishers.json':

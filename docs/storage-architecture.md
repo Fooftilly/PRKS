@@ -609,6 +609,32 @@ and V14. In practice:
 | **Open another library** (rebind) | config → another existing, active, marker-bearing root | no | same, with a confirmation that names it a different library; with PostgreSQL, only if the database pairing matches (§9) |
 | **Move this library** (relocate) | canonical bytes are copied to a new root, then config → new root | yes | same; for `cli`/`env` sources, only through the offline CLI (§8.7) |
 
+**PostgreSQL scope (#720, decided 2026-11-23 from discussion #738).** PRKS
+runs only on PostgreSQL, and the database is paired with exactly one root
+(`docs/postgresql-architecture.md` §11.1). That narrows this section:
+
+- **Choose** exists only before setup claims the root. Once the instance row
+  names a `storage_root_id`, no other root passes the start check, so a
+  running instance has nothing to choose. Before the claim, choosing writes
+  the bootstrap config through the guarded compare-and-set and takes effect
+  at the next start; it never rebinds a running process.
+- **Open another library** is refused under PostgreSQL. Only a copy of this
+  root could pass the start check, and switching to a copy is a relocation
+  without §8.2's P2 fence and P4 verification, which leaves two usable copies
+  of one library (risk R20). The refusal points to a storage move (Phase E,
+  #721) or to a new installation and a format-2 Library restore. Extra
+  Libraries are rows inside the instance, not separate folders.
+- **No hot rebind.** The reference Compose deployment always runs `web` and
+  `worker` as separate processes holding `root.lock` shared, so a hot
+  rebind could only ever refuse there, and the single-process install gains
+  nothing a restart does not give. Roots change only at a restart. The
+  transaction below stays the specification for any future single-process
+  rebind; the two-process race and mixed-binding proofs become refusal
+  tests: a second process can never serve a root the committed config does
+  not name.
+
+The rest of this subsection describes the pre-PostgreSQL design.
+
 **Hot rebind (choose, open another library).** When a library is already
 bound, both commands rebind the running process, so they need the same
 protection as relocation's P6. Each is one request, classified at request
@@ -1286,7 +1312,9 @@ managed bytes** goes through the abstraction.
 
 ### 11.1 Storage status (diagnostics contract)
 
-The storage status is shown to the authenticated owner only:
+The storage status is shown to the authenticated owner only. It is
+implemented as `GET /api/storage-status` (`backend/api/storage.py`, contract
+`docs/api/openapi-storage-status.json`) and Settings → Storage (#720):
 
 - the effective root: the configured spelling and the resolved path;
 - the source (`cli`, `env`, `config_file`, `platform_default`,
@@ -1420,7 +1448,7 @@ with no change in behavior unless stated.
 | **A. Contract and foundation** | The root resolver with §5.2 precedence and `(root, source)`; `--storage-root`; normalization (V1); the platform-default table (§6) behind the distribution flag, so a source checkout still gets `data/`; the bootstrap config reader and its guarded compare-and-set writer (§5.1: config lock, re-read, expected-state check, atomic replace; no UI writes yet); the root marker (adopt on first bind, refuse wrong, retired or foreign roots); startup validation (§7.2, startup subset); the single-process lease; `StorageKey`, `ObjectInfo`, `StorageBackend`, `LocalFilesystemStorage` over the existing primitives, with contract tests shared by any future backend; `backup_storage_inventory` classification of the marker and config (operational, not backed up). **Behavior identical for every existing deployment**: the only new files are the marker and the lease file `.prks-maintenance/root.lock`. | no | no | no | nothing (implemented; §18) |
 | **B. Route managed files through the backend** | Managed PDF create, replace, COW, adoption, cleanup and linearization; portraits; import; backup enumeration; locks keyed by `StorageKey`; `processing_files.abs_path` derived from `rel_path` (the column is left unused). Behavior is preserved and proven by the existing managed-PDF, cleanup and backup tests unchanged. | no (dropping `abs_path` is a later migration) | no | no | A |
 | **C. Asset identity coordination** | #60 Slice D lands on Phase B operations: `assets` locators are authoritative keys; the fingerprint pass uses `stat` and `verify`; the text-index fingerprint moves to `content_sha256`/`content_generation`; Slice G serves `/api/assets/{id}/content`. | #60's migrations | #60's typed API | no | **#60 Slice C/D** and B |
-| **D. Selectable root and diagnostics** | Backend: storage status (§11.1), "choose" and "open another library" commands writing the bootstrap config, with the full §7.2 validation, and hot-rebinding under the admission-time relocation mode and rebind barrier (§8.1), with the whole rebind held as one transaction under the config lock, a test that no in-flight read observes a mixed binding, a two-process hot-rebind race test, and a test that opening an existing library leaves its `storage_root_id` unchanged; typed API with OpenAPI (#45 pattern). Then the Settings → Storage UI, per `DESIGN.md`. The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4). Retire the `/data/for_processing` special case with the discovery rule and release note in §1.2. | no | **yes** | **yes** | A; #46 (packaged default and "Open folder") |
+| **D. Selectable root and diagnostics** | **PostgreSQL scope (§8.1, #738).** Storage status (§11.1, implemented: `GET /api/storage-status` and Settings → Storage, owner only, `no-store`, counts only); "choose" only before setup claims the root, as a guarded bootstrap-config write that takes effect at the next start, with the full §7.2 validation; "open another library" refused with a pointer to Phase E or a Library restore; no hot rebind, and refusal tests that no process serves a root the committed config does not name; typed API with OpenAPI (#45 pattern). The packaged platform default is activated by #46 packaging. The optional `cache_root` for derived data (§7.4) stays open (§16). The `/data/for_processing` special case is retired (`PRKS_FOR_PROCESSING_DIR` is refused, PG-C2 #641). | no | **yes** | **yes** | A; #46 (packaged default and "Open folder") |
 | **E. Relocation** | The §8 protocol: P0–P10 plus startup recovery, with the P2 source fence as the revocation mechanism; the offline `storage relocate`/`finalize`/`abort`/`verify` CLI first, then the in-app "Move library…". Crash tests at every phase boundary, as the restore suite already does. That includes the boundary between P1's config write and its destination-marker write, and the offline P1-only staging state, a crash during P0 that leaves a preflight scaffold, and resuming the same `relocation_id` through P0, and two concurrent offline `relocate` commands with different destinations, where the loser must refuse before writing any P1 marker. A gate-level test proves the in-app move route is classified at admission as backup mode (or the equivalent relocation mode), that reads continue while it runs, that mutations and backups wait, and that the move request itself does not deadlock. A config race test starts **open another library** immediately after P6 while P7 and P9 are delayed, and proves that the selection is refused while the move is unresolved. It also forces a stale P7/P9 write after a newer selection has been recorded, and proves the guarded compare-and-set leaves that newer selection intact. An inbox test adds, modifies and deletes source inbox files during P3, including a same-size in-place rewrite with a preserved `st_mtime_ns`, a rewrite during hashing, and an atomic replace or rename over the pathname while its old handle is being hashed, and proves the final pass converges on exactly the source bytes. An offline test crashes `relocate` after the P2 fence and before P4, and proves `finalize` refuses the unverified destination whether or not the source is reachable. Offline tests also cover an `abort` that crashes between unfencing the source and discarding the destination, proving a rerun finishes the discard, and a start after a P1-only crash that selects the source, proving it binds normally while the `staging` destination stays refused. Further offline tests cover `abort --to` after a P1-only crash and after unfencing, a P10 test with a post-P4 inbox file that proves the marker and config record survive until that file is imported or discarded, and that `open another library` and a new move are both refused while P10 is stopped on it; an offline variant sets `moved_from.residuals` on a CLI-selected root and proves `storage relocate` refuses and that no marker write drops the flag until the teardown completes, and Windows tests of the §12 terminal teardown for offline `abort`, P10 and one in-app discard path, asserting that the lock is released only after the marker is terminal and that a crash after the release leaves a state a rerun finishes. A second gate test holds an in-flight read across P6 and proves it finishes before the rebind barrier is granted, that reads arriving during P6 wait until it is released, and that no read observes a mixed binding; the same holds for revert's rebinds. | no | yes (move command, progress) | yes | B (for derived `abs_path`, or reuse the restore rewrite), D. **Not** #60. |
 | **F. Object storage (optional)** | An S3-compatible backend passing the shared contract tests; restore and backup for it; immutable-object mode (§10.4). **Only when a deployment needs it.** | possibly a `storage_backend` column (#60) | config only | no | C, and in practice the PostgreSQL migration (#310) |
 
@@ -1431,12 +1459,13 @@ with no change in behavior unless stated.
 
 Each item belongs to the phase named in §13 (mostly D and E).
 
-- Every Settings UI: Storage panel, root display, choose, open another
-  library, move, retained-copy cleanup, and warnings.
+- Settings UI: the Storage panel and its root display and warnings are
+  implemented (#720). Under PostgreSQL there is no in-app choose or open
+  another library (§8.1); move and retained-copy cleanup are Phase E.
 - "Open data folder" (it also needs #46 desktop packaging).
 - Relocation progress UI and the failed or retained notices.
-- The OpenAPI entries for storage status and commands. They are designed with
-  #45 when Phase D starts.
+- The OpenAPI entries for storage commands (Phase E). The storage status
+  entry is `docs/api/openapi-storage-status.json`.
 
 ---
 
