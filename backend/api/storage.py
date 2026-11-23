@@ -14,7 +14,6 @@ PostgreSQL the root is paired with the database (postgresql-architecture
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Optional
 
@@ -23,8 +22,16 @@ PATH = "/api/storage-status"
 LOGGER = logging.getLogger("prks.storage")
 
 
+_SERVER_LOCATOR = """
+SELECT host(inet_server_addr()) AS host, inet_server_port() AS port, current_database() AS name
+"""
+
+
 def database_summary(conninfo: Optional[str]) -> dict[str, Any]:
-    """Host, port and database name of ``conninfo``; never the user or the password."""
+    """Host, port and database name of ``conninfo``; never the user or the password.
+
+    The fallback when the server cannot be asked (``live_database_summary``).
+    """
     host = port = name = None
     if conninfo:
         try:
@@ -40,6 +47,30 @@ def database_summary(conninfo: Optional[str]) -> dict[str, Any]:
         port = str(raw_port) if raw_port else None
         raw_name = parts.get("dbname")
         name = raw_name if isinstance(raw_name, str) and raw_name else None
+    return {"engine": "PostgreSQL", "host": host, "port": port, "name": name}
+
+
+def live_database_summary(database: Any, conninfo: Optional[str]) -> dict[str, Any]:
+    """Where the pool is connected, as the server reports it.
+
+    libpq fills omitted options (a hostless URL means the local socket), so
+    the server's answer names the database the configuration alone may not.
+    A Unix socket has no server address: it reads ``local socket``. Falls
+    back to the configuration when the server cannot be asked.
+    """
+    fallback = database_summary(conninfo)
+    if database is None:
+        return fallback
+    try:
+        row = database.query(lambda tx: tx.execute(_SERVER_LOCATOR).fetchone())
+    except Exception:
+        LOGGER.warning("storage_status_database_locator_unavailable")
+        return fallback
+    if row is None:
+        return fallback
+    host = row["host"] if isinstance(row["host"], str) and row["host"] else "local socket"
+    port = str(row["port"]) if row["port"] is not None else fallback["port"]
+    name = row["name"] if isinstance(row["name"], str) and row["name"] else fallback["name"]
     return {"engine": "PostgreSQL", "host": host, "port": port, "name": name}
 
 
@@ -103,23 +134,11 @@ def body(
             "directory_fsync": fs.directory_fsync,
         },
         "objects": objects,
-        "database": database_summary(conninfo),
+        "database": live_database_summary(database, conninfo),
     }
     result = dump_response(StorageStatus, payload)
     assert isinstance(result, dict)
     return result
-
-
-def _send_no_store(handler: Any, status: int, payload: dict[str, Any]) -> None:
-    data = json.dumps(payload).encode("utf-8")
-    handler.send_response(status)
-    handler.send_header("Content-Type", "application/json; charset=utf-8")
-    # The body names host paths: no browser, proxy or service worker keeps it.
-    handler.send_header("Cache-Control", "no-store")
-    handler.send_header("Content-Length", str(len(data)))
-    handler.end_headers()
-    if (getattr(handler, "command", "") or "").upper() != "HEAD":
-        handler.wfile.write(data)
 
 
 def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
@@ -142,8 +161,8 @@ def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
     conninfo = None
     if database is not None:
         conninfo = getattr(getattr(database, "config", None), "conninfo", None)
-    _send_no_store(
-        handler,
+    # The body names host paths: no browser, proxy or service worker keeps it.
+    handler.send_json(
         200,
         body(
             configured_root=configured,
@@ -154,5 +173,6 @@ def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
             storage=root_storage(resolved) if database is not None else None,
             conninfo=conninfo,
         ),
+        cache_control="no-store",
     )
     return True

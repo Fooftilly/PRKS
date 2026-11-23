@@ -37,7 +37,8 @@ watch(settingsOpenCount, () => {
   if (settingsActiveCategory.value === 'storage' && readBefore()) void query.refetch()
 })
 
-const status = computed(() => query.data.value ?? null)
+// A failed read hides the last answer too: it may belong to another session.
+const status = computed(() => (query.error.value ? null : (query.data.value ?? null)))
 const rows = computed(() => (status.value ? storageRows(status.value) : null))
 const freeSpace = computed(() => {
   const fs = status.value?.filesystem

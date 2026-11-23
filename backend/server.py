@@ -2257,7 +2257,7 @@ class PRKSHandler(HttpHandlerBase):
 
 
 
-    def send_json(self, status, context, etag=None, precondition_checked=False):
+    def send_json(self, status, context, etag=None, precondition_checked=False, cache_control=None):
         if etag and status == 200 and not precondition_checked and self._prks_if_none_match(etag):
             self._send_json_not_modified(etag)
             return
@@ -2284,7 +2284,9 @@ class PRKSHandler(HttpHandlerBase):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         if etag and status == 200:
             self.send_header("ETag", etag)
-            self.send_header("Cache-Control", "private, no-cache")
+            self.send_header("Cache-Control", cache_control or "private, no-cache")
+        elif cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         if use_gzip:

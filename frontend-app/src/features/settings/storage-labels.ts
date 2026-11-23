@@ -56,7 +56,8 @@ function yesNo(value: boolean | null, yes: string, no: string): string {
 
 function databaseText(status: StorageStatus): string {
   const { host, port, name } = status.database
-  const where = [host ? (port ? `${host}:${port}` : host) : null, name].filter(Boolean).join('/')
+  const server = host ? (port ? `${host}:${port}` : host) : port ? `port ${port}` : null
+  const where = [server, name].filter(Boolean).join('/')
   return where ? `PostgreSQL · ${where}` : 'PostgreSQL'
 }
 
