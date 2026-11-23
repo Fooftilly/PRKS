@@ -298,7 +298,7 @@ class StagingTests(StagingTestCase):
         # bytes R0 hashed are not still buffered when staging reads works.csv
         # again. Python 3.14 sizes that buffer max(min(st_blksize, 8 MiB),
         # io.DEFAULT_BUFFER_SIZE): 128 KiB by default, more on some filesystems.
-        blksize = os.stat(self.out).st_blksize
+        blksize = getattr(os.stat(self.out), "st_blksize", 0)  # absent on Windows
         buffer = max(min(blksize, 8 * 1024 * 1024), io.DEFAULT_BUFFER_SIZE)
         self.create(self.put(b"%PDF in place " + os.urandom(2 * buffer)))
         result = self.backup()
