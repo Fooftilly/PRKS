@@ -70,6 +70,8 @@ describe('SetupApp', () => {
     // Defaults shown on the review: display name is the login, Library is "Library".
     expect(wrapper.get('.prks-setup__review').text()).toContain('alice')
     expect(wrapper.get('.prks-setup__review').text()).toContain('Library')
+    // The one backup choice: where to make one, since PRKS does not back up on its own.
+    expect(wrapper.text()).toContain('Settings → Backup → Download backup saves a backup file')
     expect(posts).toEqual([])
     await wrapper.get('form').trigger('submit')
     await flushPromises()

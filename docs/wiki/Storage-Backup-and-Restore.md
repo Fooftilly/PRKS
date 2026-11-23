@@ -14,7 +14,7 @@ For the full path/environment-variable reference, see [Configuration and Operati
 
 ## Backup and restore
 
-Use **Settings → Backup & restore → Download backup**. That is the supported way to preserve a PRKS library.
+Use **Settings → Backup → Download backup**. That is the supported way to preserve a PRKS library.
 
 A verified `.prks-backup` archive (format 2) holds one Library:
 
@@ -24,7 +24,7 @@ A verified `.prks-backup` archive (format 2) holds one Library:
 
 It does **not** include thumbnails, the derived search and research-reference rows, logs, or temporary maintenance files. After a restore those are rebuilt in the background.
 
-`.prks-backup` files hold private research data. Store them as carefully as the live library. The archive is ZIP-based, but restore it through PRKS (**Settings → Backup & restore**) rather than unzipping it into `/data` by hand.
+`.prks-backup` files hold private research data. Store them as carefully as the live library. The archive is ZIP-based, but restore it through PRKS (**Settings → Backup**) rather than unzipping it into `/data` by hand.
 
 Restore uploads the archive, verifies its structure, hashes, and schema compatibility, and stages its rows and objects, then asks you to type `RESTORE` before replacing the current Library. A malformed or corrupt backup cannot change live data. The replacement is one database transaction: if restore stops before it commits, the previous Library stays as it was.
 

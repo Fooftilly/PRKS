@@ -167,6 +167,8 @@ DEFAULT_E2E_MODULES = (
     # PG-C1 flows: restore through Settings, the Processing upload queue, the
     # Research-ACK fence.
     "tests.e2e.test_postgres_library_flows",
+    # First-run setup in the browser (#612).
+    "tests.e2e.test_first_run",
 )
 
 # Release-transition checks manipulate two distribution versions at one origin.

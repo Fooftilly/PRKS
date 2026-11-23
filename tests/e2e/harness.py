@@ -41,7 +41,7 @@ from tests.e2e.policy import (
     env_flag_enabled,
 )
 from tests.e2e import coverage_map
-from tests.e2e.postgres_identity import provision_library, seed_postgres_library
+from tests.e2e.postgres_identity import provision_library, provision_unconfigured, seed_postgres_library
 from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1092,7 +1092,7 @@ class PageCollector:
 class AppServer:
     """One PRKS subprocess + temp storage. Seed before start()."""
 
-    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=()):
+    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=(), first_run=False):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
         # The storage root is a fresh, empty child directory so PRKS treats it
         # as a new root (storage-architecture §7.1); server output lives beside
@@ -1122,11 +1122,19 @@ class AppServer:
         self._library_store = None
         self._auth = auth
         self._members = tuple(members)
+        # `first_run=True`: a database with no instance, so the server starts
+        # in browser setup (#612) and is ready once /api/setup answers.
+        self._first_run = bool(first_run)
+        if self._first_run and (seed_fn is not None or auth is not None or members):
+            raise ValueError("a first-run server has no seed, auth mode or members: setup creates the owner")
 
     def start(self):
         # The test this server belongs to, for the coverage map: its
         # background teardown finishes while the next test is running.
         self._owner_test_id = get_e2e_heartbeat().get("test_id") or ""
+        if self.library is None and self._first_run:
+            with profile_e2e_phase("postgres_provision"):
+                self.library = provision_unconfigured(self.storage_root)
         if self.library is None:
             try:
                 kwargs: dict[str, Any] = {"members": self._members}
@@ -1172,7 +1180,7 @@ class AppServer:
             # Do not sample extra clocks during ordinary (unprofiled) E2E.
             spawned = time.perf_counter() if profiled else None
             try:
-                wait_http(self.origin + "/api/works")
+                wait_http(self.origin + ("/api/setup" if self._first_run else "/api/works"))
             except Exception:
                 # Keep failed/retried probes separate from the successful
                 # attempt's inclusive server_start and its two detail phases.
