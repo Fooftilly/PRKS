@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from typing import Any
+from unittest import mock
 
 import psycopg
 from psycopg import sql
@@ -30,11 +31,13 @@ from backend.storage.root_marker import (
     marker_path,
     new_marker_document,
 )
-from backend.testing_reset import CONFIRM_WORD, ResetRefused, run, warning_text, plan_reset
+from backend import testing_reset
+from backend.testing_reset import CONFIRM_WORD, ResetRefused, plan_reset, run, warning_text
 from tests.pg.harness import get_harness
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _INSTANCE_ID = "IN-" + "A" * 32
+_ROOT_ID = "SR-" + "a" * 32
 
 
 class TestingResetTests(unittest.TestCase):
@@ -57,8 +60,8 @@ class TestingResetTests(unittest.TestCase):
         with psycopg.connect(self.conninfo, autocommit=True) as conn:
             conn.execute(
                 "INSERT INTO prks.instance (id, storage_root_id, setup_state, testing, start_generation, "
-                "start_token) VALUES (%s, 'SR-' || repeat('a', 32), 'ready', %s, 1, %s)",
-                (_INSTANCE_ID, testing, "b" * 32),
+                "start_token) VALUES (%s, %s, 'ready', %s, 1, %s)",
+                (_INSTANCE_ID, _ROOT_ID, testing, "b" * 32),
             )
             # A stale restore staging schema is dropped too.
             conn.execute("CREATE SCHEMA restore_" + "c" * 32)
@@ -71,7 +74,9 @@ class TestingResetTests(unittest.TestCase):
         with open(os.path.join(self.root, MAINTENANCE_DIRNAME, "stale-job.json"), "w") as handle:
             handle.write("{}")
         document: dict[str, Any] = new_marker_document()
-        document.update(instance_id=_INSTANCE_ID, start_generation=1, start_token="b" * 32)
+        document.update(
+            storage_root_id=_ROOT_ID, instance_id=_INSTANCE_ID, start_generation=1, start_token="b" * 32
+        )
         with open(marker_path(self.root), "w", encoding="utf-8") as handle:
             json.dump(document, handle)
 
@@ -129,6 +134,7 @@ class TestingResetTests(unittest.TestCase):
         self.assertIn(self.root, self.prompt)
         self.assertIn("cannot be undone", self.prompt)
         self.assertIn("new, empty testing database", self.prompt)
+        self.assertIn("(derived, ext, prks, restore_" + "c" * 32 + ")", self.prompt)
         self.assertIn(f"Type {CONFIRM_WORD}", self.prompt)
         self.assertNotIn("password", self.prompt.lower())
         plan = plan_reset(self.conninfo, self.root)
@@ -161,6 +167,91 @@ class TestingResetTests(unittest.TestCase):
             self.reset(CONFIRM_WORD)
         self.assertEqual(caught.exception.reason, "root_not_paired")
         self.assert_untouched()
+
+    def test_a_root_with_another_storage_root_id_is_refused(self) -> None:
+        with psycopg.connect(self.conninfo, autocommit=True) as conn:
+            conn.execute("UPDATE prks.instance SET storage_root_id = %s", ("SR-" + "d" * 32,))
+        with self.assertRaises(ResetRefused) as caught:
+            self.reset(CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_not_paired")
+        self.assert_untouched()
+
+    def test_a_root_paired_with_another_testing_database_is_refused(self) -> None:
+        # A second testing database (its own instance) next to this root: the
+        # root belongs to the first, so neither half is touched.
+        other = self.harness.create_database("other", empty=True)
+        self.addCleanup(self.harness.drop_database, other)
+        other_conninfo = self.harness.conninfo(other)
+        migrate(other_conninfo)
+        with psycopg.connect(other_conninfo, autocommit=True) as conn:
+            conn.execute(
+                "INSERT INTO prks.instance (id, storage_root_id, setup_state, testing, start_generation, "
+                "start_token) VALUES (%s, %s, 'ready', true, 1, %s)",
+                ("IN-" + "C" * 32, "SR-" + "c" * 32, "e" * 32),
+            )
+        with self.assertRaises(ResetRefused) as caught:
+            run(other_conninfo, self.root, stdin=io.StringIO(), stdout=io.StringIO(), read=lambda: CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_not_paired")
+        self.assert_untouched()
+        with psycopg.connect(other_conninfo) as conn:
+            self.assertIsNotNone(conn.execute("SELECT 1 FROM prks.instance").fetchone())
+
+    def test_a_root_holding_a_sqlite_library_is_refused(self) -> None:
+        for name in ("prks_data.db", "prks_data_testing.db"):
+            with self.subTest(name=name):
+                path = os.path.join(self.root, name)
+                with open(path, "wb") as handle:
+                    handle.write(b"SQLite format 3\x00")
+                try:
+                    with self.assertRaises(ResetRefused) as caught:
+                        self.reset(CONFIRM_WORD)
+                    self.assertEqual(caught.exception.reason, "sqlite_catalogue")
+                    self.assert_untouched()
+                    self.assertTrue(os.path.exists(path))
+                finally:
+                    os.unlink(path)
+
+    def test_a_link_inside_the_root_is_refused_before_the_database_is_touched(self) -> None:
+        outside = tempfile.mkdtemp(prefix="prks-reset-outside-")
+        self.addCleanup(os.rmdir, outside)
+        os.symlink(outside, os.path.join(self.root, "pdfs", "elsewhere"))
+        with self.assertRaises(ResetRefused) as caught:
+            self.reset(CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_not_plain")
+        self.assert_untouched()
+        self.assertTrue(os.path.isdir(outside))
+
+    def test_the_delete_never_descends_into_a_mount_point(self) -> None:
+        mounted = os.path.join(self.root, "pdfs")
+        real_ismount = os.path.ismount
+        with mock.patch.object(
+            testing_reset.os.path, "ismount", side_effect=lambda p: p == mounted or real_ismount(p)
+        ), mock.patch.object(testing_reset, "check_no_foreign_tree"):
+            with self.assertRaises(ResetRefused) as caught:
+                self.reset(CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_not_emptied")
+        self.assertIn(os.path.join("pdfs", "a.pdf"), self.files())
+
+    def test_a_database_unmarked_while_the_prompt_is_open_is_not_dropped(self) -> None:
+        def unmark_then_confirm() -> str:
+            self.comment("the team's Library")
+            return CONFIRM_WORD
+        self.addCleanup(self.comment, self.mark)
+        with self.assertRaises(ResetRefused) as caught:
+            run(self.conninfo, self.root, stdin=io.StringIO(), stdout=io.StringIO(), read=unmark_then_confirm)
+        self.assertEqual(caught.exception.reason, "not_a_testing_database")
+        self.assert_untouched()
+
+    def test_a_database_changed_while_the_prompt_is_open_is_not_dropped(self) -> None:
+        def add_schema_then_confirm() -> str:
+            with psycopg.connect(self.conninfo, autocommit=True) as conn:
+                conn.execute("CREATE SCHEMA someone_elses")
+            return CONFIRM_WORD
+        with self.assertRaises(ResetRefused) as caught:
+            run(self.conninfo, self.root, stdin=io.StringIO(), stdout=io.StringIO(), read=add_schema_then_confirm)
+        self.assertEqual(caught.exception.reason, "database_changed")
+        self.assertIn("someone_elses", self.schemas())
+        self.assertIn(os.path.join("pdfs", "a.pdf"), self.files())
 
     def test_an_unmarked_root_with_files_is_refused(self) -> None:
         os.unlink(marker_path(self.root))

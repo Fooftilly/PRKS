@@ -36,7 +36,7 @@ Testing mode listens on `127.0.0.1:8070` by default and uses the `scripts/dev-po
 
 Use testing mode for browser automation, demo data, screenshots, and destructive experiments.
 
-To start over on an empty testing instance, for example after a schema change makes testing mode refuse to start, run `./.venv/bin/python prks_app.py --testing --reset-db`. It lists the testing database and data root it would delete and asks you to type `RESET` to confirm. The deletion cannot be undone. PRKS then starts on a new, empty testing database and data root. It only ever deletes a database marked for testing and the `data_testing/` root (or a root paired with that database), and refuses while another PRKS process uses the root.
+To start over on an empty testing instance, for example after a schema change makes testing mode refuse to start, run `./.venv/bin/python prks_app.py --testing --reset-db`. It lists the testing database and data root it would delete and asks you to type `RESET` to confirm. The deletion cannot be undone. PRKS then starts on a new, empty testing database and data root. It only ever deletes a database marked for testing and the data root paired with it, and refuses while another PRKS process uses the root. After `scripts/dev-postgres reset`, `data_testing/` belongs to a database that no longer exists: delete that folder yourself.
 
 ## Docker
 
