@@ -585,7 +585,7 @@ def _parser_problems(environ, args):
     from backend.web.settings import HttpServerSettings, HttpSettingsError
 
     testing = bool(args.testing)
-    found = dict.fromkeys(("storage", "http", "auth", "worker", "database"))
+    found: "dict[str, str | None]" = dict.fromkeys(("storage", "http", "auth", "worker", "database"))
     storage = None
     try:
         # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
