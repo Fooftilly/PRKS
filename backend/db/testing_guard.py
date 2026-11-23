@@ -23,6 +23,8 @@ database: a process never decides on its own that a database is disposable.
 
 from __future__ import annotations
 
+from typing import Any
+
 import psycopg
 
 TESTING_MARK = "prks-testing"
@@ -67,30 +69,7 @@ def prove_testing_database(conninfo: str) -> None:
     try:
         # One read-only transaction, rolled back: the proof cannot write.
         conn.read_only = True
-        name, comment = conn.execute(
-            "SELECT datname, shobj_description(oid, 'pg_database') FROM pg_database "
-            "WHERE datname = current_database()"
-        ).fetchone() or (None, None)
-        if not is_testing_mark(comment):
-            raise TestingDatabaseRefused(
-                "not_a_testing_database",
-                f"--testing only uses a database marked for testing, and {name!s} is not. "
-                "Start the local testing database with scripts/dev-postgres, or, for a database "
-                "you created only for testing, run "
-                f"COMMENT ON DATABASE {_quoted(name)} IS '{TESTING_MARK}'. "
-                "Never mark a database that holds a real Library.",
-            )
-        has_instance = conn.execute("SELECT to_regclass('prks.instance') IS NOT NULL").fetchone()
-        if has_instance and has_instance[0]:
-            row = conn.execute(
-                "SELECT count(*) FILTER (WHERE NOT testing) FROM prks.instance"
-            ).fetchone()
-            if row and row[0]:
-                raise TestingDatabaseRefused(
-                    "testing_mismatch",
-                    f"{name!s} is marked for testing but holds a non-testing PRKS instance; "
-                    "--testing never serves it. Use another database.",
-                )
+        prove_testing_connection(conn)
     except psycopg.Error:
         raise TestingDatabaseRefused(
             "database_unavailable", "Could not check that the database is a testing database."
@@ -101,6 +80,39 @@ def prove_testing_database(conninfo: str) -> None:
         except psycopg.Error:
             pass
         conn.close()
+
+
+def prove_testing_connection(conn: psycopg.Connection[Any]) -> None:
+    """:func:`prove_testing_database` on an open connection, inside the caller's transaction.
+
+    Reads only. A caller about to write (``backend.testing_reset``) runs it in
+    the same transaction as the write, so the proof cannot go stale between
+    the check and the change. ``psycopg.Error`` is left to the caller.
+    """
+    name, comment = conn.execute(
+        "SELECT datname, shobj_description(oid, 'pg_database') FROM pg_database "
+        "WHERE datname = current_database()"
+    ).fetchone() or (None, None)
+    if not is_testing_mark(comment):
+        raise TestingDatabaseRefused(
+            "not_a_testing_database",
+            f"--testing only uses a database marked for testing, and {name!s} is not. "
+            "Start the local testing database with scripts/dev-postgres, or, for a database "
+            "you created only for testing, run "
+            f"COMMENT ON DATABASE {_quoted(name)} IS '{TESTING_MARK}'. "
+            "Never mark a database that holds a real Library.",
+        )
+    has_instance = conn.execute("SELECT to_regclass('prks.instance') IS NOT NULL").fetchone()
+    if has_instance and has_instance[0]:
+        row = conn.execute(
+            "SELECT count(*) FILTER (WHERE NOT testing) FROM prks.instance"
+        ).fetchone()
+        if row and row[0]:
+            raise TestingDatabaseRefused(
+                "testing_mismatch",
+                f"{name!s} is marked for testing but holds a non-testing PRKS instance; "
+                "--testing never serves it. Use another database.",
+            )
 
 
 def _quoted(name: object) -> str:
