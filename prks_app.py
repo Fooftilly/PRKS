@@ -489,7 +489,6 @@ _PROBE_GROUPS = (
 # stopping at a problem of its own: a loopback address, and a database URL
 # unless the probe is of a database source.
 _PROBE_HOST = "127.0.0.1"
-_PROBE_DATABASE = {"PRKS_DATABASE_URL": "postgresql://probe@127.0.0.1/probe"}
 _DATABASE_SOURCES = frozenset({"PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"})
 
 
@@ -508,6 +507,7 @@ def _delegated_checks(environ, args):
     environment adds the problems of combinations.
     """
     from backend.config_reference import BY_KEY, Scope, in_scope
+    from backend.db.config import TESTING_DEFAULT_DATABASE_URL
 
     delegated = [
         setting.key for setting in in_scope(Scope.DEPLOYMENT)
@@ -528,7 +528,9 @@ def _delegated_checks(environ, args):
         parser = _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
         if parser is None:
             continue
-        base = bare if _DATABASE_SOURCES.intersection(group) else {**_PROBE_DATABASE, **bare}
+        # The stand-in is never connected to: the parsers only read it.
+        base = bare if _DATABASE_SOURCES.intersection(group) else {
+            "PRKS_DATABASE_URL": TESTING_DEFAULT_DATABASE_URL, **bare}
         baseline, _ = _parser_problems(base, probe_args)
         probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args)
         if probe[parser] is None:
