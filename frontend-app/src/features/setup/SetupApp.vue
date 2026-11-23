@@ -163,13 +163,13 @@ function fieldError(result: Extract<SetupResult, { ok: false }>): boolean {
       loginError.value = tooLong ? 'This login is too long.' : 'This login cannot be used.'
       break
     case 'display_name':
-      displayNameError.value = 'This display name is too long.'
+      displayNameError.value = tooLong ? 'This display name is too long.' : 'This display name cannot be used.'
       break
     case 'password':
       passwordError.value = tooLong ? 'This password is too long.' : 'Enter a password.'
       break
     case 'library_name':
-      libraryError.value = 'This Library name is too long.'
+      libraryError.value = tooLong ? 'This Library name is too long.' : 'This Library name cannot be used.'
       break
     default:
       return false
@@ -271,19 +271,23 @@ defineExpose({ step })
           :error="tokenError"
           help="On the computer that runs PRKS, run the command below and copy the token it prints. DATA_ROOT is PRKS's data folder; PRKS prints the exact command while it waits for setup. A token works once and expires after 24 hours."
         >
-          <input
-            id="prks-setup-token"
-            v-model="token"
-            class="prks-input"
-            type="password"
-            name="token"
-            autocomplete="one-time-code"
-            spellcheck="false"
-            autocapitalize="none"
-            required
-            aria-required="true"
-            :aria-invalid="tokenError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-token"
+              v-model="token"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="password"
+              name="token"
+              autocomplete="one-time-code"
+              spellcheck="false"
+              autocapitalize="none"
+              required
+              aria-required="true"
+              :aria-invalid="tokenError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <pre class="prks-setup__command"><code>{{ TOKEN_COMMAND }}</code></pre>
         <div class="prks-form-actions">
@@ -297,19 +301,23 @@ defineExpose({ step })
           You will own this PRKS and its first Library. You sign in with this login and password.
         </p>
         <PrksField label="Login" for-id="prks-setup-login" :error="loginError">
-          <input
-            id="prks-setup-login"
-            v-model="login"
-            class="prks-input"
-            type="text"
-            name="username"
-            autocomplete="username"
-            spellcheck="false"
-            autocapitalize="none"
-            required
-            aria-required="true"
-            :aria-invalid="loginError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-login"
+              v-model="login"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="text"
+              name="username"
+              autocomplete="username"
+              spellcheck="false"
+              autocapitalize="none"
+              required
+              aria-required="true"
+              :aria-invalid="loginError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <PrksField
           label="Display name"
@@ -317,41 +325,53 @@ defineExpose({ step })
           :error="displayNameError"
           help="Optional. Defaults to the login."
         >
-          <input
-            id="prks-setup-display-name"
-            v-model="displayName"
-            class="prks-input"
-            type="text"
-            name="name"
-            autocomplete="name"
-            :aria-invalid="displayNameError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-display-name"
+              v-model="displayName"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="text"
+              name="name"
+              autocomplete="name"
+              :aria-invalid="displayNameError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <PrksField label="Password" for-id="prks-setup-password" :error="passwordError">
-          <input
-            id="prks-setup-password"
-            v-model="password"
-            class="prks-input"
-            type="password"
-            name="new-password"
-            autocomplete="new-password"
-            required
-            aria-required="true"
-            :aria-invalid="passwordError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-password"
+              v-model="password"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="password"
+              name="new-password"
+              autocomplete="new-password"
+              required
+              aria-required="true"
+              :aria-invalid="passwordError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <PrksField label="Password again" for-id="prks-setup-password-again" :error="passwordAgainError">
-          <input
-            id="prks-setup-password-again"
-            v-model="passwordAgain"
-            class="prks-input"
-            type="password"
-            name="new-password-again"
-            autocomplete="new-password"
-            required
-            aria-required="true"
-            :aria-invalid="passwordAgainError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-password-again"
+              v-model="passwordAgain"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="password"
+              name="new-password-again"
+              autocomplete="new-password"
+              required
+              aria-required="true"
+              :aria-invalid="passwordAgainError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <PrksField
           label="Library name"
@@ -359,15 +379,19 @@ defineExpose({ step })
           :error="libraryError"
           help="You can rename it later."
         >
-          <input
-            id="prks-setup-library"
-            v-model="libraryName"
-            class="prks-input"
-            type="text"
-            name="library"
-            autocomplete="off"
-            :aria-invalid="libraryError ? 'true' : 'false'"
-          />
+          <template #default="{ labelledBy, describedBy }">
+            <input
+              id="prks-setup-library"
+              v-model="libraryName"
+              :aria-labelledby="labelledBy"
+              :aria-describedby="describedBy"
+              class="prks-input"
+              type="text"
+              name="library"
+              autocomplete="off"
+              :aria-invalid="libraryError ? 'true' : 'false'"
+            />
+          </template>
         </PrksField>
         <div class="prks-form-actions">
           <PrksButton variant="secondary" @click="go('token')">Back</PrksButton>

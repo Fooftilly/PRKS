@@ -144,6 +144,19 @@ describe('SetupApp', () => {
     wrapper.unmount()
   })
 
+  it('says a refused name cannot be used when it is not too long', async () => {
+    answer = { status: 400, body: { error: 'invalid_request', field: 'display_name', reason: 'invalid' } }
+    const { wrapper } = await mounted()
+    await fillToReview(wrapper)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('#prks-setup-display-name-error').text()).toBe('This display name cannot be used.')
+    expect(wrapper.get('#prks-setup-display-name').attributes('aria-describedby')).toContain(
+      'prks-setup-display-name-error',
+    )
+    wrapper.unmount()
+  })
+
   it('opens the application when setup is already done', async () => {
     state = 'ready'
     const { wrapper, opened } = await mounted()
