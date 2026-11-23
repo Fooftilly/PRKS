@@ -977,6 +977,10 @@ class PRKSHandler(HttpHandlerBase):
                 if p == "/" or p == "/index.html" or p == "/" + SETUP_PAGE:
                     # SPA shell should never be cached by intermediary proxies/CDNs.
                     self.send_header("Cache-Control", "no-store, max-age=0")
+                    if getattr(self.server, "prks_setup", None) is not None:
+                        # The setup page stands in for the shell (#612): the
+                        # service worker must not keep it as the offline shell.
+                        self.send_header("X-PRKS-Shell", "setup")
                 elif leaf == "sw.js":
                     self.send_header("Cache-Control", "no-cache")
                 elif leaf == "manifest.webmanifest":

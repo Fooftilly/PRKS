@@ -27,7 +27,7 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '50a65da1ed9c';
+    const DEPENDENCY_REVISION = 'b90ad89ff8a9';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,
@@ -680,7 +680,10 @@
                 const path = pathnameOf(request.url, env.origin || 'http://localhost/');
                 const type = res && res.headers && typeof res.headers.get === 'function'
                     ? (res.headers.get('Content-Type') || '') : '';
-                if ((path === '/' || path === '/index.html') &&
+                // The setup page of a first run (#612) is not the application shell.
+                const setupPage = res && res.headers && typeof res.headers.get === 'function' &&
+                    res.headers.get('X-PRKS-Shell') === 'setup';
+                if ((path === '/' || path === '/index.html') && !setupPage &&
                     /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});

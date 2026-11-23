@@ -335,6 +335,23 @@ async function run() {
         }
     }
 
+    /* A first run's setup page (#612) is served at '/' but never becomes the offline shell. */
+    {
+        const caches = makeFakeCacheStorage();
+        const shell = await caches.open(sw.PRKS_SW_SHELL_CACHE);
+        await shell.put('/', new Response('<html>good</html>', { headers: { 'Content-Type': 'text/html' } }));
+        const handlers = sw.createHandlers({
+            caches: caches,
+            fetchImpl: () => Promise.resolve(new Response('<html>setup</html>', {
+                headers: { 'Content-Type': 'text/html', 'X-PRKS-Shell': 'setup' },
+            })),
+        });
+        await handlers.handleNavigation(fakeRequest({ url: 'https://prks.example/', mode: 'navigate' }));
+        const offline = sw.createHandlers({ caches: caches, fetchImpl: () => Promise.reject(new Error('offline')) });
+        const recovered = await offline.handleNavigation(fakeRequest({ mode: 'navigate' }));
+        assertEq('the setup page does not replace the offline shell', await recovered.text(), '<html>good</html>');
+    }
+
     /* ---- saved note figures: cached per scope; thumbnails never ---- */
     {
         const fig = '/api/remote-images?url=' + encodeURIComponent('https://figures.example/a.png') + '&figure=1';

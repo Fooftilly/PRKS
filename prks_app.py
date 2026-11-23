@@ -261,6 +261,10 @@ class SetupWait:
     def _setup_done(self):
         return self._phase is not None and self._phase.done.is_set()
 
+    def bootstrapped_here(self):
+        """Whether this process's setup page completed the bootstrap."""
+        return self._setup_done()
+
     def __call__(self):
         if not self._announced:
             self._announced = True
@@ -323,8 +327,13 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
         auth = start_web_identity(
             db, settings, root=bound_root.root_real, lease=bound_root.lease,
             testing=testing, wait_for_setup=wait,
+            bootstrapped_here=wait.bootstrapped_here if wait is not None else None,
         )
     except RootPairingRefused as exc:
+        if wait is not None:
+            # A setup request still in flight finishes before its database
+            # and root lease go away.
+            wait.close()
         db.close()
         bound_root.release()
         if exc.reason == "setup_pending" and wait is not None and wait.stopped:
@@ -335,6 +344,7 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
     if wait is not None and wait.stopped:
         # A stop that arrived during the last check is not lost: the caller
         # still holds the handlers, so it was recorded, and nothing serves.
+        wait.close()
         db.close()
         bound_root.release()
         print("PRKS stopped while waiting for setup.", file=sys.stderr)

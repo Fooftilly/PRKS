@@ -259,6 +259,7 @@ def start_web_identity(
     testing: bool,
     hasher: Optional[PasswordHasher] = None,
     wait_for_setup: Optional[SetupWait] = None,
+    bootstrapped_here: Optional[Callable[[], bool]] = None,
 ) -> WebAuth:
     """Run the start check and bump for this web process; refuse anything else.
 
@@ -266,7 +267,9 @@ def start_web_identity(
     ``lease`` its held, shared ``root.lock``. While setup is not ``ready``,
     ``wait_for_setup`` is called and the check runs again as long as it
     returns true (it waits between checks); without it, or once it returns
-    false, the process is refused with ``setup_pending``. A loopback-owner
+    false, the process is refused with ``setup_pending``.
+    ``bootstrapped_here`` tells whether this process completed the bootstrap
+    while it waited; its claim was then this process's bump. A loopback-owner
     testing process bootstraps an instance that does not exist yet
     (:func:`bootstrap_testing_instance`) instead of waiting. Raises
     :class:`RootPairingRefused` when the process must not serve.
@@ -287,6 +290,10 @@ def start_web_identity(
                 "Setup is not complete. Create the owner and Library first "
                 "(python prks_app.py admin bootstrap; docs/admin-bootstrap.md).",
             )
+        if bump and bootstrapped_here is not None and bootstrapped_here():
+            # This process ran the bootstrap itself (browser setup, #612):
+            # its root claim counted as this process's bump (§11.1).
+            bump = False
     libraries = db.query(lambda tx: tx.execute("SELECT id FROM prks.libraries LIMIT 2").fetchall())
     if len(libraries) != 1:
         # 0.8 serves one Library per instance; the data root's objects and the

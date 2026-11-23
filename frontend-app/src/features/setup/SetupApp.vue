@@ -377,7 +377,7 @@ defineExpose({ step })
           label="Library name"
           for-id="prks-setup-library"
           :error="libraryError"
-          help="You can rename it later."
+          help="Optional. Defaults to Library."
         >
           <template #default="{ labelledBy, describedBy }">
             <input
