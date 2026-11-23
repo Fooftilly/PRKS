@@ -477,12 +477,19 @@ _PARSER_OF_OWNER = {
     "backend.jobs.embedded": "worker",
     "backend.db.config": "database",
 }
-# Settings that are valid or invalid only together: each group is probed as one.
+# Settings that are valid or invalid only together: each group is probed as one
+# (a certificate needs its key; PRKS_STORAGE decides whether the bootstrap file
+# is read at all).
 _PROBE_GROUPS = (
     ("PRKS_TLS_CERT_FILE", "PRKS_TLS_KEY_FILE"),
-    ("PRKS_STORAGE", "PRKS_CONFIG_FILE", "PRKS_LOG_FILE"),
-    ("PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"),
+    ("PRKS_STORAGE", "PRKS_CONFIG_FILE"),
 )
+# What a probe stands on, so a parser reaches the probed value instead of
+# stopping at a problem of its own: a loopback address, and a database URL
+# unless the probe is of a database source.
+_PROBE_HOST = "127.0.0.1"
+_PROBE_DATABASE = {"PRKS_DATABASE_URL": "postgresql://probe@127.0.0.1/probe"}
+_DATABASE_SOURCES = frozenset({"PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"})
 
 
 def _delegated_checks(environ, args):
@@ -491,9 +498,11 @@ def _delegated_checks(environ, args):
     A parser stops at its first problem, so each set value that only its
     owner's parser checks is probed on the environment without the other
     such values (dependent values, such as a certificate and its key, as one
-    group). A probe its parser accepts is valid; one that changes the
-    parser's problem is invalid, and that problem is named; one that leaves
-    the problem as it was could not be reached and is ``unchecked``. Refused
+    group), on a loopback address and with a stand-in database URL so that
+    the parser reaches it. A probe its parser accepts is valid; one that
+    changes the parser's problem is invalid, and that problem is named; one
+    that leaves the problem as it was could not be reached and is
+    ``unchecked``. Refused
     and unchecked values are never echoed. A last pass on the whole
     environment adds the problems of combinations.
     """
@@ -512,13 +521,15 @@ def _delegated_checks(environ, args):
         seen.update(members)
         groups.append(members)
     bare = {key: value for key, value in environ.items() if key not in delegated}
-    baseline, _ = _parser_problems(bare, args)
+    probe_args = argparse.Namespace(**{**vars(args), "host": _PROBE_HOST})
     found, invalid, unchecked = [], set(), set()
     for group in groups:
         parser = _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
         if parser is None:
             continue
-        probe, _ = _parser_problems({**bare, **{key: environ[key] for key in group}}, args)
+        base = bare if _DATABASE_SOURCES.intersection(group) else {**_PROBE_DATABASE, **bare}
+        baseline, _ = _parser_problems(base, probe_args)
+        probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args)
         if probe[parser] is None:
             continue
         if probe[parser] != baseline[parser]:

@@ -206,22 +206,39 @@ class AppTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("bootstrap configuration file is not usable", text)
 
-    def test_config_check_never_echoes_a_value_another_problem_hides(self) -> None:
+    def test_config_check_checks_a_value_another_problem_would_hide(self) -> None:
         # Loopback-owner on a public address stops the auth parser before it
-        # reads PRKS_TRUSTED_PROXIES, so that value is not checked, not shown.
+        # reads PRKS_TRUSTED_PROXIES; the probe still reaches the value.
         code, text = self.run_check(
             {"PRKS_TRUSTED_PROXIES": "hunter9"}, "--testing", "--host", "0.0.0.0",
         )
         self.assertEqual(code, 2)
         self.assertNotIn("hunter9", text)
-        self.assertRegex(text, r"PRKS_TRUSTED_PROXIES +\(not checked\)")
-        code, text = self.run_check(
-            {"PRKS_TRUSTED_PROXIES": "hunter9", "PRKS_AUTH": "session"}, "--testing", "--host", "0.0.0.0",
-        )
-        self.assertEqual(code, 2)
-        self.assertNotIn("hunter9", text)
+        self.assertEqual(text.count("problem: "), 2, text)
         self.assertIn("problem: PRKS_TRUSTED_PROXIES", text)
         self.assertRegex(text, r"PRKS_TRUSTED_PROXIES +\(invalid\)")
+
+    def test_config_check_names_problems_one_parser_would_stop_before(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            missing = os.path.join(directory, "absent-url")
+            code, text = self.run_check({
+                "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_DATABASE_URL_FILE": missing,
+                "PRKS_STORAGE": str(ROOT / "data"), "PRKS_LOG_FILE": str(ROOT / "data" / "prks.log"),
+            }, "--testing")
+        self.assertEqual(code, 2)
+        problems_found = [line for line in text.splitlines() if line.startswith("problem: ")]
+        for key in ("PRKS_DATABASE_URL_FILE", "PRKS_LOG_FILE", "PRKS_STORAGE"):
+            with self.subTest(key=key):
+                self.assertTrue(any(key in line for line in problems_found), text)
+                self.assertRegex(text, key + r" +\(invalid\)")
+
+    def test_config_check_shows_an_accepted_pool_size(self) -> None:
+        code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_DB_POOL_MAX": "12"})
+        self.assertEqual(code, 0, text)
+        self.assertRegex(text, r"PRKS_DB_POOL_MAX +12 +\(environment\)")
+        code, text = self.run_check({"PRKS_DB_POOL_MAX": "-3"})
+        self.assertEqual(code, 2)
+        self.assertRegex(text, r"PRKS_DB_POOL_MAX +\(invalid\)")
 
     def test_log_levels_accept_the_logging_aliases(self) -> None:
         for name in ("warn", "FATAL", "NOTSET", "Warning"):
