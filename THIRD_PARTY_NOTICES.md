@@ -46,7 +46,7 @@ PostgreSQL and identity runtime components added for the #630 deployment:
 | Installed package | Upstream package license and notice |
 | --- | --- |
 | `psycopg` | LGPL-3.0-only ([upstream license](https://github.com/psycopg/psycopg/blob/master/LICENSE.txt)) |
-| `psycopg-binary` | LGPL-3.0-only for Psycopg's code ([package metadata](https://pypi.org/project/psycopg-binary/3.3.8/)); its self-contained binary wheels also bundle native libraries such as `libpq`, which retain their own license and notice requirements |
+| `psycopg-binary` | LGPL-3.0-only for Psycopg's code ([package metadata](https://pypi.org/project/psycopg-binary/3.3.9/)); its self-contained binary wheels also bundle native libraries such as `libpq`, which retain their own license and notice requirements |
 | `psycopg-pool` | LGPL-3.0-only ([package metadata](https://pypi.org/project/psycopg-pool/3.3.3/)) |
 | `argon2-cffi` | MIT ([package metadata](https://pypi.org/project/argon2-cffi/25.1.0/)) |
 | `uvicorn` | BSD-3-Clause ([package metadata](https://pypi.org/project/uvicorn/0.54.0/)); installs `h11` (MIT) and `click` (BSD-3-Clause) |

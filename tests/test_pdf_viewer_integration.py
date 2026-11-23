@@ -198,8 +198,10 @@ class PdfViewerIntegrationTests(unittest.TestCase):
         react_dom = [p for p in norm if "/node_modules/react-dom/" in f"/{p}"]
         self.assertTrue(react, inputs)
         self.assertTrue(react_dom, inputs)
-        self.assertTrue(any("react.production.min.js" in p for p in react), react)
-        self.assertTrue(any("react-dom.production.min.js" in p for p in react_dom), react_dom)
+        self.assertTrue(any(p.endswith("/react.production.js") for p in react), react)
+        self.assertTrue(
+            any(p.endswith("/react-dom-client.production.js") for p in react_dom), react_dom
+        )
 
     def test_lockfile_unique_react_and_no_banned_packages(self):
         lock = json.loads(_read(_LOCK))
@@ -220,8 +222,8 @@ class PdfViewerIntegrationTests(unittest.TestCase):
                 react_dom_versions.add(meta["version"])
         for banned in _BANNED:
             self.assertNotIn(banned, names)
-        self.assertEqual(react_versions, {"18.3.1"})
-        self.assertEqual(react_dom_versions, {"18.3.1"})
+        self.assertEqual(react_versions, {pkg["dependencies"]["react"]})
+        self.assertEqual(react_dom_versions, {pkg["dependencies"]["react-dom"]})
 
     def test_source_font_fallback_null_and_pan_baseline(self):
         viewer = _read(_VIEWER_SRC)
