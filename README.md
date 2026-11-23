@@ -25,7 +25,7 @@ It runs as a Python web application with its Library in PostgreSQL 18 and its PD
 ## Requirements
 
 - **PostgreSQL 18** holds the Library. Docker Compose (below) runs it for you; to run PRKS from source, use a PostgreSQL 18 server you control.
-- **Python 3.12+** and the exact runtime package pins from `requirements.txt`, for a run from source.
+- **Python 3.14+** and the exact runtime package pins from `requirements.txt`, for a run from source.
 
 Prefer a project-local virtual environment. On PEP 668 “externally managed” systems, do not use `sudo pip` or `--break-system-packages`.
 
@@ -47,7 +47,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 The venv needs pip for that second command. Some setups have none: `uv venv` and `python -m venv --without-pip` create venvs without it, and Arch Linux does not ship pip for its system Python. With [uv](https://docs.astral.sh/uv/) on `PATH`, use it instead:
 
 ```bash
-uv venv --python ">=3.12" .venv
+uv venv --python ">=3.14" .venv
 uv pip install --python ./.venv/bin/python -r requirements.txt
 ```
 

@@ -277,7 +277,7 @@ def pinned_openapi_core_version(repo_root: Path | None = None) -> str:
 
 def python_min_version(repo_root: Path | None = None) -> tuple[int, ...]:
     inv = load_inventory(repo_root)
-    raw = inv.get("python_min_version") or [3, 12]
+    raw = inv.get("python_min_version") or [3, 14]
     return tuple(int(x) for x in raw)
 
 
@@ -476,7 +476,7 @@ def format_venv_create_commands(
     is_windows: bool,
     python_cmd: str | None = None,
     use_uv: bool = False,
-    python_min: Sequence[int] = (3, 12),
+    python_min: Sequence[int] = (3, 14),
 ) -> list[str]:
     venv_python = r".venv\Scripts\python.exe" if is_windows else "./.venv/bin/python"
     if use_uv:
@@ -508,7 +508,7 @@ def _venv_create_lines(ctx: PlatformContext) -> list[str]:
     try:
         python_min: Sequence[int] = python_min_version()
     except (OSError, ValueError):
-        python_min = (3, 12)
+        python_min = (3, 14)
     lines: list[str] = []
     if use_uv and not ctx.uv_available:
         lines.append(
@@ -1874,11 +1874,12 @@ def validate_dockerfile(repo_root: Path | None = None) -> GateResult:
         return result
 
     need = python_min_version(root)[:2]
-    if image_ver < need:
+    if image_ver != need:
+        # The image runs exactly the Python that CI tests (python_min_version).
         result.fail(
             "dockerfile_python_version",
             (
-                f"Dockerfile FROM python:{image_ver[0]}.{image_ver[1]} is older than "
+                f"Dockerfile FROM python:{image_ver[0]}.{image_ver[1]} does not match "
                 f"python_min_version {need[0]}.{need[1]}"
             ),
             str(path),

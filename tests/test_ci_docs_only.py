@@ -609,7 +609,7 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
         install = step("Install pinned Markdown validator (docs-only PR)")
         docs_python = step("Set up Python for documentation-only PR")
         self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", docs_python)
-        self.assertIn('python-version: "3.12"', docs_python)
+        self.assertIn('python-version: "3.14"', docs_python)
         classifier = step("Classify documentation-only PR (fail closed)")
         self.assertIn('if base_classifier="$(mktemp)"; then', classifier)
         self.assertIn("if: steps.docs-scope.outputs.docs_only == 'true'", docs)

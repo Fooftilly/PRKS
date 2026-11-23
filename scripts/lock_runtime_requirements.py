@@ -2,7 +2,7 @@
 """Regenerate requirements-lock.txt, the hashed lock the Docker image installs.
 
 requirements.txt stays the authoritative list of direct runtime pins. This
-script resolves it (direct and transitive packages) for CPython 3.12 on every
+script resolves it (direct and transitive packages) for CPython 3.14 on every
 platform and records each distribution's sha256, so the image build runs
 ``pip install --require-hashes`` and two builds get byte-identical wheels.
 
@@ -26,7 +26,7 @@ def uv_command(uv: str) -> list[str]:
         uv, "pip", "compile", "requirements.txt",
         "--generate-hashes",
         "--universal",
-        "--python-version", "3.12",
+        "--python-version", "3.14",
         "--no-annotate",
         "--custom-compile-command", COMMAND,
         "--output-file", LOCK,

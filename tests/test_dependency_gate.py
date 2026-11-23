@@ -650,7 +650,7 @@ class RequirementsParsingTests(unittest.TestCase):
 
 class PythonVersionTests(unittest.TestCase):
     def test_minimum_from_inventory(self):
-        self.assertEqual(python_min_version(_PROJECT)[:2], (3, 12))
+        self.assertEqual(python_min_version(_PROJECT)[:2], (3, 14))
 
     def test_too_old_fails(self):
         result = validate_python_version(current=(3, 11, 0), minimum=(3, 12))
@@ -709,7 +709,7 @@ class InstalledPinTests(unittest.TestCase):
         result = run_unit_contract_gate(
             repo_root=_PROJECT,
             version_lookup=lookup,
-            current_python=(3, 12, 0),
+            current_python=(3, 14, 0),
         )
         self.assertTrue(result.ok, result.issues)
         self.assertIn("openapi-core", seen)
@@ -1304,6 +1304,35 @@ class DockerfileConsistencyTests(unittest.TestCase):
         self.assertEqual(dockerfile_python_base_version(text), (3, 12))
         self.assertEqual(dockerfile_apt_packages(text), ["qpdf", "curl"])
 
+    def test_newer_base_image_fails_repo_gate(self):
+        """The image runs exactly the Python CI tests, not just a newer one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_manifests(root)
+            (root / "Dockerfile").write_text("FROM python:3.15-slim\n", encoding="utf-8")
+            (root / "dependency-inventory.json").write_text(
+                self._inventory(names=["python", "python-base-image"], python_min=(3, 14)),
+                encoding="utf-8",
+            )
+            result = validate_dockerfile(root)
+            self.assertTrue(
+                any(i.code == "dockerfile_python_version" for i in result.issues),
+                result.issues,
+            )
+
+    def test_ci_python_matches_minimum_and_image(self):
+        need = python_min_version(_PROJECT)[:2]
+        image = dockerfile_python_base_version(
+            (_PROJECT / "Dockerfile").read_text(encoding="utf-8")
+        )
+        self.assertEqual(image, need)
+        pins = set()
+        for wf in sorted((_PROJECT / ".github/workflows").glob("*.yml")):
+            pins.update(
+                re.findall(r'python-version:\s*"?(\d+\.\d+)"?', wf.read_text(encoding="utf-8"))
+            )
+        self.assertEqual(pins, {f"{need[0]}.{need[1]}"})
+
     def test_older_base_image_fails_repo_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1562,7 +1591,7 @@ class RepoGateLiveTests(unittest.TestCase):
         result = run_runtime_gate(
             repo_root=_PROJECT,
             version_lookup=lambda n: pins.get(n),
-            current_python=(3, 12, 0),
+            current_python=(3, 14, 0),
             ctx=detect_platform_context(
                 prefix="/tmp/venv",
                 base_prefix="/usr",
