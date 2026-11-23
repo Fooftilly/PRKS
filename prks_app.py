@@ -510,7 +510,7 @@ def run_config(argv, environ=None, *, out=None):
         # The root a start would select: the CLI flag, PRKS_STORAGE, the
         # bootstrap file or a default, whichever wins (§5.2), and whether a
         # start would refuse it.
-        refused = any(problem.startswith(_STORAGE_PROBLEM) for problem in delegated)
+        refused = _placement_refused(storage, env)
         source = f"selected by {storage.root_source}" + ("; refused" if refused else "")
         rows = [Effective(row.key, storage.root, source) if row.key == "PRKS_STORAGE" else row for row in rows]
     width = max(len(row.key) for row in rows)
@@ -629,6 +629,15 @@ def _probe(group, environ, bare, probe_args):
 
 
 _STORAGE_PROBLEM = "storage root: "
+
+
+def _placement_refused(storage, environ):
+    """Whether a start would refuse the selected root before writing anything."""
+    try:
+        check_root_placement(storage, config_file_path=_bootstrap_file(storage, environ))
+    except StorageRootError:
+        return True
+    return False
 
 
 def _parser_problems(environ, args):

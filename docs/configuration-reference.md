@@ -4,7 +4,7 @@
 
 Every setting PRKS knows, by where it lives (#612). Browser-local preferences (theme, layout, workspace tabs) stay in each browser and are not listed here. Detailed behavior of each deployment setting is on the wiki's Configuration and Operations page.
 
-Check a deployment before starting it with `python prks_app.py config check`: it validates every setting the way a start does and prints the effective values and where each comes from, with secrets hidden.
+Check a deployment before starting it with `python prks_app.py config check`: it validates every setting the way a start does and prints the effective values and where each comes from, with secrets hidden. It reads the data root's path but not the root itself: a start can still refuse a root for its filesystem or its contents.
 
 ## Deployment (environment)
 
