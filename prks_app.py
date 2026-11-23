@@ -502,17 +502,42 @@ def _delegated_checks(environ, args):
     the parser reaches it. A probe its parser accepts is valid; one that
     changes the parser's problem is invalid, and that problem is named; one
     that leaves the problem as it was could not be reached and is
-    ``unchecked``. Refused
-    and unchecked values are never echoed. A last pass on the whole
-    environment adds the problems of combinations.
+    ``unchecked``. Refused and unchecked values are never echoed. A last
+    pass on the whole environment adds the problems of combinations, and
+    every value one of them names is refused too.
     """
-    from backend.config_reference import BY_KEY, Scope, in_scope
-    from backend.db.config import TESTING_DEFAULT_DATABASE_URL
+    from backend.config_reference import Scope, in_scope
 
     delegated = [
         setting.key for setting in in_scope(Scope.DEPLOYMENT)
         if setting.check is None and (environ.get(setting.key) or "").strip()
     ]
+    groups = _probe_groups(delegated)
+    bare = {key: value for key, value in environ.items() if key not in delegated}
+    probe_args = argparse.Namespace(**{**vars(args), "host": _PROBE_HOST})
+    found, invalid, unchecked = [], set(), set()
+    for group in groups:
+        verdict, problem = _probe(group, environ, bare, probe_args)
+        if verdict == "invalid":
+            invalid.update(group)
+            if problem not in found:
+                found.append(problem)
+        elif verdict == "unchecked":
+            unchecked.update(group)
+    combined, storage = _parser_problems(environ, args)
+    found.extend(problem for problem in combined.values() if problem is not None and problem not in found)
+    for group in groups:
+        # A value the whole environment's pass names is refused there (a
+        # conflict, or a value the probe could not reach), whatever its probe said.
+        problem = combined.get(_parser_of(group) or "")
+        named = [key for key in group if problem is not None and re.search(rf"\b{key}\b", problem)]
+        unchecked.difference_update(named)
+        invalid.update(named)
+    return storage, found, invalid, unchecked
+
+
+def _probe_groups(delegated):
+    """The set delegated keys as probe groups: each alone, or with the keys it depends on."""
     groups, seen = [], set()
     for key in delegated:
         if key in seen:
@@ -521,36 +546,32 @@ def _delegated_checks(environ, args):
         members = tuple(member for member in group if member in delegated)
         seen.update(members)
         groups.append(members)
-    bare = {key: value for key, value in environ.items() if key not in delegated}
-    probe_args = argparse.Namespace(**{**vars(args), "host": _PROBE_HOST})
-    found, invalid, unchecked = [], set(), set()
-    for group in groups:
-        parser = _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
-        if parser is None:
-            continue
-        # The stand-in is never connected to: the parsers only read it.
-        base = bare if _DATABASE_SOURCES.intersection(group) else {
-            "PRKS_DATABASE_URL": TESTING_DEFAULT_DATABASE_URL, **bare}
-        baseline, _ = _parser_problems(base, probe_args)
-        probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args)
-        if probe[parser] is None:
-            continue
-        if probe[parser] != baseline[parser]:
-            invalid.update(group)
-            if probe[parser] not in found:
-                found.append(probe[parser])
-        else:
-            unchecked.update(group)
-    combined, storage = _parser_problems(environ, args)
-    found.extend(problem for problem in combined.values() if problem is not None and problem not in found)
-    for group in groups:
-        # A value the whole environment's pass names is refused there (a
-        # conflict, or a value the probe could not reach), whatever its probe said.
-        problem = combined.get(_PARSER_OF_OWNER.get(BY_KEY[group[0]].owner) or "")
-        named = [key for key in group if problem is not None and re.search(rf"\b{key}\b", problem)]
-        unchecked.difference_update(named)
-        invalid.update(named)
-    return storage, found, invalid, unchecked
+    return groups
+
+
+def _parser_of(group):
+    from backend.config_reference import BY_KEY
+
+    return _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
+
+
+def _probe(group, environ, bare, probe_args):
+    """``(verdict, problem)`` for one group: ``valid``, ``invalid`` with its problem, or ``unchecked``."""
+    from backend.db.config import TESTING_DEFAULT_DATABASE_URL
+
+    parser = _parser_of(group)
+    if parser is None:
+        return "valid", None
+    # The stand-in is never connected to: the parsers only read it.
+    base = bare if _DATABASE_SOURCES.intersection(group) else {
+        "PRKS_DATABASE_URL": TESTING_DEFAULT_DATABASE_URL, **bare}
+    probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args)
+    if probe[parser] is None:
+        return "valid", None
+    baseline, _ = _parser_problems(base, probe_args)
+    if probe[parser] != baseline[parser]:
+        return "invalid", probe[parser]
+    return "unchecked", None
 
 
 def _parser_problems(environ, args):
