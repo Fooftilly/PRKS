@@ -342,6 +342,10 @@ FEATURES = {
         "description": "Processing queue route, mounted in its tab root",
         "selectors": ("tests.e2e.test_app.TabContextHostRootTests",),
     },
+    "first-run": {
+        "description": "First-run setup in the browser, restart, and a new browser's sign-in (#612)",
+        "selectors": ("tests.e2e.test_first_run",),
+    },
     "postgres-library": {
         "description": "PG-C1 flows on the PostgreSQL Library: restore recovery, Processing queue, Research-ACK fence (PostgreSQL leg only)",
         "selectors": ("tests.e2e.test_postgres_library_flows",),
@@ -749,6 +753,23 @@ AFFECTED_RULES = (
         ),
         "features": ("postgres-library", "processing"),
         "note": "Vue Processing queue (PG-C1 #640; the only Processing page since PG-C2 #641) → postgres-library, because test_postgres_library_flows drives #/processing-files, and processing, because TabContextHostRootTests opens #/processing-files in its tab root.",
+    },
+    {
+        "name": "first-run-setup",
+        "paths": (
+            "frontend-app/src/features/setup/**",
+            "frontend/setup.html",
+            "backend/api/setup.py",
+            "backend/domain/identity/web_setup.py",
+        ),
+        "exclude_paths": (
+            "frontend-app/**/*.stories.ts",
+            "frontend-app/**/*.stories.tsx",
+            "frontend-app/**/*.stories.vue",
+            "frontend-app/**/*.stories.js",
+        ),
+        "features": ("first-run",),
+        "note": "Browser first-run setup (#612): the setup page, its API and the setup phase → first-run, which walks setup, a restart and a new browser's sign-in.",
     },
     {
         "name": "concepts-vue",

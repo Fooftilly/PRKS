@@ -210,6 +210,42 @@ def provision_library(
     )
 
 
+def provision_unconfigured(storage_root: str) -> E2ELibrary:
+    """A new migrated database with no instance, for a server that starts in first-run setup (#612).
+
+    Nothing is bootstrapped and ``storage_root`` is left alone: the server
+    binds the empty root itself and serves the setup page until a browser
+    finishes setup with a token from :func:`issue_setup_token`. The ids are
+    empty until then. The server signs accounts in by password.
+    """
+    require_server()
+    from tests.pg.harness import get_harness
+
+    harness = get_harness()
+    name = harness.create_database("e2e")
+    return E2ELibrary(
+        database=name,
+        conninfo=harness.conninfo(name),
+        instance_id="",
+        user_id="",
+        library_id="",
+        auth=SESSION_MODE,
+    )
+
+
+def issue_setup_token(library: E2ELibrary) -> str:
+    """A setup token for ``library``'s database, as ``prks_app.py admin bootstrap issue-token`` prints it."""
+    from backend.db.config import DatabaseConfig
+    from backend.db.database import Database
+    from backend.domain.identity import bootstrap_tokens
+
+    db = Database(DatabaseConfig(conninfo=library.conninfo, role="test", pool_min=0, pool_max=1))
+    try:
+        return bootstrap_tokens.issue_token(db).token.reveal()
+    finally:
+        db.close()
+
+
 def _add_member(db, library_id: str, login: str) -> str:
     """One more editor of the Library, signing in with :data:`PASSWORD`."""
     from backend import entity_ids
