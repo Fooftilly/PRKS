@@ -96,6 +96,9 @@ defineExpose({ releaseThumbs: () => release() })
         </PrksInlineMessage>
         <div v-else-if="!filtered.length" class="prks-folder-tree__empty-state">
           <PrksInlineMessage>No files in the library yet.</PrksInlineMessage>
+          <p class="prks-folder-tree__empty-hint">
+            Add a PDF or a reference with New File. PDFs to sort later can wait in Processing.
+          </p>
           <PrksButton
             variant="primary"
             class="prks-folder-tree__create-btn"

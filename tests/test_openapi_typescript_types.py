@@ -58,6 +58,11 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                     "docs/api/openapi-citations.json",
                     "frontend-app/src/api/generated/citations.ts",
                 ),
+                (
+                    "deployment-settings",
+                    "docs/api/openapi-deployment-settings.json",
+                    "frontend-app/src/api/generated/deployment-settings.ts",
+                ),
             ],
         )
         for item in families:

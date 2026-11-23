@@ -123,7 +123,7 @@ describe('Settings surface', () => {
     expect(document.getElementById('prks-backup-download-btn')).toBe(backup)
     const reading = document.getElementById('prks-settings-tab-reading')
     reading?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true, cancelable: true }))
-    expect(document.activeElement?.id).toBe('prks-settings-tab-diagnostics')
+    expect(document.activeElement?.id).toBe('prks-settings-tab-deployment')
     reading?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))
     expect(document.activeElement?.id).toBe('prks-settings-tab-general')
     const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })

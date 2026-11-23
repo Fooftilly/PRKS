@@ -9,6 +9,7 @@ import {
   settingsNavOrientation,
 } from './navigation'
 import SettingsBackup from './SettingsBackup.vue'
+import SettingsDeployment from './SettingsDeployment.vue'
 import SettingsDiagnostics from './SettingsDiagnostics.vue'
 import SettingsExport from './SettingsExport.vue'
 import SettingsGeneral from './SettingsGeneral.vue'
@@ -84,6 +85,9 @@ onMounted(() => {
       </SettingsPanel>
       <SettingsPanel category="diagnostics" :active="settingsActiveCategory === 'diagnostics'">
         <SettingsDiagnostics />
+      </SettingsPanel>
+      <SettingsPanel category="deployment" :active="settingsActiveCategory === 'deployment'">
+        <SettingsDeployment />
       </SettingsPanel>
     </div>
   </div>

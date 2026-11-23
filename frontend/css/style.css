@@ -5708,6 +5708,12 @@ a.tag {
     margin: 0;
 }
 
+.prks-folder-tree__empty-hint {
+    margin: 6px 0 0;
+    font-size: var(--text-sm);
+    color: var(--text-secondary);
+}
+
 .prks-folder-tree__create-btn {
     margin-top: 12px;
 }
@@ -7401,6 +7407,36 @@ body.prks-right-panel-open #app-container.app-container--tiled [data-prks-second
 }
 .prks-perf-client {
     margin-top: 12px;
+}
+/* Deployment settings (#612): read-only key, value and source rows. */
+.prks-deployment-list {
+    list-style: none;
+    margin: 10px 0 0;
+    padding: 0;
+}
+.prks-deployment-list__item {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+}
+.prks-deployment-list__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px var(--space-sm);
+}
+.prks-deployment-list__key {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--text-xs);
+    word-break: break-all;
+}
+.prks-deployment-list__value {
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
+}
+.prks-deployment-list__summary {
+    margin: 2px 0 0;
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
 }
 .prks-perf-client .prks-settings-section__title {
     margin-top: 0;

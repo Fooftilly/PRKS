@@ -1,0 +1,110 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API \u2014 Deployment settings slice",
+    "version": "0.1.0",
+    "description": "Vertical-slice OpenAPI for the deployment settings Settings shows (#612). Read-only: deployment values are set on the host and need a restart."
+  },
+  "paths": {
+    "/api/deployment-settings": {
+      "get": {
+        "operationId": "getDeploymentSettings",
+        "summary": "Deployment settings, read-only",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Every deployment setting with its effective value and source. Secrets and host paths show only that they are set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's role is not the Library owner."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "DeploymentSetting": {
+        "additionalProperties": false,
+        "description": "One deployment setting as this web process read it at start.",
+        "properties": {
+          "key": {
+            "description": "The environment variable, such as PRKS_HTTP_THREADS.",
+            "title": "Key",
+            "type": "string"
+          },
+          "summary": {
+            "description": "What it controls.",
+            "title": "Summary",
+            "type": "string"
+          },
+          "value": {
+            "description": "The effective value. For a default, the documented default; for a secret, '(set, hidden)'; for a path on the host, 'set on the host'.",
+            "title": "Value",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the value came from; the storage root may also come from the command line or the bootstrap file.",
+            "enum": [
+              "environment",
+              "default",
+              "command line",
+              "bootstrap file"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "default": {
+            "type": "string",
+            "description": "The documented default.",
+            "title": "Default"
+          }
+        },
+        "required": [
+          "key",
+          "summary",
+          "value",
+          "source",
+          "default"
+        ],
+        "type": "object"
+      },
+      "DeploymentSettings": {
+        "additionalProperties": false,
+        "description": "GET /api/deployment-settings body (Library owner only).",
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentSetting"
+            },
+            "title": "Settings",
+            "type": "array"
+          },
+          "editable_in_browser": {
+            "const": false,
+            "description": "Always false: these values are changed on the host and need a restart.",
+            "title": "Editable In Browser",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settings",
+          "editable_in_browser"
+        ],
+        "type": "object"
+      }
+    }
+  }
+}
