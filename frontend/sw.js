@@ -681,8 +681,7 @@
                 const type = res && res.headers && typeof res.headers.get === 'function'
                     ? (res.headers.get('Content-Type') || '') : '';
                 // The setup page of a first run (#612) is not the application shell.
-                const setupPage = res && res.headers && typeof res.headers.get === 'function' &&
-                    res.headers.get('X-PRKS-Shell') === 'setup';
+                const setupPage = isSetupPage(res);
                 if ((path === '/' || path === '/index.html') && !setupPage &&
                     /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
@@ -908,12 +907,22 @@
     // atomic-or-nothing contract as the native Cache.addAll(), but built on
     // an injectable fetchImpl so it is exercisable from a plain Node test
     // without a real ServiceWorkerGlobalScope/CacheStorage.
+    function isSetupPage(response) {
+        return !!(response && response.headers && typeof response.headers.get === 'function' &&
+            response.headers.get('X-PRKS-Shell') === 'setup');
+    }
+
     function precacheRequiredPaths(cache, fetchImpl, paths) {
         return Promise.all(
             paths.map(function (path) {
                 return Promise.resolve(fetchImpl(path)).then(function (response) {
                     if (!response || !response.ok) {
                         throw new Error('required shell precache fetch failed: ' + path);
+                    }
+                    // A first run's setup page (#612) is not the application
+                    // shell: the install fails and the previous worker stays.
+                    if (isSetupPage(response)) {
+                        throw new Error('setup page served in place of the shell: ' + path);
                     }
                     return cache.put(path, response.clone ? response.clone() : response);
                 });
