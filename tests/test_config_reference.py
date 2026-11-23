@@ -232,6 +232,20 @@ class AppTests(unittest.TestCase):
                 self.assertTrue(any(key in line for line in problems_found), text)
                 self.assertRegex(text, key + r" +\(invalid\)")
 
+    def test_config_check_marks_every_value_a_conflict_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            url_file = os.path.join(directory, "url")
+            Path(url_file).write_text("postgresql://u:pw@db/prks\n", encoding="utf-8")
+            code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+                                         "PRKS_DATABASE_URL_FILE": url_file})
+        self.assertEqual(code, 2)
+        self.assertEqual(text.count("problem: "), 1, text)
+        self.assertRegex(text, r"PRKS_DATABASE_URL_FILE +\(invalid\)")
+        code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+                                     "PRKS_AUTH": "loopback-owner"}, "--host", "0.0.0.0")
+        self.assertEqual(code, 2)
+        self.assertRegex(text, r"PRKS_AUTH +\(invalid\)")
+
     def test_config_check_shows_an_accepted_pool_size(self) -> None:
         code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_DB_POOL_MAX": "12"})
         self.assertEqual(code, 0, text)
