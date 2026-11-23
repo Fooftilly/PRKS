@@ -19,6 +19,8 @@ Refusals (``StorageRootRefused`` with a stable ``reason``; nothing written):
 - ``choose_same_root``: the target is the current root.
 - ``storage_selection_changed``: the setup page's process no longer serves
   the folder the bootstrap file selects (another process chose one).
+- ``sqlite_catalogue``: the target holds a pre-0.8 SQLite Library, which a
+  start refuses.
 - ``open_another_library_refused``: the target already belongs to a
   database. "Open another library" is not offered under PostgreSQL: only a
   copy of this root could pass the start check, and switching to a copy
@@ -221,6 +223,13 @@ def choose_root(
             again = refusal_before_target(env, current_root)
             if again is not None:
                 raise again
+            if any(os.path.lexists(os.path.join(folder, name)) for name in paths.SQLITE_CATALOGUES):
+                # A start refuses this root (prks_app.refuse_sqlite_catalogue).
+                raise _refuse(
+                    "sqlite_catalogue",
+                    "That folder holds a pre-0.8 SQLite Library, which this version does not read. "
+                    "Choose a new folder.",
+                )
             target_marker = _read_marker_or_none(folder)
             if _claimed(target_marker):
                 raise _refuse(

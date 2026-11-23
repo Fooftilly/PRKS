@@ -148,6 +148,14 @@ class ChooseTests(ChooseTestCase):
         other = self.make_root(self.path("someone-elses"), claimed=True)
         self.assert_refused("open_another_library_refused", other)
 
+    def test_a_folder_holding_a_sqlite_library_is_refused(self) -> None:
+        target = self.path("old-sqlite")
+        os.mkdir(target)
+        with open(os.path.join(target, "prks_data.db"), "wb") as handle:
+            handle.write(b"SQLite format 3\x00")
+        self.assert_refused("sqlite_catalogue", target)
+        self.assertFalse(os.path.exists(os.path.join(target, MARKER)))
+
     def test_the_current_folder_is_not_a_choice(self) -> None:
         choose_root(self.path("lib"), environ=self.environ)
         self.assert_refused("choose_same_root", self.path("lib"))
