@@ -200,11 +200,31 @@ class AppTests(unittest.TestCase):
             malformed = os.path.join(directory, "config.json")
             Path(malformed).write_text("{not json", encoding="utf-8")
             base = {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_CONFIG_FILE": malformed}
-            code, text = self.run_check({**base, "PRKS_STORAGE": directory})
+            root = os.path.join(directory, "root")
+            os.mkdir(root)
+            code, text = self.run_check({**base, "PRKS_STORAGE": root})
             self.assertEqual(code, 0, text)  # PRKS_STORAGE wins; the bootstrap file is never read
             code, text = self.run_check(base)
         self.assertEqual(code, 2)
         self.assertIn("bootstrap configuration file is not usable", text)
+
+    def test_config_check_refuses_a_root_a_start_would_refuse(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            a_file = os.path.join(directory, "plain-file")
+            Path(a_file).write_text("", encoding="utf-8")
+            cases = {
+                a_file: "is not a directory",
+                os.path.join(directory, "absent", "root"): "parent directory of the storage root",
+            }
+            for root, expected in cases.items():
+                with self.subTest(root=root):
+                    code, text = self.run_check(
+                        {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_STORAGE": root}
+                    )
+                    self.assertEqual(code, 2, text)
+                    self.assertIn(expected, text)
+                    self.assertRegex(text, r"PRKS_STORAGE +\(invalid\)")
+            self.assertFalse(os.path.exists(os.path.join(directory, "absent")))
 
     def test_config_check_checks_a_value_another_problem_would_hide(self) -> None:
         # Loopback-owner on a public address stops the auth parser before it
