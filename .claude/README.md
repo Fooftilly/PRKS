@@ -9,7 +9,7 @@ These files do **nothing required** for building, testing, or running PRKS.
 They only matter if you use [Claude Code](https://code.claude.com/) with the
 [SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
 
-1. **Python 3.12+** (already required by PRKS). The shared hooks do **not**
+1. **Python 3.14+** (already required by PRKS). The shared hooks do **not**
    hard-code a bare `python3` command on Windows. Launchers follow the same
    interpreter preference as PRKS tooling:
    - POSIX / Git Bash (`run_hook.sh`): `python3`, then `python`, then `py -3`

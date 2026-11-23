@@ -476,6 +476,52 @@ def select_config(args):
         raise SystemExit(2) from None
 
 
+def serve_identity(args, config, identity, http_settings):
+    """Open the root, start identity and jobs, and serve; the web pool closes on every exit.
+
+    ``identity`` comes from :func:`prepare_identity`, whose pool is open. A
+    refusal at any later step (the root, the start check, setup) still exits
+    with its own message and status: the pool is closed here rather than by
+    its finaliser at interpreter exit, which joins the pool's threads late
+    (on Python 3.13 it held every stop for seconds) and which Python 3.14
+    refuses, printing a traceback. Closing twice is harmless.
+    """
+    from backend.startup_profile import phase as startup_phase
+
+    library_database = identity[0]
+    try:
+        # Held until this process exits: root.lock shared, beside worker and
+        # migrate (L-D-1 #630).
+        with startup_phase("startup_storage_open"):
+            bound_root = open_storage(config, paired=True)
+            refuse_sqlite_catalogue(library_database, bound_root)
+        # The start check and bump under that shared lease; a first run waits
+        # here, serving nothing, until setup is ready (a --testing run on a fresh
+        # database bootstraps its owner instead).
+        with startup_phase("startup_identity"), SetupWait().watching() as wait:
+            auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
+        with startup_phase("startup_jobs"):
+            jobs = start_jobs(auth)
+        # Every later open stays beneath the root that was validated and leased,
+        # even if a root symlink is retargeted while the process runs.
+        config = bound_root.anchor(config)
+        with startup_phase("startup_bind"):
+            config = bind_storage(config, library_database=library_database)
+        with startup_phase("startup_logging"):
+            setup_logging(config)
+            bound_root.log_binding()
+        if jobs is not None:
+            # The embedded worker's object maintenance acts on the leased root only.
+            with startup_phase("startup_worker_bind"):
+                jobs.bind_root(config.root)
+
+        port = args.port if args.port is not None else (8070 if args.testing else PORT)
+        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
+                   readiness=readiness_for(auth, config.root), http=http_settings)
+    finally:
+        library_database.close()
+
+
 if __name__ == "__main__":
     from backend.startup_profile import phase as startup_phase, record_imports
 
@@ -517,38 +563,4 @@ if __name__ == "__main__":
     # touched.
     with startup_phase("startup_identity_config"):
         identity = prepare_identity(args, config)
-        library_database = identity[0]
-    # Held until this process exits: root.lock shared, beside worker and
-    # migrate (L-D-1 #630).
-    with startup_phase("startup_storage_open"):
-        bound_root = open_storage(config, paired=True)
-        refuse_sqlite_catalogue(library_database, bound_root)
-    # The start check and bump under that shared lease; a first run waits
-    # here, serving nothing, until setup is ready (a --testing run on a fresh
-    # database bootstraps its owner instead).
-    with startup_phase("startup_identity"), SetupWait().watching() as wait:
-        auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
-    with startup_phase("startup_jobs"):
-        jobs = start_jobs(auth)
-    # Every later open stays beneath the root that was validated and leased,
-    # even if a root symlink is retargeted while the process runs.
-    config = bound_root.anchor(config)
-    with startup_phase("startup_bind"):
-        config = bind_storage(config, library_database=library_database)
-    with startup_phase("startup_logging"):
-        setup_logging(config)
-        bound_root.log_binding()
-    if jobs is not None:
-        # The embedded worker's object maintenance acts on the leased root only.
-        with startup_phase("startup_worker_bind"):
-            jobs.bind_root(config.root)
-
-    port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    try:
-        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
-                   readiness=readiness_for(auth, config.root), http=http_settings)
-    finally:
-        # Close the web pool here rather than leave it to its finaliser at
-        # interpreter exit, which joins the pool's threads late (on Python
-        # 3.13 it held every stop for seconds).
-        auth.db.close()
+    serve_identity(args, config, identity, http_settings)

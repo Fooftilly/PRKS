@@ -7,7 +7,7 @@ PRKS is designed to run locally. It needs Python and a PostgreSQL 18 server; Doc
 
 ## Requirements
 
-PRKS currently requires Python 3.12 or newer, the exact Python package versions pinned in `requirements.txt`, and a PostgreSQL 18 database (`PRKS_DATABASE_URL`). The application validates the Python environment before it touches the database, the storage root, or the network.
+PRKS currently requires Python 3.14 or newer, the exact Python package versions pinned in `requirements.txt`, and a PostgreSQL 18 database (`PRKS_DATABASE_URL`). The application validates the Python environment before it touches the database, the storage root, or the network.
 
 Use a project-local virtual environment. On distributions that enforce PEP 668, do not bypass the package manager with `sudo pip` or `--break-system-packages`.
 

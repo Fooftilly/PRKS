@@ -3,7 +3,7 @@
   "description": "PRKS accepted-dependency inventory. Prefer authoritative_source references over duplicated version literals. Freshness is Dependabot/explicit watchers; consistency is scripts/dependency_gate.py (offline).",
   "python_min_version": [
     3,
-    12
+    14
   ],
   "dependencies": [
     {

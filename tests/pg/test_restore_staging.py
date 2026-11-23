@@ -294,7 +294,13 @@ class StagingTests(StagingTestCase):
         self.assertNotIn("Swapped", json.dumps(self.staged(staged, "works"), default=str))
 
     def test_member_bytes_changed_in_place_after_r0_are_refused(self) -> None:
-        self.create(self.put(b"%PDF in place"))
+        # The object is larger than the archive file's read buffer, so the
+        # bytes R0 hashed are not still buffered when staging reads works.csv
+        # again. Python 3.14 sizes that buffer max(min(st_blksize, 8 MiB),
+        # io.DEFAULT_BUFFER_SIZE): 128 KiB by default, more on some filesystems.
+        blksize = getattr(os.stat(self.out), "st_blksize", 0)  # absent on Windows
+        buffer = max(min(blksize, 8 * 1024 * 1024), io.DEFAULT_BUFFER_SIZE)
+        self.create(self.put(b"%PDF in place " + os.urandom(2 * buffer)))
         result = self.backup()
         archive = r0.open_archive(result.path, staging_dir=self.staging_dir)
         self.addCleanup(archive.close)

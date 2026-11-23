@@ -128,6 +128,7 @@ def smoke(browser, origin: str, work_id: str, related_work_id: str, *, engine: s
     try:
         page, context, collector = open_app_page(
             browser, origin, allow_webkit_resize_notices=(engine == "webkit"),
+            allow_webkit_select_style_notices=(engine == "webkit"),
         )
         stage = "folders"
         page.locator("[data-prks-folder-library-view]").wait_for(
