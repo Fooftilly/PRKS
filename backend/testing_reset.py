@@ -52,7 +52,12 @@ from backend.db.migrate import MIGRATION_LOCK_KEY, is_empty_database
 from backend.db.testing_guard import TestingDatabaseRefused, prove_testing_connection
 from backend.storage import paths
 from backend.storage.errors import StorageRootError
-from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
+from backend.storage.file_lock import (
+    ExclusiveFileLock,
+    LockBusy,
+    LockUnavailable,
+    is_link_or_reparse_point,
+)
 from backend.storage.root_binding import check_no_foreign_tree, is_top_level_os_metadata
 from backend.storage.root_marker import (
     CLAIM_LOCK_NAME,
@@ -395,14 +400,14 @@ def _root_changed(plan: ResetPlan) -> ResetRefused:
     )
 
 
-def _open_leased_root(plan: ResetPlan, lease: Optional[ExclusiveFileLock]) -> int:
+def _open_leased_root(plan: ResetPlan, lease: ExclusiveFileLock) -> int:
     """A handle on the root that holds ``lease`` (and that its path still names); refuse otherwise."""
     try:
         fd = os.open(plan.root_real, _DIR_FLAGS)
     except OSError:
         raise _root_changed(plan) from None
     try:
-        same = lease is None or _same_file(
+        same = _same_file(
             os.stat(os.path.join(MAINTENANCE_DIRNAME, ROOT_LOCK_NAME), dir_fd=fd, follow_symlinks=False),
             lease.fstat(),
         )
@@ -423,12 +428,33 @@ def _require_path_names(plan: ResetPlan, root_fd: int) -> None:
         raise _root_changed(plan)
 
 
-def _lease(root_real: str) -> Optional[ExclusiveFileLock]:
-    """The root's lease, held exclusive, or ``None`` when the root has no maintenance directory yet."""
-    if not os.path.isdir(os.path.join(root_real, MAINTENANCE_DIRNAME)):
-        return None
+def _ensure_maintenance_dir(plan: ResetPlan) -> None:
+    """Create the root's ``.prks-maintenance/`` (as a start would) so its lease always exists to take."""
+    maintenance = os.path.join(plan.root_real, MAINTENANCE_DIRNAME)
     try:
-        return ExclusiveFileLock.acquire(lease_path(root_real))
+        os.mkdir(maintenance, 0o700)
+    except FileExistsError:
+        pass
+    except OSError:
+        raise ResetRefused(
+            "root_lock_unavailable", "Could not lock the testing data root. Nothing was deleted."
+        ) from None
+    try:
+        st = os.stat(maintenance, follow_symlinks=False)
+    except OSError:
+        raise _root_changed(plan) from None
+    if is_link_or_reparse_point(st) or not stat.S_ISDIR(st.st_mode):
+        raise ResetRefused(
+            "root_not_plain",
+            f"{maintenance} is not a plain directory. --reset-db never deletes past it. Nothing was deleted.",
+        )
+
+
+def _lease(plan: ResetPlan) -> ExclusiveFileLock:
+    """The root's lease, held exclusive; refuse when another process holds it in any mode."""
+    _ensure_maintenance_dir(plan)
+    try:
+        return ExclusiveFileLock.acquire(lease_path(plan.root_real))
     except LockBusy:
         raise ResetRefused(
             "root_in_use",
@@ -476,12 +502,15 @@ def execute(plan: ResetPlan) -> None:
     """
     _require_safe_delete(plan)
     _recheck_root(plan)
-    lease = _lease(plan.root_real)
+    lease: Optional[ExclusiveFileLock] = None
     root_fd: Optional[int] = None
     try:
-        # Under the lease: the root the person confirmed, still paired and in bounds.
-        _recheck_root(plan)
         if _has_files(plan.root_real):
+            # A populated root is only ever emptied under its exclusive lease,
+            # created first when the root has no maintenance directory, so a
+            # start racing the reset either holds it (refused) or waits.
+            lease = _lease(plan)
+            _recheck_root(plan)
             try:
                 check_no_foreign_tree(plan.root_real)
             except StorageRootError as exc:

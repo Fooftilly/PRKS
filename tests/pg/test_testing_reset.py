@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,7 +24,7 @@ import psycopg
 from psycopg import sql
 
 from backend.db.migrate import is_empty_database, migrate, verify_schema
-from backend.storage.file_lock import ExclusiveFileLock, SharedFileLock
+from backend.storage.file_lock import ExclusiveFileLock, LockBusy, SharedFileLock
 from backend.storage.root_marker import (
     MAINTENANCE_DIRNAME,
     ROOT_LOCK_NAME,
@@ -270,8 +271,8 @@ class TestingResetTests(unittest.TestCase):
     def test_a_root_re_paired_while_the_lease_is_taken_is_not_deleted(self) -> None:
         real_lease = testing_reset._lease
 
-        def lease_then_repair(root_real: str) -> Any:
-            lease = real_lease(root_real)
+        def lease_then_repair(plan: Any) -> Any:
+            lease = real_lease(plan)
             with open(marker_path(self.root), encoding="utf-8") as handle:
                 document = json.load(handle)
             document["instance_id"] = "IN-" + "D" * 32
@@ -391,6 +392,39 @@ class TestingResetTests(unittest.TestCase):
             self.reset(CONFIRM_WORD)
         self.assertEqual(caught.exception.reason, "root_in_use")
         self.assert_untouched()
+
+    def test_a_root_without_a_maintenance_dir_is_leased_before_anything_is_deleted(self) -> None:
+        # A start racing the reset creates the maintenance directory and takes
+        # the shared lease first: the reset must see it and delete nothing.
+        shutil.rmtree(os.path.join(self.root, MAINTENANCE_DIRNAME))
+        real_ensure = testing_reset._ensure_maintenance_dir
+        started: list[SharedFileLock] = []
+
+        def ensure_then_start(plan: Any) -> None:
+            real_ensure(plan)
+            started.append(SharedFileLock.acquire(lease_path(self.root)))
+        self.addCleanup(lambda: [lease.release() for lease in started])
+        with mock.patch.object(testing_reset, "_ensure_maintenance_dir", side_effect=ensure_then_start):
+            with self.assertRaises(ResetRefused) as caught:
+                self.reset(CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_in_use")
+        self.assert_untouched()
+
+    def test_a_root_without_a_maintenance_dir_keeps_a_start_out_while_it_is_emptied(self) -> None:
+        shutil.rmtree(os.path.join(self.root, MAINTENANCE_DIRNAME))
+        real_drop = testing_reset._drop_schemas
+        refused: list[bool] = []
+
+        def drop_while_a_start_tries(plan: Any) -> None:
+            try:
+                SharedFileLock.acquire(lease_path(self.root)).release()
+            except LockBusy:
+                refused.append(True)
+            real_drop(plan)
+        with mock.patch.object(testing_reset, "_drop_schemas", side_effect=drop_while_a_start_tries):
+            self.assertTrue(self.reset(CONFIRM_WORD))
+        self.assertEqual(refused, [True])
+        self.assertEqual(self.files(), [os.path.join(MAINTENANCE_DIRNAME, ROOT_LOCK_NAME)])
 
     def test_a_missing_root_needs_only_the_database(self) -> None:
         missing = os.path.join(os.path.dirname(self.root), "missing")
