@@ -294,7 +294,10 @@ class StagingTests(StagingTestCase):
         self.assertNotIn("Swapped", json.dumps(self.staged(staged, "works"), default=str))
 
     def test_member_bytes_changed_in_place_after_r0_are_refused(self) -> None:
-        self.create(self.put(b"%PDF in place"))
+        # The object is larger than the archive file's read buffer
+        # (io.DEFAULT_BUFFER_SIZE, 128 KiB since Python 3.14), so the bytes
+        # R0 hashed are not still buffered when staging reads works.csv again.
+        self.create(self.put(b"%PDF in place " + os.urandom(2 * io.DEFAULT_BUFFER_SIZE)))
         result = self.backup()
         archive = r0.open_archive(result.path, staging_dir=self.staging_dir)
         self.addCleanup(archive.close)
