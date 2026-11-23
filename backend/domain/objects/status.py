@@ -17,12 +17,15 @@ filename, so names are private data (``log_safety``).
 
 The counts cover the whole instance: one data root serves every Library
 (postgresql-architecture §6.2).
+
+``server_locator`` names the database as the server reports it: libpq fills
+options a connection string leaves out, so the configuration alone may not.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import LiteralString
+from typing import LiteralString, Optional
 
 from backend.db.database import Database, Transaction
 from backend.domain.objects.lifecycle import references
@@ -55,6 +58,31 @@ SELECT
   count(*) FILTER (WHERE hold) AS held
 FROM prks.object_cleanup_claims
 """
+
+
+_SERVER_LOCATOR: LiteralString = """
+SELECT host(inet_server_addr()) AS host, inet_server_port() AS port, current_database() AS name
+"""
+
+
+@dataclass(frozen=True)
+class ServerLocator:
+    """Where the pool is connected; ``host`` is None over a Unix socket."""
+
+    host: Optional[str]
+    port: Optional[int]
+    name: Optional[str]
+
+
+def server_locator(db: Database) -> ServerLocator:
+    row = db.query(lambda tx: tx.execute(_SERVER_LOCATOR).fetchone())
+    if row is None:
+        return ServerLocator(None, None, None)
+    return ServerLocator(
+        host=row["host"] if isinstance(row["host"], str) and row["host"] else None,
+        port=int(row["port"]) if row["port"] is not None else None,
+        name=row["name"] if isinstance(row["name"], str) and row["name"] else None,
+    )
 
 
 @dataclass(frozen=True)
