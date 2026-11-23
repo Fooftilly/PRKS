@@ -457,18 +457,23 @@ def _check_placement(
 
 
 def check_root_placement(config: Any, *, config_file_path: Optional[str] = None) -> str:
-    """The read-only placement checks a bind runs first (V2/V11/V12); returns the resolved root.
+    """The read-only path checks a bind runs first (V2/V11/V12 and the log file); returns the resolved root.
 
-    ``prks_app.py config check`` uses it to report an unusable root without
-    leasing, marking or creating anything.
+    ``prks_app.py config check`` uses it to report an unusable root, or a log
+    file aliasing one of the root's operational files, without leasing,
+    marking or creating anything.
     """
-    return _check_placement(
+    root_real = _check_placement(
         config.root,
         testing=config.mode == "testing",
         config_file_path=config_file_path,
         distribution=_distribution.DISTRIBUTION,
         home=None,
     )
+    _check_log_file_not_operational(
+        getattr(config, "log_file", None), root_real, config_file_path=config_file_path
+    )
+    return root_real
 
 
 def _find_nested_marker(root_real: str) -> Optional[str]:
