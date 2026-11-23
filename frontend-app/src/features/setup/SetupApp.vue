@@ -415,6 +415,10 @@ defineExpose({ step })
           The database, where files are stored and the network address are set by whoever runs PRKS. They
           are not changed here.
         </p>
+        <p class="prks-setup__note">
+          Back up your Library once it has something in it: Settings → Backup &amp; restore downloads a backup
+          file. PRKS does not make backups on its own.
+        </p>
         <PrksInlineMessage v-if="finishError" tone="error" status>{{ finishError }}</PrksInlineMessage>
         <div class="prks-form-actions">
           <PrksButton variant="secondary" :disabled="busy" @click="go('account')">Back</PrksButton>
