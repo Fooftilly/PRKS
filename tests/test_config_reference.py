@@ -223,7 +223,7 @@ class AppTests(unittest.TestCase):
                     )
                     self.assertEqual(code, 2, text)
                     self.assertIn(expected, text)
-                    self.assertRegex(text, r"PRKS_STORAGE +\(invalid\)")
+                    self.assertRegex(text, r"PRKS_STORAGE +" + re.escape(root) + r" +\(selected by env; refused\)")
             self.assertFalse(os.path.exists(os.path.join(directory, "absent")))
 
     def test_config_check_checks_a_value_another_problem_would_hide(self) -> None:

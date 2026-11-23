@@ -508,9 +508,11 @@ def run_config(argv, environ=None, *, out=None):
     rows = effective(env, invalid, unchecked)
     if storage is not None:
         # The root a start would select: the CLI flag, PRKS_STORAGE, the
-        # bootstrap file or a default, whichever wins (§5.2).
-        rows = [Effective(row.key, storage.root, f"selected by {storage.root_source}")
-                if row.key == "PRKS_STORAGE" else row for row in rows]
+        # bootstrap file or a default, whichever wins (§5.2), and whether a
+        # start would refuse it.
+        refused = any(problem.startswith(_STORAGE_PROBLEM) for problem in delegated)
+        source = f"selected by {storage.root_source}" + ("; refused" if refused else "")
+        rows = [Effective(row.key, storage.root, source) if row.key == "PRKS_STORAGE" else row for row in rows]
     width = max(len(row.key) for row in rows)
     for row in rows:
         print(f"{row.key.ljust(width)}  {row.shown}  ({row.source})", file=stdout)
@@ -626,6 +628,9 @@ def _probe(group, environ, bare, probe_args):
     return "unchecked", None
 
 
+_STORAGE_PROBLEM = "storage root: "
+
+
 def _parser_problems(environ, args):
     """``({parser: problem or None}, storage)``: each parser a start runs, in its own words (no value echoed)."""
     from backend.db.config import load_database_config, with_testing_default
@@ -642,12 +647,11 @@ def _parser_problems(environ, args):
     try:
         # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
         storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
-        selected = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
+        storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
         # The read-only checks a bind runs first; nothing is leased or created.
-        check_root_placement(selected, config_file_path=_bootstrap_file(selected, storage_env))
-        storage = selected
+        check_root_placement(storage, config_file_path=_bootstrap_file(storage, storage_env))
     except StorageRootError as exc:
-        found["storage"] = f"storage root: {exc.message}"
+        found["storage"] = f"{_STORAGE_PROBLEM}{exc.message}"
     try:
         HttpServerSettings.from_env(environ)
     except HttpSettingsError as exc:
