@@ -1,6 +1,6 @@
 # Produce an offline-ready frontend distribution in the builder stage.
 # Runtime images still require only Python; no Node/npm is installed.
-FROM python:3.12-slim AS frontend-builder
+FROM python:3.15-slim AS frontend-builder
 WORKDIR /build
 COPY frontend ./frontend
 COPY scripts/benchmark_classic_script_bundle.py scripts/build_classic_distribution.py ./scripts/
@@ -14,7 +14,7 @@ RUN mkdir -p dist \
          echo "PRKS_CLASSIC_BUNDLES must be 0 or 1" >&2; exit 1; \
        fi
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 
