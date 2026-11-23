@@ -83,7 +83,7 @@ Every `serve`, `migrate` and `worker` start checks that the database and the dat
 
 ### Health endpoints
 
-`GET /healthz` answers 200 while the process runs, with no I/O. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly the code's, setup is complete and the data root is still paired with this database. Otherwise it answers 503, with no detail. On a first run, `serve` waits for setup before it opens its port, so until setup is complete `/readyz` cannot be reached at all rather than answering 503. Without `PRKS_AUTH`, `/readyz` always answers 503.
+`GET /healthz` answers 200 while the process runs, with no I/O. `GET /readyz` answers 200 only when the database is reachable, its schema is exactly the code's, setup is complete and the data root is still paired with this database. Otherwise it answers 503, with no detail. On a first run, `serve` serves only the setup page and `/api/setup` while it waits for setup, so `/readyz` answers 503 until setup is complete. Without `PRKS_AUTH`, `/readyz` always answers 503.
 
 ## Database migrations
 

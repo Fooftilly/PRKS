@@ -27,7 +27,7 @@
     // frontend/js/editor-recovery.js, or
     // frontend/js/route-model.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = 'dbc14bd9ae38';
+    const DEPENDENCY_REVISION = '92d38ce640eb';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,
@@ -680,7 +680,9 @@
                 const path = pathnameOf(request.url, env.origin || 'http://localhost/');
                 const type = res && res.headers && typeof res.headers.get === 'function'
                     ? (res.headers.get('Content-Type') || '') : '';
-                if ((path === '/' || path === '/index.html') &&
+                // The setup page of a first run (#612) is not the application shell.
+                const setupPage = isSetupPage(res);
+                if ((path === '/' || path === '/index.html') && !setupPage &&
                     /^text\/html(?:\s*;|$)/i.test(type) && isCacheableStaticResponse(res)) {
                     const cache = await cachesApi.open(SHELL_CACHE);
                     cache.put('/', res.clone()).catch(function () {});
@@ -905,12 +907,22 @@
     // atomic-or-nothing contract as the native Cache.addAll(), but built on
     // an injectable fetchImpl so it is exercisable from a plain Node test
     // without a real ServiceWorkerGlobalScope/CacheStorage.
+    function isSetupPage(response) {
+        return !!(response && response.headers && typeof response.headers.get === 'function' &&
+            response.headers.get('X-PRKS-Shell') === 'setup');
+    }
+
     function precacheRequiredPaths(cache, fetchImpl, paths) {
         return Promise.all(
             paths.map(function (path) {
                 return Promise.resolve(fetchImpl(path)).then(function (response) {
                     if (!response || !response.ok) {
                         throw new Error('required shell precache fetch failed: ' + path);
+                    }
+                    // A first run's setup page (#612) is not the application
+                    // shell: the install fails and the previous worker stays.
+                    if (isSetupPage(response)) {
+                        throw new Error('setup page served in place of the shell: ' + path);
                     }
                     return cache.put(path, response.clone ? response.clone() : response);
                 });

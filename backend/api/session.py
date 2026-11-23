@@ -246,6 +246,11 @@ def _normalized(origin: Origin) -> tuple[str, str, int]:
 
 def origin_allowed(request: HttpRequest, auth: WebAuth) -> bool:
     """The §9.3 CSRF rule for a mutation (see the module docs)."""
+    return origin_matches(request, auth.settings.public_origin)
+
+
+def origin_matches(request: HttpRequest, public_origin: Optional[Origin]) -> bool:
+    """:func:`origin_allowed` for an expected ``public_origin`` (``None``: the request's own)."""
     fetch_sites = request.all("Sec-Fetch-Site")
     if len(fetch_sites) > 1:
         return False
@@ -260,7 +265,7 @@ def origin_allowed(request: HttpRequest, auth: WebAuth) -> bool:
     origin = request.parse_origin(origins[0])
     if origin is None:
         return False
-    expected = auth.settings.public_origin
+    expected = public_origin
     if expected is None:
         hostname, port = request.request_host
         expected = (request.scheme, hostname, port)

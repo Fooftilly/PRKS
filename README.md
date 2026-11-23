@@ -53,14 +53,13 @@ uv pip install --python ./.venv/bin/python -r requirements.txt
 
 The dependency gate checks which installer the interpreter has (pip, `uv` on `PATH`, or `ensurepip` to bootstrap pip) and prints a command that works.
 
-`prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** it touches the database, the storage root or the network. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI. It then applies the database schema, binds the data root (`data/` by default) and, on a first run, **waits for setup**. In a second terminal, with the same `PRKS_DATABASE_URL`, create the owner account and the Library ([admin bootstrap](docs/admin-bootstrap.md)):
+`prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** it touches the database, the storage root or the network. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI. It then applies the database schema, binds the data root (`data/` by default) and, on a first run, **waits for setup**. While it waits it serves only a setup page. In a second terminal, with the same `PRKS_DATABASE_URL`, get a one-time setup token:
 
 ```bash
 ./.venv/bin/python prks_app.py admin bootstrap issue-token --root data
-./.venv/bin/python prks_app.py admin bootstrap complete --root data --login alice
 ```
 
-The first command prints a one-time token; the second asks for it and for the owner's password. The waiting server then starts serving. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and sign in with that login and password.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080), enter the token, choose the owner's login and password and the Library's name, and finish. The server then starts serving the Library and you are signed in. Without a browser, `admin bootstrap complete --root data --login alice` does the same from the terminal ([admin bootstrap](docs/admin-bootstrap.md)).
 
 The process listens on **127.0.0.1:8080** only. Optional port (still loopback):
 
@@ -129,11 +128,10 @@ cp .env.example .env   # then set UID/GID to `id -u`/`id -g`
 docker compose up -d
 ```
 
-On a new, empty data directory `web` binds it as a PRKS data root (`prks-root.json`) and then **waits for setup**: it serves nothing, and `/readyz` stays unreachable (the container is unhealthy) until you create the owner and the Library. `worker` waits too. Run setup in the waiting `web` container ([admin bootstrap](docs/admin-bootstrap.md)):
+On a new, empty data directory `web` binds it as a PRKS data root (`prks-root.json`) and then **waits for setup**: it serves only the setup page, and `/readyz` answers 503 (the container is unhealthy) until you create the owner and the Library. `worker` waits too. Get a setup token in the waiting `web` container, then open [http://127.0.0.1:8080](http://127.0.0.1:8080) and finish setup in the browser ([admin bootstrap](docs/admin-bootstrap.md) has the terminal-only and unattended ways):
 
 ```bash
 docker compose exec web python /app/prks_app.py admin bootstrap issue-token --root /data
-docker compose exec web python /app/prks_app.py admin bootstrap complete --root /data --login alice
 ```
 
 `web` then starts serving at [http://127.0.0.1:8080](http://127.0.0.1:8080) and turns healthy. Loopback is the default publish address. Expose PRKS on a network only over HTTPS: behind a reverse proxy such as Caddy, with `PRKS_PUBLISH_HOST`, `PRKS_PUBLIC_ORIGIN` and `PRKS_TRUSTED_PROXIES` set in `.env` (recommended for the internet), or with PRKS's own TLS (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`). [HTTPS](docs/https.md) has a Compose example of each. `PRKS_TRUSTED_PROXIES` must name only the proxy, as `web` sees it, and the web port must then be reachable only by that proxy: drop the published port and put the proxy on the Compose network with an address of its own. A proxy on the host reaches `web` through Docker's bridge gateway, not from `127.0.0.1`, so `PRKS_TRUSTED_PROXIES=127.0.0.1` does not match it ([HTTPS](docs/https.md) has the Compose example). Anyone who reaches the port from a trusted address can set `X-Forwarded-For` and spread their sign-in attempts over invented addresses.
