@@ -456,6 +456,21 @@ def _check_placement(
     return root_real
 
 
+def check_root_placement(config: Any, *, config_file_path: Optional[str] = None) -> str:
+    """The read-only placement checks a bind runs first (V2/V11/V12); returns the resolved root.
+
+    ``prks_app.py config check`` uses it to report an unusable root without
+    leasing, marking or creating anything.
+    """
+    return _check_placement(
+        config.root,
+        testing=config.mode == "testing",
+        config_file_path=config_file_path,
+        distribution=_distribution.DISTRIBUTION,
+        home=None,
+    )
+
+
 def _find_nested_marker(root_real: str) -> Optional[str]:
     """Bounded scan for a marker one or two levels below ``root_real``."""
     if not os.path.isdir(root_real):

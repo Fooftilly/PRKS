@@ -20,7 +20,7 @@ from backend.server import (
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootError
 from backend.storage.resolver import bootstrap_config_path
-from backend.storage.root_binding import open_storage_root
+from backend.storage.root_binding import check_root_placement, open_storage_root
 
 
 def parse_host(value):
@@ -106,6 +106,20 @@ def build_parser():
     return parser
 
 
+def _bootstrap_file(config, environ):
+    """The bootstrap config file a root must not contain (V11), or None."""
+    if config.mode == "testing":
+        # Testing mode never consults the bootstrap file (storage-architecture §5.3).
+        return None
+    try:
+        return bootstrap_config_path(environ)
+    except StorageRootError:
+        # A higher-precedence source won, so this path was never used; an
+        # unparseable value names no file that could sit inside the root.
+        # (A config_file selection already validated it in from_env.)
+        return None
+
+
 def open_storage(config, *, paired=False):
     """Validate, lease and mark the selected root; exit with a message on refusal.
 
@@ -113,21 +127,12 @@ def open_storage(config, *, paired=False):
     holds the root's lease shared, beside ``worker`` and ``migrate``, and
     leaves the marker's pairing to the start check (L-D-1 #630).
     """
-    config_file = None
-    if config.mode != "testing":
-        # Only used to check the root does not contain it (V11); testing mode
-        # never consults the bootstrap file (storage-architecture §5.3).
-        try:
-            config_file = bootstrap_config_path(os.environ)
-        except StorageRootError:
-            # A higher-precedence source won, so this path was never used; an
-            # unparseable value names no file that could sit inside the root.
-            # (A config_file selection already validated it in from_env.)
-            config_file = None
     try:
         # Logging is configured only after the root is open (its log file
         # lives there), so the open's warnings wait for log_binding().
-        return open_storage_root(config, config_file_path=config_file, defer_logs=True, paired=paired)
+        return open_storage_root(
+            config, config_file_path=_bootstrap_file(config, os.environ), defer_logs=True, paired=paired
+        )
     except StorageRootError as exc:
         print(f"PRKS cannot open its storage root: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
@@ -590,7 +595,10 @@ def _parser_problems(environ, args):
     try:
         # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
         storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
-        storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
+        selected = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
+        # The read-only checks a bind runs first; nothing is leased or created.
+        check_root_placement(selected, config_file_path=_bootstrap_file(selected, storage_env))
+        storage = selected
     except StorageRootError as exc:
         found["storage"] = f"storage root: {exc.message}"
     try:
