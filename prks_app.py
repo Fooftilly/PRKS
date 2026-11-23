@@ -82,6 +82,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "With --testing only: after you type RESET, permanently delete the testing "
+            "database's PRKS schemas and the testing data root's files, then start on a "
+            "new, empty testing instance."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=None,
@@ -174,6 +183,35 @@ def prepare_identity(args, config, environ=None):
     db = Database(db_config)
     migrate_on_start(db, env, testing=testing)
     return db, settings
+
+
+def reset_testing_instance(config, environ=None):
+    """``--testing --reset-db``: empty the testing database and data root once the person confirms.
+
+    Returns when the instance was reset, so the start that follows applies the
+    schema and sets the instance up as on a first start; exits 1 when the
+    person cancels and 2 on any refusal (``backend.testing_reset``). With
+    ``PRKS_MIGRATE_ON_START=0`` the start would refuse the emptied database,
+    so the reset is refused before anything is deleted.
+    """
+    from backend.db.config import load_database_config
+    from backend.db.errors import DatabaseConfigError
+    from backend.testing_reset import main_reset
+
+    env = os.environ if environ is None else environ
+    if (env.get("PRKS_MIGRATE_ON_START") or "1").strip() != "1":
+        print(
+            "PRKS did not reset the testing instance: --reset-db starts PRKS on the emptied "
+            "database, which needs PRKS_MIGRATE_ON_START unset or 1. Nothing was deleted.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        conninfo = load_database_config(env, role="web").conninfo
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+    main_reset(conninfo, config.root)
 
 
 def refuse_untested_database(conninfo):
@@ -373,6 +411,10 @@ def refuse_sqlite_catalogue(library_database, bound_root):
         raise SystemExit(2)
 
 
+# The schema refusals that only a new instance fixes (backend.db.migrate).
+RECREATE_REASONS = frozenset({"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order"})
+
+
 def migrate_on_start(db, environ, *, testing=False):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
@@ -402,6 +444,11 @@ def migrate_on_start(db, environ, *, testing=False):
         message = exc.message
         if testing and exc.reason == "database_unavailable":
             message += " For --testing, start the local database with scripts/dev-postgres."
+        if testing and exc.reason in RECREATE_REASONS:
+            message += (
+                " For --testing, run prks_app.py --testing --reset-db to delete this testing "
+                "instance and start on a new, empty one."
+            )
         print(f"PRKS cannot start: {message}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -513,6 +560,62 @@ def select_config(args):
         raise SystemExit(2) from None
 
 
+def serve_identity(args, config, identity, http_settings):
+    """Open the root, start identity and jobs, and serve; the web pool closes on every exit.
+
+    ``identity`` comes from :func:`prepare_identity`, whose pool is open. A
+    refusal at any later step (the root, the start check, setup) still exits
+    with its own message and status: the pool is closed here rather than by
+    its finaliser at interpreter exit, which joins the pool's threads late
+    (on Python 3.13 it held every stop for seconds) and which Python 3.14
+    refuses, printing a traceback. Closing twice is harmless.
+    """
+    from backend.startup_profile import phase as startup_phase
+
+    library_database = identity[0]
+    try:
+        # Held until this process exits: root.lock shared, beside worker and
+        # migrate (L-D-1 #630).
+        with startup_phase("startup_storage_open"):
+            bound_root = open_storage(config, paired=True)
+            refuse_sqlite_catalogue(library_database, bound_root)
+        port = args.port if args.port is not None else (8070 if args.testing else PORT)
+        testing = config.mode == "testing"
+        # The start check and bump under that shared lease; a first run waits
+        # here until setup is ready, serving only the browser setup page (#612)
+        # meanwhile (a --testing run on a fresh database bootstraps its owner
+        # instead). Leaving the wait stops the setup server before the normal
+        # server binds the same address.
+        wait = SetupWait(
+            setup=setup_phase_starter(
+                identity, bound_root, host=args.host, port=port, http=http_settings, testing=testing
+            ),
+            setup_hint=setup_url(args.host, port, tls=http_settings.tls, public_origin=identity[1].public_origin),
+            token_command=token_command(bound_root.root_real),
+        )
+        with startup_phase("startup_identity"), wait.watching():
+            auth = start_identity(identity, bound_root, testing=testing, wait=wait)
+        with startup_phase("startup_jobs"):
+            jobs = start_jobs(auth)
+        # Every later open stays beneath the root that was validated and leased,
+        # even if a root symlink is retargeted while the process runs.
+        config = bound_root.anchor(config)
+        with startup_phase("startup_bind"):
+            config = bind_storage(config, library_database=library_database)
+        with startup_phase("startup_logging"):
+            setup_logging(config)
+            bound_root.log_binding()
+        if jobs is not None:
+            # The embedded worker's object maintenance acts on the leased root only.
+            with startup_phase("startup_worker_bind"):
+                jobs.bind_root(config.root)
+
+        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
+                   readiness=readiness_for(auth, config.root), http=http_settings)
+    finally:
+        library_database.close()
+
+
 if __name__ == "__main__":
     from backend.startup_profile import phase as startup_phase, record_imports
 
@@ -521,7 +624,10 @@ if __name__ == "__main__":
     refuse_stale_library_backend()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
-    args = build_parser().parse_args(role_argv)
+    parser = build_parser()
+    args = parser.parse_args(role_argv)
+    if args.reset_db and not args.testing:
+        parser.error("--reset-db only resets a testing instance: use it with --testing.")
     if args.testing:
         enter_testing_mode()
 
@@ -544,52 +650,11 @@ if __name__ == "__main__":
         except HttpSettingsError as exc:
             print(f"PRKS cannot start its HTTP server: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
+    if args.reset_db:
+        # Before the schema step, which refuses a changed schema file.
+        reset_testing_instance(config)
     # Authentication settings, the pool and the schema, before the root is
     # touched.
     with startup_phase("startup_identity_config"):
         identity = prepare_identity(args, config)
-        library_database = identity[0]
-    # Held until this process exits: root.lock shared, beside worker and
-    # migrate (L-D-1 #630).
-    with startup_phase("startup_storage_open"):
-        bound_root = open_storage(config, paired=True)
-        refuse_sqlite_catalogue(library_database, bound_root)
-    port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    testing = config.mode == "testing"
-    # The start check and bump under that shared lease; a first run waits
-    # here until setup is ready, serving only the browser setup page (#612)
-    # meanwhile (a --testing run on a fresh database bootstraps its owner
-    # instead). Leaving the wait stops the setup server before the normal
-    # server binds the same address.
-    wait = SetupWait(
-        setup=setup_phase_starter(
-            identity, bound_root, host=args.host, port=port, http=http_settings, testing=testing
-        ),
-        setup_hint=setup_url(args.host, port, tls=http_settings.tls, public_origin=identity[1].public_origin),
-        token_command=token_command(bound_root.root_real),
-    )
-    with startup_phase("startup_identity"), wait.watching():
-        auth = start_identity(identity, bound_root, testing=testing, wait=wait)
-    with startup_phase("startup_jobs"):
-        jobs = start_jobs(auth)
-    # Every later open stays beneath the root that was validated and leased,
-    # even if a root symlink is retargeted while the process runs.
-    config = bound_root.anchor(config)
-    with startup_phase("startup_bind"):
-        config = bind_storage(config, library_database=library_database)
-    with startup_phase("startup_logging"):
-        setup_logging(config)
-        bound_root.log_binding()
-    if jobs is not None:
-        # The embedded worker's object maintenance acts on the leased root only.
-        with startup_phase("startup_worker_bind"):
-            jobs.bind_root(config.root)
-
-    try:
-        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
-                   readiness=readiness_for(auth, config.root), http=http_settings)
-    finally:
-        # Close the web pool here rather than leave it to its finaliser at
-        # interpreter exit, which joins the pool's threads late (on Python
-        # 3.13 it held every stop for seconds).
-        auth.db.close()
+    serve_identity(args, config, identity, http_settings)

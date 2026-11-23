@@ -1,6 +1,6 @@
 # PRKS
 
-PRKS is a research-library application. The runtime is Python 3.12 served by Uvicorn, PostgreSQL 18 as the only Library store, managed local files, and a Vue 3 + TypeScript frontend that is replacing the legacy JavaScript UI.
+PRKS is a research-library application. The runtime is Python 3.14 served by Uvicorn, PostgreSQL 18 as the only Library store, managed local files, and a Vue 3 + TypeScript frontend that is replacing the legacy JavaScript UI.
 
 Where things are documented:
 

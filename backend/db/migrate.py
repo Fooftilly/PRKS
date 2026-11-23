@@ -241,7 +241,7 @@ def _lock(conn: psycopg.Connection[Any]) -> None:
 _FIRST_NORMAL_OBJECT_ID = 16384
 
 
-def _is_empty(conn: psycopg.Connection[Any]) -> bool:
+def is_empty_database(conn: psycopg.Connection[Any]) -> bool:
     """True when no object was created in this database after initdb.
 
     Every per-database catalog with an ``oid`` column is checked, so a
@@ -302,7 +302,7 @@ def _ensure_ledger(conn: psycopg.Connection[Any]) -> list[AppliedFile]:
     applied = _applied(conn)
     if applied is not None:
         return applied
-    if not _is_empty(conn):
+    if not is_empty_database(conn):
         raise MigrationError(
             "foreign_schema",
             "The database already holds objects and has no prks.schema_migrations; "

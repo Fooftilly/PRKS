@@ -277,7 +277,7 @@ def pinned_openapi_core_version(repo_root: Path | None = None) -> str:
 
 def python_min_version(repo_root: Path | None = None) -> tuple[int, ...]:
     inv = load_inventory(repo_root)
-    raw = inv.get("python_min_version") or [3, 12]
+    raw = inv.get("python_min_version") or [3, 14]
     return tuple(int(x) for x in raw)
 
 
@@ -476,7 +476,7 @@ def format_venv_create_commands(
     is_windows: bool,
     python_cmd: str | None = None,
     use_uv: bool = False,
-    python_min: Sequence[int] = (3, 12),
+    python_min: Sequence[int] = (3, 14),
 ) -> list[str]:
     venv_python = r".venv\Scripts\python.exe" if is_windows else "./.venv/bin/python"
     if use_uv:
@@ -508,7 +508,7 @@ def _venv_create_lines(ctx: PlatformContext) -> list[str]:
     try:
         python_min: Sequence[int] = python_min_version()
     except (OSError, ValueError):
-        python_min = (3, 12)
+        python_min = (3, 14)
     lines: list[str] = []
     if use_uv and not ctx.uv_available:
         lines.append(
@@ -568,6 +568,34 @@ def remediation_message(
                 "  # or: docker compose build && docker compose up",
             ]
         )
+        return "\n".join(lines)
+
+    if python_too_old is not None:
+        # Reinstalling packages cannot change this interpreter's version, so a
+        # fresh virtual environment with a supported Python is the only fix.
+        lines.extend(
+            [
+                "Reinstalling packages cannot change this interpreter's version.",
+                "Install uv (https://docs.astral.sh/uv/) outside the old .venv if it"
+                " is not on PATH; uv can download a supported Python. Then remove"
+                " the old .venv and run:",
+            ]
+        )
+        lines.extend(
+            f"  {cmd}"
+            for cmd in format_venv_create_commands(
+                is_windows=ctx.is_windows, use_uv=True, python_min=python_too_old[1]
+            )
+        )
+        venv_python = r".venv\Scripts\python.exe" if ctx.is_windows else "./.venv/bin/python"
+        lines.append(
+            "For the test suite, also run: "
+            f"uv pip install --python {venv_python} -r requirements-dev.txt"
+        )
+        if ctx.is_windows:
+            lines.append(r"Then run PRKS with: .venv\Scripts\python.exe prks_app.py")
+        else:
+            lines.append("Then run PRKS with: ./.venv/bin/python prks_app.py")
         return "\n".join(lines)
 
     if ctx.in_venv:
@@ -1797,6 +1825,14 @@ def dockerfile_python_base_version(text: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2)))
 
 
+def dockerfile_python_versions(text: str) -> list[tuple[int, int]]:
+    """Return ``(major, minor)`` of every ``FROM python:X.Y…`` stage, in order."""
+    return [
+        (int(m.group(1)), int(m.group(2)))
+        for m in _DOCKER_FROM_PYTHON_RE.finditer(text)
+    ]
+
+
 def dockerfile_apt_packages(text: str) -> list[str]:
     """Direct ``apt-get install`` package names, in first-seen order."""
     collapsed = _DOCKER_LINE_CONT_RE.sub(" ", text)
@@ -1874,15 +1910,18 @@ def validate_dockerfile(repo_root: Path | None = None) -> GateResult:
         return result
 
     need = python_min_version(root)[:2]
-    if image_ver < need:
-        result.fail(
-            "dockerfile_python_version",
-            (
-                f"Dockerfile FROM python:{image_ver[0]}.{image_ver[1]} is older than "
-                f"python_min_version {need[0]}.{need[1]}"
-            ),
-            str(path),
-        )
+    # Every Python stage (builder and runtime) runs exactly the Python that CI
+    # tests (python_min_version), not merely a newer one.
+    for ver in dockerfile_python_versions(text):
+        if ver != need:
+            result.fail(
+                "dockerfile_python_version",
+                (
+                    f"Dockerfile FROM python:{ver[0]}.{ver[1]} does not match "
+                    f"python_min_version {need[0]}.{need[1]}"
+                ),
+                str(path),
+            )
     return result
 
 

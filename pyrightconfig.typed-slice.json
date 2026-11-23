@@ -171,6 +171,7 @@
     "backend/domain/research/constraints.py",
     "backend/domain/saved_views/constraints.py",
     "backend/db/testing_guard.py",
+    "backend/testing_reset.py",
     "backend/jobs/__init__.py",
     "backend/services/__init__.py",
     "backend/services/work_pdf_replace.py",
@@ -230,6 +231,7 @@
     "backend/db/config.py",
     "backend/db/migrate.py",
     "backend/db/testing_guard.py",
+    "backend/testing_reset.py",
     "backend/derived_cache_publish.py",
     "backend/domain/__init__.py",
     "backend/domain/annotations/__init__.py",
@@ -326,7 +328,7 @@
   "exclude": [
     "**/__pycache__"
   ],
-  "pythonVersion": "3.12",
+  "pythonVersion": "3.14",
   "typeCheckingMode": "standard",
   "reportUndefinedVariable": "error",
   "reportUnboundVariable": "error",
