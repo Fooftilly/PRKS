@@ -202,6 +202,12 @@ class ChooseSpellingAndFenceTests(ChooseTestCase):
         # Without a source, a claim that need not be selected goes ahead too.
         with choose_mod.selection_fence(unavailable, self.path("cli"), require_selected=False):
             pass
+        # A lock that cannot be opened (here a directory in its place): no
+        # choice can be written either, so a claim that need not be selected goes ahead.
+        os.remove(self.config_file + ".lock")
+        os.makedirs(self.config_file + ".lock")
+        with choose_mod.selection_fence(self.environ, self.path("cli"), require_selected=False):
+            pass
         # A root that must still be the selection cannot be checked: refused.
         with self.assertRaises(StorageRootError):
             with choose_mod.selection_fence(unavailable, self.path("cli"), require_selected=True):

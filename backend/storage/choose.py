@@ -142,8 +142,8 @@ def selection_fence(
     (``storage_selection_changed``). A no-op in testing mode and when
     ``--storage-root``/``PRKS_STORAGE`` selects the root (``source``, when the
     caller knows it, or else the environment): nothing can choose then. When
-    the configuration directory cannot be created, nothing can record a choice
-    either, so a caller that need not be selected claims without the lock.
+    the config lock cannot be created or opened, nothing can record a choice
+    either, so a caller that need not be selected claims without it.
     """
     if paths.testing_from_value(environ.get("PRKS_TESTING", "")):
         yield
@@ -164,8 +164,10 @@ def selection_fence(
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(BootstrapConfigStore(path).transaction())
-        except BootstrapConfigError as exc:
-            if require_selected or exc.reason != "config_dir_unavailable":
+        except BootstrapConfigError:
+            # The lock cannot be created or opened (not busy: that is
+            # BootstrapConfigLockTimeout), so no choice can be written either.
+            if require_selected:
                 raise
         else:
             if require_selected and os.path.realpath(_current_root(environ)) != os.path.realpath(root):
