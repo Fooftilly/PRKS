@@ -188,12 +188,24 @@ class ChooseTests(ChooseTestCase):
 
 
 class ChooseSpellingAndFenceTests(ChooseTestCase):
-    def test_a_folder_that_expands_again_is_refused(self) -> None:
+    def test_a_folder_is_expanded_once_and_recorded_as_validated(self) -> None:
         env = {**self.environ, "BASE": self.path("example", "$SUB"), "SUB": "expanded"}
-        self.assert_refused("root_unparseable", "$BASE", environ=env)
-        self.assertFalse(os.path.exists(self.path("example")))
+        os.mkdir(self.path("example"))
+        chosen = choose_root("$BASE", environ=env)
+        self.assertEqual(chosen.root, self.path("example", "$SUB"))
+        self.assertEqual(self.selected(), chosen.root)
+        self.assertIsNotNone(_marker(chosen.root))  # the recorded folder is the one made a root
+        self.assertFalse(os.path.exists(self.path("example", "expanded")))
 
-    def test_the_fence_skips_a_root_the_command_line_selects(self) -> None:
+    def test_a_command_line_root_still_serializes_with_choices(self) -> None:
+        with choose_mod.selection_fence(self.environ, self.path("cli"), require_selected=False, source="cli"):
+            # A choice from a process without the override waits for the claim.
+            with self.assertRaises(StorageRootError) as caught:
+                with BootstrapConfigStore(self.config_file, lock_timeout=0.05).transaction():
+                    pass
+            self.assertEqual(caught.exception.reason, "bootstrap_config_locked")
+
+    def test_the_fence_skips_an_unusable_config_lock(self) -> None:
         unavailable = {**self.environ, "PRKS_CONFIG_FILE": os.path.join(self.path("file"), "config.json")}
         with open(self.path("file"), "w", encoding="utf-8"):
             pass  # a file where the configuration directory should be

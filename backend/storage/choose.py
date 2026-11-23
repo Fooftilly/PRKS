@@ -111,9 +111,8 @@ def _read_marker_or_none(root: str) -> Optional[RootMarker]:
 def _target_config(target: str, environ: Mapping[str, str]) -> Any:
     from backend.storage.config import StorageConfig
 
-    # As if given on the command line: a new, empty folder may become a root.
-    env = {key: value for key, value in environ.items() if key not in ("PRKS_STORAGE", "PRKS_TESTING")}
-    return StorageConfig.from_env(cli_root=target, environ=env)
+    # The normalized folder as the bootstrap file will hold it: never expanded again.
+    return StorageConfig.for_chosen_root(target, environ=environ)
 
 
 def _selection_changed() -> StorageRootRefused:
@@ -148,12 +147,12 @@ def selection_fence(
     if paths.testing_from_value(environ.get("PRKS_TESTING", "")):
         yield
         return
-    if source is not None and source not in CHOOSABLE_SOURCES:
+    if source == "testing":
         yield
         return
     try:
-        source = resolver.resolve_storage_root(cli_root=None, environ=environ, testing=False).source
-        path = resolver.bootstrap_config_path(environ) if source in CHOOSABLE_SOURCES else None
+        resolved = resolver.resolve_storage_root(cli_root=None, environ=environ, testing=False).source
+        path = resolver.bootstrap_config_path(environ) if resolved in CHOOSABLE_SOURCES else None
     except StorageRootError:
         if require_selected:
             raise
@@ -199,13 +198,6 @@ def choose_root(
     if early is not None:
         raise early
     folder = resolver.normalize_root_spelling(target, environ=env, what="the Library folder", cwd=cwd)
-    if resolver.normalize_root_spelling(folder, environ=env, what="the Library folder") != folder:
-        # A start expands the recorded folder again (V1): only a spelling that
-        # expansion leaves alone names the same folder at every start.
-        raise _refuse(
-            "root_unparseable",
-            "That folder's name still holds an environment reference or ~ after expansion. Choose it by its path.",
-        )
     store = BootstrapConfigStore(resolver.bootstrap_config_path(env))
     with store.transaction() as txn:
         snapshot = txn.read()
