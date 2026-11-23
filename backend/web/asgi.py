@@ -706,6 +706,8 @@ class UvicornServing:
     prks_auth: Any
     prks_jobs: Any
     prks_readiness: Any
+    # The setup phase of a first run (backend.api.setup, #612); None otherwise.
+    prks_setup: Any = None
 
     def __init__(
         self,

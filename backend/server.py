@@ -9,6 +9,7 @@ import time
 import re
 import uuid
 import logging
+import threading
 import ipaddress
 import itertools
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -191,6 +192,8 @@ _JSON_BODY_REJECTED = object()
 # Get the path to the frontend directory
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 frontend_dir = os.path.join(base_dir, "frontend")
+# The page a first run serves while it waits for setup (#612).
+SETUP_PAGE = "setup.html"
 
 # Ensure the frontend dir exists so static serving has a root at startup
 os.makedirs(frontend_dir, exist_ok=True)
@@ -802,11 +805,8 @@ class PRKSHandler(HttpHandlerBase):
         self._prks_library_epoch = None
         self._prks_request_context = None
         method = (getattr(self, "command", "") or "").upper()
-        auth = getattr(self.server, "prks_auth", None)
-        if auth is None:
-            self._reject_request(503, "identity_not_started", "identity_not_started")
-            return False
         from backend.api import session as session_api
+        from backend.api import setup as setup_api
 
         def read_json():
             data = self._read_json_body()
@@ -814,20 +814,33 @@ class PRKSHandler(HttpHandlerBase):
                 return session_api.ANSWERED
             return {} if data is _JSON_BODY_ABSENT else data
 
-        outcome = session_api.handle(
-            auth,
-            session_api.HttpRequest(
-                method=method,
-                path=parsed_path.path,
-                headers=self.headers,
-                peer=str(self.client_address[0]),
-                request_host=self._prks_request_host,
-                scheme=self._prks_scheme,
-                parse_origin=parse_request_origin,
-                read_json=read_json,
-                route_fences_epoch=True,
-            ),
+        request = session_api.HttpRequest(
+            method=method,
+            path=parsed_path.path,
+            headers=self.headers,
+            peer=str(self.client_address[0]),
+            request_host=self._prks_request_host,
+            scheme=self._prks_scheme,
+            parse_origin=parse_request_origin,
+            read_json=read_json,
+            route_fences_epoch=True,
         )
+        setup = getattr(self.server, "prks_setup", None)
+        if setup is not None:
+            # The setup phase of a first run (#612): only /api/setup answers.
+            reply = setup_api.handle_setup_phase(setup, request)
+            if reply is not None:
+                self._send_session_reply(reply)
+            return False
+        auth = getattr(self.server, "prks_auth", None)
+        if auth is None:
+            self._reject_request(503, "identity_not_started", "identity_not_started")
+            return False
+        reply = setup_api.handle_after_setup(request)
+        if reply is not None:
+            self._send_session_reply(reply)
+            return False
+        outcome = session_api.handle(auth, request)
         if isinstance(outcome, session_api.Admitted):
             self._prks_library_epoch = outcome.epoch
             self._prks_request_context = outcome.context
@@ -961,7 +974,7 @@ class PRKSHandler(HttpHandlerBase):
             p = urlparse(self.path).path
             if not p.startswith("/api/"):
                 leaf = p.rstrip("/").split("/")[-1].lower()
-                if p == "/" or p == "/index.html":
+                if p == "/" or p == "/index.html" or p == "/" + SETUP_PAGE:
                     # SPA shell should never be cached by intermediary proxies/CDNs.
                     self.send_header("Cache-Control", "no-store, max-age=0")
                 elif leaf == "sw.js":
@@ -1086,11 +1099,18 @@ class PRKSHandler(HttpHandlerBase):
         if candidate != frontend_root and not inside(candidate):
             self.send_error(404, "Not Found")
             return
+        shell = 'index.html'
+        if getattr(self.server, "prks_setup", None) is not None:
+            # The setup phase of a first run (#612): the setup page stands in
+            # for the application shell, which has no Library to show yet.
+            shell = SETUP_PAGE
+            if candidate == os.path.join(frontend_root, 'index.html'):
+                candidate = frontend_root
         if candidate == frontend_root or not os.path.exists(candidate):
             if candidate != frontend_root:
                 # end_headers picks the shell's Cache-Control by path.
-                self.path = '/index.html'
-            candidate = os.path.realpath(os.path.join(frontend_root, 'index.html'))
+                self.path = '/' + shell
+            candidate = os.path.realpath(os.path.join(frontend_root, shell))
         if not inside(candidate) or not os.path.isfile(candidate):
             self.send_error(404, "Not Found")
             return
@@ -2305,3 +2325,68 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
             httpd.serve_forever()
         except KeyboardInterrupt:
             LOGGER.info("server_stopping reason=keyboard_interrupt")
+
+
+class SetupServer:
+    """The HTTP server of a first run's setup phase (#612), serving on a thread.
+
+    It serves the setup page and ``/api/setup`` only
+    (:mod:`backend.api.setup`): no Library, no storage, ``/readyz`` 503.
+    :meth:`stop` closes the listening socket, so the normal server binds the
+    same address once setup is done.
+    """
+
+    def __init__(self, httpd: Any) -> None:
+        self._httpd = httpd
+        self._thread = threading.Thread(target=httpd.serve_forever, name="prks-setup-server", daemon=True)
+
+    @property
+    def server_address(self) -> tuple[str, int]:
+        return self._httpd.server_address
+
+    def start(self) -> "SetupServer":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        try:
+            self._httpd.shutdown()
+            self._thread.join(timeout=GRACEFUL_SETUP_STOP_S)
+        finally:
+            self._httpd.server_close()
+
+
+# Bounds the wait for the setup server's thread after shutdown() returned.
+GRACEFUL_SETUP_STOP_S = 5.0
+
+
+def start_setup_server(phase: Any, port=PORT, host=DEFAULT_HOST, http=None, *, testing=False) -> SetupServer:
+    """Bind and start the setup phase's server (#612); the caller stops it.
+
+    The bind, Host and CSRF rules are the normal server's; ``phase`` is the
+    process's :class:`backend.domain.identity.web_setup.SetupPhase`. Storage
+    is not bound yet, so ``testing`` says whether this is a testing process
+    (which may use the ``--testing`` port).
+    """
+    host = normalize_listen_host(host)
+    trusted_hosts = parse_trusted_hosts(os.environ.get("PRKS_TRUSTED_HOSTS", ""))
+    if not testing:
+        _validate_listen_port(port)
+    from backend.web.settings import HttpServerSettings
+
+    http = http or HttpServerSettings()
+    httpd = make_server((host, port), http)
+    httpd.prks_bind_host = host
+    httpd.prks_trusted_hosts = trusted_hosts
+    httpd.prks_auth = None
+    httpd.prks_jobs = None
+    httpd.prks_readiness = None
+    httpd.prks_setup = phase
+    public_origin = phase.settings.public_origin
+    if public_origin is not None:
+        httpd.prks_trusted_hosts = trusted_hosts | {public_origin[1]}
+    LOGGER.info(
+        "setup_server_starting bind_scope=%s port=%s tls=%s",
+        safe_bind_scope(host), port, "on" if http.tls else "off",
+    )
+    return SetupServer(httpd).start()
