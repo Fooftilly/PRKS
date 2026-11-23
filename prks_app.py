@@ -189,14 +189,23 @@ def reset_testing_instance(config, environ=None):
     """``--testing --reset-db``: empty the testing database and data root once the person confirms.
 
     Returns when the instance was reset, so the start that follows applies the
-    schema and bootstraps a new owner; exits 1 when the person cancels and 2
-    on any refusal (``backend.testing_reset``).
+    schema and sets the instance up as on a first start; exits 1 when the
+    person cancels and 2 on any refusal (``backend.testing_reset``). With
+    ``PRKS_MIGRATE_ON_START=0`` the start would refuse the emptied database,
+    so the reset is refused before anything is deleted.
     """
     from backend.db.config import load_database_config
     from backend.db.errors import DatabaseConfigError
     from backend.testing_reset import main_reset
 
     env = os.environ if environ is None else environ
+    if (env.get("PRKS_MIGRATE_ON_START") or "1").strip() != "1":
+        print(
+            "PRKS did not reset the testing instance: --reset-db starts PRKS on the emptied "
+            "database, which needs PRKS_MIGRATE_ON_START unset or 1. Nothing was deleted.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
     try:
         conninfo = load_database_config(env, role="web").conninfo
     except DatabaseConfigError as exc:

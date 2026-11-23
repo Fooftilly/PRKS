@@ -277,9 +277,12 @@ class TestingResetTests(unittest.TestCase):
 
     # --- prks_app.py ----------------------------------------------------------
 
-    def run_app(self, *args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
+    def run_app(
+        self, *args: str, stdin: str = "", extra_env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("PRKS_")}
         env["PRKS_DATABASE_URL"] = self.conninfo
+        env.update(extra_env or {})
         return subprocess.run(
             [sys.executable, "prks_app.py", *args, "--storage-root", self.root],
             cwd=_PROJECT_DIR, env=env, input=stdin, capture_output=True, text=True, timeout=120,
@@ -298,6 +301,12 @@ class TestingResetTests(unittest.TestCase):
         self.assertEqual(done.returncode, 2, done.stderr)
         self.assertIn("changed after this database applied it", done.stderr)
         self.assertIn("prks_app.py --testing --reset-db", done.stderr)
+        self.assert_untouched()
+
+    def test_the_app_refuses_reset_db_when_the_start_would_not_apply_the_schema(self) -> None:
+        done = self.run_app("--testing", "--reset-db", extra_env={"PRKS_MIGRATE_ON_START": "0"})
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertIn("PRKS_MIGRATE_ON_START", done.stderr)
         self.assert_untouched()
 
     def test_the_app_never_reads_the_confirmation_from_a_pipe(self) -> None:
