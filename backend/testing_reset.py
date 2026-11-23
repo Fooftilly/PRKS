@@ -348,10 +348,23 @@ def _lease(root_real: str) -> Optional[ExclusiveFileLock]:
         ) from None
 
 
+def _recheck_root(plan: ResetPlan) -> None:
+    """Refuse when the root changed since the prompt (moved, relinked, repaired or re-paired)."""
+    if check_root(plan.root, instance=plan.database.instance) != plan.root_real:
+        raise ResetRefused(
+            "root_changed",
+            f"The testing data root {plan.root} changed after you confirmed. Nothing was deleted. "
+            "Run --reset-db again.",
+        )
+
+
 def execute(plan: ResetPlan) -> None:
     """Check the tree, empty the database, then the data root, holding the root's lease throughout."""
+    _recheck_root(plan)
     lease = _lease(plan.root_real)
     try:
+        # Under the lease: the root the person confirmed, still paired and in bounds.
+        _recheck_root(plan)
         if os.path.isdir(plan.root_real):
             try:
                 check_no_foreign_tree(plan.root_real)

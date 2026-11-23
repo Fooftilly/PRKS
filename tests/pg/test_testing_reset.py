@@ -253,6 +253,33 @@ class TestingResetTests(unittest.TestCase):
         self.assertIn("someone_elses", self.schemas())
         self.assertIn(os.path.join("pdfs", "a.pdf"), self.files())
 
+    def test_a_root_relinked_while_the_prompt_is_open_is_not_deleted(self) -> None:
+        # Missing when planned, a link to another populated tree when confirmed.
+        missing = os.path.join(os.path.dirname(self.root), "later")
+
+        def link_then_confirm() -> str:
+            os.symlink(self.root, missing)
+            return CONFIRM_WORD
+        self.addCleanup(lambda: os.path.lexists(missing) and os.unlink(missing))
+        with self.assertRaises(ResetRefused) as caught:
+            run(self.conninfo, missing, stdin=io.StringIO(), stdout=io.StringIO(), read=link_then_confirm)
+        self.assertEqual(caught.exception.reason, "root_changed")
+        self.assert_untouched()
+
+    def test_a_root_filled_while_the_prompt_is_open_is_not_deleted(self) -> None:
+        empty = os.path.join(os.path.dirname(self.root), "empty")
+        os.mkdir(empty)
+
+        def fill_then_confirm() -> str:
+            with open(os.path.join(empty, "someone.pdf"), "wb") as handle:
+                handle.write(b"%PDF")
+            return CONFIRM_WORD
+        with self.assertRaises(ResetRefused) as caught:
+            run(self.conninfo, empty, stdin=io.StringIO(), stdout=io.StringIO(), read=fill_then_confirm)
+        self.assertEqual(caught.exception.reason, "root_not_paired")
+        self.assertTrue(os.path.exists(os.path.join(empty, "someone.pdf")))
+        self.assert_untouched()
+
     def test_an_unmarked_root_with_files_is_refused(self) -> None:
         os.unlink(marker_path(self.root))
         with self.assertRaises(ResetRefused) as caught:
