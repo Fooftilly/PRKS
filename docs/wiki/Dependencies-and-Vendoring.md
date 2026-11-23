@@ -76,6 +76,9 @@ directory, Docker, GitHub Actions), majors included; security updates arrive
 separately. It cannot rebuild committed outputs, so land the batch through one
 follow-up PR that adds the rebuild, and revert a breaking major there while adding
 an `ignore` rule for it in `.github/dependabot.yml` until it is migrated.
+When the batch touches several npm islands, rebuild each one: the gate run at
+the end of each refresh reports the islands not yet rebuilt, so only the last
+refresh is expected to pass.
 
 For an npm dependency PR, rebuild the affected island with
 `bash scripts/refresh_dependency_artifacts.sh frontend-app`,
