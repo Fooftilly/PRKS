@@ -339,6 +339,27 @@ class TestingResetTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(outside, "keep.pdf")))
         self.assertTrue(os.path.exists(os.path.join(outside, "moved", "a.pdf")))
 
+    def test_a_root_replaced_while_the_schemas_drop_is_never_emptied(self) -> None:
+        # The original root moves aside and a new directory takes its path
+        # after the handle was opened; only the original is emptied.
+        original = os.path.join(os.path.dirname(self.root), "original")
+        real_drop = testing_reset._drop_schemas
+
+        def drop_then_replace(plan: Any) -> None:
+            real_drop(plan)
+            os.rename(self.root, original)
+            os.mkdir(self.root)
+            with open(os.path.join(self.root, "newcomer.pdf"), "wb") as handle:
+                handle.write(b"%PDF")
+        with mock.patch.object(testing_reset, "_drop_schemas", side_effect=drop_then_replace):
+            self.reset(CONFIRM_WORD)
+        self.assertEqual(self.files(), ["newcomer.pdf"])
+        kept = sorted(
+            os.path.relpath(os.path.join(dirpath, name), original)
+            for dirpath, _dirs, names in os.walk(original) for name in names
+        )
+        self.assertEqual(kept, [os.path.join(MAINTENANCE_DIRNAME, ROOT_LOCK_NAME)])
+
     def test_without_handle_relative_deletion_nothing_is_asked_or_deleted(self) -> None:
         missing = os.path.join(os.path.dirname(self.root), "missing")
         with mock.patch.object(testing_reset, "_fd_delete_supported", return_value=False):
