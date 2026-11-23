@@ -345,8 +345,8 @@ def render_reference() -> str:
         "",
         "Check a deployment before starting it with `python prks_app.py config check`: it validates every"
         " setting the way a start does and prints the effective values and where each comes from, with"
-        " secrets hidden. It reads the data root's path but not the root itself: a start can still refuse a"
-        " root for its filesystem or its contents.",
+        " secrets hidden. It checks the data root read-only (its path and placement) without leasing, marking"
+        " or creating it: a start can still refuse a root for its filesystem or its contents.",
         "",
     ]
     for scope in Scope:
