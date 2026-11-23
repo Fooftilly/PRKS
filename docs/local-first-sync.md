@@ -1176,8 +1176,17 @@ new intent after conflict resolution receives a new UUID.
 
 **Only never-sent pending rows may coalesce.** A pending retry after a lost
 response might already be ledgered. Its ID must survive and that Tag control
-stays disabled until it settles, like a syncing control. Other Tags stay usable.
-Conflicted rows also require explicit resolution rather than coalescing.
+stays disabled until it settles. Other Tags stay usable. Conflicted rows also
+require explicit resolution rather than coalescing.
+
+A Work Tag control whose change is syncing stays enabled. A click on it waits,
+within a bounded budget, for the send to settle and records the new intent
+against the base that send produced; disabling it for the send's milliseconds
+only swallowed clicks already in flight. The sync runtime stores a row as
+acknowledged before it emits the ACK to the live editor, so a coalesce also
+takes an acknowledged, not yet retired row in the same scope as its base when
+that row is newer than the caller's. Folder Tag controls have no such wait and
+still disable while syncing.
 
 Effective Tags are acknowledged Work state plus durable pending/conflicted
 operations. Unsynchronized state is never baked into cache records. A bounded

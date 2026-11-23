@@ -341,8 +341,14 @@ remain connection-required. The Work-Tag implementation contract is in
   never executes. Future revisions are protocol errors, not stale conflicts.
 - At most one active operation per Work/Tag. Coalesce only never-sent pending
   rows; retries might already have reached the server. Never edit an immutable
-  envelope. Syncing/retrying controls disable only that relationship. Explicit
-  conflict reapplication creates a new ID against the reported server revision.
+  envelope. Retrying (pending after an attempt) and conflicted controls disable
+  only that relationship. A Work Tag control stays enabled while its change is
+  syncing: the click waits (bounded) for that send to settle and is recorded
+  against the base it produced. Folder Tag controls still disable while syncing.
+  A coalesce measures against an acknowledged, not yet retired row when it is
+  newer than the caller's base (the ACK is stored before it is emitted).
+  Explicit conflict reapplication creates a new ID against the reported server
+  revision.
 - ACK reconciliation must complete before retiring the durable operation.
   Cache-write failure leaves it retryable; no mandatory extra GET. Missing cache
   bases remain missing. Pending/conflicted overlays never enter cache records.
