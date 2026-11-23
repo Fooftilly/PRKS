@@ -15,6 +15,7 @@ import os
 import re
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import prks_app
@@ -260,6 +261,16 @@ class AppTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 env = {} if raw is None else {"PRKS_MIGRATE_ON_START": raw}
                 self.assertEqual(prks_app._migrate_on_start_value(env), value)
+        # --reset-db goes on for a blank value and refuses 0, before touching anything.
+        config = type("Config", (), {"root": "/nonexistent-root"})()
+        url = {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks_testing"}
+        with mock.patch("backend.testing_reset.main_reset") as main_reset:
+            prks_app.reset_testing_instance(config, {**url, "PRKS_MIGRATE_ON_START": "  "})
+            self.assertEqual(main_reset.call_count, 1)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:
+                prks_app.reset_testing_instance(config, {**url, "PRKS_MIGRATE_ON_START": "0"})
+            self.assertEqual(refused.exception.code, 2)
+            self.assertEqual(main_reset.call_count, 1)
 
     def test_config_check_accepts_a_safe_log_file_over_an_unsafe_default(self) -> None:
         # The root's default log is a link to its marker; a start uses the
