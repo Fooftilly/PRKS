@@ -19,7 +19,7 @@ Each setting has one home, and Settings labels it:
 | Account | PostgreSQL (login, password hash, sessions) | Created at setup; signing in and out changes sessions only | Display names only, never logins, passwords or sessions |
 | This device | The browser's local storage | Anyone using that browser | No |
 
-[configuration-reference.md](../configuration-reference.md) lists every key with its scope, default and roles.
+[configuration-reference.md](https://github.com/Fooftilly/PRKS/blob/master/docs/configuration-reference.md) lists every key with its scope, default and roles.
 
 ## Configuration and data layout
 
