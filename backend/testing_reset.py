@@ -352,35 +352,75 @@ def _remove_at(dir_fd: int, name: str, path: str, root_dev: int) -> None:
     os.rmdir(name, dir_fd=dir_fd)
 
 
-def _empty_root(root_real: str) -> None:
-    """Delete everything in the root except its lock files and volume metadata (``lost+found``)."""
-    root_fd = os.open(root_real, _DIR_FLAGS)
+def _empty_root(root_fd: int, root_real: str) -> None:
+    """Delete everything in the open root except its lock files and volume metadata (``lost+found``).
+
+    ``root_fd`` is the handle verified against the lease; the root is never
+    reopened by path, so a directory renamed into its place is not touched.
+    """
+    root_dev = os.fstat(root_fd).st_dev
+    with os.scandir(root_fd) as entries:
+        names = [entry.name for entry in entries]
+    for name in names:
+        path = os.path.join(root_real, name)
+        if is_top_level_os_metadata(name):
+            continue
+        st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        if name == MAINTENANCE_DIRNAME and stat.S_ISDIR(st.st_mode):
+            inner_fd = os.open(name, _DIR_FLAGS, dir_fd=root_fd)
+            try:
+                opened = os.fstat(inner_fd)
+                if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino) or opened.st_dev != root_dev:
+                    raise OSError(f"{path} changed during the reset")
+                with os.scandir(inner_fd) as entries:
+                    inner_names = [entry.name for entry in entries]
+                for inner in inner_names:
+                    if inner not in _LOCK_FILES:
+                        _remove_at(inner_fd, inner, os.path.join(path, inner), root_dev)
+            finally:
+                os.close(inner_fd)
+            continue
+        _remove_at(root_fd, name, path, root_dev)
+
+
+def _same_file(a: os.stat_result, b: os.stat_result) -> bool:
+    return (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+
+def _root_changed(plan: ResetPlan) -> ResetRefused:
+    return ResetRefused(
+        "root_changed",
+        f"The testing data root {plan.root} changed after you confirmed. Nothing was deleted. "
+        "Run --reset-db again.",
+    )
+
+
+def _open_leased_root(plan: ResetPlan, lease: Optional[ExclusiveFileLock]) -> int:
+    """A handle on the root that holds ``lease`` (and that its path still names); refuse otherwise."""
     try:
-        root_dev = os.fstat(root_fd).st_dev
-        with os.scandir(root_fd) as entries:
-            names = [entry.name for entry in entries]
-        for name in names:
-            path = os.path.join(root_real, name)
-            if is_top_level_os_metadata(name):
-                continue
-            st = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
-            if name == MAINTENANCE_DIRNAME and stat.S_ISDIR(st.st_mode):
-                inner_fd = os.open(name, _DIR_FLAGS, dir_fd=root_fd)
-                try:
-                    opened = os.fstat(inner_fd)
-                    if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino) or opened.st_dev != root_dev:
-                        raise OSError(f"{path} changed during the reset")
-                    with os.scandir(inner_fd) as entries:
-                        inner_names = [entry.name for entry in entries]
-                    for inner in inner_names:
-                        if inner not in _LOCK_FILES:
-                            _remove_at(inner_fd, inner, os.path.join(path, inner), root_dev)
-                finally:
-                    os.close(inner_fd)
-                continue
-            _remove_at(root_fd, name, path, root_dev)
-    finally:
-        os.close(root_fd)
+        fd = os.open(plan.root_real, _DIR_FLAGS)
+    except OSError:
+        raise _root_changed(plan) from None
+    try:
+        same = lease is None or _same_file(
+            os.stat(os.path.join(MAINTENANCE_DIRNAME, ROOT_LOCK_NAME), dir_fd=fd, follow_symlinks=False),
+            lease.fstat(),
+        )
+    except OSError:
+        same = False
+    if not same:
+        os.close(fd)
+        raise _root_changed(plan)
+    return fd
+
+
+def _require_path_names(plan: ResetPlan, root_fd: int) -> None:
+    try:
+        named = os.stat(plan.root_real, follow_symlinks=False)
+    except OSError:
+        raise _root_changed(plan) from None
+    if not _same_file(named, os.fstat(root_fd)):
+        raise _root_changed(plan)
 
 
 def _lease(root_real: str) -> Optional[ExclusiveFileLock]:
@@ -404,11 +444,7 @@ def _lease(root_real: str) -> Optional[ExclusiveFileLock]:
 def _recheck_root(plan: ResetPlan) -> None:
     """Refuse when the root changed since the prompt (moved, relinked, repaired or re-paired)."""
     if check_root(plan.root, instance=plan.database.instance) != plan.root_real:
-        raise ResetRefused(
-            "root_changed",
-            f"The testing data root {plan.root} changed after you confirmed. Nothing was deleted. "
-            "Run --reset-db again.",
-        )
+        raise _root_changed(plan)
 
 
 def _has_files(root_real: str) -> bool:
@@ -431,24 +467,34 @@ def _require_safe_delete(plan: ResetPlan) -> None:
 
 
 def execute(plan: ResetPlan) -> None:
-    """Check the tree, empty the database, then the data root, holding the root's lease throughout."""
+    """Check the tree, empty the database, then the data root, holding the root's lease throughout.
+
+    The files are deleted through one handle on the root, opened under the
+    lease and checked to be the directory whose ``root.lock`` the lease holds,
+    before the database is touched; a directory moved into the root's path
+    later (while the schemas drop) is never reached.
+    """
     _require_safe_delete(plan)
     _recheck_root(plan)
     lease = _lease(plan.root_real)
+    root_fd: Optional[int] = None
     try:
         # Under the lease: the root the person confirmed, still paired and in bounds.
         _recheck_root(plan)
-        if os.path.isdir(plan.root_real):
+        if _has_files(plan.root_real):
             try:
                 check_no_foreign_tree(plan.root_real)
             except StorageRootError as exc:
                 raise ResetRefused(
                     "root_not_plain", f"{exc.message} --reset-db never deletes past it. Nothing was deleted."
                 ) from None
+            root_fd = _open_leased_root(plan, lease)
+            _recheck_root(plan)
+            _require_path_names(plan, root_fd)
         _drop_schemas(plan)
-        if _has_files(plan.root_real):
+        if root_fd is not None:
             try:
-                _empty_root(plan.root_real)
+                _empty_root(root_fd, plan.root_real)
             except OSError:
                 raise ResetRefused(
                     "root_not_emptied",
@@ -456,6 +502,8 @@ def execute(plan: ResetPlan) -> None:
                     f"deleted. Delete {plan.root} yourself before the next start.",
                 ) from None
     finally:
+        if root_fd is not None:
+            os.close(root_fd)
         if lease is not None:
             lease.release()
 
