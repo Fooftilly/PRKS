@@ -15,8 +15,16 @@
         if (ops.length) return root.prksOfflineRuntimeState() === 'online' ? 'Waiting to sync' : 'Offline · saved locally';
         return 'All changes synced';
     }
+    /**
+     * A Tag whose change waits on the user (a conflict) or on a scheduled
+     * retry. One merely on the wire is NOT blocked: edit() waits for it to
+     * land and records the click against the base it produced. Disabling it
+     * for the send's few milliseconds only swallowed a click already on its
+     * way -- a disabled button dispatches no click at all.
+     */
     function blocked(state, tagId) {
-        return state.operations.some(o => o.payload.tag_id === tagId && (o.status !== 'pending' || o.attempt_count > 0));
+        return state.operations.some(o => o.payload.tag_id === tagId && o.status !== 'syncing' &&
+            (o.status !== 'pending' || o.attempt_count > 0));
     }
     async function paint(ctx, state) {
         if (!live(ctx, state)) return;
@@ -54,7 +62,7 @@
         }
         list.querySelectorAll('[data-tag-id]').forEach(button => {
             button.disabled = !state.options || blocked(state, button.dataset.tagId);
-            if (button.disabled) button.title = state.options ? 'This change is syncing or needs resolution.' : unavailable;
+            if (button.disabled) button.title = state.options ? 'This change is waiting to retry or needs resolution.' : unavailable;
         });
         let status = panel.querySelector('[data-work-tag-sync]');
         if (!status) {

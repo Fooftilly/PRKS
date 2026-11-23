@@ -1619,6 +1619,30 @@
                 });
         }
 
+        /**
+         * The base a relationship edit is measured against.
+         *
+         * The caller reads its base from the live UI, which learns of an ACK
+         * only when the sync runtime emits it -- and the runtime marks the row
+         * acknowledged in an earlier transaction than that emit. A base read
+         * while that write was in flight is therefore older than the
+         * acknowledged row this transaction sees. The row stays until it is
+         * retired after the emit, so whenever the caller's base can be stale
+         * the newer one is here: take it, or "remove what I just added" would
+         * compare against the pre-ACK absence and silently record nothing.
+         */
+        function acknowledgedRelationshipBase(rows, scope, addOperation, baseState, baseRevision) {
+            let state = baseState;
+            let revision = baseRevision;
+            for (const r of rows) {
+                if (!r || r.status !== STATUS_ACKNOWLEDGED || !scope(r) ||
+                    !Number.isSafeInteger(r.server_revision) || r.server_revision <= revision) continue;
+                state = r.operation === addOperation;
+                revision = r.server_revision;
+            }
+            return { state, revision };
+        }
+
         function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
             if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
                 !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
@@ -1633,8 +1657,9 @@
                  * relationship waits for it, by the generic mechanism. */
                 const createOp = tagCreationDependency(rows, tagId,
                     'it cannot be attached to anything');
-                const existing = rows.find(r => r.entity_type === 'work' && r.entity_id === workId &&
-                    r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+                const scope = r => r.entity_type === 'work' && r.entity_id === workId &&
+                    r.payload.tag_id === tagId;
+                const existing = rows.find(r => scope(r) && r.status !== STATUS_ACKNOWLEDGED);
                 if (existing) {
                     if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                         throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
@@ -1644,10 +1669,11 @@
                     setResult(null);
                     return;
                 }
-                if (present === baseState) { setResult(null); return; }
+                const base = acknowledgedRelationshipBase(rows, scope, 'ADD_WORK_TAG', baseState, baseRevision);
+                if (present === base.state) { setResult(null); return; }
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
-                    entity_id: workId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                    entity_id: workId, payload: { tag_id: tagId }, base_revision: base.revision,
                     depends_on: createOp ? [createOp.op_id] : [],
                 }, { tag }));
             });
@@ -1666,8 +1692,9 @@
                     'it cannot be attached to anything');
                 // A Folder this device is still creating is tagged after it exists.
                 const folderOp = folderCreationDependency(rows, folderId, 'it cannot be tagged');
-                const existing = rows.find(r => r.entity_type === 'folder' && r.entity_id === folderId &&
-                    r.payload.tag_id === tagId && r.status !== STATUS_ACKNOWLEDGED);
+                const scope = r => r.entity_type === 'folder' && r.entity_id === folderId &&
+                    r.payload.tag_id === tagId;
+                const existing = rows.find(r => scope(r) && r.status !== STATUS_ACKNOWLEDGED);
                 if (existing) {
                     if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                         throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
@@ -1677,10 +1704,11 @@
                     setResult(null);
                     return;
                 }
-                if (present === baseState) { setResult(null); return; }
+                const base = acknowledgedRelationshipBase(rows, scope, 'ADD_FOLDER_TAG', baseState, baseRevision);
+                if (present === base.state) { setResult(null); return; }
                 setResult(await insertEnvelopeIn(request, {
                     operation: present ? 'ADD_FOLDER_TAG' : 'REMOVE_FOLDER_TAG', entity_type: 'folder',
-                    entity_id: folderId, payload: { tag_id: tagId }, base_revision: baseRevision,
+                    entity_id: folderId, payload: { tag_id: tagId }, base_revision: base.revision,
                     depends_on: [createOp, folderOp].filter(Boolean).map(op => op.op_id),
                 }, { tag }));
             });

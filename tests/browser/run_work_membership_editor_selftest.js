@@ -601,6 +601,50 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
     prksDestroyAllTabContexts();
 }
 
+/* A chip whose change is only on the wire stays clickable: edit() waits for
+ * it to land. Disabling it for the send swallowed a click already on its way
+ * (a disabled button dispatches no click). Conflicts and scheduled retries
+ * still wait on something else, so they stay disabled. */
+async function tagChipBlockedOnlyWhileWaiting() {
+    resetCounts();
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    showWork(main, 'work-a');
+    ownPanel(main);
+    main.ui.workDetailsMode = 'view';
+    delete global.prksVueRefreshWorkPanelRead;
+    const chips = global.renderWorkTagsChips;
+    global.renderWorkTagsChips = function () {
+        return ['t1', 't2', 't3', 't4'].map(function (id) {
+            return '<button type="button" class="work-tag-remove" data-tag-id="' + id + '">x</button>';
+        }).join('');
+    };
+    function op(tagId, status, attempts) {
+        return { op_id: 'op-' + tagId, entity_type: 'work', entity_id: 'work-a', operation: 'ADD_WORK_TAG',
+            payload: { tag_id: tagId }, status: status, attempt_count: attempts };
+    }
+    outboxRows.push(op('t1', 'syncing', 1), op('t2', 'pending', 0), op('t3', 'pending', 1), op('t4', 'conflict', 1));
+    panel().innerHTML = '<div id="work-tags-list"></div>';
+    const before = syncListeners.length;
+    prksMountWorkTags(main, 'work-a');
+    main.getResource('workTagEditor').options = { work_id: 'work-a', assigned: [], known_absent: {} };
+    await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
+    await until(function () {
+        const b = document.getElementById('work-tags-list').querySelector('[data-tag-id="t4"]');
+        return !!(b && b.disabled);
+    }, 'chip paint');
+    function disabled(id) {
+        return document.getElementById('work-tags-list').querySelector('[data-tag-id="' + id + '"]').disabled;
+    }
+    assert('a chip whose change is syncing stays enabled', disabled('t1') === false);
+    assert('a chip with a never-sent draft stays enabled', disabled('t2') === false);
+    assert('a chip waiting for a scheduled retry is disabled', disabled('t3') === true);
+    assert('a chip in conflict is disabled', disabled('t4') === true);
+    outboxRows.length = 0;
+    global.renderWorkTagsChips = chips;
+    prksDestroyAllTabContexts();
+}
+
 async function main() {
     try {
         await deferredFolder('set');
@@ -612,6 +656,7 @@ async function main() {
         await newPlaylistDuringRead('replaced');
         await newPlaylistDuringRead('secondary');
         await tagBridgeAndOwner();
+        await tagChipBlockedOnlyWhileWaiting();
         await tagRemoveWaitsForInFlightAdd('acknowledged');
         await tagRemoveWaitsForInFlightAdd('other-tab');
         await tagRemoveWaitsForInFlightAdd('released');

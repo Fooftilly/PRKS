@@ -530,6 +530,34 @@ async function run() {
         assertEq('retired conflict removed atomically', await store.getOperation(op.op_id), null);
     }
 
+    /* An ACK this device has stored but not yet emitted is the newer base.
+     *
+     * The sync runtime marks the row acknowledged, THEN emits the ACK to the
+     * live UI, THEN retires the row. A click measured against the UI's base
+     * in between still says "absent" for a Tag whose ADD just landed, so
+     * "remove it" equalled that stale base and recorded nothing. */
+    for (const family of [
+        { add: 'ADD_WORK_TAG', remove: 'REMOVE_WORK_TAG', coalesce: (st, ...a) => st.coalesceWorkTag('W-A', ...a) },
+        { add: 'ADD_FOLDER_TAG', remove: 'REMOVE_FOLDER_TAG', coalesce: (st, ...a) => st.coalesceFolderTag('F-A', ...a) },
+    ]) {
+        const factory = createFakeIndexedDBFactory();
+        const store = mod.createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: factory, uuid: seqUuid });
+        const tag = { id: 'T-A', name: 'Acked', color: '#112233', aliases: [] };
+        const added = await family.coalesce(store, tag.id, true, false, 0, tag);
+        await store.claimOperation(added.op_id);
+        await store.updateOperationSyncState(added.op_id, { status: 'acknowledged', server_revision: 4 });
+        const removed = await family.coalesce(store, tag.id, false, false, 0, tag);
+        assert(family.remove + ' against the stored ACK is recorded', removed && removed.operation === family.remove);
+        assertEq(family.remove + ' carries the ACK revision', removed.base_revision, 4);
+        assertEq('adding it back cancels the draft',
+            await family.coalesce(store, tag.id, true, false, 0, tag), null);
+        assertEq('nothing left to send', (await store.listOperations()).filter(r => r.status !== 'acknowledged').length, 0);
+        assertEq(family.add + ' already acknowledged is no new change',
+            await family.coalesce(store, tag.id, true, false, 0, tag), null);
+        const later = await family.coalesce(store, tag.id, false, true, 6, tag);
+        assertEq('a base newer than the stored ACK wins', later.base_revision, 6);
+    }
+
     /* ---- the byte-limited payload allowance: abstract ----
      *
      * The 64 KiB bound stays the ordinary limit. The fields in BYTE_LIMITS are
