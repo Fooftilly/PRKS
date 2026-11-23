@@ -285,6 +285,94 @@ class WebProcessTests(RootPairingTestCase):
         # Both of its locks are gone.
         root_binding.open_storage_root(StorageConfig.for_testing(root), register=False).release()
 
+    # --- a non-container start without --testing (#612) --------------------------
+
+    def production_env(self, name: str, home: str) -> dict[str, str]:
+        env = self.environment(name, auth="session")
+        # The bootstrap configuration file and anything else per-user stay
+        # in this test's own home, never the real one.
+        env["HOME"] = home
+        env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+        return env
+
+    def serve(self, name: str, root: str, port: int, home: str) -> subprocess.Popen[str]:
+        return subprocess.Popen(
+            [sys.executable, "prks_app.py", "--storage-root", root, "--port", str(port)],
+            cwd=_PROJECT_DIR, env=self.production_env(name, home),
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+
+    def request(
+        self, port: int, method: str, path: str, body: dict[str, Any] | None = None,
+        cookie: str | None = None,
+    ) -> tuple[int, dict[str, Any], str]:
+        import json
+
+        headers = {"Origin": f"http://127.0.0.1:{port}", "Host": f"127.0.0.1:{port}"}
+        payload = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            payload = json.dumps(body)
+        if cookie:
+            headers["Cookie"] = cookie
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        try:
+            conn.request(method, path, body=payload, headers=headers)
+            response = conn.getresponse()
+            raw = response.read()
+            set_cookie = response.getheader("Set-Cookie") or ""
+            try:
+                data = json.loads(raw) if raw else {}
+            except ValueError:
+                data = {}
+            return response.status, data, set_cookie
+        finally:
+            conn.close()
+
+    def test_production_start_sets_up_in_the_browser_and_restarts_ready(self) -> None:
+        from backend.domain.identity import bootstrap_tokens
+
+        name = self.migrated()
+        root = os.path.join(self.tmp, "library")  # new: the start creates and marks it
+        home = os.path.join(self.tmp, "home")
+        os.mkdir(home)
+        port = _free_port()
+        proc = self.serve(name, root, port, home)
+        try:
+            self.assertEqual(_wait_for(port, "/api/setup", proc), 200)
+            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "unconfigured"})
+            self.assertEqual(self.request(port, "GET", "/api/works")[0], 503)
+            self.assertTrue(require(root_marker.read_marker(root)).bindable)
+            token = bootstrap_tokens.issue_token(self.db(name)).token.reveal()
+            self.close(name)
+            status, body, set_cookie = self.request(port, "POST", "/api/setup", {
+                "token": token, "login": "owner", "password": "production first run passphrase",
+                "library_name": "Home Library",
+            })
+            self.assertEqual(status, 200, body)
+            self.assertEqual((body["state"], body["created"], body["signed_in"]), ("ready", True, True))
+            cookie = set_cookie.split(";", 1)[0]
+            self.assertTrue(cookie.startswith("prks_session="), set_cookie)
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            self.assertEqual(self.request(port, "GET", "/api/works", cookie=cookie)[0], 200)
+        finally:
+            self.stop(proc)
+        with psycopg.connect(self.harness.conninfo(name)) as conn:
+            self.assertEqual(conn.execute("SELECT testing FROM prks.instance").fetchone(), (False,))
+
+        proc = self.serve(name, root, port, home)
+        try:
+            self.assertEqual(_wait_for(port, "/readyz", proc), 200)
+            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "ready"})
+            again = self.request(port, "POST", "/api/setup", {
+                "token": token, "login": "intruder", "password": "another passphrase here",
+            })
+            self.assertEqual((again[0], again[1].get("error")), (409, "already_ready"))
+            self.assertEqual(self.request(port, "GET", "/api/works", cookie=cookie)[0], 200)
+            self.assertEqual(self.request(port, "GET", "/api/works")[0], 401)
+        finally:
+            self.stop(proc)
+
 
 class MigrateOnStartTests(RootPairingTestCase):
     def empty(self) -> Database:
