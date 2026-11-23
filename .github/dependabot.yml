@@ -43,6 +43,9 @@ updates:
     ignore:
       - dependency-name: "@embedpdf/*"
         update-types: ["version-update:semver-major"]
+      # Kept on frontend-app's TypeScript major (see there).
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Maintainer-only Cytoscape.js research-graph build dependency.
   - package-ecosystem: "npm"
@@ -78,6 +81,11 @@ updates:
     patterns: ["*"]
     cooldown:
       default-days: 7
+    # typescript-eslint supports TypeScript <6.1 and openapi-typescript
+    # peers on ^5, so a TypeScript major waits for them.
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Keep the Python base image in the root Dockerfile visible to Dependabot.
   - package-ecosystem: "docker"

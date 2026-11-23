@@ -12,7 +12,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 AXE_JS = REPO / "frontend-app" / "node_modules" / "axe-core" / "axe.min.js"
-AXE_PIN = "4.14.0"
+# The exact devDependency pin, so a Dependabot bump needs no second edit here.
+AXE_PIN = json.loads((REPO / "frontend-app" / "package.json").read_text(encoding="utf-8"))[
+    "devDependencies"]["axe-core"]
 MAX_RULES = 18
 MAX_TARGETS = 2
 MAX_SELECTOR = 100
