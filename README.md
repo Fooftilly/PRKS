@@ -154,6 +154,8 @@ docker compose exec web python /app/prks_app.py admin bootstrap issue-token --ro
 
 ## Configuration and data layout
 
+Every setting, its scope and default is in the [configuration reference](docs/configuration-reference.md). `python prks_app.py config check` validates the configuration as a start would (the data root's path and placement, read-only; not its filesystem or contents) and shows the effective values, secrets hidden; an invalid or retired setting stops every role with exit status 2.
+
 | Variable | Purpose |
 | -------- | ------- |
 | `PRKS_DATABASE_URL` | The PostgreSQL 18 database of the Library (`PRKS_DATABASE_URL_FILE`: a file holding it). Required by every role, except that `--testing` defaults to the `scripts/dev-postgres` database. |
@@ -167,7 +169,7 @@ docker compose exec web python /app/prks_app.py admin bootstrap issue-token --ro
 | `PRKS_LOG_FILE_LEVEL` | Persistent file log level. Default `ERROR`. |
 | `PRKS_LOG_RETENTION_DAYS` | Rotated persistent log copies to keep. Default `7`. |
 | `PRKS_LOG_FILE` | Override path for the rotating error log. Default `$PRKS_STORAGE/prks-errors.log`. |
-| `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. Clamped to 10–60000. Does not timeout requests. |
+| `PRKS_PERF_SLOW_MS` | API request duration in milliseconds counted as slow. Default `250`. A value outside 10–60000 stops PRKS at start. Does not timeout requests. |
 | `PRKS_PERF_LOG_SLOW` | When truthy (`1`, `true`, `yes`, `on`), emit a privacy-safe `slow_request` INFO log for slow API requests. Default off. |
 | `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
 | `PRKS_CONFIG_FILE` | Override path of the bootstrap configuration file (default: `~/.config/prks/config.json` on Linux, `~/Library/Application Support/PRKS/config.json` on macOS, `%LOCALAPPDATA%\PRKS\config.json` on Windows). Ignored in testing mode. |

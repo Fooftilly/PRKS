@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import os
+import re
 import sys
 import time
 
@@ -19,7 +20,7 @@ from backend.server import (
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootError
 from backend.storage.resolver import bootstrap_config_path
-from backend.storage.root_binding import open_storage_root
+from backend.storage.root_binding import check_root_placement, open_storage_root
 
 
 def parse_host(value):
@@ -29,7 +30,7 @@ def parse_host(value):
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-ROLES = ("serve", "migrate", "worker", "admin")
+ROLES = ("serve", "migrate", "worker", "admin", "config")
 
 
 def split_role(argv):
@@ -114,6 +115,20 @@ def build_parser():
     return parser
 
 
+def _bootstrap_file(config, environ):
+    """The bootstrap config file a root must not contain (V11), or None."""
+    if config.mode == "testing":
+        # Testing mode never consults the bootstrap file (storage-architecture §5.3).
+        return None
+    try:
+        return bootstrap_config_path(environ)
+    except StorageRootError:
+        # A higher-precedence source won, so this path was never used; an
+        # unparseable value names no file that could sit inside the root.
+        # (A config_file selection already validated it in from_env.)
+        return None
+
+
 def open_storage(config, *, paired=False):
     """Validate, lease and mark the selected root; exit with a message on refusal.
 
@@ -121,21 +136,12 @@ def open_storage(config, *, paired=False):
     holds the root's lease shared, beside ``worker`` and ``migrate``, and
     leaves the marker's pairing to the start check (L-D-1 #630).
     """
-    config_file = None
-    if config.mode != "testing":
-        # Only used to check the root does not contain it (V11); testing mode
-        # never consults the bootstrap file (storage-architecture §5.3).
-        try:
-            config_file = bootstrap_config_path(os.environ)
-        except StorageRootError:
-            # A higher-precedence source won, so this path was never used; an
-            # unparseable value names no file that could sit inside the root.
-            # (A config_file selection already validated it in from_env.)
-            config_file = None
     try:
         # Logging is configured only after the root is open (its log file
         # lives there), so the open's warnings wait for log_binding().
-        return open_storage_root(config, config_file_path=config_file, defer_logs=True, paired=paired)
+        return open_storage_root(
+            config, config_file_path=_bootstrap_file(config, os.environ), defer_logs=True, paired=paired
+        )
     except StorageRootError as exc:
         print(f"PRKS cannot open its storage root: {exc.message}", file=sys.stderr)
         raise SystemExit(2) from None
@@ -199,7 +205,7 @@ def reset_testing_instance(config, environ=None):
     from backend.testing_reset import main_reset
 
     env = os.environ if environ is None else environ
-    if (env.get("PRKS_MIGRATE_ON_START") or "1").strip() != "1":
+    if _migrate_on_start_value(env) != "1":
         print(
             "PRKS did not reset the testing instance: --reset-db starts PRKS on the emptied "
             "database, which needs PRKS_MIGRATE_ON_START unset or 1. Nothing was deleted.",
@@ -427,6 +433,11 @@ def refuse_sqlite_catalogue(library_database, bound_root):
 RECREATE_REASONS = frozenset({"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order"})
 
 
+def _migrate_on_start_value(environ):
+    """``PRKS_MIGRATE_ON_START`` as a start reads it: unset or blank is ``1``."""
+    return (environ.get("PRKS_MIGRATE_ON_START") or "").strip() or "1"
+
+
 def migrate_on_start(db, environ, *, testing=False):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
@@ -439,7 +450,7 @@ def migrate_on_start(db, environ, *, testing=False):
     """
     from backend.db.migrate import MigrationError, migrate, verify_schema
 
-    value = (environ.get("PRKS_MIGRATE_ON_START") or "1").strip()
+    value = _migrate_on_start_value(environ)
     if value not in ("0", "1"):
         db.close()
         print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
@@ -530,7 +541,9 @@ def run_role(role, argv):
         return process_roles.run_migrate(root=root, testing=testing)
     import logging
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    from backend.log_config import stderr_log_level
+
+    logging.basicConfig(level=stderr_log_level(), format="%(asctime)s %(levelname)s %(message)s")
     return process_roles.run_worker(root=root, testing=testing)
 
 
@@ -547,20 +560,237 @@ def enter_testing_mode(environ=None):
     env.update(with_testing_default(env))
 
 
-def refuse_stale_library_backend(environ=None):
-    """Exit with status 2 while the retired ``PRKS_LIBRARY_BACKEND`` is set (``backend.library_backend``).
+def refuse_invalid_environment(environ=None):
+    """Exit with status 2 while any setting is invalid or retired (``backend.config_reference``, #612).
 
-    Every role runs it first: the variable chooses nothing now that
-    PostgreSQL is the only backend, and a process that ignored it would hide
-    configuration written for an earlier release.
+    Every role runs it first, before the database, the storage root or the
+    network: a deployment never runs on a value PRKS would otherwise replace
+    with a default, nor with configuration written for an earlier release.
     """
-    from backend.library_backend import LibraryBackendError, refuse_stale_selection
+    from backend.config_reference import problems
 
+    found = problems(os.environ if environ is None else environ)
+    if found:
+        for problem in found:
+            print(f"PRKS cannot start: {problem}", file=sys.stderr)
+        print("Check the whole configuration with: python prks_app.py config check", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def run_config(argv, environ=None, *, out=None):
+    """``config check``: validate the configuration the way a start does, and show it (#612).
+
+    Runs every parser a ``serve`` start runs before it touches anything
+    (settings, storage selection, HTTP, authentication, database), without
+    connecting, binding or opening the root. Prints each problem, then the
+    effective deployment values and their source, secrets hidden. Exit 0
+    when a start would accept the configuration, 2 otherwise.
+    """
+    from backend.config_reference import Effective, effective, problems
+
+    parser = argparse.ArgumentParser(
+        prog="prks_app.py config", description="Validate and show this deployment's configuration."
+    )
+    steps = parser.add_subparsers(dest="command", required=True)
+    check = steps.add_parser("check", help="validate every setting and print the effective values")
+    check.add_argument("--testing", action="store_true", help="check as a --testing run would")
+    check.add_argument("--host", type=parse_host, default=DEFAULT_HOST, help="the address serve would bind")
+    check.add_argument("--storage-root", metavar="PATH", help="the storage root serve would use")
+    args = parser.parse_args(argv)
+    env = dict(os.environ if environ is None else environ)
+    if args.testing:
+        env["PRKS_TESTING"] = "1"
+    stdout = out or sys.stdout
+    storage, delegated, invalid, unchecked = _delegated_checks(env, args)
+    found = list(problems(env))
+    found += [problem for problem in delegated if problem not in found]
+    for problem in found:
+        print(f"problem: {problem}", file=stdout)
+    rows = effective(env, invalid, unchecked)
+    if storage is not None:
+        # The root a start would select: the CLI flag, PRKS_STORAGE, the
+        # bootstrap file or a default, whichever wins (§5.2), and whether a
+        # start would refuse it. A log file on one of the root's operational
+        # files is the log file's problem, not the root's.
+        refused = _placement_refused(storage, env)
+        log_refused = refused == "log_file_operational"
+        source = f"selected by {storage.root_source}" + ("; refused" if refused and not log_refused else "")
+        rows = [Effective(row.key, storage.root, source) if row.key == "PRKS_STORAGE"
+                else Effective(row.key, "(invalid)", "environment") if log_refused and row.key == "PRKS_LOG_FILE"
+                else row for row in rows]
+    width = max(len(row.key) for row in rows)
+    for row in rows:
+        print(f"{row.key.ljust(width)}  {row.shown}  ({row.source})", file=stdout)
+    print("configuration: OK" if not found else f"configuration: {len(found)} problem(s)", file=stdout)
+    return 0 if not found else 2
+
+
+# The parser a start runs for each owner of a delegated setting (the admin
+# token file is read only when a setup needs it, so it is shown as set).
+_PARSER_OF_OWNER = {
+    "backend.storage.config": "storage",
+    "backend.storage.resolver": "storage",
+    "backend.web.settings": "http",
+    "backend.domain.identity.web_start": "auth",
+    "backend.domain.identity.login_limiter": "auth",
+    "backend.domain.identity.sessions": "auth",
+    "backend.jobs.embedded": "worker",
+    "backend.db.config": "database",
+}
+# Settings that are valid or invalid only together: each group is probed as one
+# (a certificate needs its key; PRKS_STORAGE decides whether the bootstrap file
+# is read at all).
+_PROBE_GROUPS = (
+    ("PRKS_TLS_CERT_FILE", "PRKS_TLS_KEY_FILE"),
+    ("PRKS_STORAGE", "PRKS_CONFIG_FILE"),
+)
+# What a probe stands on, so a parser reaches the probed value instead of
+# stopping at a problem of its own: a loopback address, and a database URL
+# unless the probe is of a database source.
+_PROBE_HOST = "127.0.0.1"
+_DATABASE_SOURCES = frozenset({"PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"})
+
+
+def _delegated_checks(environ, args):
+    """``(storage, problems, invalid keys, unchecked keys)`` from the parsers a start runs.
+
+    A parser stops at its first problem, so each set value that only its
+    owner's parser checks is probed on the environment without the other
+    such values (dependent values, such as a certificate and its key, as one
+    group), on a loopback address and with a stand-in database URL so that
+    the parser reaches it. A probe its parser accepts is valid; one that
+    changes the parser's problem is invalid, and that problem is named; one
+    that leaves the problem as it was could not be reached and is
+    ``unchecked``. Refused and unchecked values are never echoed. A last
+    pass on the whole environment adds the problems of combinations, and
+    every value one of them names is refused too.
+    """
+    from backend.config_reference import Scope, in_scope
+
+    delegated = [
+        setting.key for setting in in_scope(Scope.DEPLOYMENT)
+        if setting.check is None and (environ.get(setting.key) or "").strip()
+    ]
+    groups = _probe_groups(delegated)
+    bare = {key: value for key, value in environ.items() if key not in delegated}
+    probe_args = argparse.Namespace(**{**vars(args), "host": _PROBE_HOST})
+    found, invalid, unchecked = [], set(), set()
+    for group in groups:
+        verdict, problem = _probe(group, environ, bare, probe_args)
+        if verdict == "invalid":
+            invalid.update(group)
+            if problem not in found:
+                found.append(problem)
+        elif verdict == "unchecked":
+            unchecked.update(group)
+    combined, storage = _parser_problems(environ, args)
+    found.extend(problem for problem in combined.values() if problem is not None and problem not in found)
+    for group in groups:
+        # A value the whole environment's pass names is refused there (a
+        # conflict, or a value the probe could not reach), whatever its probe said.
+        problem = combined.get(_parser_of(group) or "")
+        named = [key for key in group if problem is not None and re.search(rf"\b{key}\b", problem)]
+        unchecked.difference_update(named)
+        invalid.update(named)
+    return storage, found, invalid, unchecked
+
+
+def _probe_groups(delegated):
+    """The set delegated keys as probe groups: each alone, or with the keys it depends on."""
+    groups, seen = [], set()
+    for key in delegated:
+        if key in seen:
+            continue
+        group = next((g for g in _PROBE_GROUPS if key in g), (key,))
+        members = tuple(member for member in group if member in delegated)
+        seen.update(members)
+        groups.append(members)
+    return groups
+
+
+def _parser_of(group):
+    from backend.config_reference import BY_KEY
+
+    return _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
+
+
+def _probe(group, environ, bare, probe_args):
+    """``(verdict, problem)`` for one group: ``valid``, ``invalid`` with its problem, or ``unchecked``."""
+    from backend.db.config import TESTING_DEFAULT_DATABASE_URL
+
+    parser = _parser_of(group)
+    if parser is None:
+        return "valid", None
+    # The stand-in is never connected to: the parsers only read it.
+    base = bare if _DATABASE_SOURCES.intersection(group) else {
+        "PRKS_DATABASE_URL": TESTING_DEFAULT_DATABASE_URL, **bare}
+    probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args, log_file=False)
+    if probe[parser] is None:
+        return "valid", None
+    baseline, _ = _parser_problems(base, probe_args, log_file=False)
+    if probe[parser] != baseline[parser]:
+        return "invalid", probe[parser]
+    return "unchecked", None
+
+
+_STORAGE_PROBLEM = "storage root: "
+
+
+def _placement_refused(storage, environ):
+    """Why a start would refuse the selected root before writing anything, or None."""
     try:
-        refuse_stale_selection(os.environ if environ is None else environ)
-    except LibraryBackendError as exc:
-        print(f"PRKS cannot start: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
+        check_root_placement(storage, config_file_path=_bootstrap_file(storage, environ))
+    except StorageRootError as exc:
+        return exc.reason
+    return None
+
+
+def _parser_problems(environ, args, *, log_file=True):
+    """``({parser: problem or None}, storage)``: each parser a start runs, in its own words (no value echoed).
+
+    ``log_file=False`` skips the log file's operational-alias check: a probe
+    sees only part of the environment, so its log path may not be the one a
+    start would use.
+    """
+    from backend.db.config import load_database_config, with_testing_default
+    from backend.db.errors import DatabaseConfigError
+    from backend.domain.identity.login_limiter import LimiterConfigError
+    from backend.domain.identity.sessions import SessionConfigError
+    from backend.domain.identity.web_start import WebAuthConfigError, settings_from_env
+    from backend.jobs.embedded import EmbeddedWorkerConfigError, embedded_worker_enabled
+    from backend.web.settings import HttpServerSettings, HttpSettingsError
+
+    testing = bool(args.testing)
+    found: "dict[str, str | None]" = dict.fromkeys(("storage", "http", "auth", "worker", "database"))
+    storage = None
+    try:
+        # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
+        storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
+        storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
+        # The read-only checks a bind runs first; nothing is leased or created.
+        check_root_placement(
+            storage, config_file_path=_bootstrap_file(storage, storage_env), log_file=log_file
+        )
+    except StorageRootError as exc:
+        prefix = "PRKS_LOG_FILE: " if exc.reason == "log_file_operational" else _STORAGE_PROBLEM
+        found["storage"] = f"{prefix}{exc.message}"
+    try:
+        HttpServerSettings.from_env(environ)
+    except HttpSettingsError as exc:
+        found["http"] = exc.message
+    try:
+        settings_from_env(environ, testing=testing, host=args.host, parse_origin=parse_request_origin)
+    except (WebAuthConfigError, LimiterConfigError, SessionConfigError) as exc:
+        found["auth"] = str(exc)
+    try:
+        embedded_worker_enabled(environ)
+    except EmbeddedWorkerConfigError as exc:
+        found["worker"] = str(exc)
+    try:
+        load_database_config(with_testing_default(environ) if testing else environ, role="web")
+    except DatabaseConfigError as exc:
+        found["database"] = exc.message
+    return found, storage
 
 
 def select_config(args):
@@ -633,7 +863,9 @@ if __name__ == "__main__":
 
     record_imports(_IMPORT_STARTED)
     role, role_argv = split_role(sys.argv[1:])
-    refuse_stale_library_backend()
+    if role == "config":
+        raise SystemExit(run_config(role_argv))
+    refuse_invalid_environment()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
     parser = build_parser()
