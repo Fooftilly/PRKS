@@ -6,7 +6,7 @@ For a first run, start with [Getting Started](Getting-Started.md). For backup/re
 
 Every setting, with its scope (deployment, Compose, Library), default and whether it is a secret, is listed in the [configuration reference](https://github.com/Fooftilly/PRKS/blob/master/docs/configuration-reference.md), generated from `backend/config_reference.py`. Deployment settings are read once at start and only the operator changes them; Library settings are edited in Settings.
 
-**Check before you start.** `python prks_app.py config check` validates every setting exactly as a start would, without connecting to the database or touching the data root, and prints the effective values and where each comes from (environment or default). Secrets show only that they are set. It exits 0 when a start would accept the configuration, 2 otherwise; add `--testing`, `--host` or `--storage-root` to check as that run would. Every role refuses an invalid or retired setting the same way at start, with exit status 2: no value falls back to a default.
+**Check before you start.** `python prks_app.py config check` validates every setting exactly as a start would, without connecting to the database or opening the data root (it checks the root's path and placement; a start can still refuse a root for its filesystem or contents), and prints the effective values and where each comes from (environment or default). Secrets show only that they are set. It exits 0 when a start would accept the configuration, 2 otherwise; add `--testing`, `--host` or `--storage-root` to check as that run would. Every role refuses an invalid or retired setting the same way at start, with exit status 2: no value falls back to a default.
 
 ## Configuration and data layout
 

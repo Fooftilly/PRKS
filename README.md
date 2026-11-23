@@ -154,7 +154,7 @@ docker compose exec web python /app/prks_app.py admin bootstrap complete --root 
 
 ## Configuration and data layout
 
-Every setting, its scope and default is in the [configuration reference](docs/configuration-reference.md). `python prks_app.py config check` validates the configuration as a start would and shows the effective values, secrets hidden; an invalid or retired setting stops every role with exit status 2.
+Every setting, its scope and default is in the [configuration reference](docs/configuration-reference.md). `python prks_app.py config check` validates the configuration as a start would (the data root's path, not its filesystem or contents) and shows the effective values, secrets hidden; an invalid or retired setting stops every role with exit status 2.
 
 | Variable | Purpose |
 | -------- | ------- |
