@@ -456,12 +456,14 @@ def _check_placement(
     return root_real
 
 
-def check_root_placement(config: Any, *, config_file_path: Optional[str] = None) -> str:
+def check_root_placement(
+    config: Any, *, config_file_path: Optional[str] = None, log_file: bool = True
+) -> str:
     """The read-only path checks a bind runs first (V2/V11/V12 and the log file); returns the resolved root.
 
     ``prks_app.py config check`` uses it to report an unusable root, or a log
     file aliasing one of the root's operational files, without leasing,
-    marking or creating anything.
+    marking or creating anything. ``log_file=False`` checks the root alone.
     """
     root_real = _check_placement(
         config.root,
@@ -470,9 +472,10 @@ def check_root_placement(config: Any, *, config_file_path: Optional[str] = None)
         distribution=_distribution.DISTRIBUTION,
         home=None,
     )
-    _check_log_file_not_operational(
-        getattr(config, "log_file", None), root_real, config_file_path=config_file_path
-    )
+    if log_file:
+        _check_log_file_not_operational(
+            getattr(config, "log_file", None), root_real, config_file_path=config_file_path
+        )
     return root_real
 
 

@@ -719,10 +719,10 @@ def _probe(group, environ, bare, probe_args):
     # The stand-in is never connected to: the parsers only read it.
     base = bare if _DATABASE_SOURCES.intersection(group) else {
         "PRKS_DATABASE_URL": TESTING_DEFAULT_DATABASE_URL, **bare}
-    probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args)
+    probe, _ = _parser_problems({**base, **{key: environ[key] for key in group}}, probe_args, log_file=False)
     if probe[parser] is None:
         return "valid", None
-    baseline, _ = _parser_problems(base, probe_args)
+    baseline, _ = _parser_problems(base, probe_args, log_file=False)
     if probe[parser] != baseline[parser]:
         return "invalid", probe[parser]
     return "unchecked", None
@@ -740,8 +740,13 @@ def _placement_refused(storage, environ):
     return None
 
 
-def _parser_problems(environ, args):
-    """``({parser: problem or None}, storage)``: each parser a start runs, in its own words (no value echoed)."""
+def _parser_problems(environ, args, *, log_file=True):
+    """``({parser: problem or None}, storage)``: each parser a start runs, in its own words (no value echoed).
+
+    ``log_file=False`` skips the log file's operational-alias check: a probe
+    sees only part of the environment, so its log path may not be the one a
+    start would use.
+    """
     from backend.db.config import load_database_config, with_testing_default
     from backend.db.errors import DatabaseConfigError
     from backend.domain.identity.login_limiter import LimiterConfigError
@@ -758,7 +763,9 @@ def _parser_problems(environ, args):
         storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
         storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
         # The read-only checks a bind runs first; nothing is leased or created.
-        check_root_placement(storage, config_file_path=_bootstrap_file(storage, storage_env))
+        check_root_placement(
+            storage, config_file_path=_bootstrap_file(storage, storage_env), log_file=log_file
+        )
     except StorageRootError as exc:
         prefix = "PRKS_LOG_FILE: " if exc.reason == "log_file_operational" else _STORAGE_PROBLEM
         found["storage"] = f"{prefix}{exc.message}"
