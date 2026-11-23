@@ -9,6 +9,7 @@ export const SETTINGS_CATEGORIES = [
   { id: 'backup', label: 'Backup' },
   { id: 'maintenance', label: 'Maintenance' },
   { id: 'diagnostics', label: 'Diagnostics' },
+  { id: 'deployment', label: 'Deployment' },
 ] as const
 
 export type SettingsCategoryId = (typeof SETTINGS_CATEGORIES)[number]['id']

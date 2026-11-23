@@ -100,7 +100,7 @@ _ADMIN_MUTATIONS = frozenset({"/api/settings"})
 # Importing or deleting a citation style feeds the Library's style setting.
 _CITATION_STYLES = "/api/citation-styles"
 # Reads only the Library owner may make: instance-level job diagnostics.
-_ADMIN_READS = frozenset({"/api/diagnostics/jobs"})
+_ADMIN_READS = frozenset({"/api/diagnostics/jobs", "/api/deployment-settings"})
 # Mutations that change no Library content: authorized, never epoch-fenced.
 # Mutations whose route looks up its ledger before it fences the epoch.
 _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})

@@ -8,6 +8,19 @@ Every setting, with its scope (deployment, Compose, Library), default and whethe
 
 **Check before you start.** `python prks_app.py config check` validates every setting exactly as a start would, without connecting to the database or touching the data root, and prints the effective values and where each comes from (environment or default). Secrets show only that they are set. It exits 0 when a start would accept the configuration, 2 otherwise; add `--testing`, `--host` or `--storage-root` to check as that run would. Every role refuses an invalid or retired setting the same way at start, with exit status 2: no value falls back to a default.
 
+## Where settings live
+
+Each setting has one home, and Settings labels it:
+
+| Scope | Where it is stored | Who changes it | In a Library backup |
+| ----- | ------------------ | -------------- | ------------------- |
+| Whole installation (deployment) | The host's environment, Compose `.env` or a secret file | Whoever runs PRKS, then a restart. **Settings → Deployment** shows the effective values read-only to the Library owner; secrets and host paths show only that they are set. | No |
+| Library-wide | PostgreSQL, with the Library | The Library owner, in Settings; applies at once | Yes |
+| Account | PostgreSQL (login, password hash, sessions) | Created at setup; signing in and out changes sessions only | Display names only, never logins, passwords or sessions |
+| This device | The browser's local storage | Anyone using that browser | No |
+
+[configuration-reference.md](../configuration-reference.md) lists every key with its scope, default and roles.
+
 ## Configuration and data layout
 
 On/off settings take `1`, `true`, `yes` or `on` for true and `0`, `false`, `no` or `off` for false; anything else stops the start. `PRKS_MIGRATE_ON_START` and `PRKS_EMBEDDED_WORKER` take only `0` or `1`.

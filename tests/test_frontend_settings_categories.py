@@ -19,7 +19,7 @@ _CATEGORIES = os.path.join(_SETTINGS, "categories.ts")
 _SURFACE = os.path.join(_SETTINGS, "SettingsSurface.vue")
 _PANEL = os.path.join(_SETTINGS, "SettingsPanel.vue")
 
-_CATEGORY_IDS = ["general", "reading", "export", "backup", "maintenance", "diagnostics"]
+_CATEGORY_IDS = ["general", "reading", "export", "backup", "maintenance", "diagnostics", "deployment"]
 
 
 def _read(path: str) -> str:
@@ -77,6 +77,7 @@ class SettingsCategoryStructureTests(unittest.TestCase):
         self.assertIn("label: 'Backup'", categories)
         self.assertIn("label: 'Maintenance'", categories)
         self.assertIn("label: 'Diagnostics'", categories)
+        self.assertIn("label: 'Deployment'", categories)
 
     def test_inactive_panels_stay_hidden_and_inert(self):
         panel = _read(_PANEL)

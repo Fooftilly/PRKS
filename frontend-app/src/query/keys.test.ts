@@ -3,6 +3,7 @@ import { createPrksQueryClient } from './client'
 import { prksQueryKeys, type PrksQueryDomain } from './keys'
 
 const DOMAIN_KEYS: Record<PrksQueryDomain, string> = {
+  deploymentSettings: 'deployment-settings',
   performanceDiagnostics: 'performance-diagnostics',
   publishers: 'publishers',
   savedViews: 'saved-views',
