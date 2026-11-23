@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 
 from backend.db.migrate import is_empty_database, migrate, verify_schema
-from backend.storage.file_lock import SharedFileLock
+from backend.storage.file_lock import ExclusiveFileLock, SharedFileLock
 from backend.storage.root_marker import (
     MAINTENANCE_DIRNAME,
     ROOT_LOCK_NAME,
@@ -265,6 +265,25 @@ class TestingResetTests(unittest.TestCase):
             run(self.conninfo, missing, stdin=io.StringIO(), stdout=io.StringIO(), read=link_then_confirm)
         self.assertEqual(caught.exception.reason, "root_changed")
         self.assert_untouched()
+
+    def test_a_root_re_paired_while_the_lease_is_taken_is_not_deleted(self) -> None:
+        real_lease = testing_reset._lease
+
+        def lease_then_repair(root_real: str) -> Any:
+            lease = real_lease(root_real)
+            with open(marker_path(self.root), encoding="utf-8") as handle:
+                document = json.load(handle)
+            document["instance_id"] = "IN-" + "D" * 32
+            with open(marker_path(self.root), "w", encoding="utf-8") as handle:
+                json.dump(document, handle)
+            return lease
+        with mock.patch.object(testing_reset, "_lease", side_effect=lease_then_repair):
+            with self.assertRaises(ResetRefused) as caught:
+                self.reset(CONFIRM_WORD)
+        self.assertEqual(caught.exception.reason, "root_not_paired")
+        self.assert_untouched()
+        # The lease was released on the refusal.
+        ExclusiveFileLock.acquire(lease_path(self.root)).release()
 
     def test_a_root_filled_while_the_prompt_is_open_is_not_deleted(self) -> None:
         empty = os.path.join(os.path.dirname(self.root), "empty")
