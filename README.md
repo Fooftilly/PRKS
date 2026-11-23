@@ -223,7 +223,7 @@ Implementation/design authorities that intentionally remain outside the Wiki:
 
 Normal runs use `data/` unless `PRKS_STORAGE` selects another storage root. The canonical library is the PostgreSQL database together with the managed files under the data root; several indexes and caches are derived and rebuildable.
 
-Use **Settings → Backup & restore → Download backup** for supported backups. A `.prks-backup` contains private research data and should be protected like the live library.
+Use **Settings → Backup → Download backup** for supported backups. A `.prks-backup` contains private research data and should be protected like the live library.
 
 See [Storage, Backup, and Restore](docs/wiki/Storage-Backup-and-Restore.md) before manual recovery, moving storage, or restoring a library.
 

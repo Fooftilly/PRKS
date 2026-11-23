@@ -416,7 +416,7 @@ defineExpose({ step })
           are not changed here.
         </p>
         <p class="prks-setup__note">
-          Back up your Library once it has something in it: Settings → Backup &amp; restore downloads a backup
+          Back up your Library once it has something in it: Settings → Backup → Download backup saves a backup
           file. PRKS does not make backups on its own.
         </p>
         <PrksInlineMessage v-if="finishError" tone="error" status>{{ finishError }}</PrksInlineMessage>

@@ -71,7 +71,7 @@ describe('SetupApp', () => {
     expect(wrapper.get('.prks-setup__review').text()).toContain('alice')
     expect(wrapper.get('.prks-setup__review').text()).toContain('Library')
     // The one backup choice: where to make one, since PRKS does not back up on its own.
-    expect(wrapper.text()).toContain('Settings → Backup & restore downloads a backup file')
+    expect(wrapper.text()).toContain('Settings → Backup → Download backup saves a backup file')
     expect(posts).toEqual([])
     await wrapper.get('form').trigger('submit')
     await flushPromises()
