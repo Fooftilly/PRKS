@@ -22,11 +22,6 @@ PATH = "/api/storage-status"
 LOGGER = logging.getLogger("prks.storage")
 
 
-_SERVER_LOCATOR = """
-SELECT host(inet_server_addr()) AS host, inet_server_port() AS port, current_database() AS name
-"""
-
-
 def database_summary(conninfo: Optional[str]) -> dict[str, Any]:
     """Host, port and database name of ``conninfo``; never the user or the password.
 
@@ -61,16 +56,16 @@ def live_database_summary(database: Any, conninfo: Optional[str]) -> dict[str, A
     fallback = database_summary(conninfo)
     if database is None:
         return fallback
+    from backend.domain.objects.status import server_locator
+
     try:
-        row = database.query(lambda tx: tx.execute(_SERVER_LOCATOR).fetchone())
+        locator = server_locator(database)
     except Exception:
         LOGGER.warning("storage_status_database_locator_unavailable")
         return fallback
-    if row is None:
-        return fallback
-    host = row["host"] if isinstance(row["host"], str) and row["host"] else "local socket"
-    port = str(row["port"]) if row["port"] is not None else fallback["port"]
-    name = row["name"] if isinstance(row["name"], str) and row["name"] else fallback["name"]
+    host = locator.host or "local socket"
+    port = str(locator.port) if locator.port is not None else fallback["port"]
+    name = locator.name or fallback["name"]
     return {"engine": "PostgreSQL", "host": host, "port": port, "name": name}
 
 
