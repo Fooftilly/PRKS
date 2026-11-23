@@ -820,13 +820,41 @@ _TRANSIENT_WEBKIT_RESIZE_NOTICES = frozenset({
     "ResizeObserver loop completed with undelivered notifications.",
     "ResizeObserver loop limit exceeded",
 })
+# WebKit (Playwright 1.64's 27.2) logs this, and fires a style-src-attr
+# violation at the element, for the user-agent styles of every <select> it
+# creates under PRKS's no-inline-style CSP (backend/server.py). The text names
+# no source, so it is excused only one-for-one against recorded violations
+# that all target a <select> and carry no inline sample.
+WEBKIT_SELECT_STYLE_NOTICE = (
+    "Refused to apply a stylesheet because its hash, its nonce, or 'unsafe-inline' "
+    "does not appear in the style-src directive of the Content Security Policy."
+)
+_RECORD_STYLE_VIOLATIONS = """
+document.addEventListener('securitypolicyviolation', (event) => {
+  if (!String(event.effectiveDirective || event.violatedDirective).startsWith('style-src')) return;
+  const target = event.target;
+  window.__prksReportStyleViolation(target && target.tagName ? String(target.tagName) : '',
+                                    String(event.sample || ''));
+}, true);
+"""
 
 
 class PageCollector:
     """Fail the scenario on unexpected page errors, console errors, 5xx, and off-origin HTTP."""
 
-    def __init__(self, page, origin: str, *, allow_webkit_resize_notices: bool = False):
+    def __init__(self, page, origin: str, *, allow_webkit_resize_notices: bool = False,
+                 allow_webkit_select_style_notices: bool = False):
         self.origin = origin.rstrip("/")
+        # Only the synthetic WebKit pilot opts in; see WEBKIT_SELECT_STYLE_NOTICE.
+        self._allow_webkit_select_style_notices = allow_webkit_select_style_notices
+        # Kept here, not in the page, so a reload does not lose them.
+        self.style_violations = []
+        if allow_webkit_select_style_notices:
+            page.expose_function(
+                "__prksReportStyleViolation",
+                lambda tag, sample: self.style_violations.append({"tag": tag, "sample": sample}),
+            )
+            page.add_init_script(_RECORD_STYLE_VIOLATIONS)
         self.pageerrors = []
         self.pageerror_names = []
         # WebKit may emit a spec-defined ResizeObserver notification when a
@@ -1025,7 +1053,24 @@ class PageCollector:
         if any(s >= 400 for s in statuses):
             raise AssertionError("PDF save handshake had a failed response")
 
+    def _excuse_webkit_select_style_notices(self) -> None:
+        """Drop one WebKit <select> notice per matching violation; fail closed otherwise."""
+        if not getattr(self, "_allow_webkit_select_style_notices", False):
+            return
+        violations, self.style_violations = self.style_violations, []
+        if not violations or any(v.get("tag") != "SELECT" or v.get("sample") for v in violations):
+            return
+        budget = len(violations)
+        kept = []
+        for entry in self.console_errors:
+            if budget and entry.split(" (", 1)[0] == WEBKIT_SELECT_STYLE_NOTICE:
+                budget -= 1
+                continue
+            kept.append(entry)
+        self.console_errors[:] = kept
+
     def assert_clean(self) -> None:
+        self._excuse_webkit_select_style_notices()
         problems = []
         if self.pageerrors:
             problems.append("pageerror: " + "; ".join(self.pageerrors[:5]))
@@ -1572,7 +1617,8 @@ def _profile_browser_navigation(page) -> None:
     _profile_nav_count("nav_timing_samples")
 
 
-def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False, allow_webkit_resize_notices: bool = False):
+def open_app_page(browser, origin: str, service_workers: str = "block", *, install_clock: bool = False,
+                  allow_webkit_resize_notices: bool = False, allow_webkit_select_style_notices: bool = False):
     started = time.perf_counter()
     # Prefer-reduced-motion is opt-in (`PRKS_E2E_REDUCED_MOTION=1`). Emulating
     # it by default breaks layout/scroll assertions that measure real overflow
@@ -1591,6 +1637,7 @@ def open_app_page(browser, origin: str, service_workers: str = "block", *, insta
         page.clock.install()
     collector = PageCollector(
         page, origin, allow_webkit_resize_notices=allow_webkit_resize_notices,
+        allow_webkit_select_style_notices=allow_webkit_select_style_notices,
     )
     _profile_phase("browser_context", time.perf_counter() - started)
     e2e_heartbeat("CONTEXT_READY")

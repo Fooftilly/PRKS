@@ -202,6 +202,47 @@ class CrossBrowserSmokeContracts(unittest.TestCase):
         self.assertEqual(older.pageerrors, [])
         self.assertEqual(older._webkit_resize_notices, 1)
 
+    def test_webkit_select_style_notice_is_excused_only_against_select_violations(self):
+        from tests.e2e.harness import WEBKIT_SELECT_STYLE_NOTICE, PageCollector
+
+        notice = WEBKIT_SELECT_STYLE_NOTICE + " (http://127.0.0.1:1/#/folders)"
+
+        def collector(allow, violations, errors):
+            instance = PageCollector.__new__(PageCollector)
+            instance._allow_webkit_select_style_notices = allow
+            instance.style_violations = list(violations or [])
+            instance.console_errors = list(errors)
+            instance.pageerrors = []
+            instance.failed_requests = []
+            instance.http_5xx = []
+            instance.external = []
+            return instance
+
+        select = {"tag": "SELECT", "sample": ""}
+        # One notice per <select> violation is excused; the rest still fail.
+        webkit = collector(True, [select], [notice, notice, "other error"])
+        with self.assertRaises(AssertionError):
+            webkit.assert_clean()
+        self.assertEqual(webkit.console_errors, [notice, "other error"])
+
+        clean = collector(True, [select, select], [notice, notice])
+        clean.assert_clean()
+
+        # A violation from anything but a <select>, or one with an inline
+        # sample (a real inline style), excuses nothing.
+        for violation in ({"tag": "DIV", "sample": ""}, {"tag": "SELECT", "sample": "color:red"}):
+            with self.subTest(violation=violation):
+                mixed = collector(True, [select, violation], [notice])
+                with self.assertRaises(AssertionError):
+                    mixed.assert_clean()
+
+        # No recorded violations, or a browser that did not opt in: fail.
+        for allow, violations in ((True, []), (False, [select])):
+            with self.subTest(allow=allow, violations=violations):
+                strict = collector(allow, violations, [notice])
+                with self.assertRaises(AssertionError):
+                    strict.assert_clean()
+
     def test_notes_commit_and_reload_check_is_required(self):
         self.assertIn("notes_save_reload", CHECKS)
         data = report()
