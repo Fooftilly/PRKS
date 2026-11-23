@@ -71,6 +71,12 @@ selects the intended subset, and installs those pins with an argument-list
 subprocess and binary-only policy. The workflow files must never maintain
 second copies of those version strings.
 
+Dependabot opens one weekly pull request for every ecosystem (pip, each npm
+directory, Docker, GitHub Actions), majors included; security updates arrive
+separately. It cannot rebuild committed outputs, so land the batch through one
+follow-up PR that adds the rebuild, and revert a breaking major there while adding
+an `ignore` rule for it in `.github/dependabot.yml` until it is migrated.
+
 For an npm dependency PR, rebuild the affected island with
 `bash scripts/refresh_dependency_artifacts.sh frontend-app`,
 `frontend-vendor`, `research-graph`, or `pdf-viewer` as the argument.
