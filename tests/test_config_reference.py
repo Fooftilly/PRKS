@@ -241,8 +241,9 @@ class AppTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(text.count("problem: "), 1, text)
         self.assertRegex(text, r"PRKS_DATABASE_URL_FILE +\(invalid\)")
+        # --testing allows loopback-owner, so only the public bind refuses it.
         code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
-                                     "PRKS_AUTH": "loopback-owner"}, "--host", "0.0.0.0")
+                                     "PRKS_AUTH": "loopback-owner"}, "--testing", "--host", "0.0.0.0")
         self.assertEqual(code, 2)
         self.assertRegex(text, r"PRKS_AUTH +\(invalid\)")
 
