@@ -22,6 +22,7 @@ from backend.dependency_gate import (
     detect_platform_context,
     dockerfile_apt_packages,
     dockerfile_python_base_version,
+    dockerfile_python_versions,
     format_pip_install_command,
     format_venv_create_commands,
     parse_requirements_pins,
@@ -810,6 +811,21 @@ class RemediationMessageTests(unittest.TestCase):
         self.assertIn("/tmp/.venv/bin/python -m pip install -r requirements.txt", msg)
         assert_remediation_is_safe(msg)
 
+    def test_too_old_venv_recommends_new_venv_not_reinstall(self):
+        ctx = detect_platform_context(
+            prefix="/tmp/.venv",
+            base_prefix="/usr",
+            executable="/tmp/.venv/bin/python",
+            system="Linux",
+            environ={},
+            externally_managed=False,
+            **_HAS_PIP,
+        )
+        msg = remediation_message(python_too_old=((3, 12, 3), (3, 14)), ctx=ctx)
+        self.assertIn('uv venv --python ">=3.14" .venv', msg)
+        self.assertNotIn("/tmp/.venv/bin/python -m pip install", msg)
+        assert_remediation_is_safe(msg)
+
     def test_windows_quotes_paths(self):
         cmd = format_pip_install_command(
             r"C:\Users\Me\PRKS\.venv\Scripts\python.exe",
@@ -1320,12 +1336,34 @@ class DockerfileConsistencyTests(unittest.TestCase):
                 result.issues,
             )
 
+    def test_runtime_stage_drift_fails_even_when_builder_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._write_minimal_manifests(root)
+            (root / "Dockerfile").write_text(
+                "FROM python:3.14-slim AS frontend-builder\nFROM python:3.15-slim\n",
+                encoding="utf-8",
+            )
+            (root / "dependency-inventory.json").write_text(
+                self._inventory(names=["python", "python-base-image"], python_min=(3, 14)),
+                encoding="utf-8",
+            )
+            result = validate_dockerfile(root)
+            self.assertTrue(
+                any(
+                    i.code == "dockerfile_python_version" and "3.15" in i.message
+                    for i in result.issues
+                ),
+                result.issues,
+            )
+
     def test_ci_python_matches_minimum_and_image(self):
         need = python_min_version(_PROJECT)[:2]
-        image = dockerfile_python_base_version(
+        stages = dockerfile_python_versions(
             (_PROJECT / "Dockerfile").read_text(encoding="utf-8")
         )
-        self.assertEqual(image, need)
+        self.assertGreaterEqual(len(stages), 2)
+        self.assertEqual(set(stages), {need})
         pins = set()
         for wf in sorted((_PROJECT / ".github/workflows").glob("*.yml")):
             pins.update(

@@ -570,6 +570,28 @@ def remediation_message(
         )
         return "\n".join(lines)
 
+    if python_too_old is not None:
+        # Reinstalling packages cannot change this interpreter's version, so a
+        # fresh virtual environment with a supported Python is the only fix.
+        lines.extend(
+            [
+                "Reinstalling packages cannot change this interpreter's version.",
+                "Remove the old .venv, then create it with a supported Python"
+                " (uv, https://docs.astral.sh/uv/, can download one):",
+            ]
+        )
+        lines.extend(
+            f"  {cmd}"
+            for cmd in format_venv_create_commands(
+                is_windows=ctx.is_windows, use_uv=True, python_min=python_too_old[1]
+            )
+        )
+        if ctx.is_windows:
+            lines.append(r"Then run PRKS with: .venv\Scripts\python.exe prks_app.py")
+        else:
+            lines.append("Then run PRKS with: ./.venv/bin/python prks_app.py")
+        return "\n".join(lines)
+
     if ctx.in_venv:
         intro, cmds = interpreter_install_lines(ctx, requirements_file)
         lines.append("You are in a virtual environment. " + intro)
@@ -1797,6 +1819,14 @@ def dockerfile_python_base_version(text: str) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2)))
 
 
+def dockerfile_python_versions(text: str) -> list[tuple[int, int]]:
+    """Return ``(major, minor)`` of every ``FROM python:X.Y…`` stage, in order."""
+    return [
+        (int(m.group(1)), int(m.group(2)))
+        for m in _DOCKER_FROM_PYTHON_RE.finditer(text)
+    ]
+
+
 def dockerfile_apt_packages(text: str) -> list[str]:
     """Direct ``apt-get install`` package names, in first-seen order."""
     collapsed = _DOCKER_LINE_CONT_RE.sub(" ", text)
@@ -1874,16 +1904,18 @@ def validate_dockerfile(repo_root: Path | None = None) -> GateResult:
         return result
 
     need = python_min_version(root)[:2]
-    if image_ver != need:
-        # The image runs exactly the Python that CI tests (python_min_version).
-        result.fail(
-            "dockerfile_python_version",
-            (
-                f"Dockerfile FROM python:{image_ver[0]}.{image_ver[1]} does not match "
-                f"python_min_version {need[0]}.{need[1]}"
-            ),
-            str(path),
-        )
+    # Every Python stage (builder and runtime) runs exactly the Python that CI
+    # tests (python_min_version), not merely a newer one.
+    for ver in dockerfile_python_versions(text):
+        if ver != need:
+            result.fail(
+                "dockerfile_python_version",
+                (
+                    f"Dockerfile FROM python:{ver[0]}.{ver[1]} does not match "
+                    f"python_min_version {need[0]}.{need[1]}"
+                ),
+                str(path),
+            )
     return result
 
 
