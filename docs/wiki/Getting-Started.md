@@ -7,7 +7,7 @@ PRKS is designed to run locally. It needs Python and a PostgreSQL 18 server; Doc
 
 ## Requirements
 
-PRKS currently requires Python 3.12 or newer, the exact Python package versions pinned in `requirements.txt`, and a PostgreSQL 18 database (`PRKS_DATABASE_URL`). The application validates the Python environment before it touches the database, the storage root, or the network.
+PRKS currently requires Python 3.14 or newer, the exact Python package versions pinned in `requirements.txt`, and a PostgreSQL 18 database (`PRKS_DATABASE_URL`). The application validates the Python environment before it touches the database, the storage root, or the network.
 
 Use a project-local virtual environment. On distributions that enforce PEP 668, do not bypass the package manager with `sudo pip` or `--break-system-packages`.
 
@@ -20,7 +20,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 
 If the venv has no pip (for example one made by `uv venv`, or on Arch Linux), install with [uv](https://docs.astral.sh/uv/) instead: `uv pip install --python ./.venv/bin/python -r requirements.txt`. The dependency gate prints the right command for your interpreter.
 
-On a first run the server applies the schema and waits for setup: create the owner account and the Library with [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) (the README's "Quick start" has the two commands). Then open `http://127.0.0.1:8080` and sign in.
+On a first run the server applies the schema and waits for setup, serving only a setup page. Get a one-time setup token with `./.venv/bin/python prks_app.py admin bootstrap issue-token --root data` (the server prints the exact command), open `http://127.0.0.1:8080`, enter the token and create the owner account and the Library. PRKS then opens the Library, signed in. [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) also covers terminal-only and unattended setup.
 
 A different loopback port can be selected with `--port`. To make PRKS reachable on another interface, pass an explicit host such as `--host 0.0.0.0`. Every account signs in with its password, but do not expose PRKS to an untrusted network without an HTTPS reverse proxy; see [Security and Operations](Security-and-Operations.md).
 
@@ -35,6 +35,8 @@ unset PRKS_DATABASE_URL         # if you exported your Library's URL above
 Testing mode listens on `127.0.0.1:8070` by default and uses the `scripts/dev-postgres` database unless `PRKS_DATABASE_URL` (or `PRKS_DATABASE_URL_FILE`) is set; it refuses a database that is not marked for testing, so a shell that still exports your regular Library's URL will not start it. Unset that variable first, or export the testing URL that `scripts/dev-postgres` prints. On a fresh testing database every request acts as the owner (loopback only). Open `http://127.0.0.1:8070` in a browser. When `PRKS_STORAGE` is not set, it isolates data under `data_testing/`. It contains safety checks intended to prevent tests from binding to the normal repository `data/` tree.
 
 Use testing mode for browser automation, demo data, screenshots, and destructive experiments.
+
+To start over on an empty testing instance, for example after a schema change makes testing mode refuse to start, run `./.venv/bin/python prks_app.py --testing --reset-db`. It lists the testing database and data root it would delete and asks you to type `RESET` to confirm. The deletion cannot be undone. PRKS then starts on a new, empty testing database and data root. It only ever deletes a database marked for testing and the data root paired with it, and refuses while another PRKS process uses the root. After `scripts/dev-postgres reset`, `data_testing/` belongs to a database that no longer exists: delete that folder yourself.
 
 ## Docker
 

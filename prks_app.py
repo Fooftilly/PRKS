@@ -83,6 +83,15 @@ def build_parser():
         ),
     )
     parser.add_argument(
+        "--reset-db",
+        action="store_true",
+        help=(
+            "With --testing only: after you type RESET, permanently delete the testing "
+            "database's PRKS schemas and the testing data root's files, then start on a "
+            "new, empty testing instance."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=None,
@@ -182,6 +191,35 @@ def prepare_identity(args, config, environ=None):
     return db, settings
 
 
+def reset_testing_instance(config, environ=None):
+    """``--testing --reset-db``: empty the testing database and data root once the person confirms.
+
+    Returns when the instance was reset, so the start that follows applies the
+    schema and sets the instance up as on a first start; exits 1 when the
+    person cancels and 2 on any refusal (``backend.testing_reset``). With
+    ``PRKS_MIGRATE_ON_START=0`` the start would refuse the emptied database,
+    so the reset is refused before anything is deleted.
+    """
+    from backend.db.config import load_database_config
+    from backend.db.errors import DatabaseConfigError
+    from backend.testing_reset import main_reset
+
+    env = os.environ if environ is None else environ
+    if (env.get("PRKS_MIGRATE_ON_START") or "1").strip() != "1":
+        print(
+            "PRKS did not reset the testing instance: --reset-db starts PRKS on the emptied "
+            "database, which needs PRKS_MIGRATE_ON_START unset or 1. Nothing was deleted.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+    try:
+        conninfo = load_database_config(env, role="web").conninfo
+    except DatabaseConfigError as exc:
+        print(f"PRKS cannot start: {exc.message}", file=sys.stderr)
+        raise SystemExit(2) from None
+    main_reset(conninfo, config.root)
+
+
 def refuse_untested_database(conninfo):
     """Exit with status 2 unless ``conninfo`` is a testing database (``backend.db.testing_guard``).
 
@@ -203,9 +241,17 @@ class SetupWait:
     answers whether to check again: false once SIGTERM or SIGINT arrived
     while :meth:`watching`. The handlers only record the signal (see
     ``backend.jobs.worker.SignalStop``).
+
+    ``setup`` starts the browser setup phase (#612) on the first wait: a
+    callable returning ``(server, phase)``, the running
+    ``backend.server.SetupServer`` and its
+    ``backend.domain.identity.web_setup.SetupPhase``. A wait ends early once
+    the phase finished setup, and leaving :meth:`watching` stops the server,
+    so the normal server can bind the same address. Without it (or when its
+    server cannot bind) setup is the CLI's alone (``admin bootstrap``).
     """
 
-    def __init__(self, poll=2.0, *, stderr=None, step=0.1):
+    def __init__(self, poll=2.0, *, stderr=None, step=0.1, setup=None, setup_hint="", token_command=""):
         from backend.jobs.worker import SignalStop
 
         self.poll = poll
@@ -213,6 +259,11 @@ class SetupWait:
         self._stderr = stderr
         self._signals = SignalStop()
         self._announced = False
+        self._setup = setup
+        self._setup_hint = setup_hint
+        self._token_command = token_command or "python prks_app.py admin bootstrap issue-token --root DATA_ROOT"
+        self._server = None
+        self._phase = None
 
     @property
     def stopped(self):
@@ -225,19 +276,96 @@ class SetupWait:
             yield self
         finally:
             self._signals.restore()
+            self.close()
+
+    def close(self):
+        """Stop the setup server, if one runs, and wait for a setup request it still runs."""
+        server, self._server = self._server, None
+        if server is not None:
+            server.stop()
+            if self._phase is not None:
+                self._phase.close()
+
+    def _say(self, text):
+        print(text, file=self._stderr or sys.stderr)
+
+    def _start_setup(self, setup):
+        try:
+            self._server, self._phase = setup()
+        except OSError as exc:
+            self._say(
+                f"PRKS cannot serve its setup page ({exc.strerror or 'bind failed'}); "
+                "complete setup with python prks_app.py admin bootstrap (docs/admin-bootstrap.md)."
+            )
+            return
+        self._say(
+            "PRKS is waiting for setup. Open "
+            f"{self._setup_hint or 'PRKS in a browser'} to set it up there, with a setup token from: "
+            f"{self._token_command} (docs/admin-bootstrap.md)."
+        )
+
+    def _setup_done(self):
+        return self._phase is not None and self._phase.done.is_set()
+
+    @contextlib.contextmanager
+    def settled(self):
+        """Hold off this process's setup page's bootstrap; yields whether it already ran."""
+        if self._phase is None:
+            yield False
+            return
+        with self._phase.settled() as done:
+            yield done
 
     def __call__(self):
         if not self._announced:
             self._announced = True
-            print(
-                "PRKS is waiting for setup to complete (python prks_app.py admin bootstrap; "
-                "docs/admin-bootstrap.md).",
-                file=self._stderr or sys.stderr,
-            )
+            if self._setup is not None:
+                self._start_setup(self._setup)
+            else:
+                self._say(
+                    "PRKS is waiting for setup to complete (python prks_app.py admin bootstrap; "
+                    "docs/admin-bootstrap.md)."
+                )
         deadline = time.monotonic() + self.poll
-        while not self.stopped and time.monotonic() < deadline:
+        while not self.stopped and not self._setup_done() and time.monotonic() < deadline:
             time.sleep(self._step)
         return not self.stopped
+
+
+def setup_url(host, port, *, tls, public_origin=None):
+    """The address an operator opens for browser setup, as printed while waiting (#612)."""
+    def authority(name):
+        return f"[{name}]" if ":" in name else name  # an IPv6 literal
+
+    if public_origin is not None:
+        scheme, hostname, origin_port = public_origin
+        return f"{scheme}://{authority(hostname)}" + (f":{origin_port}" if origin_port else "") + "/"
+    scheme = "https" if tls else "http"
+    any_address = host in ("0.0.0.0", "::", "")  # nosec B104 - a bind, printed
+    shown = "this computer's address" if any_address else authority(host)
+    return f"{scheme}://{shown}:{port}/"
+
+
+def token_command(root):
+    """The command that issues a setup token for this data root, as printed while waiting (#612)."""
+    import shlex
+
+    # The interpreter running PRKS (a virtual environment's, say), not whatever ``python`` is.
+    return f"{shlex.quote(sys.executable or 'python')} prks_app.py admin bootstrap issue-token --root {shlex.quote(root)}"
+
+
+def setup_phase_starter(prepared, bound_root, *, host, port, http, testing):
+    """The ``setup`` callable of :class:`SetupWait` for this web process (#612)."""
+    from backend.domain.identity.web_setup import SetupPhase
+    from backend.server import start_setup_server
+
+    db, settings = prepared
+
+    def start():
+        phase = SetupPhase(db, settings, root=bound_root.root_real, lease=bound_root.lease, testing=testing)
+        return start_setup_server(phase, port=port, host=host, http=http, testing=testing), phase
+
+    return start
 
 
 def start_identity(prepared, bound_root, *, testing, wait=None):
@@ -255,8 +383,13 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
         auth = start_web_identity(
             db, settings, root=bound_root.root_real, lease=bound_root.lease,
             testing=testing, wait_for_setup=wait,
+            setup_settled=wait.settled if wait is not None else None,
         )
     except RootPairingRefused as exc:
+        if wait is not None:
+            # A setup request still in flight finishes before its database
+            # and root lease go away.
+            wait.close()
         db.close()
         bound_root.release()
         if exc.reason == "setup_pending" and wait is not None and wait.stopped:
@@ -267,6 +400,7 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
     if wait is not None and wait.stopped:
         # A stop that arrived during the last check is not lost: the caller
         # still holds the handlers, so it was recorded, and nothing serves.
+        wait.close()
         db.close()
         bound_root.release()
         print("PRKS stopped while waiting for setup.", file=sys.stderr)
@@ -293,6 +427,10 @@ def refuse_sqlite_catalogue(library_database, bound_root):
             file=sys.stderr,
         )
         raise SystemExit(2)
+
+
+# The schema refusals that only a new instance fixes (backend.db.migrate).
+RECREATE_REASONS = frozenset({"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order"})
 
 
 def migrate_on_start(db, environ, *, testing=False):
@@ -324,6 +462,11 @@ def migrate_on_start(db, environ, *, testing=False):
         message = exc.message
         if testing and exc.reason == "database_unavailable":
             message += " For --testing, start the local database with scripts/dev-postgres."
+        if testing and exc.reason in RECREATE_REASONS:
+            message += (
+                " For --testing, run prks_app.py --testing --reset-db to delete this testing "
+                "instance and start on a new, empty one."
+            )
         print(f"PRKS cannot start: {message}", file=sys.stderr)
         raise SystemExit(2) from None
 
@@ -642,6 +785,62 @@ def select_config(args):
         raise SystemExit(2) from None
 
 
+def serve_identity(args, config, identity, http_settings):
+    """Open the root, start identity and jobs, and serve; the web pool closes on every exit.
+
+    ``identity`` comes from :func:`prepare_identity`, whose pool is open. A
+    refusal at any later step (the root, the start check, setup) still exits
+    with its own message and status: the pool is closed here rather than by
+    its finaliser at interpreter exit, which joins the pool's threads late
+    (on Python 3.13 it held every stop for seconds) and which Python 3.14
+    refuses, printing a traceback. Closing twice is harmless.
+    """
+    from backend.startup_profile import phase as startup_phase
+
+    library_database = identity[0]
+    try:
+        # Held until this process exits: root.lock shared, beside worker and
+        # migrate (L-D-1 #630).
+        with startup_phase("startup_storage_open"):
+            bound_root = open_storage(config, paired=True)
+            refuse_sqlite_catalogue(library_database, bound_root)
+        port = args.port if args.port is not None else (8070 if args.testing else PORT)
+        testing = config.mode == "testing"
+        # The start check and bump under that shared lease; a first run waits
+        # here until setup is ready, serving only the browser setup page (#612)
+        # meanwhile (a --testing run on a fresh database bootstraps its owner
+        # instead). Leaving the wait stops the setup server before the normal
+        # server binds the same address.
+        wait = SetupWait(
+            setup=setup_phase_starter(
+                identity, bound_root, host=args.host, port=port, http=http_settings, testing=testing
+            ),
+            setup_hint=setup_url(args.host, port, tls=http_settings.tls, public_origin=identity[1].public_origin),
+            token_command=token_command(bound_root.root_real),
+        )
+        with startup_phase("startup_identity"), wait.watching():
+            auth = start_identity(identity, bound_root, testing=testing, wait=wait)
+        with startup_phase("startup_jobs"):
+            jobs = start_jobs(auth)
+        # Every later open stays beneath the root that was validated and leased,
+        # even if a root symlink is retargeted while the process runs.
+        config = bound_root.anchor(config)
+        with startup_phase("startup_bind"):
+            config = bind_storage(config, library_database=library_database)
+        with startup_phase("startup_logging"):
+            setup_logging(config)
+            bound_root.log_binding()
+        if jobs is not None:
+            # The embedded worker's object maintenance acts on the leased root only.
+            with startup_phase("startup_worker_bind"):
+                jobs.bind_root(config.root)
+
+        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
+                   readiness=readiness_for(auth, config.root), http=http_settings)
+    finally:
+        library_database.close()
+
+
 if __name__ == "__main__":
     from backend.startup_profile import phase as startup_phase, record_imports
 
@@ -652,7 +851,10 @@ if __name__ == "__main__":
     refuse_invalid_environment()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))
-    args = build_parser().parse_args(role_argv)
+    parser = build_parser()
+    args = parser.parse_args(role_argv)
+    if args.reset_db and not args.testing:
+        parser.error("--reset-db only resets a testing instance: use it with --testing.")
     if args.testing:
         enter_testing_mode()
 
@@ -675,42 +877,11 @@ if __name__ == "__main__":
         except HttpSettingsError as exc:
             print(f"PRKS cannot start its HTTP server: {exc.message}", file=sys.stderr)
             raise SystemExit(2) from None
+    if args.reset_db:
+        # Before the schema step, which refuses a changed schema file.
+        reset_testing_instance(config)
     # Authentication settings, the pool and the schema, before the root is
     # touched.
     with startup_phase("startup_identity_config"):
         identity = prepare_identity(args, config)
-        library_database = identity[0]
-    # Held until this process exits: root.lock shared, beside worker and
-    # migrate (L-D-1 #630).
-    with startup_phase("startup_storage_open"):
-        bound_root = open_storage(config, paired=True)
-        refuse_sqlite_catalogue(library_database, bound_root)
-    # The start check and bump under that shared lease; a first run waits
-    # here, serving nothing, until setup is ready (a --testing run on a fresh
-    # database bootstraps its owner instead).
-    with startup_phase("startup_identity"), SetupWait().watching() as wait:
-        auth = start_identity(identity, bound_root, testing=config.mode == "testing", wait=wait)
-    with startup_phase("startup_jobs"):
-        jobs = start_jobs(auth)
-    # Every later open stays beneath the root that was validated and leased,
-    # even if a root symlink is retargeted while the process runs.
-    config = bound_root.anchor(config)
-    with startup_phase("startup_bind"):
-        config = bind_storage(config, library_database=library_database)
-    with startup_phase("startup_logging"):
-        setup_logging(config)
-        bound_root.log_binding()
-    if jobs is not None:
-        # The embedded worker's object maintenance acts on the leased root only.
-        with startup_phase("startup_worker_bind"):
-            jobs.bind_root(config.root)
-
-    port = args.port if args.port is not None else (8070 if args.testing else PORT)
-    try:
-        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
-                   readiness=readiness_for(auth, config.root), http=http_settings)
-    finally:
-        # Close the web pool here rather than leave it to its finaliser at
-        # interpreter exit, which joins the pool's threads late (on Python
-        # 3.13 it held every stop for seconds).
-        auth.db.close()
+    serve_identity(args, config, identity, http_settings)

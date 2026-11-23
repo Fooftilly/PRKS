@@ -10,7 +10,7 @@ npm ci
 npm run build
 ```
 
-Pins EmbedPDF **2.15.1** and React **18.3.1** / React DOM **18.3.1**. React exists only inside the generated bundle.
+Pins EmbedPDF **2.15.1** and React **19.3.1** / React DOM **19.3.1**. React exists only inside the generated bundle.
 
 Open documents through DocumentManager (`initialDocuments`, `openDocumentUrl`, `openDocumentBuffer`). `engine.saveAsCopy()` is for export only.
 

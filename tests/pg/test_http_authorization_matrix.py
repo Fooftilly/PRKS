@@ -114,8 +114,10 @@ ROWS: tuple[Row, ...] = (
     # An empty envelope is the protocol's own refusal, after admission.
     Row("session", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
 )
-# Modules that are not a route family of their own.
-_NOT_FAMILIES = frozenset({"__init__"})
+# Modules that are not a route family of their own. ``setup`` serves only a
+# first run's setup phase, before any session or Library exists (#612); its
+# token, origin and rate-limit rules are in tests/pg/test_web_setup.py.
+_NOT_FAMILIES = frozenset({"__init__", "setup"})
 # Families with no mutating route.
 # Families with no mutating route. A saved remote image is written only by a
 # read (``GET /api/remote-images`` fills it, as the portrait route does).

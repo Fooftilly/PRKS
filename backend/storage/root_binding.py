@@ -793,6 +793,18 @@ def _check_no_mount_points(root_real: str) -> None:
             )
 
 
+def check_no_foreign_tree(root_real: str) -> None:
+    """V7 and V13 for a caller about to delete inside the root: no mount point, link or other device.
+
+    ``StorageRootRefused`` names the first entry that would carry a recursive
+    delete outside the root's own filesystem tree (``backend.testing_reset``).
+    Regular files on another device (overlayfs) are not refused: unlinking one
+    never reaches past it.
+    """
+    _check_no_mount_points(root_real)
+    _check_tree(root_real, file_devices=False)
+
+
 def _check_tree(root_real: str, *, file_devices: bool = True) -> None:
     """V13 and V7 for everything beneath the root (§7.3): no links, no mount points.
 

@@ -19,7 +19,7 @@ same file through SQL. The rule:
 The key is not re-normalized after folding, on either side.
 
 Unicode version skew: Python and PostgreSQL can ship different Unicode data
-(Python 3.12 has 15.0, PostgreSQL 18 has 16.0). Unicode's case-folding
+(Python 3.14 and PostgreSQL 18 both have 16.0 today). Unicode's case-folding
 stability policy keeps the folding of an assigned character fixed, so the two
 can only disagree on a code point one side does not know yet. This module
 therefore refuses text holding a code point unassigned in Python's

@@ -25,7 +25,7 @@ It runs as a Python web application with its Library in PostgreSQL 18 and its PD
 ## Requirements
 
 - **PostgreSQL 18** holds the Library. Docker Compose (below) runs it for you; to run PRKS from source, use a PostgreSQL 18 server you control.
-- **Python 3.12+** and the exact runtime package pins from `requirements.txt`, for a run from source.
+- **Python 3.14+** and the exact runtime package pins from `requirements.txt`, for a run from source.
 
 Prefer a project-local virtual environment. On PEP 668 “externally managed” systems, do not use `sudo pip` or `--break-system-packages`.
 
@@ -47,20 +47,19 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 The venv needs pip for that second command. Some setups have none: `uv venv` and `python -m venv --without-pip` create venvs without it, and Arch Linux does not ship pip for its system Python. With [uv](https://docs.astral.sh/uv/) on `PATH`, use it instead:
 
 ```bash
-uv venv --python ">=3.12" .venv
+uv venv --python ">=3.14" .venv
 uv pip install --python ./.venv/bin/python -r requirements.txt
 ```
 
 The dependency gate checks which installer the interpreter has (pip, `uv` on `PATH`, or `ensurepip` to bootstrap pip) and prints a command that works.
 
-`prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** it touches the database, the storage root or the network. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI. It then applies the database schema, binds the data root (`data/` by default) and, on a first run, **waits for setup**. In a second terminal, with the same `PRKS_DATABASE_URL`, create the owner account and the Library ([admin bootstrap](docs/admin-bootstrap.md)):
+`prks_app.py` validates the Python environment (minimum version + exact `requirements.txt` pins via `importlib.metadata`) **before** it touches the database, the storage root or the network. A mismatch exits non-zero with platform-aware remediation. It never auto-runs `pip` and never contacts PyPI. It then applies the database schema, binds the data root (`data/` by default) and, on a first run, **waits for setup**. While it waits it serves only a setup page. In a second terminal, with the same `PRKS_DATABASE_URL`, get a one-time setup token:
 
 ```bash
 ./.venv/bin/python prks_app.py admin bootstrap issue-token --root data
-./.venv/bin/python prks_app.py admin bootstrap complete --root data --login alice
 ```
 
-The first command prints a one-time token; the second asks for it and for the owner's password. The waiting server then starts serving. Open [http://127.0.0.1:8080](http://127.0.0.1:8080) and sign in with that login and password.
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080), enter the token, choose the owner's login and password and the Library's name, and finish. The server then starts serving the Library and you are signed in. Without a browser, `admin bootstrap complete --root data --login alice` does the same from the terminal ([admin bootstrap](docs/admin-bootstrap.md)).
 
 The process listens on **127.0.0.1:8080** only. Optional port (still loopback):
 
@@ -89,6 +88,8 @@ python prks_app.py --testing
 Testing mode is a disposable instance for development and agents. It sets `PRKS_TESTING=1`, uses port **8070** by default (unless you pass `--port`) and, with `PRKS_STORAGE` unset, the `data_testing/` root, so the repository's `data/` is untouched. You may set `PRKS_STORAGE` to an explicit safe testing root. Testing mode refuses `/data` and the repository `data/` directory (and descendants), including via symlinks.
 
 Its database is `PRKS_DATABASE_URL`, or by default the one `scripts/dev-postgres` serves (`postgresql://prks:prks@127.0.0.1:55433/prks_testing`; `scripts/dev-postgres stop` stops it, `reset` deletes it, and then delete `data_testing/` too). **Before it writes anything, a testing process proves its database is a testing one**: the database must be marked for testing (`scripts/dev-postgres` and the test harness mark theirs) and hold no non-testing instance, or the process exits with status 2 and leaves it untouched. To use a database you created only for testing, mark it with `COMMENT ON DATABASE <name> IS 'prks-testing'`; never mark one that holds a real Library. On a fresh testing database the first start creates its owner and Library itself and every request acts as that owner (`PRKS_AUTH=loopback-owner`, loopback only); set `PRKS_AUTH=session` to sign in with a password instead.
+
+**Start over on an empty testing instance** with `python prks_app.py --testing --reset-db`, for example when a schema file changed under the testing database ("Schema file … changed after this database applied it"). It shows the database and data root it would delete, says the deletion cannot be undone, and continues only when you type `RESET` at a terminal (never from a pipe). It then drops every schema in the testing database except `public` (the prompt lists them; the database, its testing mark and its owner stay) and deletes every file in the data root, and the start that follows sets the instance up as on a first start. It refuses, deleting nothing: a database that is not marked for testing; a data root that is not paired with that database (even `data_testing/`: after `scripts/dev-postgres reset` delete that folder yourself); a root holding a pre-0.8 SQLite Library, a link or a mount point; a root a running PRKS process holds; and a database that changed while the prompt was open. There is no way to keep the old testing data across a schema change: a backup restores only into the PRKS version that made it.
 
 ## Docker
 
@@ -127,11 +128,10 @@ cp .env.example .env   # then set UID/GID to `id -u`/`id -g`
 docker compose up -d
 ```
 
-On a new, empty data directory `web` binds it as a PRKS data root (`prks-root.json`) and then **waits for setup**: it serves nothing, and `/readyz` stays unreachable (the container is unhealthy) until you create the owner and the Library. `worker` waits too. Run setup in the waiting `web` container ([admin bootstrap](docs/admin-bootstrap.md)):
+On a new, empty data directory `web` binds it as a PRKS data root (`prks-root.json`) and then **waits for setup**: it serves only the setup page, and `/readyz` answers 503 (the container is unhealthy) until you create the owner and the Library. `worker` waits too. Get a setup token in the waiting `web` container, then open [http://127.0.0.1:8080](http://127.0.0.1:8080) and finish setup in the browser ([admin bootstrap](docs/admin-bootstrap.md) has the terminal-only and unattended ways):
 
 ```bash
 docker compose exec web python /app/prks_app.py admin bootstrap issue-token --root /data
-docker compose exec web python /app/prks_app.py admin bootstrap complete --root /data --login alice
 ```
 
 `web` then starts serving at [http://127.0.0.1:8080](http://127.0.0.1:8080) and turns healthy. Loopback is the default publish address. Expose PRKS on a network only over HTTPS: behind a reverse proxy such as Caddy, with `PRKS_PUBLISH_HOST`, `PRKS_PUBLIC_ORIGIN` and `PRKS_TRUSTED_PROXIES` set in `.env` (recommended for the internet), or with PRKS's own TLS (`PRKS_TLS_CERT_FILE`, `PRKS_TLS_KEY_FILE`). [HTTPS](docs/https.md) has a Compose example of each. `PRKS_TRUSTED_PROXIES` must name only the proxy, as `web` sees it, and the web port must then be reachable only by that proxy: drop the published port and put the proxy on the Compose network with an address of its own. A proxy on the host reaches `web` through Docker's bridge gateway, not from `127.0.0.1`, so `PRKS_TRUSTED_PROXIES=127.0.0.1` does not match it ([HTTPS](docs/https.md) has the Compose example). Anyone who reaches the port from a trusted address can set `X-Forwarded-For` and spread their sign-in attempts over invented addresses.

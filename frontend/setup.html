@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#6d6cf7">
+    <title>Set up PRKS</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/vendor/inter/inter.css">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body class="prks-setup-body">
+    <!-- First-run setup (#612). A web process waiting for setup serves this page
+         instead of the application shell; the Vue bundle mounts the setup flow
+         here (frontend-app/src/features/setup/). No service worker, no Library. -->
+    <main id="prks-setup-root" class="prks-setup">
+        <noscript>
+            <p class="prks-inline-message">PRKS setup needs JavaScript. You can also set PRKS up from a terminal
+                with <code>python prks_app.py admin bootstrap</code>.</p>
+        </noscript>
+    </main>
+    <script type="module" src="/vue/prks-vue.js"></script>
+</body>
+
+</html>

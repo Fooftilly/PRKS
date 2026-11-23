@@ -2,8 +2,9 @@
 
 L-ID-1 (#626); design in `docs/postgresql-architecture.md` §9.2. Every new
 PRKS instance needs it once: until setup completes, the web process waits and
-serves nothing (a `--testing` run on a fresh testing database bootstraps its
-own owner instead). Run the command as `python prks_app.py admin …`
+serves only the browser setup page (below; a `--testing` run in
+`loopback-owner` mode on a fresh testing database bootstraps its own owner
+instead). Run the command as `python prks_app.py admin …`
 (the same as `python -m backend.domain.identity.admin …`, used below).
 
 Setup needs a **one-time bootstrap token**. Getting a token and using it are
@@ -13,7 +14,42 @@ two separate commands, so you never handle a token that is already used up:
 2. `bootstrap complete` uses the token to create the owner account and the
    Library. Using it consumes it.
 
-Browser first-run setup, when it arrives, uses the same tokens.
+Browser setup (#612) uses the same tokens: `issue-token` gives you one, and
+the browser uses it instead of `complete`.
+
+## Browser setup
+
+While setup is not complete, the web process serves a **setup phase** on its
+normal address and port: the setup page for every page path, `GET`/`POST
+/api/setup`, `/healthz` (200) and `/readyz` (503). Every other `/api/` route
+answers 503 `setup_pending`; no Library is served. The process prints the
+address and the exact `issue-token` command (with its `--root`) once.
+
+1. Run `issue-token` (any of the ways below) and copy the token.
+2. Open PRKS in a browser. Enter the token, then the owner's login, optional
+   display name, password (twice) and the Library's name (default
+   `Library`), review, and press **Finish setup**.
+3. PRKS runs the same bootstrap as `complete`, signs that browser in as the
+   owner, stops the setup phase and starts serving the Library on the same
+   address. The page opens it once it answers.
+
+Rules of the setup phase:
+
+- Without a valid token nothing is written; the token is checked before the
+  password is hashed. Ten refused tokens a minute make it answer 429 for the
+  rest of that minute.
+- The Host and cross-site request (CSRF) rules of every PRKS mutation apply.
+  The bind address is the normal one: loopback unless you chose otherwise.
+  Serve it on a network only over HTTPS, as for sign-in.
+- One setup runs at a time; a second tab gets "already running". An
+  interrupted setup resumes with the same or a new token, from the browser or
+  `complete`.
+- Once setup is complete nothing reopens it: `GET /api/setup` answers
+  `ready` and `POST /api/setup` 409 `already_ready`, signed in or not. A new
+  browser signs in; it never sees setup again.
+- The used configuration-directory token file is deleted, as by `complete`.
+- If the setup page cannot bind its address, the process says so and setup
+  stays possible with `complete`.
 
 ## Before you start
 
@@ -24,7 +60,7 @@ Browser first-run setup, when it arrives, uses the same tokens.
 - The data root is already bound: it has a `prks-root.json`. Both commands
   check `--root` first and refuse a missing or unbound root before asking for
   any secret. A web process with `PRKS_AUTH` started on a new root binds it,
-  then waits (serving nothing, `/readyz` unreachable) until setup is complete;
+  then waits (serving only the setup page, `/readyz` 503) until setup is complete;
   run these commands meanwhile, beside it. Once setup is complete it runs its
   start check and starts serving.
 - Both commands take `--root PATH`, the data root this database will own.

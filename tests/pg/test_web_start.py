@@ -16,7 +16,7 @@ import io
 import signal
 import unittest
 from datetime import timedelta
-from typing import Any
+from typing import Any, Iterator
 
 import psycopg
 from psycopg import sql
@@ -153,6 +153,26 @@ class StartTests(WebStartTestCase):
         self.assertEqual(auth.instance_id, require(self.instance(name))["id"])
         # The claim was generation 1; this process's start is the one bump.
         self.assert_paired(name, root, 2)
+
+    def test_a_browser_setup_in_this_process_is_its_one_bump(self) -> None:
+        name = self.database()
+        root = self.new_root()
+        lease = self.lease(root)
+        done: list[bool] = []
+
+        def wait() -> bool:
+            # The waiting process's own setup page runs the bootstrap (#612).
+            self.bootstrap(name, root, lease=lease)
+            done.append(True)
+            return True
+
+        @contextlib.contextmanager
+        def settled() -> Iterator[bool]:
+            yield bool(done)
+
+        self.web_start(name, root, lease=lease, wait_for_setup=wait, setup_settled=settled)
+        # The claim (generation 1) counted as this process's start.
+        self.assert_paired(name, root, 1)
 
     def test_a_wait_that_gives_up_is_refused(self) -> None:
         name = self.database()

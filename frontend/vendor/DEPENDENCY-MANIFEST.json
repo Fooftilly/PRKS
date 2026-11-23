@@ -74,22 +74,22 @@
       "runtime_files": [
         {
           "path": "/vendor/cytoscape/cytoscape.min.js",
-          "sha256": "081591ab735b2b6a3b31a3c60f8f3a3e2fee8c92939e0c7820ad1208571b6cd8"
+          "sha256": "71fa9ebec21a7ca2c40cff6aacc30d1f6464e363662ad4b2c197e1adc770cd94"
         }
       ],
       "source_category": "npm:tools/research-graph",
-      "version": "3.34.4"
+      "version": "3.35.0"
     },
     {
       "name": "dompurify",
       "runtime_files": [
         {
           "path": "/vendor/dompurify/purify.min.js",
-          "sha256": "cd37898f9782adf54820c413191b5691803f0f137c799d6edcfd38523b4c2c31"
+          "sha256": "8053ee2a6a09f9d50f7fcd6fb7f07072f52c7f3fa9aa12147cab4feaf65ee970"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "3.4.17"
+      "version": "3.4.18"
     },
     {
       "name": "easymde",
@@ -137,11 +137,11 @@
       "runtime_files": [
         {
           "path": "/vendor/lucide/lucide.min.js",
-          "sha256": "d2e6483c0256fdb7bc4feb41b040717632641beacff7e79791ebcbb31e363344"
+          "sha256": "ed271ffbe31f0905af8a6ef7b45a70831a517a70909795e637135e218a543c5e"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "1.70.0"
+      "version": "1.73.0"
     },
     {
       "name": "prks-editor-recovery",
@@ -170,7 +170,7 @@
       "runtime_files": [
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
-          "sha256": "9f494272914a077f4610f93377a2b44884c6f4f454c2466bf2061067c00a71ff"
+          "sha256": "d17d97716c61e1679f10d79d5c92fd5ae17590e633591213d37a35b499b199c5"
         },
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.css",
@@ -222,11 +222,11 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "f54d0557795569225963e42f3b1dd34bdc0b0056d4c1b7963436e008b7fd598d"
+          "sha256": "91cb762692252f562409e7820b336f7566d10d7dbeed09f97c3d1fb041b7105f"
         }
       ],
       "source_category": "npm:frontend-app",
-      "version": "3.5.44"
+      "version": "3.5.45"
     },
     {
       "name": "prks-work-route-projection",
