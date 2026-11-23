@@ -12,6 +12,8 @@ import {
  */
 export const settingsActiveCategory = ref<SettingsCategoryId>('general')
 export const settingsNavOrientation = ref<'vertical' | 'horizontal'>('vertical')
+/** Counts Settings modal opens, so a panel can read again on reopen without a category change. */
+export const settingsOpenCount = ref(0)
 
 let diagnosticsActivated = false
 let orientationMedia: MediaQueryList | null = null
@@ -84,6 +86,7 @@ export function activateSettingsCategory(
 export function openSettingsToLastCategory(): void {
   syncSettingsNavOrientation()
   activateSettingsCategory(settingsActiveCategory.value)
+  settingsOpenCount.value += 1
 }
 
 export function registerSettingsNavigationBridge(target: Window = window): void {
@@ -110,5 +113,6 @@ export function resetSettingsNavigationForTests(): void {
   orientationHandler = null
   diagnosticsActivated = false
   settingsActiveCategory.value = 'general'
+  settingsOpenCount.value = 0
   settingsNavOrientation.value = 'vertical'
 }

@@ -6,7 +6,7 @@ import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
 import { prksQueryKeys } from '../../query/keys'
-import { settingsActiveCategory } from './navigation'
+import { settingsActiveCategory, settingsOpenCount } from './navigation'
 
 /**
  * Deployment settings (#612): how this PRKS was started, read-only.
@@ -23,10 +23,14 @@ const query = useQuery({
   queryFn: ({ signal }) => getDeploymentSettings(signal),
 })
 
-// The panel stays mounted while other categories show, and the host may have
-// restarted PRKS with new values since: read again each time it reopens.
+// The panel stays mounted while other categories show and while Settings is
+// closed, and the host may have restarted PRKS with new values since: read
+// again each time the category or the Settings modal reopens on it.
 watch(settingsActiveCategory, (now, before) => {
   if (now === 'deployment' && before !== 'deployment' && query.data.value) void query.refetch()
+})
+watch(settingsOpenCount, () => {
+  if (settingsActiveCategory.value === 'deployment' && query.data.value) void query.refetch()
 })
 
 const settings = computed(() => query.data.value?.settings ?? [])

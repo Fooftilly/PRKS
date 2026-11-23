@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { parseDeploymentSettings } from '../../api/deployment-settings'
 import { createPrksQueryClient } from '../../query/client'
-import { activateSettingsCategory, resetSettingsNavigationForTests } from './navigation'
+import { activateSettingsCategory, openSettingsToLastCategory, resetSettingsNavigationForTests } from './navigation'
 import SettingsDeployment from './SettingsDeployment.vue'
 
 const BODY = {
@@ -98,6 +98,26 @@ describe('SettingsDeployment', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
     body = after
     activateSettingsCategory('deployment')
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(threads()).toBe('4')
+  })
+  it('reads again when Settings reopens on Deployment without a category change', async () => {
+    const after = { ...BODY, settings: [{ ...BODY.settings[0], value: '4' }, ...BODY.settings.slice(1)] }
+    let body: unknown = BODY
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    activateSettingsCategory('deployment')
+    const wrapper = mountPanel()
+    await flushPromises()
+    const threads = () => wrapper.get('[data-prks-setting="PRKS_HTTP_THREADS"] .prks-deployment-list__value').text()
+    expect(threads()).toBe('8')
+    // Settings closes (nothing unmounts, the category stays), the host restarts PRKS, Settings reopens.
+    body = after
+    openSettingsToLastCategory()
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(threads()).toBe('4')
