@@ -25,7 +25,7 @@ It runs as a Python web application with its Library in PostgreSQL 18 and its PD
 ## Requirements
 
 - **PostgreSQL 18** holds the Library. Docker Compose (below) runs it for you; to run PRKS from source, use a PostgreSQL 18 server you control.
-- **Python 3.12+** and the exact runtime package pins from `requirements.txt`, for a run from source.
+- **Python 3.14+** and the exact runtime package pins from `requirements.txt`, for a run from source.
 
 Prefer a project-local virtual environment. On PEP 668 “externally managed” systems, do not use `sudo pip` or `--break-system-packages`.
 
@@ -47,7 +47,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 The venv needs pip for that second command. Some setups have none: `uv venv` and `python -m venv --without-pip` create venvs without it, and Arch Linux does not ship pip for its system Python. With [uv](https://docs.astral.sh/uv/) on `PATH`, use it instead:
 
 ```bash
-uv venv --python ">=3.12" .venv
+uv venv --python ">=3.14" .venv
 uv pip install --python ./.venv/bin/python -r requirements.txt
 ```
 
@@ -89,6 +89,8 @@ python prks_app.py --testing
 Testing mode is a disposable instance for development and agents. It sets `PRKS_TESTING=1`, uses port **8070** by default (unless you pass `--port`) and, with `PRKS_STORAGE` unset, the `data_testing/` root, so the repository's `data/` is untouched. You may set `PRKS_STORAGE` to an explicit safe testing root. Testing mode refuses `/data` and the repository `data/` directory (and descendants), including via symlinks.
 
 Its database is `PRKS_DATABASE_URL`, or by default the one `scripts/dev-postgres` serves (`postgresql://prks:prks@127.0.0.1:55433/prks_testing`; `scripts/dev-postgres stop` stops it, `reset` deletes it, and then delete `data_testing/` too). **Before it writes anything, a testing process proves its database is a testing one**: the database must be marked for testing (`scripts/dev-postgres` and the test harness mark theirs) and hold no non-testing instance, or the process exits with status 2 and leaves it untouched. To use a database you created only for testing, mark it with `COMMENT ON DATABASE <name> IS 'prks-testing'`; never mark one that holds a real Library. On a fresh testing database the first start creates its owner and Library itself and every request acts as that owner (`PRKS_AUTH=loopback-owner`, loopback only); set `PRKS_AUTH=session` to sign in with a password instead.
+
+**Start over on an empty testing instance** with `python prks_app.py --testing --reset-db`, for example when a schema file changed under the testing database ("Schema file … changed after this database applied it"). It shows the database and data root it would delete, says the deletion cannot be undone, and continues only when you type `RESET` at a terminal (never from a pipe). It then drops every schema in the testing database except `public` (the prompt lists them; the database, its testing mark and its owner stay) and deletes every file in the data root, and the start that follows sets the instance up as on a first start. It refuses, deleting nothing: a database that is not marked for testing; a data root that is not paired with that database (even `data_testing/`: after `scripts/dev-postgres reset` delete that folder yourself); a root holding a pre-0.8 SQLite Library, a link or a mount point; a root a running PRKS process holds; and a database that changed while the prompt was open. There is no way to keep the old testing data across a schema change: a backup restores only into the PRKS version that made it.
 
 ## Docker
 

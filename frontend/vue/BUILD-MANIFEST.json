@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "vue": "3.5.44",
+  "vue": "3.5.45",
   "tanstackVueQuery": "5.105.2",
-  "vueUse": "13.9.0",
-  "vite": "8.3.6",
+  "vueUse": "15.1.0",
+  "vite": "8.3.8",
   "typescript": "5.9.2",
   "vueTsc": "3.3.14",
   "vitest": "5.1.0",

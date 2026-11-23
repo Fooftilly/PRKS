@@ -1505,6 +1505,7 @@ class EngineeringInvariantTests(unittest.TestCase):
                 "backend/domain/research/constraints.py",
                 "backend/domain/saved_views/constraints.py",
                 "backend/db/testing_guard.py",
+                "backend/testing_reset.py",
                 "backend/jobs/__init__.py",
                 "backend/services/__init__.py",
                 "backend/services/work_pdf_replace.py",

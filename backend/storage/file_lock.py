@@ -142,6 +142,12 @@ class _HeldFileLock:
             _close_quietly(fd)
         raise LockUnavailable("lock_file_unstable")
 
+    def fstat(self) -> os.stat_result:
+        """``os.fstat`` of the held handle: the identity of the file actually locked."""
+        if self._fd is None:
+            raise LockUnavailable("lock_not_held")
+        return os.fstat(self._fd)
+
     def release(self) -> None:
         """Release the lock by closing its handle. Idempotent."""
         fd, self._fd = self._fd, None

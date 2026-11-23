@@ -1,22 +1,23 @@
 {
   "embedpdf": "2.15.1",
-  "react": "18.3.1",
-  "reactDom": "18.3.1",
+  "react": "19.3.1",
+  "reactDom": "19.3.1",
   "fontFallback": null,
   "tiling": false,
   "pdfiumWasm": "pdfium.wasm",
   "esbuild": "0.28.2",
   "reactMetafileInputs": [
-    "node_modules/react/cjs/react.production.min.js",
+    "node_modules/react/cjs/react.production.js",
     "node_modules/react/index.js",
-    "node_modules/react-dom/cjs/react-dom.production.min.js",
+    "node_modules/react-dom/cjs/react-dom.production.js",
     "node_modules/react-dom/index.js",
+    "node_modules/react-dom/cjs/react-dom-client.production.js",
     "node_modules/react-dom/client.js",
-    "node_modules/react/cjs/react-jsx-runtime.production.min.js",
+    "node_modules/react/cjs/react-jsx-runtime.production.js",
     "node_modules/react/jsx-runtime.js"
   ],
   "outputSha256": {
-    "js": "9f494272914a077f4610f93377a2b44884c6f4f454c2466bf2061067c00a71ff",
+    "js": "d17d97716c61e1679f10d79d5c92fd5ae17590e633591213d37a35b499b199c5",
     "css": "2aa01915857d9d12a3753860e8c3f5ad2c26eab0b5ce6ca7e8be28110dff0253",
     "wasm": "5e4cd023c3dad4a895b3571ca573d3fc51bac6de48360d95283134385b954eaa"
   },

@@ -1,108 +1,71 @@
-"""Guard Dependabot batching boundaries, especially security and runtime pins."""
+"""Guard the single weekly Dependabot batch and its deliberate-migration ignores."""
 
 from __future__ import annotations
 
-import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 CONFIG = Path(__file__).resolve().parents[1] / ".github/dependabot.yml"
+GROUP = "weekly-dependencies"
+ECOSYSTEMS = {
+    ("pip", "/"),
+    ("npm", "/tools/pdf-viewer"),
+    ("npm", "/tools/research-graph"),
+    ("npm", "/tools/frontend-vendor"),
+    ("npm", "/frontend-app"),
+    ("docker", "/"),
+    ("github-actions", "/"),
+}
+MAJOR = ["version-update:semver-major"]
 
 
-def ecosystem(config: str, kind: str, directory: str) -> str:
-    match = re.search(
-        r'(?ms)^  - package-ecosystem: "' + re.escape(kind) + r'"\n'
-        + r'    directory: "' + re.escape(directory) + r'"\n'
-        + r'(.*?)(?=^  - package-ecosystem: |\Z)',
-        config,
-    )
-    if match is None:
-        raise AssertionError(f"Missing Dependabot ecosystem {kind}:{directory}")
-    return match.group(1)
+def ignored_majors(entry: dict) -> set[str]:
+    return {
+        rule["dependency-name"]
+        for rule in entry.get("ignore", [])
+        if rule.get("update-types") == MAJOR
+    }
 
 
-def group(config: str, name: str) -> str:
-    match = re.search(
-        r"(?ms)^      " + re.escape(name) + r":\n"
-        + r"(.*?)(?=^      [\w-]+:\n|\Z)",
-        config,
-    )
-    if match is None:
-        raise AssertionError(f"Missing Dependabot group {name}")
-    return match.group(1)
-
-
-def values(section: str, field: str) -> set[str]:
-    match = re.search(
-        r"(?m)^        " + re.escape(field) + r":\n"
-        + r"((?:^          - \"[^\"]+\"\n)+)",
-        section,
-    )
-    if match is None:
-        raise AssertionError(f"Missing or malformed {field}")
-    return set(re.findall(r'(?m)^          - "([^"]+)"$', match.group(1)))
-
-
-class DependabotGroupingSafetyTests(unittest.TestCase):
+class DependabotWeeklyBatchTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.config = CONFIG.read_text(encoding="utf-8")
-
-    def test_psycopg_stack_is_only_database_driver_family(self):
-        pip = ecosystem(self.config, "pip", "/")
-        stack = group(pip, "psycopg-stack")
-        self.assertEqual(
-            values(stack, "patterns"),
-            {"psycopg", "psycopg-binary", "psycopg-pool"},
-        )
-        self.assertIn("applies-to: version-updates", stack)
-        self.assertIn('update-types: ["minor", "patch"]', stack)
-        # Crucially, these must not be grouped even if they move to runtime.
-        for pkg in ("argon2-cffi", "openapi-core", "pydantic", "playwright"):
-            self.assertNotIn(pkg, values(stack, "patterns"))
-
-    def test_frontend_stacks_are_excluded_from_routine(self):
-        frontend = ecosystem(self.config, "npm", "/frontend-app")
-        reserved = {
-            "storybook", "@storybook/*", "vitest", "@vitest/*", "vite",
-            "@vitejs/plugin-vue", "vue-tsc", "vue", "@vue/*",
+        cls.config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+        cls.entries = {
+            (u["package-ecosystem"], u["directory"]): u for u in cls.config["updates"]
         }
-        for key in ("storybook-stack", "vitest-stack", "vite-toolchain", "vue-core"):
-            self.assertTrue(values(group(frontend, key), "patterns"))
-        routine = group(frontend, "frontend-routine")
-        self.assertEqual(values(routine, "patterns"), {"*"})
-        self.assertTrue(reserved.issubset(values(routine, "exclude-patterns")))
-        self.assertIn('update-types: ["minor", "patch"]', routine)
-        self.assertIn("vue-tsc", values(group(frontend, "vite-toolchain"), "patterns"))
 
-    def test_pdf_react_and_embedpdf_not_swallowed_by_routine(self):
-        viewer = ecosystem(self.config, "npm", "/tools/pdf-viewer")
-        routine = group(viewer, "pdf-viewer-routine")
-        protected = {"@embedpdf/*", "react", "react-dom", "@types/react", "@types/react-dom"}
-        self.assertTrue(protected.issubset(values(routine, "exclude-patterns")))
-        self.assertEqual(values(routine, "patterns"), {"*"})
-        self.assertIn('update-types: ["minor", "patch"]', routine)
-        self.assertTrue(protected.intersection(values(group(viewer, "react-stack"), "patterns")))
-        self.assertIn("@embedpdf/*", values(group(viewer, "embedpdf"), "patterns"))
+    def test_every_ecosystem_joins_the_one_weekly_group(self):
+        self.assertEqual(set(self.entries), ECOSYSTEMS)
+        self.assertEqual(set(self.config["multi-ecosystem-groups"]), {GROUP})
+        for key, entry in self.entries.items():
+            with self.subTest(ecosystem=key):
+                self.assertEqual(entry["multi-ecosystem-group"], GROUP)
+                self.assertEqual(entry["patterns"], ["*"])
+                # Per-ecosystem groups would split the batch again.
+                self.assertNotIn("groups", entry)
 
-    def test_dompurify_exclusion_is_real(self):
-        vendor = ecosystem(self.config, "npm", "/tools/frontend-vendor")
-        routine = group(vendor, "frontend-vendor-routine")
-        self.assertEqual(values(routine, "patterns"), {"*"})
-        self.assertIn("dompurify", values(routine, "exclude-patterns"))
-        self.assertIn('update-types: ["minor", "patch"]', routine)
+    def test_group_has_weekly_schedule_and_no_update_type_filter(self):
+        group = self.config["multi-ecosystem-groups"][GROUP]
+        self.assertEqual(group["schedule"]["interval"], "weekly")
+        # A multi-ecosystem job skips updates outside the group, so a filter
+        # here would silently drop majors instead of opening separate PRs.
+        self.assertNotIn("update-types", group)
 
-    def test_action_security_and_major_updates_remain_separate(self):
-        gh = ecosystem(self.config, "github-actions", "/")
-        security = group(gh, "codeql-security")
-        codeql = group(gh, "codeql-action")
-        routine = group(gh, "actions-routine")
-        self.assertIn("applies-to: security-updates", security)
-        self.assertIn("applies-to: version-updates", codeql)
-        self.assertIn("applies-to: version-updates", routine)
-        self.assertEqual(values(routine, "patterns"), {"actions/*"})
-        self.assertIn('update-types: ["minor", "patch"]', routine)
+    def test_deliberate_migrations_stay_ignored(self):
+        self.assertIn(
+            "@embedpdf/*", ignored_majors(self.entries[("npm", "/tools/pdf-viewer")])
+        )
+        self.assertIn(
+            "codemirror", ignored_majors(self.entries[("npm", "/tools/frontend-vendor")])
+        )
+
+    def test_docker_python_stays_below_unsupported_release(self):
+        rules = self.entries[("docker", "/")]["ignore"]
+        self.assertIn({"dependency-name": "python", "versions": [">= 3.15"]}, rules)
 
 
 if __name__ == "__main__":
