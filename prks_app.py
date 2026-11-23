@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import os
+import re
 import sys
 import time
 
@@ -541,10 +542,10 @@ def _delegated_checks(environ, args):
     combined, storage = _parser_problems(environ, args)
     found.extend(problem for problem in combined.values() if problem is not None and problem not in found)
     for group in groups:
-        # A value the probe could not reach that the whole environment's
-        # pass names (another value cleared the way) is refused after all.
+        # A value the whole environment's pass names is refused there (a
+        # conflict, or a value the probe could not reach), whatever its probe said.
         problem = combined.get(_PARSER_OF_OWNER.get(BY_KEY[group[0]].owner) or "")
-        named = [key for key in group if key in unchecked and problem is not None and key in problem]
+        named = [key for key in group if problem is not None and re.search(rf"\b{key}\b", problem)]
         unchecked.difference_update(named)
         invalid.update(named)
     return storage, found, invalid, unchecked
