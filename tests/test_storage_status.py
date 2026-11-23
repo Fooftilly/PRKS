@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Optional
 from unittest.mock import patch
 
 from openapi_core import OpenAPI
@@ -19,6 +20,7 @@ from backend.domain.identity.authorization import Capability
 from backend.log_safety import safe_route
 from backend.storage import root_binding, status
 from backend.storage.config import StorageConfig
+from backend.storage.errors import StorageRootError
 from backend.storage.preflight import (
     NORMALIZATION_INSENSITIVE,
     NORMALIZATION_NORMALIZED,
@@ -52,8 +54,10 @@ class _Handler:
     def end_headers(self) -> None:
         pass
 
-    def send_json(self, status: int, payload: dict) -> None:
+    def send_json(self, status: int, payload: dict, cache_control: Optional[str] = None) -> None:
         self.status, self.json = status, payload
+        if cache_control:
+            self.headers["Cache-Control"] = cache_control
 
 
 class StatusTestCase(unittest.TestCase):
@@ -147,6 +151,12 @@ class StorageStatusFactsTests(StatusTestCase):
         self.assertEqual((identity["state"], identity["relocation_state"]), ("fenced", "fenced"))
 
 
+    def test_an_unreadable_marker_never_claims_no_move(self) -> None:
+        with patch.object(status, "read_marker", side_effect=StorageRootError("marker_unreadable", "unreadable")):
+            identity = self.body()["identity"]
+        self.assertEqual((identity["storage_root_id"], identity["relocation_state"]), (None, "unknown"))
+
+
 class NameSemanticsProbeTests(unittest.TestCase):
     def test_probe_runs_in_the_scaffold_and_removes_it(self) -> None:
         with tempfile.TemporaryDirectory(prefix="prks-probe-") as tmp:
@@ -154,9 +164,23 @@ class NameSemanticsProbeTests(unittest.TestCase):
             os.mkdir(maintenance)
             semantics = probe_name_semantics(maintenance)
             self.assertEqual(os.listdir(maintenance), [])
-            if os.name == "posix" and not os.uname().sysname == "Darwin":
-                self.assertTrue(semantics.case_sensitive)
-                self.assertEqual(semantics.normalization, NORMALIZATION_PRESERVED)
+            # The filesystem decides, not the OS: compare with an independent probe.
+            other = os.path.join(tmp, "independent")
+            os.mkdir(other)
+            with open(os.path.join(other, "a"), "w", encoding="utf-8"):
+                pass
+            self.assertEqual(semantics.case_sensitive, not os.path.exists(os.path.join(other, "A")))
+            nfc, nfd = "\u00e9", "e\u0301"
+            with open(os.path.join(other, nfc), "w", encoding="utf-8"):
+                pass
+            listed = set(os.listdir(other))
+            if nfc not in listed:
+                expected = NORMALIZATION_NORMALIZED
+            elif os.path.exists(os.path.join(other, nfd)):
+                expected = NORMALIZATION_INSENSITIVE
+            else:
+                expected = NORMALIZATION_PRESERVED
+            self.assertEqual(semantics.normalization, expected)
 
 
 class StorageRouteTests(StatusTestCase):
@@ -174,7 +198,8 @@ class StorageRouteTests(StatusTestCase):
         self.assertTrue(storage_api.handle_get(handler, storage_api.PATH, config=config, library=None))
         self.assertEqual(handler.status, 200)
         self.assertEqual(handler.headers["Cache-Control"], "no-store")
-        body = json.loads(handler.wfile.getvalue())
+        body = handler.json
+        assert body is not None
         self.assertEqual(body["identity"]["storage_root_id"], self.bound.storage_root_id)
 
     def test_other_paths_and_an_unbound_process(self) -> None:

@@ -5,7 +5,7 @@ import { parseStorageStatus } from '../../api/storage-status'
 import { createPrksQueryClient } from '../../query/client'
 import { activateSettingsCategory, openSettingsToLastCategory, resetSettingsNavigationForTests } from './navigation'
 import SettingsStorage from './SettingsStorage.vue'
-import { formatStorageBytes } from './storage-labels'
+import { formatStorageBytes, storageRows } from './storage-labels'
 
 const BODY = {
   root: { configured: '/srv/prks-link', resolved: '/mnt/disk/prks', source: 'env', editable_in_app: false },
@@ -133,6 +133,31 @@ describe('SettingsStorage', () => {
     await flushPromises()
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(wrapper.get('[data-prks-storage="files"]').text()).toContain('1.0 GB free')
+  })
+
+  it('hides the last answer once a later read fails', async () => {
+    let status = 200
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(status === 200 ? BODY : { error: 'Forbidden', code: 'forbidden' }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    activateSettingsCategory('storage')
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.find('#prks-storage-objects').exists()).toBe(true)
+    status = 403
+    openSettingsToLastCategory()
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('#prks-storage-locations').exists()).toBe(false)
+    expect(wrapper.find('#prks-storage-objects').exists()).toBe(false)
+    expect(wrapper.find('#prks-storage-folder').exists()).toBe(false)
+  })
+
+  it('keeps a known port when the server has no host name', () => {
+    const rows = storageRows(parseStorageStatus({ ...BODY, database: { engine: 'PostgreSQL', host: null, port: '5433', name: 'prks' } }))
+    expect(rows.database).toBe('PostgreSQL · port 5433/prks')
   })
 
   it('formats sizes', () => {

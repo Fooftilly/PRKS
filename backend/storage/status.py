@@ -23,7 +23,7 @@ import os
 import shutil
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
 from backend.storage.errors import StorageRootError
 from backend.storage.preflight import NameSemantics, probe_name_semantics
@@ -167,10 +167,19 @@ def root_status(
         storage_root_id=marker.storage_root_id if marker is not None else None,
         layout_version=marker.layout_version if marker is not None else None,
         state=marker.state if marker is not None else None,
-        relocation_state=(phase if isinstance(phase, str) else "unknown") if relocation is not None else "none",
+        relocation_state=_relocation_state(marker, relocation, phase),
         backend_type=BACKEND_LOCAL,
         filesystem=filesystem_facts(resolved_root, marker, probe=leased),
     )
+
+
+def _relocation_state(marker: Optional[RootMarker], relocation: Any, phase: Any) -> str:
+    # An unreadable marker says nothing about a move: never claim there is none.
+    if marker is None:
+        return "unknown"
+    if relocation is None:
+        return "none"
+    return phase if isinstance(phase, str) else "unknown"
 
 
 def reset_cache() -> None:

@@ -5,7 +5,10 @@ filename, so names are private data (``log_safety``).
 
 - ``missing``: keys a catalogue row names whose object the store does not
   have. Every referenced key is stat-ed, once per status read; the read is
-  the owner's, on demand, never scheduled.
+  the owner's, on demand, never scheduled. An absent key is asked again
+  *after* its stat: a release and settle between the first read and the
+  stat removes the bytes of a key nothing names any more, and that is not
+  a lost file. A key whose references cannot be told stays missing.
 - ``pending_cleanup``: claims a Library recorded when it stopped naming a
   key, waiting for ``objects.cleanup`` (§11.2).
 - ``orphans``: claims the orphan sweep recorded for objects nothing ever
@@ -22,6 +25,7 @@ from dataclasses import dataclass
 from typing import LiteralString
 
 from backend.db.database import Database, Transaction
+from backend.domain.objects.lifecycle import references
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
@@ -77,14 +81,28 @@ def _read(tx: Transaction) -> tuple[list[tuple[str, str]], dict[str, int]]:
 def object_counts(db: Database, storage: StorageBackend) -> ObjectCounts:
     """Count missing referenced objects and pending claims across the instance."""
     keys, claims = db.query(_read)
-    missing = 0
+    absent: list[StorageKey] = []
+    invalid = 0
     for namespace, name in keys:
         try:
-            found = storage.stat(StorageKey(namespace, name))
+            key = StorageKey(namespace, name)
+        except InvalidStorageKey:
+            # A name the store cannot hold: the catalogue names bytes PRKS
+            # cannot serve, and no release can make that a cleanup.
+            invalid += 1
+            continue
+        try:
+            found = storage.stat(key)
         except (InvalidStorageKey, StorageObjectError):
-            # A name the store cannot hold, or a link where the object should
-            # be: either way the catalogue names bytes PRKS cannot serve.
+            # A link where the object should be: bytes PRKS cannot serve.
             found = None
         if found is None:
-            missing += 1
-    return ObjectCounts(referenced=len(keys), missing=missing, **claims)
+            absent.append(key)
+    still_named = db.query(lambda tx: _still_named(tx, absent)) if absent else 0
+    return ObjectCounts(referenced=len(keys), missing=invalid + still_named, **claims)
+
+
+def _still_named(tx: Transaction, keys: list[StorageKey]) -> int:
+    # After the stats: a key released and settled since the first read is
+    # no longer named, so its absence is cleanup, not loss. Unknown counts.
+    return sum(1 for key in keys if references(tx, key) is not False)
