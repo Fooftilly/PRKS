@@ -25,12 +25,17 @@ const query = useQuery({
 
 // The panel stays mounted while other categories show and while Settings is
 // closed, and the host may have restarted PRKS with new values since: read
-// again each time the category or the Settings modal reopens on it.
+// again each time the category or the Settings modal reopens on it. Only
+// after a first read finished, with values or an error: the first read comes
+// from `enabled`, and a failed one must not stick on reopen.
+function readBefore(): boolean {
+  return query.data.value !== undefined || query.isError.value
+}
 watch(settingsActiveCategory, (now, before) => {
-  if (now === 'deployment' && before !== 'deployment' && query.data.value) void query.refetch()
+  if (now === 'deployment' && before !== 'deployment' && readBefore()) void query.refetch()
 })
 watch(settingsOpenCount, () => {
-  if (settingsActiveCategory.value === 'deployment' && query.data.value) void query.refetch()
+  if (settingsActiveCategory.value === 'deployment' && readBefore()) void query.refetch()
 })
 
 const settings = computed(() => query.data.value?.settings ?? [])

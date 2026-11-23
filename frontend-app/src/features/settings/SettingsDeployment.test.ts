@@ -122,4 +122,22 @@ describe('SettingsDeployment', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(threads()).toBe('4')
   })
+
+  it('reads again on reopen after a failed first read', async () => {
+    let status = 503
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(status === 200 ? BODY : { error: 'unavailable' }), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    activateSettingsCategory('deployment')
+    const wrapper = mountPanel()
+    await flushPromises()
+    expect(wrapper.findAll('[data-prks-setting]')).toHaveLength(0)
+    status = 200
+    openSettingsToLastCategory()
+    await flushPromises()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('[data-prks-setting]')).toHaveLength(3)
+  })
 })
