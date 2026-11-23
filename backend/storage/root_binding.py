@@ -1290,9 +1290,37 @@ def _open_storage_root(
             # the lease shared. Until then the exclusive lease keeps every
             # other process out, so a second web started meanwhile is refused.
             _share(bound)
+    try:
+        _check_selection_unchanged(config, config_file_path)
+    except BaseException:
+        bound._release_locks()
+        raise
     if register:
         _register(bound)
     return bound
+
+
+def _check_selection_unchanged(config: Any, config_file_path: Optional[str]) -> None:
+    """Refuse a root the bootstrap file stopped selecting while this process leased it (§8.1).
+
+    A process reads the bootstrap file, then leases the root it names. A
+    choice (``backend.storage.choose``) written in between holds the old
+    root's lease while it writes, so it finishes before this lease is taken,
+    and this re-read, under the lease, sees it. No process then serves a
+    root the committed selection does not name.
+    """
+    if getattr(config, "root_source", None) != SOURCE_CONFIG_FILE or not config_file_path:
+        return
+    from backend.storage.bootstrap_config import read_bootstrap_config
+
+    current = read_bootstrap_config(config_file_path)
+    selected = current.local_root if current is not None else None
+    if selected is None or os.path.normpath(selected) != os.path.normpath(config.root):
+        raise StorageRootRefused(
+            "storage_selection_changed",
+            "The Library folder in the PRKS bootstrap configuration changed while PRKS was starting. "
+            "Start PRKS again to use the folder it selects now.",
+        )
 
 
 def _look_before_leasing(

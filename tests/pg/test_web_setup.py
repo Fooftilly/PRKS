@@ -38,7 +38,16 @@ from backend.domain.identity.web_setup import (
 )
 from backend.domain.identity.web_start import settings_from_env
 from backend.server import parse_request_origin, start_setup_server
+from backend.storage import root_marker
+from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent, read_bootstrap_config
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
+
+
+def _marker(root: str) -> root_marker.RootMarker:
+    marker = root_marker.read_marker(root)
+    assert marker is not None, root
+    return marker
+
 
 PASSWORD = "correct horse battery"
 
@@ -112,12 +121,14 @@ class AfterSetupTests(unittest.TestCase):
     def test_ready_for_a_read_and_already_ready_for_a_post(self) -> None:
         for method in ("GET", "HEAD"):
             reply = self.answer(method)
-            self.assertEqual((reply.status, reply.body), (200, {"state": "ready"}))
+            self.assertEqual((reply.status, reply.body), (200, {"state": "ready", "storage": "fixed"}))
         reply = self.answer("POST")
         self.assertEqual((reply.status, reply.body), (409, {"error": "already_ready"}))
         reply = self.answer("DELETE")
         self.assertEqual(reply.status, 405)
         self.assertIsNone(self.answer("GET", "/api/setup/x"))
+        reply = self.answer("POST", "/api/setup/storage")
+        self.assertEqual((reply.status, reply.body), (409, {"error": "already_ready"}))
 
 
 class SetupTestCase(RootPairingTestCase):
@@ -285,7 +296,7 @@ class SetupHttpTests(SetupTestCase):
                 self.assertIn(b'id="prks-setup-root"', raw)
                 self.assertEqual(headers["cache-control"], "no-store, max-age=0")
         status, _, raw = self.request(port, "GET", "/api/setup")
-        self.assertEqual((status, json.loads(raw)), (200, {"state": "unconfigured"}))
+        self.assertEqual((status, json.loads(raw)), (200, {"state": "unconfigured", "storage": "fixed"}))
         for method, path in (("GET", "/api/session"), ("GET", "/api/works"), ("POST", "/api/login")):
             with self.subTest(path=path):
                 status, _, raw = self.request(port, method, path, {} if method == "POST" else None)
@@ -320,7 +331,7 @@ class SetupHttpTests(SetupTestCase):
         self.assertNotIn(token, json.dumps(got) + json.dumps(headers))
         self.assertTrue(phase.done.is_set())
         status, _, raw = self.request(port, "GET", "/api/setup")
-        self.assertEqual((status, json.loads(raw)), (200, {"state": "ready"}))
+        self.assertEqual((status, json.loads(raw)), (200, {"state": "ready", "storage": "fixed"}))
         # Nothing opens it again, not even the token that set it up.
         status, got, _ = self.post(port, body(token))
         self.assertEqual((status, got), (409, {"error": "already_ready"}))
@@ -342,6 +353,83 @@ class SetupHttpTests(SetupTestCase):
         status, got, _ = self.post(port, body(self.issue(other).reveal()))
         self.assertEqual((status, got["error"], got["reason"]), (409, "setup_refused", "root_used"))
         self.assertNotIn(root, got["message"])
+
+
+class SetupStorageChoiceTests(SetupHttpTests):
+    """The setup page's folder choice (#720): token-gated, then setup waits for a restart."""
+
+    def choosable_phase(self, name: str) -> tuple[SetupPhase, str]:
+        root = self.new_root("current")
+        BootstrapConfigStore(self.environ["PRKS_CONFIG_FILE"]).compare_and_set(
+            expect=expect_absent(), local_root=root)
+        phase = SetupPhase(
+            self.db(name), self.settings(), root=root, lease=self.lease(root), testing=False,
+            environ=self.environ, root_source="config_file",
+        )
+        return phase, root
+
+    def choose(self, port: int, data: Any, **headers: str) -> tuple[int, dict[str, Any]]:
+        origin = {"Origin": f"http://127.0.0.1:{port}", **headers}
+        status, _, raw = self.request(port, "POST", "/api/setup/storage", data, origin)
+        return status, json.loads(raw) if raw else {}
+
+    def selected(self) -> Optional[str]:
+        config = read_bootstrap_config(self.environ["PRKS_CONFIG_FILE"])
+        return config.local_root if config is not None else None
+
+    def test_the_token_holder_chooses_a_folder_and_setup_waits_for_a_restart(self) -> None:
+        name = self.database()
+        phase, root = self.choosable_phase(name)
+        token = self.issue(name).reveal()
+        port = self.serve(phase)
+        status, _, raw = self.request(port, "GET", "/api/setup")
+        self.assertEqual((status, json.loads(raw)), (200, {"state": "unconfigured", "storage": "choosable"}))
+        target = os.path.join(self.tmp, "chosen")
+        # Cross-site, without a token, or with a wrong one: refused, nothing written.
+        self.assertEqual(self.choose(port, {"token": token, "folder": target}, Origin="http://evil.example"),
+                         (403, {"error": "origin_not_allowed"}))
+        self.assertEqual(self.choose(port, {"folder": target})[1]["field"], "token")
+        self.assertEqual(self.choose(port, {"token": bootstrap_tokens.new_token().reveal(), "folder": target}),
+                         (403, {"error": "bootstrap_token_invalid"}))
+        self.assertEqual(self.choose(port, {"token": token, "folder": " "})[1]["field"], "folder")
+        self.assertEqual(self.selected(), root)
+        self.assertFalse(os.path.exists(target))
+
+        status, got = self.choose(port, {"token": token, "folder": target})
+        self.assertEqual((status, got), (200, {"folder": target, "created": True, "restart_required": True}))
+        self.assertEqual(self.selected(), target)
+        status, _, raw = self.request(port, "GET", "/api/setup")
+        self.assertEqual(json.loads(raw), {"state": "unconfigured", "storage": "restart_required"})
+        # Setup would claim the folder this process serves: refused until a restart.
+        status, got, _ = self.post(port, body(token))
+        self.assertEqual((status, got), (409, {"error": "restart_required"}))
+        self.assertEqual(self.choose(port, {"token": token, "folder": os.path.join(self.tmp, "again")}),
+                         (409, {"error": "restart_required"}))
+        self.assertIsNone(self.instance(name))
+        self.assertIsNone(_marker(root).instance_id)
+
+    def test_open_another_library_is_refused(self) -> None:
+        name = self.database()
+        phase, root = self.choosable_phase(name)
+        token = self.issue(name).reveal()
+        other = self.new_root("other")
+        self.bootstrap(self.database("other"), other)  # another database claims it
+        before = _marker(other).document
+        port = self.serve(phase)
+        status, got = self.choose(port, {"token": token, "folder": other})
+        self.assertEqual((status, got["error"], got["reason"]), (409, "storage_refused", "open_another_library_refused"))
+        self.assertEqual(self.selected(), root)
+        self.assertEqual(_marker(other).document, before)
+        self.assertEqual(json.loads(self.request(port, "GET", "/api/setup")[2])["storage"], "choosable")
+
+    def test_a_folder_set_by_the_host_is_fixed(self) -> None:
+        name, root = self.database(), self.new_root()
+        token = self.issue(name).reveal()
+        port = self.serve(self.phase(name, root))  # a testing process: PRKS_STORAGE or data_testing
+        self.assertEqual(json.loads(self.request(port, "GET", "/api/setup")[2])["storage"], "fixed")
+        status, got = self.choose(port, {"token": token, "folder": os.path.join(self.tmp, "x")})
+        self.assertEqual((status, got["error"], got["reason"]), (409, "storage_refused", "choose_set_by_host"))
+        self.assertIsNone(self.selected())
 
 
 class WaitingProcessTests(SetupTestCase):

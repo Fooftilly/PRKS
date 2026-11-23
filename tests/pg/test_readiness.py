@@ -340,7 +340,7 @@ class WebProcessTests(RootPairingTestCase):
         proc = self.serve(name, root, port, home)
         try:
             self.assertEqual(_wait_for(port, "/api/setup", proc), 200)
-            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "unconfigured"})
+            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "unconfigured", "storage": "fixed"})
             self.assertEqual(self.request(port, "GET", "/api/works")[0], 503)
             self.assertTrue(require(root_marker.read_marker(root)).bindable)
             token = bootstrap_tokens.issue_token(self.db(name)).token.reveal()
@@ -363,7 +363,7 @@ class WebProcessTests(RootPairingTestCase):
         proc = self.serve(name, root, port, home)
         try:
             self.assertEqual(_wait_for(port, "/readyz", proc), 200)
-            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "ready"})
+            self.assertEqual(self.request(port, "GET", "/api/setup")[1], {"state": "ready", "storage": "fixed"})
             again = self.request(port, "POST", "/api/setup", {
                 "token": token, "login": "intruder", "password": "another passphrase here",
             })

@@ -49,11 +49,19 @@ from backend.domain.identity.bootstrap_tokens import BootstrapToken
 from backend.domain.identity.errors import RootPairingRefused
 from backend.domain.identity.sessions import NewSession
 from backend.domain.identity.web_start import WebAuthSettings
+from backend.storage.choose import CHOOSABLE_SOURCES, Chosen, choose_root
+from backend.storage.errors import StorageRootError, StorageRootRefused
 from backend.storage.file_lock import SharedFileLock
 
 STATE_UNCONFIGURED = "unconfigured"
 STATE_BOOTSTRAPPING = "bootstrapping"
 STATE_READY = root_pairing.SETUP_READY
+
+# Whether the setup page may choose the Library folder (#720).
+STORAGE_CHOOSABLE = "choosable"
+STORAGE_FIXED = "fixed"
+STORAGE_RESTART_REQUIRED = "restart_required"
+_RESTART_MESSAGE = "A new Library folder was chosen. Restart PRKS, then finish setup."
 
 DEFAULT_LIBRARY_NAME = "Library"
 MAX_NAME_CHARS = 200
@@ -229,6 +237,7 @@ class SetupPhase:
         environ: Optional[Mapping[str, str]] = None,
         hasher: Optional[PasswordHasher] = None,
         attempts: Optional[TokenAttempts] = None,
+        root_source: Optional[str] = None,
     ) -> None:
         self.db = db
         self.settings = settings
@@ -244,6 +253,9 @@ class SetupPhase:
         # without also seeing ``done``.
         self._settle = threading.Lock()
         self._closed = False
+        self._root_source = root_source
+        # Set once a folder was chosen (#720): setup waits for a restart on it.
+        self.chosen_root: Optional[str] = None
         self.done = threading.Event()
 
     def state(self) -> str:
@@ -251,6 +263,69 @@ class SetupPhase:
         if self.done.is_set():
             return STATE_READY
         return read_state(self.db)
+
+    def storage_choice(self) -> str:
+        """``choosable``, ``fixed`` or ``restart_required``: whether the setup page may choose a folder.
+
+        ``choosable`` only for a non-testing process whose folder no higher
+        source set and that setup has not claimed (``backend.storage.choose``).
+        Reveals no path. Raises nothing: a folder it cannot read is ``fixed``.
+        """
+        if self.chosen_root is not None:
+            return STORAGE_RESTART_REQUIRED
+        if self._testing or self._root_source not in CHOOSABLE_SOURCES:
+            return STORAGE_FIXED
+        from backend.storage.choose import refusal_before_target
+
+        try:
+            refusal = refusal_before_target(self._environ, self._root)
+        except StorageRootError:
+            return STORAGE_FIXED
+        return STORAGE_FIXED if refusal is not None else STORAGE_CHOOSABLE
+
+    def choose_folder(self, token: BootstrapToken, folder: str) -> Chosen:
+        """Record ``folder`` as the Library folder for the next start (#720).
+
+        Checks the bootstrap token first, like :meth:`complete`, and shares
+        its one-at-a-time rule and attempt window. Once a folder is chosen,
+        setup is refused until PRKS restarts on it. Raises
+        :class:`RootPairingRefused`, :class:`SetupBusy`,
+        :class:`TooManyAttempts` or ``StorageRootError``.
+        """
+        self._attempts.check()
+        if not self._running.acquire(blocking=False):
+            raise SetupBusy()
+        try:
+            if self._closed:
+                raise SetupBusy()
+            self._attempts.check()
+            try:
+                _token_usable(self.db, token)
+            except RootPairingRefused as exc:
+                if exc.reason in _TOKEN_REFUSALS:
+                    self._attempts.refused()
+                raise
+            if self.chosen_root is not None:
+                raise RootPairingRefused("restart_required", _RESTART_MESSAGE)
+            if self._testing or self._root_source not in CHOOSABLE_SOURCES:
+                raise StorageRootRefused(
+                    "choose_set_by_host",
+                    "The Library folder is set where PRKS is deployed; change it there.",
+                )
+            if read_state(self.db) != STATE_UNCONFIGURED:
+                raise StorageRootRefused(
+                    "choose_root_claimed", "Setup has already started on the current Library folder."
+                )
+            with self._settle:
+                if self.done.is_set():
+                    raise RootPairingRefused(
+                        "already_ready", "This PRKS instance is already set up; bootstrap is closed."
+                    )
+                chosen = choose_root(folder, environ=self._environ, held_current_root=self._root)
+                self.chosen_root = chosen.root
+            return chosen
+        finally:
+            self._running.release()
 
     def close(self) -> None:
         """Wait for a setup request in flight, then refuse any later one.
@@ -289,6 +364,10 @@ class SetupPhase:
             if exc.reason in _TOKEN_REFUSALS:
                 self._attempts.refused()
             raise
+        if self.chosen_root is not None:
+            # Setup would claim the folder this process serves, which the
+            # bootstrap file no longer selects.
+            raise RootPairingRefused("restart_required", _RESTART_MESSAGE)
         owner = root_pairing.OwnerSpec(
             login_name=request.login,
             display_name=request.display_name,

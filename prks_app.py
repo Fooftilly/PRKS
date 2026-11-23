@@ -30,7 +30,7 @@ def parse_host(value):
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
-ROLES = ("serve", "migrate", "worker", "admin", "config")
+ROLES = ("serve", "migrate", "worker", "admin", "config", "storage")
 
 
 def split_role(argv):
@@ -362,7 +362,10 @@ def setup_phase_starter(prepared, bound_root, *, host, port, http, testing):
     db, settings = prepared
 
     def start():
-        phase = SetupPhase(db, settings, root=bound_root.root_real, lease=bound_root.lease, testing=testing)
+        phase = SetupPhase(
+            db, settings, root=bound_root.root_real, lease=bound_root.lease, testing=testing,
+            root_source=bound_root.source,
+        )
         return start_setup_server(phase, port=port, host=host, http=http, testing=testing), phase
 
     return start
@@ -625,6 +628,40 @@ def run_config(argv, environ=None, *, out=None):
     return 0 if not found else 2
 
 
+def run_storage(argv, environ=None, *, out=None, err=None):
+    """``storage choose PATH``: pick the Library folder before setup claims it (#720).
+
+    Writes the bootstrap file through its guarded compare-and-set and takes
+    effect at the next start (``backend.storage.choose``). Refused once setup
+    has paired the current folder, when ``--storage-root`` or
+    ``PRKS_STORAGE`` selects the folder, for a folder that already belongs to
+    a database ("open another library" is not supported), and while a PRKS
+    process runs on the current folder. Exit 0 when recorded, 2 when refused.
+    """
+    from backend.storage.choose import choose_root
+
+    parser = argparse.ArgumentParser(
+        prog="prks_app.py storage", description="Choose where this installation keeps its Library files."
+    )
+    steps = parser.add_subparsers(dest="command", required=True)
+    choose = steps.add_parser(
+        "choose", help="use PATH as the Library folder from the next start (only before setup)"
+    )
+    choose.add_argument("path", metavar="PATH", help="an empty or new folder, or an unpaired PRKS folder")
+    args = parser.parse_args(argv)
+    stdout = out or sys.stdout
+    stderr = err or sys.stderr
+    try:
+        chosen = choose_root(args.path, environ=os.environ if environ is None else environ)
+    except StorageRootError as exc:
+        print(f"PRKS cannot use that folder: {exc.message}", file=stderr)
+        return 2
+    kind = "a new Library folder" if chosen.created else "an existing, unpaired Library folder"
+    print(f"Library folder: {chosen.root} ({kind}).", file=stdout)
+    print("Start PRKS (or restart it) to use it; setup then pairs it with the database.", file=stdout)
+    return 0
+
+
 # The parser a start runs for each owner of a delegated setting (the admin
 # token file is read only when a setup needs it, so it is shown as set).
 _PARSER_OF_OWNER = {
@@ -865,6 +902,8 @@ if __name__ == "__main__":
     role, role_argv = split_role(sys.argv[1:])
     if role == "config":
         raise SystemExit(run_config(role_argv))
+    if role == "storage":
+        raise SystemExit(run_storage(role_argv))
     refuse_invalid_environment()
     if role != "serve":
         raise SystemExit(run_role(role, role_argv))

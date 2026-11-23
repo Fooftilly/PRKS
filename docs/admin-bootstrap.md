@@ -51,6 +51,30 @@ Rules of the setup phase:
 - If the setup page cannot bind its address, the process says so and setup
   stays possible with `complete`.
 
+## Choosing the Library folder before setup
+
+The Library's files live in one data folder, paired with the database the
+moment setup completes. Before that, and only when nothing on the host sets
+the folder (no `--storage-root`, no `PRKS_STORAGE`), you may pick another
+folder:
+
+- **Command line:** `python prks_app.py storage choose PATH` (stop PRKS
+  first; it refuses while a PRKS process runs on the current folder).
+- **Setup page:** on the token step, open *Use a different folder for the
+  Library's files*, enter the token and the folder, and press **Use this
+  folder**. Setup then waits for a restart.
+
+Either way PRKS validates the folder as a start would (an empty or new
+folder, or an existing PRKS folder no database has claimed), records it in
+the bootstrap file and uses it from the next start. Restart PRKS, then
+finish setup with the same token. Refused, with nothing written: testing
+mode, a folder the host sets, any choice once setup has claimed the current
+folder, a folder that belongs to another database ("open another library" is
+not supported: use a storage move or a new installation and a Library
+restore), a folder another PRKS process holds, and every folder a start
+would refuse. A process that read the old selection and starts after a
+choice refuses to serve and asks to be started again.
+
 ## Before you start
 
 - The database schema is applied (`python prks_app.py migrate`; a web
