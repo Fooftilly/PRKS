@@ -576,8 +576,9 @@ def remediation_message(
         lines.extend(
             [
                 "Reinstalling packages cannot change this interpreter's version.",
-                "Remove the old .venv, then create it with a supported Python"
-                " (uv, https://docs.astral.sh/uv/, can download one):",
+                "Install uv (https://docs.astral.sh/uv/) outside the old .venv if it"
+                " is not on PATH; uv can download a supported Python. Then remove"
+                " the old .venv and run:",
             ]
         )
         lines.extend(
@@ -585,6 +586,11 @@ def remediation_message(
             for cmd in format_venv_create_commands(
                 is_windows=ctx.is_windows, use_uv=True, python_min=python_too_old[1]
             )
+        )
+        venv_python = r".venv\Scripts\python.exe" if ctx.is_windows else "./.venv/bin/python"
+        lines.append(
+            "For the test suite, also run: "
+            f"uv pip install --python {venv_python} -r requirements-dev.txt"
         )
         if ctx.is_windows:
             lines.append(r"Then run PRKS with: .venv\Scripts\python.exe prks_app.py")

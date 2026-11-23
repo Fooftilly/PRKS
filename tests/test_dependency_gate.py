@@ -823,6 +823,8 @@ class RemediationMessageTests(unittest.TestCase):
         )
         msg = remediation_message(python_too_old=((3, 12, 3), (3, 14)), ctx=ctx)
         self.assertIn('uv venv --python ">=3.14" .venv', msg)
+        self.assertIn("Install uv", msg)
+        self.assertIn("-r requirements-dev.txt", msg)
         self.assertNotIn("/srv/prks/.venv/bin/python -m pip install", msg)
         assert_remediation_is_safe(msg)
 
