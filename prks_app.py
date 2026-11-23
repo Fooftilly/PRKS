@@ -319,9 +319,7 @@ def refuse_sqlite_catalogue(library_database, bound_root):
 
 
 # The schema refusals that only a new instance fixes (backend.db.migrate).
-RECREATE_REASONS = frozenset(
-    {"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order", "foreign_schema"}
-)
+RECREATE_REASONS = frozenset({"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order"})
 
 
 def migrate_on_start(db, environ, *, testing=False):
