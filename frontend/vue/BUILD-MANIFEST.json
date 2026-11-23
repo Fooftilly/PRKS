@@ -1,13 +1,13 @@
 {
   "schema_version": 1,
-  "vue": "3.5.44",
+  "vue": "3.5.45",
   "tanstackVueQuery": "5.105.2",
   "vueUse": "13.9.0",
-  "vite": "8.3.6",
+  "vite": "8.3.8",
   "typescript": "5.9.2",
   "vueTsc": "3.3.14",
   "vitest": "5.1.0",
   "outputSha256": {
-    "prks-vue.js": "f54d0557795569225963e42f3b1dd34bdc0b0056d4c1b7963436e008b7fd598d"
+    "prks-vue.js": "f09eba010692a66ed4a5e34168112afae2c11d5d746322b563c577ae37c8c6c6"
   }
 }
