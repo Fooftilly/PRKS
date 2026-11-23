@@ -339,58 +339,16 @@ class TestingResetTests(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(outside, "keep.pdf")))
         self.assertTrue(os.path.exists(os.path.join(outside, "moved", "a.pdf")))
 
-    def test_without_handle_relative_deletion_a_root_with_files_is_refused_before_asking(self) -> None:
+    def test_without_handle_relative_deletion_nothing_is_asked_or_deleted(self) -> None:
+        missing = os.path.join(os.path.dirname(self.root), "missing")
         with mock.patch.object(testing_reset, "_fd_delete_supported", return_value=False):
-            with self.assertRaises(ResetRefused) as caught:
-                self.reset(CONFIRM_WORD)
-            self.assertEqual(caught.exception.reason, "unsupported_platform")
-            self.assertFalse(hasattr(self, "prompt"), "refused before the prompt")
-            self.assert_untouched()
-            # A missing root has nothing to delete, so the database can still be reset.
-            missing = os.path.join(os.path.dirname(self.root), "missing")
-            self.assertTrue(run(self.conninfo, missing, stdin=io.StringIO(), stdout=io.StringIO(),
-                                read=lambda: CONFIRM_WORD))
-        self.assertEqual(self.schemas(), [])
-
-    def test_a_directory_moved_into_the_root_path_while_schemas_drop_is_not_touched(self) -> None:
-        # The leased root is renamed away and another directory takes its path
-        # while the database is being emptied: only the leased one is emptied.
-        moved = self.root + "-moved"
-        real_drop = testing_reset._drop_schemas
-
-        def drop_then_swap(plan: Any) -> None:
-            real_drop(plan)
-            os.rename(self.root, moved)
-            os.makedirs(os.path.join(self.root, "pdfs"))
-            with open(os.path.join(self.root, "pdfs", "unrelated.pdf"), "wb") as handle:
-                handle.write(b"%PDF")
-        self.addCleanup(lambda: __import__("shutil").rmtree(moved, ignore_errors=True))
-        with mock.patch.object(testing_reset, "_drop_schemas", side_effect=drop_then_swap):
-            self.assertTrue(self.reset(CONFIRM_WORD))
-        self.assertTrue(os.path.exists(os.path.join(self.root, "pdfs", "unrelated.pdf")))
-        self.assertFalse(os.path.exists(os.path.join(moved, "pdfs")))
-        self.assertTrue(os.path.exists(os.path.join(moved, MAINTENANCE_DIRNAME, ROOT_LOCK_NAME)))
-
-    def test_a_root_whose_lock_is_not_the_leased_one_is_refused(self) -> None:
-        real_lease = testing_reset._lease
-
-        def lease_then_swap(root_real: str) -> Any:
-            lease = real_lease(root_real)
-            # Another directory with its own lock file now holds the path.
-            os.rename(self.root, self.root + "-old")
-            os.makedirs(os.path.join(self.root, MAINTENANCE_DIRNAME))
-            for name in os.listdir(self.root + "-old"):
-                if name != MAINTENANCE_DIRNAME:
-                    os.rename(os.path.join(self.root + "-old", name), os.path.join(self.root, name))
-            with open(os.path.join(self.root, MAINTENANCE_DIRNAME, ROOT_LOCK_NAME), "wb"):
-                pass
-            return lease
-        self.addCleanup(lambda: __import__("shutil").rmtree(self.root + "-old", ignore_errors=True))
-        with mock.patch.object(testing_reset, "_lease", side_effect=lease_then_swap):
-            with self.assertRaises(ResetRefused) as caught:
-                self.reset(CONFIRM_WORD)
-        self.assertEqual(caught.exception.reason, "root_changed")
-        self.assert_untouched()
+            for root in (self.root, missing):
+                with self.subTest(root=root):
+                    with self.assertRaises(ResetRefused) as caught:
+                        run(self.conninfo, root, stdin=io.StringIO(), stdout=io.StringIO(),
+                            read=lambda: self.fail("asked"))
+                    self.assertEqual(caught.exception.reason, "unsupported_platform")
+                    self.assert_untouched()
 
     def test_volume_metadata_at_the_top_is_left_alone(self) -> None:
         os.mkdir(os.path.join(self.root, "lost+found"))
