@@ -3,8 +3,8 @@ Pillow==13.0.0
 pydantic==2.14.3
 # PostgreSQL canonical runtime and server identity dependencies (#630).
 # psycopg-binary supplies libpq inside the production container.
-psycopg==3.3.8
-psycopg-binary==3.3.8
+psycopg==3.3.9
+psycopg-binary==3.3.9
 psycopg-pool==3.3.3
 argon2-cffi==25.1.0
 # Production HTTP server (#1329, docs/http-server.md).
