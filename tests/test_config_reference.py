@@ -235,15 +235,18 @@ class AppTests(unittest.TestCase):
             os.mkdir(root)
             alias = os.path.join(directory, "alias.log")
             os.symlink(os.path.join(root, "prks-root.json"), alias)
+            bootstrap = os.path.join(directory, "prks.json")
             before = sorted(os.listdir(root))
             for log_file in (
                 os.path.join(root, "prks-root.json"),
                 os.path.join(root, ".prks-maintenance", "root.lock"),
                 alias,
+                bootstrap,
+                bootstrap + ".lock",
             ):
                 with self.subTest(log_file=log_file):
                     code, text = self.run_check({
-                        "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+                        "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_CONFIG_FILE": bootstrap,
                         "PRKS_STORAGE": root, "PRKS_LOG_FILE": log_file,
                     })
                     self.assertEqual(code, 2, text)
@@ -251,6 +254,12 @@ class AppTests(unittest.TestCase):
                     self.assertRegex(text, r"PRKS_LOG_FILE +\(invalid\)")
                     self.assertRegex(text, r"PRKS_STORAGE +" + re.escape(root) + r" +\(selected by env\)")
             self.assertEqual(sorted(os.listdir(root)), before)
+
+    def test_reset_and_start_read_migrate_on_start_alike(self) -> None:
+        for raw, value in ((None, "1"), ("", "1"), ("  ", "1"), (" 1 ", "1"), ("0", "0"), ("yes", "yes")):
+            with self.subTest(raw=raw):
+                env = {} if raw is None else {"PRKS_MIGRATE_ON_START": raw}
+                self.assertEqual(prks_app._migrate_on_start_value(env), value)
 
     def test_config_check_accepts_a_safe_log_file_over_an_unsafe_default(self) -> None:
         # The root's default log is a link to its marker; a start uses the
