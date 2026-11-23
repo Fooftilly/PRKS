@@ -16,7 +16,7 @@ requests==2.34.2
 
 # Line + branch coverage for SonarCloud (#1373). Installed only by the
 # SonarCloud workflow's coverage jobs; not in the Test Gate or production.
-coverage==7.16.2
+coverage==7.17.3
 
 # Advisory mutation testing of pure modules (#651 B2). Installed only by the
 # dedicated Mutation testing workflow (scripts/ci/mutation_testing.py).
