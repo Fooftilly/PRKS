@@ -252,6 +252,24 @@ class AppTests(unittest.TestCase):
                     self.assertRegex(text, r"PRKS_STORAGE +" + re.escape(root) + r" +\(selected by env\)")
             self.assertEqual(sorted(os.listdir(root)), before)
 
+    def test_config_check_accepts_a_safe_log_file_over_an_unsafe_default(self) -> None:
+        # The root's default log is a link to its marker; a start uses the
+        # override instead, so the check must not judge the unused default.
+        with tempfile.TemporaryDirectory() as directory:
+            root = os.path.join(directory, "root")
+            os.mkdir(root)
+            os.symlink(os.path.join(root, "prks-root.json"), os.path.join(root, "prks-errors.log"))
+            code, text = self.run_check({
+                "PRKS_DATABASE_URL": "postgresql://u:pw@db/prks",
+                "PRKS_STORAGE": root, "PRKS_LOG_FILE": os.path.join(directory, "prks.log"),
+            })
+            self.assertEqual(code, 0, text)
+            self.assertNotIn("problem: ", text)
+            # Without the override, the default itself is refused.
+            code, text = self.run_check({"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks", "PRKS_STORAGE": root})
+            self.assertEqual(code, 2, text)
+            self.assertIn("cannot be the storage root marker", text)
+
     def test_config_check_checks_a_value_another_problem_would_hide(self) -> None:
         # Loopback-owner on a public address stops the auth parser before it
         # reads PRKS_TRUSTED_PROXIES; the probe still reaches the value.
