@@ -30,6 +30,11 @@
       "name": "citations",
       "artifact": "docs/api/openapi-citations.json",
       "output": "frontend-app/src/api/generated/citations.ts"
+    },
+    {
+      "name": "deployment-settings",
+      "artifact": "docs/api/openapi-deployment-settings.json",
+      "output": "frontend-app/src/api/generated/deployment-settings.ts"
     }
   ]
 }

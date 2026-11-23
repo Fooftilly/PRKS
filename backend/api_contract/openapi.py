@@ -13,6 +13,7 @@ from backend.api_contract.citations import (
     CitationsCslJson,
     CitationsRequest,
 )
+from backend.api_contract.deployment import DeploymentSetting, DeploymentSettings
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.jobs import (
     EmbeddedJobWorker,
@@ -461,6 +462,57 @@ def job_diagnostics_openapi_document() -> dict[str, Any]:
                 "Vertical-slice OpenAPI for job diagnostics (L-J-1 #627). "
                 "Counts, ages, job kinds and reason codes only; the counters "
                 "are disposable process metadata, not canonical library data."
+            ),
+        },
+        "paths": paths,
+        "components": {
+            "schemas": schemas,
+        },
+    }
+
+
+DEPLOYMENT_SETTINGS_CONTRACT_VERSION = "0.1.0"
+
+
+def deployment_settings_openapi_document() -> dict[str, Any]:
+    """OpenAPI 3.1 for the read-only deployment settings (#612)."""
+    schemas: dict[str, Any] = {}
+    for model in (DeploymentSetting, DeploymentSettings):
+        _merge_defs(schemas, _schema(model))
+
+    paths: dict[str, Any] = {
+        "/api/deployment-settings": {
+            "get": {
+                "operationId": "getDeploymentSettings",
+                "summary": "Deployment settings, read-only",
+                "tags": ["settings"],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "Every deployment setting with its effective value and source. "
+                            "Secrets and host paths show only that they are set."
+                        ),
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": "#/components/schemas/DeploymentSettings"}
+                            }
+                        },
+                    },
+                    "401": {"description": "No live session (not_authenticated)."},
+                    "403": {"description": "The session's role is not the Library owner."},
+                },
+            },
+        },
+    }
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "PRKS API — Deployment settings slice",
+            "version": DEPLOYMENT_SETTINGS_CONTRACT_VERSION,
+            "description": (
+                "Vertical-slice OpenAPI for the deployment settings Settings shows (#612). "
+                "Read-only: deployment values are set on the host and need a restart."
             ),
         },
         "paths": paths,

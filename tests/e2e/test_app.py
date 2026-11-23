@@ -14121,9 +14121,9 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         page.keyboard.press("End")
         self.assertEqual(
             page.evaluate("() => document.activeElement && document.activeElement.id"),
-            "prks-settings-tab-diagnostics",
+            "prks-settings-tab-deployment",
         )
-        page.wait_for_selector("#prks-settings-panel-diagnostics:not([hidden])")
+        page.wait_for_selector("#prks-settings-panel-deployment:not([hidden])")
         page.keyboard.press("Home")
         self.assertEqual(
             page.evaluate("() => document.activeElement && document.activeElement.id"),
@@ -14151,6 +14151,17 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
             "e => e.name.indexOf('/api/diagnostics/performance') !== -1).length >= 2"
         )
         self.assertEqual(len(_diagnostics_requests(page)), 2)
+
+    def test_deployment_settings_are_shown_read_only(self):
+        _server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-deployment").click()
+        page.wait_for_selector("#prks-deployment-settings [data-prks-setting='PRKS_HTTP_THREADS']")
+        panel = page.locator("#prks-settings-panel-deployment")
+        # The testing database URL is set, and only that it is set shows.
+        self.assertIn("(set, hidden)", panel.locator("[data-prks-setting='PRKS_DATABASE_URL']").inner_text())
+        self.assertEqual(panel.locator("input, select, textarea").count(), 0)
+        self.assertIn("needs a restart", panel.inner_text())
 
     def test_diagnostics_table_remains_usable(self):
         _server, page, _collector = self._start_app()

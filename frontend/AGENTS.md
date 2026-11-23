@@ -9,7 +9,7 @@ This file governs the shipped `frontend/` runtime. It applies on top of the root
 - `frontend-app/` is the Vue 3 + TypeScript source (Vite, `vue-tsc`, Vitest; Node `>=24.15.0 <25` for maintainers only). The Python runtime serves the committed bundle `frontend/vue/prks-vue.js` and never runs Vite. Component CSS is inlined into that bundle.
 - `frontend/js/` keeps the classic runtime owners: route coordinator, durable/offline operations, the Settings and Create New Entity modal shells, the shared backdrop (`openModal` / `closeModals`), folder tree, PDF, graph and workspace effects. Do not rewrite them only because they are classic JavaScript. Migrated UI goes in `frontend-app/src/` and must not add a second workspace or application state model.
 - Do not add Vue Router or Pinia. Use VueUse only for generic browser lifecycle (listeners, observers, timers), never for PRKS route, workspace, durable or preview semantics.
-- TanStack Query is used only for performance diagnostics, Publishers and Saved View records. There is one QueryClient (`prksQueryClient()`); route surfaces pass it to `useQuery`. Query keys come only from `prksQueryKeys` (`frontend-app/src/query/keys.ts`): one domain prefix per family, never a URL. Every online write that was sent invalidates its domain's `all()` prefix, on success or failure, instead of editing cached rows. The query cache is never persisted and is not an offline queue.
+- TanStack Query is used only for performance diagnostics, read-only deployment settings, Publishers and Saved View records. There is one QueryClient (`prksQueryClient()`); route surfaces pass it to `useQuery`. Query keys come only from `prksQueryKeys` (`frontend-app/src/query/keys.ts`): one domain prefix per family, never a URL. Every online write that was sent invalidates its domain's `all()` prefix, on success or failure, instead of editing cached rows. The query cache is never persisted and is not an offline queue.
 - The Settings modal body is Vue, teleported into `#prks-settings-root`; `#settings-modal` stays the shell for open, close, Escape and focus return. The shared confirm/alert/prompt/unsaved dialogs are the Vue modal host.
 
 ### Routing and route surfaces
@@ -156,7 +156,7 @@ Workspace logical state is persistent; workspace runtime state is ephemeral. `fr
 
 Settings category navigation is presentation state; it must not create another settings persistence model. The active category is an in-memory ref, never stored or routed. Inactive panels are hidden and inert, never recreated, so switching never resets a running backup, a chosen restore file or an in-progress value.
 
-Performance diagnostics loads on first activation of the Diagnostics category and stays in TanStack Query until Refresh or Reset (an online mutation, no retry). Do not move durable or offline mutations into TanStack Query.
+Performance diagnostics loads on first activation of the Diagnostics category and stays in TanStack Query until Refresh or Reset (an online mutation, no retry). Deployment settings load on first activation of the Deployment category and read again each time it reopens; they have no writes. Do not move durable or offline mutations into TanStack Query.
 
 ## Saved Views
 
@@ -190,7 +190,7 @@ Performance diagnostics loads on first activation of the Diagnostics category an
 
 ### Server-state ownership
 
-Publishers, Saved Views and Performance Diagnostics use `prksApiRequest` and TanStack Query and must not call `prksRequest`. The Processing queue uses `prksApiRequest` through its typed client (`frontend-app/src/api/processing-items.ts`) without TanStack Query. Every other family stays on `prksRequest` because it has an effective or durable owner: Folders, Persons, Tags, Search, PDF bytes and annotations, browse/Recent snapshots, Concepts/Positions/Arguments, Person Groups, Playlists, Settings and maintenance, BibTeX export and the online Work create. Do not add a Query family for any of them. `fetchFolders`, `fetchConcepts`, `fetchPositions` and `fetchArguments` read only the effective catalogue and must not grow a raw fallback.
+Publishers, Saved Views, Performance Diagnostics and Deployment settings (read-only) use `prksApiRequest` and TanStack Query and must not call `prksRequest`. The Processing queue uses `prksApiRequest` through its typed client (`frontend-app/src/api/processing-items.ts`) without TanStack Query. Every other family stays on `prksRequest` because it has an effective or durable owner: Folders, Persons, Tags, Search, PDF bytes and annotations, browse/Recent snapshots, Concepts/Positions/Arguments, Person Groups, Playlists, Settings and maintenance, BibTeX export and the online Work create. Do not add a Query family for any of them. `fetchFolders`, `fetchConcepts`, `fetchPositions` and `fetchArguments` read only the effective catalogue and must not grow a raw fallback.
 
 ## Offline / PWA
 

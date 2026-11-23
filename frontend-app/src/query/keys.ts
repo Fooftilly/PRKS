@@ -14,6 +14,10 @@
  *   replay queue, and nothing here is persisted.
  */
 export const prksQueryKeys = {
+  deploymentSettings: {
+    all: () => ['deployment-settings'] as const,
+    list: () => ['deployment-settings', 'list'] as const,
+  },
   performanceDiagnostics: {
     all: () => ['performance-diagnostics'] as const,
     snapshot: () => ['performance-diagnostics', 'snapshot'] as const,

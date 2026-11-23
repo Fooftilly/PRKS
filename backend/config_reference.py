@@ -119,6 +119,8 @@ class Setting:
     check: Optional[Check] = None
     # The module that parses (and, without ``check``, validates) it.
     owner: str = ""
+    # A path on the host: the browser shows only that it is set (#612).
+    host_path: bool = False
 
     @property
     def editable_in_browser(self) -> bool:
@@ -131,16 +133,16 @@ _D = Scope.DEPLOYMENT
 SETTINGS: tuple[Setting, ...] = (
     # --- storage and database ---------------------------------------------------------
     Setting("PRKS_STORAGE", _D, "The data root: managed PDFs, portraits, thumbnails and the root marker.",
-            "data/ (testing: data_testing/)", ("serve", "migrate", "worker"), owner="backend.storage.config"),
+            "data/ (testing: data_testing/)", ("serve", "migrate", "worker"), owner="backend.storage.config", host_path=True),
     Setting("PRKS_CONFIG_FILE", _D, "Path of the bootstrap configuration file; its directory also holds "
             "the bootstrap-token file. Ignored in testing mode.",
             "the platform configuration directory", ("serve", "migrate", "worker", "admin"),
-            owner="backend.storage.resolver"),
+            owner="backend.storage.resolver", host_path=True),
     Setting("PRKS_DATABASE_URL", _D, "PostgreSQL connection string. Set this or PRKS_DATABASE_URL_FILE.",
             "none (testing: the scripts/dev-postgres server)", _ALL_ROLES, secret=True,
             owner="backend.db.config"),
     Setting("PRKS_DATABASE_URL_FILE", _D, "File holding the connection string (a Compose secret). Preferred.",
-            "unset", _ALL_ROLES, owner="backend.db.config"),
+            "unset", _ALL_ROLES, owner="backend.db.config", host_path=True),
     Setting("PRKS_DB_POOL_MAX", _D, "Largest connection pool of the web process and of migrate.",
             "10", ("serve", "migrate"), owner="backend.db.config"),
     Setting("PRKS_MIGRATE_ON_START", _D, "1 applies the schema at start; 0 leaves it to migrate and only verifies it.",
@@ -153,9 +155,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_HTTP_THREADS", _D, "Requests that run PRKS work at the same time, 1 to 256.",
             "16", ("serve",), owner="backend.web.settings"),
     Setting("PRKS_TLS_CERT_FILE", _D, "PEM certificate chain; with PRKS_TLS_KEY_FILE PRKS serves HTTPS itself.",
-            "unset", ("serve",), owner="backend.web.settings"),
+            "unset", ("serve",), owner="backend.web.settings", host_path=True),
     Setting("PRKS_TLS_KEY_FILE", _D, "Unencrypted PEM private key for PRKS_TLS_CERT_FILE.",
-            "unset", ("serve",), owner="backend.web.settings"),
+            "unset", ("serve",), owner="backend.web.settings", host_path=True),
     Setting("PRKS_PUBLIC_ORIGIN", _D, "The origin browsers use behind an HTTPS reverse proxy.",
             "the request's own origin", ("serve",), owner="backend.domain.identity.web_start"),
     Setting("PRKS_TRUSTED_PROXIES", _D, "Proxy addresses or networks whose X-Forwarded-For is believed.",
@@ -173,7 +175,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_LOGIN_DEVICE_LIMIT", _D, "Sign-in attempts per known sign-in device per window.",
             "5", ("serve",), owner="backend.domain.identity.login_limiter"),
     Setting("PRKS_BOOTSTRAP_TOKEN_FILE", _D, "An owner-only file holding the setup token an installer chose.",
-            "unset", ("admin",), owner="backend.domain.identity.admin"),
+            "unset", ("admin",), owner="backend.domain.identity.admin", host_path=True),
     # --- logging and diagnostics ------------------------------------------------------
     Setting("PRKS_LOG_LEVEL", _D, "Stderr log level.", "INFO", ("serve", "worker"), check=log_level,
             owner="backend.log_config"),
@@ -182,7 +184,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_LOG_RETENTION_DAYS", _D, "Rotated persistent log copies to keep, 1 to 3650.", "7", ("serve",),
             check=integer(1, 3650), owner="backend.log_config"),
     Setting("PRKS_LOG_FILE", _D, "Path of the rotating error log.", "<data root>/prks-errors.log", ("serve",),
-            owner="backend.storage.config"),
+            owner="backend.storage.config", host_path=True),
     Setting("PRKS_PERF_SLOW_MS", _D, "API request duration counted as slow, 10 to 60000 ms.", "250", ("serve",),
             check=number(10, 60000), owner="backend.performance"),
     Setting("PRKS_PERF_LOG_SLOW", _D, "Log a privacy-safe slow_request line for slow API requests.", "off",
@@ -292,6 +294,22 @@ def effective(
             rows.append(Effective(setting.key, "(not checked)", "environment"))
         else:
             rows.append(Effective(setting.key, raw, "environment"))
+    return rows
+
+
+def browser_view(environ: Mapping[str, str]) -> list[Effective]:
+    """The deployment settings as Settings shows them to the Library owner (#612).
+
+    Read-only: they come from the host and the browser can never change
+    them. Stricter than :func:`effective`: a secret shows only that it is
+    set and a host path only that it is set, so neither leaves the host.
+    """
+    rows: list[Effective] = []
+    for row in effective(environ):
+        setting = BY_KEY[row.key]
+        if row.source == "environment" and setting.host_path:
+            row = Effective(row.key, "set on the host", row.source)
+        rows.append(row)
     return rows
 
 
