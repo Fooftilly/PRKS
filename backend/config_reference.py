@@ -270,12 +270,16 @@ class Effective:
     source: str  # "environment" or "default"
 
 
-def effective(environ: Mapping[str, str], invalid: Collection[str] = ()) -> list[Effective]:
+def effective(
+    environ: Mapping[str, str], invalid: Collection[str] = (), unchecked: Collection[str] = ()
+) -> list[Effective]:
     """The deployment settings as this environment sets them.
 
     A secret shows only that it is set, and an invalid value only that it is
     invalid (it may be a secret typed into the wrong variable). ``invalid``
-    names the keys their owner's parser refused (settings without a ``check``).
+    names the keys their owner's parser refused (settings without a ``check``);
+    ``unchecked`` names the keys that parser could not reach because another
+    of its problems stopped it, shown as ``(not checked)`` and never echoed.
     """
     rows: list[Effective] = []
     for setting in in_scope(Scope.DEPLOYMENT):
@@ -286,6 +290,8 @@ def effective(environ: Mapping[str, str], invalid: Collection[str] = ()) -> list
             rows.append(Effective(setting.key, "(set, hidden)", "environment"))
         elif setting.key in invalid or (setting.check is not None and setting.check(raw) is not None):
             rows.append(Effective(setting.key, "(invalid)", "environment"))
+        elif setting.key in unchecked:
+            rows.append(Effective(setting.key, "(not checked)", "environment"))
         else:
             rows.append(Effective(setting.key, raw, "environment"))
     return rows

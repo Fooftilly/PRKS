@@ -447,12 +447,12 @@ def run_config(argv, environ=None, *, out=None):
     if args.testing:
         env["PRKS_TESTING"] = "1"
     stdout = out or sys.stdout
-    storage, delegated, invalid = _delegated_checks(env, args)
+    storage, delegated, invalid, unchecked = _delegated_checks(env, args)
     found = list(problems(env))
     found += [problem for problem in delegated if problem not in found]
     for problem in found:
         print(f"problem: {problem}", file=stdout)
-    rows = effective(env, invalid)
+    rows = effective(env, invalid, unchecked)
     if storage is not None:
         # The root a start would select: the CLI flag, PRKS_STORAGE, the
         # bootstrap file or a default, whichever wins (§5.2).
@@ -465,37 +465,82 @@ def run_config(argv, environ=None, *, out=None):
     return 0 if not found else 2
 
 
+# The parser a start runs for each owner of a delegated setting (the admin
+# token file is read only when a setup needs it, so it is shown as set).
+_PARSER_OF_OWNER = {
+    "backend.storage.config": "storage",
+    "backend.storage.resolver": "storage",
+    "backend.web.settings": "http",
+    "backend.domain.identity.web_start": "auth",
+    "backend.domain.identity.login_limiter": "auth",
+    "backend.domain.identity.sessions": "auth",
+    "backend.jobs.embedded": "worker",
+    "backend.db.config": "database",
+}
+# Settings that are valid or invalid only together: each group is probed as one.
+_PROBE_GROUPS = (
+    ("PRKS_TLS_CERT_FILE", "PRKS_TLS_KEY_FILE"),
+    ("PRKS_STORAGE", "PRKS_CONFIG_FILE", "PRKS_LOG_FILE"),
+    ("PRKS_DATABASE_URL", "PRKS_DATABASE_URL_FILE"),
+)
+
+
 def _delegated_checks(environ, args):
-    """``(storage, problems, invalid keys)`` from the parsers a start runs.
+    """``(storage, problems, invalid keys, unchecked keys)`` from the parsers a start runs.
 
     A parser stops at its first problem, so each set value that only its
-    owner's parser checks is first checked alone (on the environment without
-    the other such values): one pass then names every independent problem,
-    and every refused value is known and shown as ``(invalid)``, never echoed.
-    A last pass on the whole environment adds the problems of combinations.
+    owner's parser checks is probed on the environment without the other
+    such values (dependent values, such as a certificate and its key, as one
+    group). A probe its parser accepts is valid; one that changes the
+    parser's problem is invalid, and that problem is named; one that leaves
+    the problem as it was could not be reached and is ``unchecked``. Refused
+    and unchecked values are never echoed. A last pass on the whole
+    environment adds the problems of combinations.
     """
-    from backend.config_reference import Scope, in_scope
+    from backend.config_reference import BY_KEY, Scope, in_scope
 
     delegated = [
         setting.key for setting in in_scope(Scope.DEPLOYMENT)
         if setting.check is None and (environ.get(setting.key) or "").strip()
     ]
+    groups, seen = [], set()
+    for key in delegated:
+        if key in seen:
+            continue
+        group = next((g for g in _PROBE_GROUPS if key in g), (key,))
+        members = tuple(member for member in group if member in delegated)
+        seen.update(members)
+        groups.append(members)
     bare = {key: value for key, value in environ.items() if key not in delegated}
     baseline, _ = _parser_problems(bare, args)
-    found, invalid = [], set()
-    for key in delegated:
-        alone, _ = _parser_problems({**bare, key: environ[key]}, args)
-        own = [problem for problem in alone if problem not in baseline]
-        if own:
-            invalid.add(key)
-            found.extend(problem for problem in own if problem not in found)
+    found, invalid, unchecked = [], set(), set()
+    for group in groups:
+        parser = _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
+        if parser is None:
+            continue
+        probe, _ = _parser_problems({**bare, **{key: environ[key] for key in group}}, args)
+        if probe[parser] is None:
+            continue
+        if probe[parser] != baseline[parser]:
+            invalid.update(group)
+            if probe[parser] not in found:
+                found.append(probe[parser])
+        else:
+            unchecked.update(group)
     combined, storage = _parser_problems(environ, args)
-    found.extend(problem for problem in combined if problem not in found)
-    return storage, found, invalid
+    found.extend(problem for problem in combined.values() if problem is not None and problem not in found)
+    for group in groups:
+        # A value the probe could not reach that the whole environment's
+        # pass names (another value cleared the way) is refused after all.
+        problem = combined.get(_PARSER_OF_OWNER.get(BY_KEY[group[0]].owner) or "")
+        named = [key for key in group if key in unchecked and problem is not None and key in problem]
+        unchecked.difference_update(named)
+        invalid.update(named)
+    return storage, found, invalid, unchecked
 
 
 def _parser_problems(environ, args):
-    """``(problems, storage)``: the messages of the parsers a start runs, each in its own words (no value echoed)."""
+    """``({parser: problem or None}, storage)``: each parser a start runs, in its own words (no value echoed)."""
     from backend.db.config import load_database_config, with_testing_default
     from backend.db.errors import DatabaseConfigError
     from backend.domain.identity.login_limiter import LimiterConfigError
@@ -505,29 +550,30 @@ def _parser_problems(environ, args):
     from backend.web.settings import HttpServerSettings, HttpSettingsError
 
     testing = bool(args.testing)
-    found, storage = [], None
+    found = dict.fromkeys(("storage", "http", "auth", "worker", "database"))
+    storage = None
     try:
         # A set PRKS_FOR_PROCESSING_DIR is reported once, as a retired key.
         storage_env = {key: value for key, value in environ.items() if key != "PRKS_FOR_PROCESSING_DIR"}
         storage = StorageConfig.from_env(cli_root=args.storage_root, environ=storage_env)
     except StorageRootError as exc:
-        found.append(f"storage root: {exc.message}")
+        found["storage"] = f"storage root: {exc.message}"
     try:
         HttpServerSettings.from_env(environ)
     except HttpSettingsError as exc:
-        found.append(exc.message)
+        found["http"] = exc.message
     try:
         settings_from_env(environ, testing=testing, host=args.host, parse_origin=parse_request_origin)
     except (WebAuthConfigError, LimiterConfigError, SessionConfigError) as exc:
-        found.append(str(exc))
+        found["auth"] = str(exc)
     try:
         embedded_worker_enabled(environ)
     except EmbeddedWorkerConfigError as exc:
-        found.append(str(exc))
+        found["worker"] = str(exc)
     try:
         load_database_config(with_testing_default(environ) if testing else environ, role="web")
     except DatabaseConfigError as exc:
-        found.append(exc.message)
+        found["database"] = exc.message
     return found, storage
 
 
