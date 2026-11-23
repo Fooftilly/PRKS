@@ -170,7 +170,7 @@
       "runtime_files": [
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.js",
-          "sha256": "9f494272914a077f4610f93377a2b44884c6f4f454c2466bf2061067c00a71ff"
+          "sha256": "d17d97716c61e1679f10d79d5c92fd5ae17590e633591213d37a35b499b199c5"
         },
         {
           "path": "/vendor/prks-pdf-viewer/prks-pdf-viewer.css",
@@ -222,7 +222,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "f09eba010692a66ed4a5e34168112afae2c11d5d746322b563c577ae37c8c6c6"
+          "sha256": "69023921db27ef33280a80a5cf1af27600badb4d7708e13e6fb7490611cf1e4e"
         }
       ],
       "source_category": "npm:frontend-app",

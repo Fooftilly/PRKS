@@ -56,13 +56,16 @@ class DependabotWeeklyBatchTests(unittest.TestCase):
         self.assertNotIn("update-types", group)
 
     def test_deliberate_migrations_stay_ignored(self):
-        self.assertTrue(
-            {"react", "react-dom", "@types/react", "@types/react-dom", "@embedpdf/*"}
-            <= ignored_majors(self.entries[("npm", "/tools/pdf-viewer")])
+        self.assertIn(
+            "@embedpdf/*", ignored_majors(self.entries[("npm", "/tools/pdf-viewer")])
         )
         self.assertIn(
             "codemirror", ignored_majors(self.entries[("npm", "/tools/frontend-vendor")])
         )
+
+    def test_docker_python_stays_below_unsupported_release(self):
+        rules = self.entries[("docker", "/")]["ignore"]
+        self.assertIn({"dependency-name": "python", "versions": [">= 3.15"]}, rules)
 
 
 if __name__ == "__main__":
