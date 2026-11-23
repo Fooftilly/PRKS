@@ -40,5 +40,5 @@ class DeploymentSettings(BaseModel):
 
     settings: list[DeploymentSetting]
     editable_in_browser: Literal[False] = Field(
-        False, description="Always false: these values are changed on the host and need a restart."
+        description="Always false: these values are changed on the host and need a restart."
     )

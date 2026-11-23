@@ -65,10 +65,9 @@ export interface components {
             /**
              * Editable In Browser
              * @description Always false: these values are changed on the host and need a restart.
-             * @default false
              * @constant
              */
-            editable_in_browser?: false;
+            editable_in_browser: false;
             /** Settings */
             settings: components["schemas"]["DeploymentSetting"][];
         };
