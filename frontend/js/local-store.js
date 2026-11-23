@@ -1643,9 +1643,44 @@
             return { state, revision };
         }
 
+        /**
+         * Coalesce "this Tag is now attached / detached" within one entity's
+         * scope (a Work or a Folder). A never-sent opposite draft cancels; an
+         * attempted or conflicted one is immutable (`scope_busy`); otherwise a
+         * change is recorded against the newest base this transaction knows.
+         */
+        async function coalesceTagRelationshipIn(request, setResult, rows, intent) {
+            const { entityType, entityId, tagId, present, baseState, baseRevision, tag, dependsOn } = intent;
+            const addOperation = entityType === 'work' ? 'ADD_WORK_TAG' : 'ADD_FOLDER_TAG';
+            const removeOperation = entityType === 'work' ? 'REMOVE_WORK_TAG' : 'REMOVE_FOLDER_TAG';
+            const scope = r => r.entity_type === entityType && r.entity_id === entityId &&
+                r.payload.tag_id === tagId;
+            const existing = rows.find(r => scope(r) && r.status !== STATUS_ACKNOWLEDGED);
+            if (existing) {
+                if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
+                    throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
+                }
+                if ((existing.operation === addOperation) === present) { setResult(existing); return; }
+                await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                setResult(null);
+                return;
+            }
+            const base = acknowledgedRelationshipBase(rows, scope, addOperation, baseState, baseRevision);
+            if (present === base.state) { setResult(null); return; }
+            setResult(await insertEnvelopeIn(request, {
+                operation: present ? addOperation : removeOperation, entity_type: entityType,
+                entity_id: entityId, payload: { tag_id: tagId }, base_revision: base.revision,
+                depends_on: dependsOn,
+            }, { tag }));
+        }
+
+        function invalidRelationshipBase(present, baseState, baseRevision) {
+            return typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
+                !Number.isSafeInteger(baseRevision) || baseRevision < 0;
+        }
+
         function coalesceWorkTag(workId, tagId, present, baseState, baseRevision, tag) {
-            if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
-                !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+            if (invalidRelationshipBase(present, baseState, baseRevision)) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
             }
             return runIntent(async (request, setResult) => {
@@ -1657,31 +1692,15 @@
                  * relationship waits for it, by the generic mechanism. */
                 const createOp = tagCreationDependency(rows, tagId,
                     'it cannot be attached to anything');
-                const scope = r => r.entity_type === 'work' && r.entity_id === workId &&
-                    r.payload.tag_id === tagId;
-                const existing = rows.find(r => scope(r) && r.status !== STATUS_ACKNOWLEDGED);
-                if (existing) {
-                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                        throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
-                    }
-                    if ((existing.operation === 'ADD_WORK_TAG') === present) { setResult(existing); return; }
-                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
-                    setResult(null);
-                    return;
-                }
-                const base = acknowledgedRelationshipBase(rows, scope, 'ADD_WORK_TAG', baseState, baseRevision);
-                if (present === base.state) { setResult(null); return; }
-                setResult(await insertEnvelopeIn(request, {
-                    operation: present ? 'ADD_WORK_TAG' : 'REMOVE_WORK_TAG', entity_type: 'work',
-                    entity_id: workId, payload: { tag_id: tagId }, base_revision: base.revision,
-                    depends_on: createOp ? [createOp.op_id] : [],
-                }, { tag }));
+                await coalesceTagRelationshipIn(request, setResult, rows, {
+                    entityType: 'work', entityId: workId, tagId, present, baseState, baseRevision, tag,
+                    dependsOn: createOp ? [createOp.op_id] : [],
+                });
             });
         }
 
         function coalesceFolderTag(folderId, tagId, present, baseState, baseRevision, tag) {
-            if (typeof present !== 'boolean' || typeof baseState !== 'boolean' ||
-                !Number.isSafeInteger(baseRevision) || baseRevision < 0) {
+            if (invalidRelationshipBase(present, baseState, baseRevision)) {
                 return Promise.reject(localStoreError('invalid_base', 'Invalid relationship base.'));
             }
             return runIntent(async (request, setResult) => {
@@ -1692,25 +1711,10 @@
                     'it cannot be attached to anything');
                 // A Folder this device is still creating is tagged after it exists.
                 const folderOp = folderCreationDependency(rows, folderId, 'it cannot be tagged');
-                const scope = r => r.entity_type === 'folder' && r.entity_id === folderId &&
-                    r.payload.tag_id === tagId;
-                const existing = rows.find(r => scope(r) && r.status !== STATUS_ACKNOWLEDGED);
-                if (existing) {
-                    if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
-                        throw localStoreError('scope_busy', 'This Tag change is syncing or needs resolution.');
-                    }
-                    if ((existing.operation === 'ADD_FOLDER_TAG') === present) { setResult(existing); return; }
-                    await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
-                    setResult(null);
-                    return;
-                }
-                const base = acknowledgedRelationshipBase(rows, scope, 'ADD_FOLDER_TAG', baseState, baseRevision);
-                if (present === base.state) { setResult(null); return; }
-                setResult(await insertEnvelopeIn(request, {
-                    operation: present ? 'ADD_FOLDER_TAG' : 'REMOVE_FOLDER_TAG', entity_type: 'folder',
-                    entity_id: folderId, payload: { tag_id: tagId }, base_revision: base.revision,
-                    depends_on: [createOp, folderOp].filter(Boolean).map(op => op.op_id),
-                }, { tag }));
+                await coalesceTagRelationshipIn(request, setResult, rows, {
+                    entityType: 'folder', entityId: folderId, tagId, present, baseState, baseRevision, tag,
+                    dependsOn: [createOp, folderOp].filter(Boolean).map(op => op.op_id),
+                });
             });
         }
 
