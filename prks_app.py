@@ -605,10 +605,14 @@ def run_config(argv, environ=None, *, out=None):
     if storage is not None:
         # The root a start would select: the CLI flag, PRKS_STORAGE, the
         # bootstrap file or a default, whichever wins (§5.2), and whether a
-        # start would refuse it.
+        # start would refuse it. A log file on one of the root's operational
+        # files is the log file's problem, not the root's.
         refused = _placement_refused(storage, env)
-        source = f"selected by {storage.root_source}" + ("; refused" if refused else "")
-        rows = [Effective(row.key, storage.root, source) if row.key == "PRKS_STORAGE" else row for row in rows]
+        log_refused = refused == "log_file_operational"
+        source = f"selected by {storage.root_source}" + ("; refused" if refused and not log_refused else "")
+        rows = [Effective(row.key, storage.root, source) if row.key == "PRKS_STORAGE"
+                else Effective(row.key, "(invalid)", "environment") if log_refused and row.key == "PRKS_LOG_FILE"
+                else row for row in rows]
     width = max(len(row.key) for row in rows)
     for row in rows:
         print(f"{row.key.ljust(width)}  {row.shown}  ({row.source})", file=stdout)
@@ -728,12 +732,12 @@ _STORAGE_PROBLEM = "storage root: "
 
 
 def _placement_refused(storage, environ):
-    """Whether a start would refuse the selected root before writing anything."""
+    """Why a start would refuse the selected root before writing anything, or None."""
     try:
         check_root_placement(storage, config_file_path=_bootstrap_file(storage, environ))
-    except StorageRootError:
-        return True
-    return False
+    except StorageRootError as exc:
+        return exc.reason
+    return None
 
 
 def _parser_problems(environ, args):
@@ -756,7 +760,8 @@ def _parser_problems(environ, args):
         # The read-only checks a bind runs first; nothing is leased or created.
         check_root_placement(storage, config_file_path=_bootstrap_file(storage, storage_env))
     except StorageRootError as exc:
-        found["storage"] = f"{_STORAGE_PROBLEM}{exc.message}"
+        prefix = "PRKS_LOG_FILE: " if exc.reason == "log_file_operational" else _STORAGE_PROBLEM
+        found["storage"] = f"{prefix}{exc.message}"
     try:
         HttpServerSettings.from_env(environ)
     except HttpSettingsError as exc:
