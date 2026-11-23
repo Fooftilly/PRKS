@@ -50,7 +50,7 @@ from typing import Any, Optional
 
 from backend.storage import paths, resolver
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_unchanged
-from backend.storage.errors import StorageRootError, StorageRootRefused
+from backend.storage.errors import BootstrapConfigError, StorageRootError, StorageRootRefused
 from backend.storage.root_binding import acquire_root_lease, open_storage_root
 from backend.storage.root_marker import RootMarker, read_marker
 
@@ -129,7 +129,9 @@ def _current_root(environ: Mapping[str, str]) -> str:
 
 
 @contextlib.contextmanager
-def selection_fence(environ: Mapping[str, str], root: str, *, require_selected: bool) -> Iterator[None]:
+def selection_fence(
+    environ: Mapping[str, str], root: str, *, require_selected: bool, source: Optional[str] = None
+) -> Iterator[None]:
     """Hold the config lock while setup claims ``root`` (§8.1).
 
     A choice writes under the same lock and refuses a claimed root, so a
@@ -138,9 +140,15 @@ def selection_fence(environ: Mapping[str, str], root: str, *, require_selected: 
     choosable source) also refuses a root the committed selection stopped
     naming: another process chose a folder after this one started
     (``storage_selection_changed``). A no-op in testing mode and when
-    ``--storage-root``/``PRKS_STORAGE`` selects the root: nothing can choose then.
+    ``--storage-root``/``PRKS_STORAGE`` selects the root (``source``, when the
+    caller knows it, or else the environment): nothing can choose then. When
+    the configuration directory cannot be created, nothing can record a choice
+    either, so a caller that need not be selected claims without the lock.
     """
     if paths.testing_from_value(environ.get("PRKS_TESTING", "")):
+        yield
+        return
+    if source is not None and source not in CHOOSABLE_SOURCES:
         yield
         return
     try:
@@ -153,10 +161,15 @@ def selection_fence(environ: Mapping[str, str], root: str, *, require_selected: 
     if path is None:
         yield
         return
-    store = BootstrapConfigStore(path)
-    with store.transaction():
-        if require_selected and os.path.realpath(_current_root(environ)) != os.path.realpath(root):
-            raise _selection_changed()
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(BootstrapConfigStore(path).transaction())
+        except BootstrapConfigError as exc:
+            if require_selected or exc.reason != "config_dir_unavailable":
+                raise
+        else:
+            if require_selected and os.path.realpath(_current_root(environ)) != os.path.realpath(root):
+                raise _selection_changed()
         yield
 
 
@@ -184,6 +197,13 @@ def choose_root(
     if early is not None:
         raise early
     folder = resolver.normalize_root_spelling(target, environ=env, what="the Library folder", cwd=cwd)
+    if resolver.normalize_root_spelling(folder, environ=env, what="the Library folder") != folder:
+        # A start expands the recorded folder again (V1): only a spelling that
+        # expansion leaves alone names the same folder at every start.
+        raise _refuse(
+            "root_unparseable",
+            "That folder's name still holds an environment reference or ~ after expansion. Choose it by its path.",
+        )
     store = BootstrapConfigStore(resolver.bootstrap_config_path(env))
     with store.transaction() as txn:
         snapshot = txn.read()

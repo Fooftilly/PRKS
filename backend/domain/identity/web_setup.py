@@ -388,6 +388,7 @@ class SetupPhase:
                 with selection_fence(
                     self._environ, self._root,
                     require_selected=not self._testing and self._root_source in CHOOSABLE_SOURCES,
+                    source="testing" if self._testing else self._root_source,
                 ):
                     result = root_pairing.bootstrap(
                         self.db, owner, token=request.token, root=self._root, lease=self._lease,

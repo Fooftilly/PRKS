@@ -187,6 +187,27 @@ class ChooseTests(ChooseTestCase):
         self.assert_refused("root_contains_config", os.path.dirname(os.path.dirname(self.config_file)))
 
 
+class ChooseSpellingAndFenceTests(ChooseTestCase):
+    def test_a_folder_that_expands_again_is_refused(self) -> None:
+        env = {**self.environ, "BASE": self.path("example", "$SUB"), "SUB": "expanded"}
+        self.assert_refused("root_unparseable", "$BASE", environ=env)
+        self.assertFalse(os.path.exists(self.path("example")))
+
+    def test_the_fence_skips_a_root_the_command_line_selects(self) -> None:
+        unavailable = {**self.environ, "PRKS_CONFIG_FILE": os.path.join(self.path("file"), "config.json")}
+        with open(self.path("file"), "w", encoding="utf-8"):
+            pass  # a file where the configuration directory should be
+        with choose_mod.selection_fence(unavailable, self.path("cli"), require_selected=False, source="cli"):
+            pass
+        # Without a source, a claim that need not be selected goes ahead too.
+        with choose_mod.selection_fence(unavailable, self.path("cli"), require_selected=False):
+            pass
+        # A root that must still be the selection cannot be checked: refused.
+        with self.assertRaises(StorageRootError):
+            with choose_mod.selection_fence(unavailable, self.path("cli"), require_selected=True):
+                pass
+
+
 class SelectionRaceTests(ChooseTestCase):
     def test_a_start_that_read_the_old_selection_refuses_after_a_choice(self) -> None:
         choose_root(self.path("old"), environ=self.environ)
