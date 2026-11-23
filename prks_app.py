@@ -205,7 +205,7 @@ def reset_testing_instance(config, environ=None):
     from backend.testing_reset import main_reset
 
     env = os.environ if environ is None else environ
-    if (env.get("PRKS_MIGRATE_ON_START") or "1").strip() != "1":
+    if _migrate_on_start_value(env) != "1":
         print(
             "PRKS did not reset the testing instance: --reset-db starts PRKS on the emptied "
             "database, which needs PRKS_MIGRATE_ON_START unset or 1. Nothing was deleted.",
@@ -433,6 +433,11 @@ def refuse_sqlite_catalogue(library_database, bound_root):
 RECREATE_REASONS = frozenset({"newer_schema", "unknown_schema_file", "schema_file_changed", "out_of_order"})
 
 
+def _migrate_on_start_value(environ):
+    """``PRKS_MIGRATE_ON_START`` as a start reads it: unset or blank is ``1``."""
+    return (environ.get("PRKS_MIGRATE_ON_START") or "").strip() or "1"
+
+
 def migrate_on_start(db, environ, *, testing=False):
     """``PRKS_MIGRATE_ON_START`` (§4.4): unset or ``1`` applies the schema here, ``0`` leaves it to ``migrate``.
 
@@ -445,7 +450,7 @@ def migrate_on_start(db, environ, *, testing=False):
     """
     from backend.db.migrate import MigrationError, migrate, verify_schema
 
-    value = (environ.get("PRKS_MIGRATE_ON_START") or "").strip() or "1"
+    value = _migrate_on_start_value(environ)
     if value not in ("0", "1"):
         db.close()
         print("PRKS cannot start: PRKS_MIGRATE_ON_START must be 0 or 1.", file=sys.stderr)
