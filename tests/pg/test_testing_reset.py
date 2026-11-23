@@ -136,6 +136,7 @@ class TestingResetTests(unittest.TestCase):
         self.assertIn("new, empty testing database", self.prompt)
         self.assertIn("(derived, ext, prks, restore_" + "c" * 32 + ")", self.prompt)
         self.assertIn(f"Type {CONFIRM_WORD}", self.prompt)
+        self.assertIn("lost+found", self.prompt)
         self.assertNotIn("password", self.prompt.lower())
         plan = plan_reset(self.conninfo, self.root)
         self.assertEqual(warning_text(plan), self.prompt.split("Type ")[0])
@@ -316,10 +317,15 @@ class TestingResetTests(unittest.TestCase):
         with open(os.path.join(outside, "keep.pdf"), "wb") as handle:
             handle.write(b"%PDF")
         real_stat = os.stat
+        swapped: list[bool] = []
 
         def stat_then_swap(name: Any, *args: Any, **kwargs: Any) -> os.stat_result:
             result = real_stat(name, *args, **kwargs)
             if name == "pdfs" and kwargs.get("dir_fd") is not None:
+                swapped.append(True)
+            if len(swapped) == 2 and name == "pdfs":
+                # After _remove_at's own inspection, before its open: the open must catch it.
+                swapped.append(True)
                 os.rename(os.path.join(self.root, "pdfs"), os.path.join(outside, "moved"))
                 os.symlink(outside, os.path.join(self.root, "pdfs"))
             return result
@@ -328,6 +334,19 @@ class TestingResetTests(unittest.TestCase):
                 testing_reset._empty_root(os.path.realpath(self.root))
         self.assertTrue(os.path.exists(os.path.join(outside, "keep.pdf")))
         self.assertTrue(os.path.exists(os.path.join(outside, "moved", "a.pdf")))
+
+    def test_without_handle_relative_deletion_a_root_with_files_is_refused_before_asking(self) -> None:
+        with mock.patch.object(testing_reset, "_fd_delete_supported", return_value=False):
+            with self.assertRaises(ResetRefused) as caught:
+                self.reset(CONFIRM_WORD)
+            self.assertEqual(caught.exception.reason, "unsupported_platform")
+            self.assertFalse(hasattr(self, "prompt"), "refused before the prompt")
+            self.assert_untouched()
+            # A missing root has nothing to delete, so the database can still be reset.
+            missing = os.path.join(os.path.dirname(self.root), "missing")
+            self.assertTrue(run(self.conninfo, missing, stdin=io.StringIO(), stdout=io.StringIO(),
+                                read=lambda: CONFIRM_WORD))
+        self.assertEqual(self.schemas(), [])
 
     def test_volume_metadata_at_the_top_is_left_alone(self) -> None:
         os.mkdir(os.path.join(self.root, "lost+found"))

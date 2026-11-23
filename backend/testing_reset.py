@@ -238,7 +238,8 @@ def warning_text(plan: ResetPlan) -> str:
         f"  Database:  {plan.database_label}. Every schema in it except public is dropped, "
         f"with every table and row ({schemas}).\n"
         f"  Data root: {plan.root}. Every file in it is deleted (PDFs, thumbnails, people images, logs),\n"
-        "             except the lock files PRKS keeps in .prks-maintenance/.\n"
+        "             except the lock files PRKS keeps in .prks-maintenance/ and OS or volume\n"
+        "             metadata at its top level (lost+found, .Trash-*, .DS_Store).\n"
         "This cannot be undone. Nothing is backed up and the data cannot be recovered.\n"
         "When the reset is done, PRKS starts on a new, empty testing database and data root,\n"
         "set up as on a first start.\n"
@@ -410,14 +411,28 @@ def _recheck_root(plan: ResetPlan) -> None:
         )
 
 
-def execute(plan: ResetPlan) -> None:
-    """Check the tree, empty the database, then the data root, holding the root's lease throughout."""
-    if not _fd_delete_supported():
+def _has_files(root_real: str) -> bool:
+    return os.path.isdir(root_real) and not _is_empty_dir(root_real)
+
+
+def _require_safe_delete(plan: ResetPlan) -> None:
+    """Refuse when the root has files to delete but the platform lacks handle-relative deletion.
+
+    Linux and macOS have it; native Windows Python does not, so there only a
+    missing or empty data root can be reset (delete the folder yourself first).
+    """
+    if _has_files(plan.root_real) and not _fd_delete_supported():
         raise ResetRefused(
             "unsupported_platform",
-            "--reset-db deletes only through directory handles, which this platform does not offer. "
-            "Nothing was deleted.",
+            f"--reset-db deletes files only through directory handles, which this platform does not "
+            f"offer. Nothing was deleted. Delete {plan.root} yourself, then run --reset-db again to "
+            "reset the database.",
         )
+
+
+def execute(plan: ResetPlan) -> None:
+    """Check the tree, empty the database, then the data root, holding the root's lease throughout."""
+    _require_safe_delete(plan)
     _recheck_root(plan)
     lease = _lease(plan.root_real)
     try:
@@ -431,7 +446,7 @@ def execute(plan: ResetPlan) -> None:
                     "root_not_plain", f"{exc.message} --reset-db never deletes past it. Nothing was deleted."
                 ) from None
         _drop_schemas(plan)
-        if os.path.isdir(plan.root_real):
+        if _has_files(plan.root_real):
             try:
                 _empty_root(plan.root_real)
             except OSError:
@@ -455,6 +470,7 @@ def run(
 ) -> bool:
     """Plan, confirm and run the reset. ``False`` when the person cancelled; raises :class:`ResetRefused`."""
     plan = plan_reset(conninfo, root)
+    _require_safe_delete(plan)  # before asking, not after
     if not confirm(plan, stdin=stdin, stdout=stdout, read=read):
         return False
     execute(plan)
