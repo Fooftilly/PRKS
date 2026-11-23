@@ -7,12 +7,13 @@ the empty Library signed in as the new owner, and then:
 
 - a reload, a restart and a second tab never show setup again;
 - a new browser (no session) gets the sign-in dialog, not setup, and the
-  owner signs in there with the password chosen during setup;
-- a second setup request for the ready instance is refused (409).
+  owner signs in there with the password chosen during setup.
+
+The 409 for a second setup request is covered without a browser in
+``tests/pg/test_readiness.py``.
 """
 from __future__ import annotations
 
-import json
 import os
 import unittest
 
@@ -101,17 +102,6 @@ class FirstRunSetupTests(unittest.TestCase):
         # A second tab of the same browser goes straight to the Library.
         self.open_library(self.new_page(context))
 
-        # Setup cannot run again, whoever asks.
-        again = context.request.post(
-            self.server.origin + "/api/setup",
-            data=json.dumps({
-                "token": "x" * 43, "login": "intruder", "password": "another passphrase here",
-            }),
-            headers={"Content-Type": "application/json", "Origin": self.server.origin},
-        )
-        self.assertEqual(again.status, 409, again.text())
-        self.assertEqual(again.json()["error"], "already_ready")
-
         # A restart serves the Library, not setup; the session survives it.
         self.server._release_process()
         self.server.start()
@@ -124,12 +114,12 @@ class FirstRunSetupTests(unittest.TestCase):
         page.goto(self.server.origin + "/", wait_until="domcontentloaded")
         page.wait_for_selector("#prks-sign-in")
         self.assertEqual(page.locator("#prks-setup-heading").count(), 0)
-        signed_in = other.request.post(
-            self.server.origin + "/api/login",
-            data=json.dumps({"login": OWNER_LOGIN, "password": OWNER_PASSWORD}),
-            headers={"Content-Type": "application/json", "Origin": self.server.origin},
-        )
-        self.assertEqual(signed_in.status, 200, signed_in.text())
+        page.fill("#prks-sign-in-login", OWNER_LOGIN)
+        page.fill("#prks-sign-in-password", OWNER_PASSWORD)
+        with page.expect_navigation(wait_until="domcontentloaded"):
+            page.click("#prks-sign-in button[type=submit]")
+        page.wait_for_selector(".prks-folder-library")
+        self.assertEqual(page.locator("#prks-sign-in").count(), 0)
         self.open_library(self.new_page(other))
 
 
