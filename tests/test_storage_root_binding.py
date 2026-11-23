@@ -1269,18 +1269,26 @@ class TestProcessEntry(RootTestCase):
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
             src = handle.read()
         main = src[src.index('if __name__ == "__main__":'):]
+        serve = src[src.index("def serve_identity("):src.index('if __name__ == "__main__":')]
         self.assertNotIn("recover_incomplete_restore", src)
+        # The entry checks the environment and selects the root, then hands
+        # the open pool to serve_identity, which owns every later step.
         order = [
             main.index("ensure_runtime_or_exit()"),
             main.index("StorageConfig.from_env(cli_root=args.storage_root)"),
-            main.index("open_storage(config"),
-            main.index("refuse_sqlite_catalogue(library_database, bound_root)"),
-            main.index("bound_root.anchor(config)"),
-            main.index("bind_storage(config, library_database=library_database)"),
+            main.index("prepare_identity(args, config)"),
+            main.index("serve_identity(args, config, identity, http_settings)"),
+        ]
+        self.assertEqual(order, sorted(order))
+        order = [
+            serve.index("open_storage(config"),
+            serve.index("refuse_sqlite_catalogue(library_database, bound_root)"),
+            serve.index("bound_root.anchor(config)"),
+            serve.index("bind_storage(config, library_database=library_database)"),
             # The source report needs logging configured, or INFO is dropped.
-            main.index("setup_logging(config)"),
-            main.index("bound_root.log_binding()"),
-            main.index("run_server("),
+            serve.index("setup_logging(config)"),
+            serve.index("bound_root.log_binding()"),
+            serve.index("run_server("),
         ]
         self.assertEqual(order, sorted(order))
 
@@ -1472,9 +1480,10 @@ class TestRootSnapshot(RootTestCase):
     def test_process_entry_anchors_before_binding(self):
         # Every open after the root lease stays beneath the validated root.
         with open(os.path.join(_PROJECT_DIR, "prks_app.py"), encoding="utf-8") as handle:
-            main = handle.read().split('if __name__ == "__main__":', 1)[1]
-        self.assertLess(main.index("bound_root.anchor(config)"),
-                        main.index("bind_storage(config, library_database=library_database)"))
+            src = handle.read()
+        serve = src[src.index("def serve_identity("):src.index('if __name__ == "__main__":')]
+        self.assertLess(serve.index("bound_root.anchor(config)"),
+                        serve.index("bind_storage(config, library_database=library_database)"))
 
 
 class TestWholeRootInvariants(RootTestCase):
