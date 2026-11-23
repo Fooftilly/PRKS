@@ -28,10 +28,12 @@ so ``python prks_app.py --testing`` starts on a fresh database and root.
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import secrets
 import threading
 from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
@@ -259,7 +261,7 @@ def start_web_identity(
     testing: bool,
     hasher: Optional[PasswordHasher] = None,
     wait_for_setup: Optional[SetupWait] = None,
-    bootstrapped_here: Optional[Callable[[], bool]] = None,
+    setup_settled: Optional[Callable[[], AbstractContextManager[bool]]] = None,
 ) -> WebAuth:
     """Run the start check and bump for this web process; refuse anything else.
 
@@ -268,15 +270,22 @@ def start_web_identity(
     ``wait_for_setup`` is called and the check runs again as long as it
     returns true (it waits between checks); without it, or once it returns
     false, the process is refused with ``setup_pending``.
-    ``bootstrapped_here`` tells whether this process completed the bootstrap
-    while it waited; its claim was then this process's bump. A loopback-owner
+    ``setup_settled`` holds off this process's own browser setup (#612)
+    around each check and tells whether that setup already ran the
+    bootstrap; its claim was then this process's bump. A loopback-owner
     testing process bootstraps an instance that does not exist yet
     (:func:`bootstrap_testing_instance`) instead of waiting. Raises
     :class:`RootPairingRefused` when the process must not serve.
     """
     bump = True
     while True:
-        started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=bump)
+        settle = setup_settled() if setup_settled is not None else contextlib.nullcontext(False)
+        with settle as here:
+            if here:
+                # This process ran the bootstrap itself (browser setup, #612):
+                # its root claim counted as this process's bump (§11.1).
+                bump = False
+            started = root_pairing.start_process(db, root=root, lease=lease, testing=testing, bump=bump)
         if started.status is root_pairing.StartStatus.READY and started.instance_id is not None:
             break
         if bump and testing and settings.mode is AuthMode.LOOPBACK_OWNER and not _has_instance(db):
@@ -290,10 +299,6 @@ def start_web_identity(
                 "Setup is not complete. Create the owner and Library first "
                 "(python prks_app.py admin bootstrap; docs/admin-bootstrap.md).",
             )
-        if bump and bootstrapped_here is not None and bootstrapped_here():
-            # This process ran the bootstrap itself (browser setup, #612):
-            # its root claim counted as this process's bump (§11.1).
-            bump = False
     libraries = db.query(lambda tx: tx.execute("SELECT id FROM prks.libraries LIMIT 2").fetchall())
     if len(libraries) != 1:
         # 0.8 serves one Library per instance; the data root's objects and the

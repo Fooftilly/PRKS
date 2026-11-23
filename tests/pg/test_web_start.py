@@ -16,7 +16,7 @@ import io
 import signal
 import unittest
 from datetime import timedelta
-from typing import Any
+from typing import Any, Iterator
 
 import psycopg
 from psycopg import sql
@@ -166,7 +166,11 @@ class StartTests(WebStartTestCase):
             done.append(True)
             return True
 
-        self.web_start(name, root, lease=lease, wait_for_setup=wait, bootstrapped_here=lambda: bool(done))
+        @contextlib.contextmanager
+        def settled() -> Iterator[bool]:
+            yield bool(done)
+
+        self.web_start(name, root, lease=lease, wait_for_setup=wait, setup_settled=settled)
         # The claim (generation 1) counted as this process's start.
         self.assert_paired(name, root, 1)
 

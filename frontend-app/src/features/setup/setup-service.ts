@@ -116,24 +116,32 @@ export async function waitForApplication(
     intervalMs = 500,
     sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
     maxAttempts = 240,
+    timeoutMs = 5000,
   }: {
     fetchImpl?: Fetch
     intervalMs?: number
     sleep?: (ms: number) => Promise<void>
     maxAttempts?: number
+    timeoutMs?: number
   } = {},
 ): Promise<boolean> {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    // A request the switch-over leaves hanging is given up and tried again.
+    const controller = new AbortController()
+    const deadline = setTimeout(() => controller.abort(), timeoutMs)
     try {
       const response = await fetchImpl('/api/session', {
         method: 'GET',
         credentials: 'same-origin',
         cache: 'no-store',
         headers: { Accept: 'application/json' },
+        signal: controller.signal,
       })
       if (response.status === 200 || response.status === 401) return true
     } catch {
       // The server is switching over; try again.
+    } finally {
+      clearTimeout(deadline)
     }
     await sleep(intervalMs)
   }

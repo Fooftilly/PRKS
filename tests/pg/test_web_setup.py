@@ -14,6 +14,7 @@ import io
 import json
 import os
 import socket
+import sys
 import stat
 import threading
 import time
@@ -71,6 +72,7 @@ class ParseRequestTests(unittest.TestCase):
         self.refused(body(self.TOKEN, login=5), "invalid_request", "login")
         self.refused(body(self.TOKEN, password=""), "required", "password")
         self.refused(body(self.TOKEN, password="x" * 1025), "too_long", "password")
+        self.refused(body(self.TOKEN, password="pass\x00word"), "invalid", "password")
         self.refused(body(self.TOKEN, library_name="L" * 201), "too_long", "library_name")
         self.refused(body(self.TOKEN, display_name="a\x00b"), "invalid", "display_name")
 
@@ -121,8 +123,12 @@ class AfterSetupTests(unittest.TestCase):
 class SetupTestCase(RootPairingTestCase):
     def setUp(self) -> None:
         super().setUp()
-        # The configuration directory (bootstrap-token) stays inside the test's tmp.
-        self.environ = {"XDG_CONFIG_HOME": os.path.join(self.tmp, "config")}
+        # The configuration directory (bootstrap-token) stays inside the test's
+        # tmp on every platform (macOS ignores XDG_CONFIG_HOME).
+        self.environ = {
+            "PRKS_CONFIG_FILE": os.path.join(self.tmp, "config", "prks", "config.json"),
+            "XDG_CONFIG_HOME": os.path.join(self.tmp, "config"),
+        }
 
     def settings(self, env: Optional[dict[str, str]] = None) -> Any:
         return settings_from_env(
@@ -202,6 +208,22 @@ class SetupPhaseTests(SetupTestCase):
             phase._running.release()
         self.assertTrue(phase.complete(parse_request(body(token.reveal()))).created)
 
+    def test_close_waits_for_a_setup_in_flight_then_refuses(self) -> None:
+        name, root = self.database(), self.new_root()
+        token = self.issue(name)
+        phase = self.phase(name, root)
+        phase._running.acquire()  # a request still running after the server stopped
+        closed = threading.Event()
+        closer = threading.Thread(target=lambda: (phase.close(), closed.set()))
+        closer.start()
+        self.assertFalse(closed.wait(0.2))
+        phase._running.release()
+        self.assertTrue(closed.wait(10))
+        closer.join()
+        with self.assertRaises(SetupBusy):
+            phase.complete(parse_request(body(token.reveal())))
+        self.assertIsNone(self.instance(name))
+
     def test_an_interrupted_setup_resumes_from_the_browser(self) -> None:
         name, root = self.database(), self.new_root()
         token = self.issue(name)
@@ -223,18 +245,12 @@ class SetupPhaseTests(SetupTestCase):
         self.assertFalse(os.path.exists(path))
 
 
-def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 class SetupHttpTests(SetupTestCase):
     def serve(self, phase: SetupPhase) -> int:
-        port = free_port()
-        server = start_setup_server(phase, port=port, host="127.0.0.1")
+        # Port 0: the listener itself takes a free port, so nothing can take it first.
+        server = start_setup_server(phase, port=0, host="127.0.0.1")
         self.addCleanup(server.stop)
-        return port
+        return int(server.server_address[1])
 
     def request(
         self, port: int, method: str, path: str, data: Any = None, headers: Optional[dict[str, str]] = None
@@ -301,7 +317,7 @@ class SetupHttpTests(SetupTestCase):
         self.assertIn("prks_session=", cookie)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
-        self.assertNotIn(token, json.dumps(got) + json.dumps({k: v for k, v in headers.items() if k != "set-cookie"}))
+        self.assertNotIn(token, json.dumps(got) + json.dumps(headers))
         self.assertTrue(phase.done.is_set())
         status, _, raw = self.request(port, "GET", "/api/setup")
         self.assertEqual((status, json.loads(raw)), (200, {"state": "ready"}))
@@ -334,20 +350,19 @@ class WaitingProcessTests(SetupTestCase):
     def test_a_browser_setup_ends_the_wait_and_frees_the_address(self) -> None:
         name, root = self.database(), self.new_root()
         token = self.issue(name).reveal()
-        port = free_port()
         lease = self.lease(root)
         phase = SetupPhase(self.db(name), self.settings(), root=root, lease=lease, testing=True,
                            environ=self.environ)
         started: list[Any] = []
 
         def setup() -> Any:
-            server = start_setup_server(phase, port=port, host="127.0.0.1")
+            server = start_setup_server(phase, port=0, host="127.0.0.1")
             started.append(server)
             return server, phase
 
         stderr = io.StringIO()
         wait = prks_app.SetupWait(poll=30, stderr=stderr, step=0.01, setup=setup,
-                                  setup_hint=prks_app.setup_url("127.0.0.1", port, tls=False))
+                                  setup_hint="http://setup.example/")
         results: list[bool] = []
         with wait.watching():
             thread = threading.Thread(target=lambda: results.append(wait()))
@@ -355,6 +370,7 @@ class WaitingProcessTests(SetupTestCase):
             deadline = time.monotonic() + 10
             while not started and time.monotonic() < deadline:
                 time.sleep(0.01)
+            port = int(started[0].server_address[1])
             conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
             conn.request("POST", "/api/setup", body=json.dumps(body(token)), headers={
                 "Host": f"127.0.0.1:{port}", "Origin": f"http://127.0.0.1:{port}",
@@ -364,7 +380,7 @@ class WaitingProcessTests(SetupTestCase):
             conn.close()
             thread.join(timeout=10)  # well before the 30 s poll
             self.assertEqual(results, [True])
-        self.assertIn(f"http://127.0.0.1:{port}/", stderr.getvalue())
+        self.assertIn("http://setup.example/", stderr.getvalue())
         self.assertIn("admin bootstrap issue-token", stderr.getvalue())
         # Leaving the wait closed the setup server's socket: the normal server can bind.
         with socket.create_server(("127.0.0.1", port)):
@@ -386,6 +402,19 @@ class WaitingProcessTests(SetupTestCase):
         self.assertEqual(prks_app.setup_url("127.0.0.1", 8080, tls=False), "http://127.0.0.1:8080/")
         self.assertEqual(prks_app.setup_url("127.0.0.1", 8443, tls=True), "https://127.0.0.1:8443/")
         self.assertEqual(prks_app.setup_url("0.0.0.0", 8080, tls=False), "http://this computer's address:8080/")  # nosec B104
+        self.assertEqual(prks_app.setup_url("::", 8080, tls=False), "http://this computer's address:8080/")
+        self.assertEqual(prks_app.setup_url("::1", 8080, tls=False), "http://[::1]:8080/")
+        self.assertEqual(
+            prks_app.setup_url("::1", 8080, tls=False, public_origin=("http", "::1", 8080)), "http://[::1]:8080/"
+        )
+
+    def test_token_command_uses_this_interpreter(self) -> None:
+        import shlex
+
+        self.assertEqual(
+            prks_app.token_command("/srv/my data"),
+            f"{shlex.quote(sys.executable)} prks_app.py admin bootstrap issue-token --root '/srv/my data'",
+        )
         self.assertEqual(
             prks_app.setup_url("0.0.0.0", 8080, tls=False, public_origin=("https", "prks.example.org", None)),  # nosec B104
             "https://prks.example.org/",

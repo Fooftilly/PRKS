@@ -273,10 +273,12 @@ class SetupWait:
             self.close()
 
     def close(self):
-        """Stop the setup server, if one runs."""
+        """Stop the setup server, if one runs, and wait for a setup request it still runs."""
         server, self._server = self._server, None
         if server is not None:
             server.stop()
+            if self._phase is not None:
+                self._phase.close()
 
     def _say(self, text):
         print(text, file=self._stderr or sys.stderr)
@@ -299,9 +301,14 @@ class SetupWait:
     def _setup_done(self):
         return self._phase is not None and self._phase.done.is_set()
 
-    def bootstrapped_here(self):
-        """Whether this process's setup page completed the bootstrap."""
-        return self._setup_done()
+    @contextlib.contextmanager
+    def settled(self):
+        """Hold off this process's setup page's bootstrap; yields whether it already ran."""
+        if self._phase is None:
+            yield False
+            return
+        with self._phase.settled() as done:
+            yield done
 
     def __call__(self):
         if not self._announced:
@@ -321,11 +328,15 @@ class SetupWait:
 
 def setup_url(host, port, *, tls, public_origin=None):
     """The address an operator opens for browser setup, as printed while waiting (#612)."""
+    def authority(name):
+        return f"[{name}]" if ":" in name else name  # an IPv6 literal
+
     if public_origin is not None:
         scheme, hostname, origin_port = public_origin
-        return f"{scheme}://{hostname}" + (f":{origin_port}" if origin_port else "") + "/"
+        return f"{scheme}://{authority(hostname)}" + (f":{origin_port}" if origin_port else "") + "/"
     scheme = "https" if tls else "http"
-    shown = "this computer's address" if host in ("0.0.0.0", "") else host  # nosec B104 - a bind, printed
+    any_address = host in ("0.0.0.0", "::", "")  # nosec B104 - a bind, printed
+    shown = "this computer's address" if any_address else authority(host)
     return f"{scheme}://{shown}:{port}/"
 
 
@@ -333,7 +344,8 @@ def token_command(root):
     """The command that issues a setup token for this data root, as printed while waiting (#612)."""
     import shlex
 
-    return f"python prks_app.py admin bootstrap issue-token --root {shlex.quote(root)}"
+    # The interpreter running PRKS (a virtual environment's, say), not whatever ``python`` is.
+    return f"{shlex.quote(sys.executable or 'python')} prks_app.py admin bootstrap issue-token --root {shlex.quote(root)}"
 
 
 def setup_phase_starter(prepared, bound_root, *, host, port, http, testing):
@@ -365,7 +377,7 @@ def start_identity(prepared, bound_root, *, testing, wait=None):
         auth = start_web_identity(
             db, settings, root=bound_root.root_real, lease=bound_root.lease,
             testing=testing, wait_for_setup=wait,
-            bootstrapped_here=wait.bootstrapped_here if wait is not None else None,
+            setup_settled=wait.settled if wait is not None else None,
         )
     except RootPairingRefused as exc:
         if wait is not None:

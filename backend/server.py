@@ -374,7 +374,10 @@ def parse_request_origin(value: str) -> tuple[str, str, int | None] | None:
         return None
     if value == "null":
         return None
-    parsed = urlparse(value)
+    try:
+        parsed = urlparse(value)
+    except ValueError:  # e.g. an unmatched IPv6 bracket
+        return None
     if parsed.scheme not in ("http", "https"):
         return None
     if parsed.username is not None or parsed.password is not None:

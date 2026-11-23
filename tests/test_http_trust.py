@@ -154,6 +154,10 @@ class TestParseOrigin(unittest.TestCase):
     def test_null_rejected(self):
         self.assertIsNone(parse_request_origin("null"))
 
+    def test_unparseable_ipv6_rejected(self):
+        for raw in ("http://[::1", "http://[::1:8080", "https://[fe80::1"):
+            self.assertIsNone(parse_request_origin(raw), raw)
+
     def test_path_query_fragment_syntax_rejected(self):
         for raw in (
             "http://localhost:8080/",

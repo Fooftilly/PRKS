@@ -157,6 +157,17 @@ describe('SetupApp', () => {
     wrapper.unmount()
   })
 
+  it('returns to a password the server cannot use', async () => {
+    answer = { status: 400, body: { error: 'invalid_request', field: 'password', reason: 'invalid' } }
+    const { wrapper } = await mounted()
+    await fillToReview(wrapper)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.text()).toContain('Step 2 of 3')
+    expect(wrapper.get('#prks-setup-password-error').text()).toBe('This password cannot be used.')
+    wrapper.unmount()
+  })
+
   it('opens the application when setup is already done', async () => {
     state = 'ready'
     const { wrapper, opened } = await mounted()
@@ -220,5 +231,19 @@ describe('setup service', () => {
     expect(sleep).toHaveBeenCalledTimes(2)
     const down = vi.fn(async () => { throw new TypeError('down') }) as unknown as typeof fetch
     expect(await waitForApplication({ fetchImpl: down, sleep, maxAttempts: 3 })).toBe(false)
+  })
+
+  it('gives up a hanging handoff request and tries again', async () => {
+    let calls = 0
+    const fetchImpl = vi.fn((_url: string, init?: RequestInit) => {
+      calls += 1
+      if (calls > 1) return Promise.resolve(json(401, {}))
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    }) as unknown as typeof fetch
+    const sleep = vi.fn(async () => undefined)
+    expect(await waitForApplication({ fetchImpl, sleep, timeoutMs: 5 })).toBe(true)
+    expect(calls).toBe(2)
   })
 })

@@ -166,7 +166,9 @@ function fieldError(result: Extract<SetupResult, { ok: false }>): boolean {
       displayNameError.value = tooLong ? 'This display name is too long.' : 'This display name cannot be used.'
       break
     case 'password':
-      passwordError.value = tooLong ? 'This password is too long.' : 'Enter a password.'
+      passwordError.value = tooLong
+        ? 'This password is too long.'
+        : result.reason === 'required' ? 'Enter a password.' : 'This password cannot be used.'
       break
     case 'library_name':
       libraryError.value = tooLong ? 'This Library name is too long.' : 'This Library name cannot be used.'

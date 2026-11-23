@@ -31,11 +31,12 @@ Rules:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -142,6 +143,8 @@ def parse_request(data: object) -> SetupRequest:
         raise SetupInputError("required", "password")
     if len(password.encode("utf-8", "surrogatepass")) > passwords.MAX_PASSWORD_BYTES:
         raise SetupInputError("too_long", "password")
+    if not passwords.usable_password(password):
+        raise SetupInputError("invalid", "password")
     return SetupRequest(token, login, display_name, password, library_name)
 
 
@@ -236,6 +239,11 @@ class SetupPhase:
         self._hasher = hasher
         self._attempts = attempts or TokenAttempts()
         self._running = threading.Lock()
+        # Held across the bootstrap commit and ``done``; the start check holds
+        # it too (:meth:`settled`), so it never sees this process's commit
+        # without also seeing ``done``.
+        self._settle = threading.Lock()
+        self._closed = False
         self.done = threading.Event()
 
     def state(self) -> str:
@@ -244,6 +252,21 @@ class SetupPhase:
             return STATE_READY
         return read_state(self.db)
 
+    def close(self) -> None:
+        """Wait for a setup request in flight, then refuse any later one.
+
+        The setup server's worker threads can outlive its shutdown; the caller
+        closes the pool and the root lease only after this returns.
+        """
+        with self._running:
+            self._closed = True
+
+    @contextlib.contextmanager
+    def settled(self) -> Iterator[bool]:
+        """Hold off a bootstrap commit in this process; yields whether this process already ran it."""
+        with self._settle:
+            yield self.done.is_set()
+
     def complete(self, request: SetupRequest) -> SetupDone:
         """Run setup for ``request``; raises :class:`RootPairingRefused`, :class:`SetupBusy`
         or :class:`TooManyAttempts`."""
@@ -251,6 +274,10 @@ class SetupPhase:
         if not self._running.acquire(blocking=False):
             raise SetupBusy()
         try:
+            if self._closed:
+                raise SetupBusy()
+            # A refusal recorded while this request waited for the lock counts.
+            self._attempts.check()
             return self._complete(request)
         finally:
             self._running.release()
@@ -268,11 +295,12 @@ class SetupPhase:
             library_name=request.library_name,
             password_hash=passwords.hash_password(request.password, hasher=self._hasher),
         )
-        result = root_pairing.bootstrap(
-            self.db, owner, token=request.token, root=self._root, lease=self._lease,
-            testing=self._testing,
-        )
-        self.done.set()
+        with self._settle:
+            result = root_pairing.bootstrap(
+                self.db, owner, token=request.token, root=self._root, lease=self._lease,
+                testing=self._testing,
+            )
+            self.done.set()
         self._remove_token_files(request.token)
         if not result.created:
             return SetupDone(created=False)
