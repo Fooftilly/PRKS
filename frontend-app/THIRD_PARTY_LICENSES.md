@@ -23,7 +23,7 @@ Conservative list of the installed lockfile production graph (which includes som
 | `@tanstack/match-sorter-utils` | `9.1.2` | `MIT` |
 | `@tanstack/query-core` | `5.105.2` | `MIT` |
 | `@tanstack/vue-query` | `5.105.2` | `MIT` |
-| `@types/web-bluetooth` | `0.0.21` | `MIT` |
+| `@types/web-bluetooth` | `0.0.22` | `MIT` |
 | `@vue/compiler-core` | `3.5.45` | `MIT` |
 | `@vue/compiler-dom` | `3.5.45` | `MIT` |
 | `@vue/compiler-sfc` | `3.5.45` | `MIT` |
@@ -34,9 +34,9 @@ Conservative list of the installed lockfile production graph (which includes som
 | `@vue/runtime-dom` | `3.5.45` | `MIT` |
 | `@vue/server-renderer` | `3.5.45` | `MIT` |
 | `@vue/shared` | `3.5.45` | `MIT` |
-| `@vueuse/core` | `13.9.0` | `MIT` |
-| `@vueuse/metadata` | `13.9.0` | `MIT` |
-| `@vueuse/shared` | `13.9.0` | `MIT` |
+| `@vueuse/core` | `15.1.0` | `MIT` |
+| `@vueuse/metadata` | `15.1.0` | `MIT` |
+| `@vueuse/shared` | `15.1.0` | `MIT` |
 | `bind-event-listener` | `3.0.0` | `MIT` |
 | `csstype` | `3.2.3` | `MIT` |
 | `entities` | `7.0.1` | `BSD-2-Clause` |

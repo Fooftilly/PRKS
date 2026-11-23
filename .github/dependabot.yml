@@ -37,18 +37,10 @@ updates:
     patterns: ["*"]
     cooldown:
       default-days: 7
-    # Deliberate migrations, not Dependabot bumps: React 19 needs react +
-    # react-dom + types together (and an EmbedPDF check); EmbedPDF 3.x must
-    # move every @embedpdf/* package and the viewer patches pinned to 2.x.
+    # EmbedPDF 3.x is a re-architecture (headless kernel, renamed plugins,
+    # no 3.x scroll/viewport/zoom yet) and the viewer patches are pinned to
+    # 2.15.1: a deliberate migration, not a Dependabot bump.
     ignore:
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@types/react-dom"
-        update-types: ["version-update:semver-major"]
       - dependency-name: "@embedpdf/*"
         update-types: ["version-update:semver-major"]
 
@@ -96,6 +88,11 @@ updates:
     patterns: ["*"]
     cooldown:
       default-days: 7
+    # Python 3.15 has no onnxruntime wheel (needed by PyMuPDF), and the
+    # image's Python must match CI's python-version pins.
+    ignore:
+      - dependency-name: "python"
+        versions: [">= 3.15"]
 
   # Keep GitHub Actions used by CI and security workflows current.
   - package-ecosystem: "github-actions"
