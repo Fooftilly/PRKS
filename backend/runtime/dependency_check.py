@@ -8,6 +8,7 @@ service-worker revision) is tooling, in ``scripts/dependency_gate.py``.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
@@ -213,13 +214,11 @@ def detect_externally_managed(sysconfig_get_path: Callable[[str], str] | None = 
         Path(purelib).resolve().parent / "EXTERNALLY-MANAGED",
     ]
     # Also check the scheme's stdlib-ish locations used by CPython 3.12+.
-    try:
+    with contextlib.suppress(KeyError, OSError, ValueError):
         stdlib = getter("stdlib")
         if stdlib:
             candidates.append(Path(stdlib) / "EXTERNALLY-MANAGED")
             candidates.append(Path(stdlib).parent / "EXTERNALLY-MANAGED")
-    except Exception:
-        pass
     for path in candidates:
         try:
             if path.is_file():
