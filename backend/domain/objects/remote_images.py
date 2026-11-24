@@ -314,7 +314,8 @@ def enqueue_prune_for_host(tx: Any, library_id: str, epoch: int) -> None:
 
 
 def _finish_prune(scope: LibraryScope) -> None:
-    if scope.execute(_ANY_SAVED).fetchone()["any"]:
+    row = scope.execute(_ANY_SAVED).fetchone()
+    if row is not None and row["any"]:
         schedule_prune(scope)
 
 

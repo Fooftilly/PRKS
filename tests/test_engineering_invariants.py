@@ -1331,216 +1331,10 @@ class EngineeringInvariantTests(unittest.TestCase):
             self.assertEqual(checker.check_pyright_configs(root), [])
 
     def test_pyright_typed_slice_scopes_are_pinned(self):
+        # #1429: whole trees, so a new module is checked without editing a list.
         self.assertEqual(
             checker.PYRIGHT_TYPED_SLICE_SCOPES,
-            (
-                "backend/storage",
-                "backend/web",
-                "backend/entity_ids.py",
-                "backend/byte_range.py",
-                "backend/research_markup.py",
-                "backend/pdf_linearize.py",
-                "backend/derived_cache_publish.py",
-                "backend/domain/text_identity.py",
-                "backend/pdf_byte_mentions.py",
-                "backend/fs_durability.py",
-                "backend/config_reference.py",
-                "backend/log_safety.py",
-                "backend/person_image.py",
-                "backend/derived_caches.py",
-                "backend/managed_pdf_names.py",
-                "backend/domain/works/rules.py",
-                "backend/domain/saved_views/rules.py",
-                "backend/domain/settings/rules.py",
-                "backend/domain/people/errors.py",
-                "backend/domain/works/bibtex_format.py",
-                "backend/domain/works/csl_format.py",
-                "backend/domain/works/citation_styles.py",
-                "backend/domain/people/rules.py",
-                "backend/etags.py",
-                "backend/domain/research/rules.py",
-                "backend/pdf_text.py",
-                "backend/db/config.py",
-                "backend/db/errors.py",
-                "backend/db/database.py",
-                "backend/db/__init__.py",
-                "backend/db/migrate.py",
-                "backend/db/schema_snapshot.py",
-                "backend/domain/identity/secret_tokens.py",
-                "backend/domain/identity/login_names.py",
-                "backend/domain/identity/errors.py",
-                "backend/domain/identity/passwords.py",
-                "backend/domain/identity/login_limiter.py",
-                "backend/domain/identity/bootstrap_tokens.py",
-                "backend/domain/identity/login.py",
-                "backend/domain/identity/authorization.py",
-                "backend/domain/identity/library_scope.py",
-                "backend/domain/identity/request_context.py",
-                "backend/domain/identity/sessions.py",
-                "backend/domain/identity/web_start.py",
-                "backend/domain/identity/root_pairing.py",
-                "backend/domain/identity/admin.py",
-                "backend/api/session.py",
-                "backend/work_metadata_sync.py",
-                "backend/work_role_sync.py",
-                "backend/domain/works/__init__.py",
-                "backend/domain/works/integrity.py",
-                "backend/domain/works/projection.py",
-                "backend/domain/works/queries.py",
-                "backend/domain/works/commands.py",
-                "backend/domain/works/revisions.py",
-                "backend/domain/works/metadata.py",
-                "backend/domain/works/notes.py",
-                "backend/domain/works/source.py",
-                "backend/domain/works/bulk.py",
-                "backend/domain/works/citation.py",
-                "backend/domain/works/lifecycle.py",
-                "backend/domain/works/merge.py",
-                "backend/domain/works/wiki_links.py",
-                "backend/domain/works/work_commands.py",
-                "backend/domain/people/__init__.py",
-                "backend/domain/people/persons.py",
-                "backend/domain/people/groups.py",
-                "backend/domain/people/group_commands.py",
-                "backend/domain/people/person_commands.py",
-                "backend/domain/people/role_commands.py",
-                "backend/domain/people/publishers.py",
-                "backend/domain/people/publisher_commands.py",
-                "backend/domain/people/queries.py",
-                "backend/domain/people/roles.py",
-                "backend/domain/organization/__init__.py",
-                "backend/domain/organization/folders.py",
-                "backend/domain/organization/folder_commands.py",
-                "backend/domain/organization/lifecycle.py",
-                "backend/domain/organization/links.py",
-                "backend/domain/organization/playlists.py",
-                "backend/domain/organization/playlist_commands.py",
-                "backend/domain/organization/tags.py",
-                "backend/domain/organization/tag_commands.py",
-                "backend/domain/research/__init__.py",
-                "backend/domain/research/arguments.py",
-                "backend/domain/research/concepts.py",
-                "backend/domain/research/concept_commands.py",
-                "backend/domain/research/position_commands.py",
-                "backend/domain/research/argument_commands.py",
-                "backend/domain/research/note_commands.py",
-                "backend/domain/research/graph.py",
-                "backend/domain/research/index_commands.py",
-                "backend/library.py",
-                "backend/domain/research/positions.py",
-                "backend/domain/research/reindex.py",
-                "backend/domain/search/__init__.py",
-                "backend/domain/search/refresh.py",
-                "backend/domain/search/queries.py",
-                "backend/domain/search/text.py",
-                "backend/domain/search/search_commands.py",
-                "backend/domain/search/rebuild.py",
-                "backend/domain/annotations/__init__.py",
-                "backend/domain/annotations/materialize.py",
-                "backend/domain/annotations/operations.py",
-                "backend/domain/annotations/store.py",
-                "backend/domain/annotations/annotation_commands.py",
-                "backend/domain/objects/__init__.py",
-                "backend/domain/objects/ingest.py",
-                "backend/domain/objects/jobs.py",
-                "backend/domain/objects/lifecycle.py",
-                "backend/domain/objects/portraits.py",
-                "backend/domain/objects/replace.py",
-                "backend/domain/processing/__init__.py",
-                "backend/domain/processing/commands.py",
-                "backend/domain/processing/imports.py",
-                "backend/domain/processing/items.py",
-                "backend/domain/processing/uploads.py",
-                "backend/domain/maintenance/__init__.py",
-                "backend/domain/maintenance/archive.py",
-                "backend/domain/maintenance/backup.py",
-                "backend/domain/maintenance/connection.py",
-                "backend/domain/maintenance/format.py",
-                "backend/domain/maintenance/jobs.py",
-                "backend/domain/maintenance/restore.py",
-                "backend/domain/maintenance/staged.py",
-                "backend/domain/maintenance/staging.py",
-                "backend/domain/maintenance/tables.py",
-                "backend/domain/saved_views/__init__.py",
-                "backend/domain/saved_views/commands.py",
-                "backend/domain/saved_views/views.py",
-                "backend/domain/settings/__init__.py",
-                "backend/domain/settings/app_settings.py",
-                "backend/domain/works/custom_citation_styles.py",
-                "backend/domain/settings/commands.py",
-                "backend/jobs/queue.py",
-                "backend/jobs/handlers.py",
-                "backend/jobs/runner.py",
-                "backend/jobs/diagnostics.py",
-                "backend/jobs/prune.py",
-                "backend/jobs/worker.py",
-                "backend/jobs/embedded.py",
-                "backend/process_roles.py",
-                "backend/readiness.py",
-                "backend/sync/__init__.py",
-                "backend/sync/families.py",
-                "backend/sync/protocol.py",
-                "backend/sync/handlers/__init__.py",
-                "backend/sync/handlers/argument.py",
-                "backend/sync/handlers/concept.py",
-                "backend/sync/handlers/folder.py",
-                "backend/sync/handlers/pdf_annotation.py",
-                "backend/sync/handlers/person.py",
-                "backend/sync/handlers/person_group.py",
-                "backend/sync/handlers/position.py",
-                "backend/sync/handlers/playlist.py",
-                "backend/sync/handlers/tag.py",
-                "backend/sync/handlers/tag_link.py",
-                "backend/sync/handlers/work_lifecycle.py",
-                "backend/sync/handlers/work_metadata.py",
-                "backend/sync/handlers/work_notes.py",
-                "backend/sync/handlers/work_open.py",
-                "backend/sync/handlers/work_role.py",
-                "backend/sync/handlers/work_source.py",
-                "backend/api",
-                "backend/domain/__init__.py",
-                "backend/domain/identity/__init__.py",
-                "backend/domain/maintenance/upload.py",
-                "backend/domain/people/constraints.py",
-                "backend/domain/research/constraints.py",
-                "backend/domain/saved_views/constraints.py",
-                "backend/db/testing_guard.py",
-                "backend/testing_reset.py",
-                "backend/jobs/__init__.py",
-                "backend/services/__init__.py",
-                "backend/services/work_pdf_replace.py",
-                "backend/api_contract",
-                "backend/argument_sync.py",
-                "backend/concept_sync.py",
-                "backend/dependency_gate.py",
-                "backend/folder_sync.py",
-                "backend/folder_tag_sync.py",
-                "backend/log_config.py",
-                "backend/pdf_annotation_adopt.py",
-                "backend/pdf_annotation_sync.py",
-                "backend/pdf_annotations.py",
-                "backend/pdf_materialization.py",
-                "backend/performance.py",
-                "backend/person_group_sync.py",
-                "backend/person_metadata_sync.py",
-                "backend/person_sync.py",
-                "backend/playlist_sync.py",
-                "backend/position_sync.py",
-                "backend/research_graph.py",
-                "backend/startup_profile.py",
-                "backend/sync_protocol.py",
-                "backend/tag_color.py",
-                "backend/tag_sync.py",
-                "backend/work_lifecycle_sync.py",
-                "backend/work_note_sync.py",
-                "backend/work_open_sync.py",
-                "backend/work_source_sync.py",
-                "backend/work_tag_sync.py",
-                "backend/server.py",
-                "prks_app.py",
-                "scripts",
-                "tests",
-            ),
+            ("backend", "prks_app.py", "scripts", "tests"),
         )
 
     def test_pyright_typed_slice_include_order_is_irrelevant(self):
@@ -1606,9 +1400,10 @@ class EngineeringInvariantTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
-            (root / "backend" / "uncovered.py").write_text("", encoding="utf-8")
+            (root / "tools").mkdir(exist_ok=True)
+            (root / "tools" / "uncovered.py").write_text("", encoding="utf-8")
             self._rewrite_typed_slice(
-                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "backend/uncovered.py"]
+                root, strict=[*checker.PYRIGHT_TYPED_SLICE_STRICT, "tools/uncovered.py"]
             )
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-004"])
@@ -1633,23 +1428,8 @@ class EngineeringInvariantTests(unittest.TestCase):
                 self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
                 self.assertIn(f"missing [{dropped!r}]", findings[0].message)
 
-    def test_pyright_typed_slice_rejects_storage_only_include(self):
-        """Reverting to the first-slice include loses the newer scopes."""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            self._write_valid_pyright_tree(root)
-            typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
-            typed["include"] = ["backend/storage"]
-            (root / "pyrightconfig.typed-slice.json").write_text(
-                json.dumps(typed), encoding="utf-8"
-            )
-            findings = checker.check_pyright_configs(root)
-            self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
-            self.assertIn("backend/entity_ids.py", findings[0].message)
-            self.assertIn("backend/research_markup.py", findings[0].message)
-
-    def test_pyright_typed_slice_rejects_second_slice_include(self):
-        """Reverting to the second-slice include loses the third-slice scopes."""
+    def test_pyright_typed_slice_rejects_backend_file_list(self):
+        """Narrowing ``backend`` back to a list of files loses every new module (#1429)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self._write_valid_pyright_tree(root)
@@ -1657,18 +1437,16 @@ class EngineeringInvariantTests(unittest.TestCase):
             typed["include"] = [
                 "backend/storage",
                 "backend/entity_ids.py",
+                "prks_app.py",
+                "scripts",
+                "tests",
             ]
             (root / "pyrightconfig.typed-slice.json").write_text(
                 json.dumps(typed), encoding="utf-8"
             )
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
-            for scope in (
-                "backend/research_markup.py",
-                "backend/pdf_linearize.py",
-                "backend/derived_cache_publish.py",
-            ):
-                self.assertIn(f"{scope!r}", findings[0].message.split("missing", 1)[1])
+            self.assertIn("missing ['backend']", findings[0].message)
 
     def test_pyright_typed_slice_rejects_unreviewed_extra_scope(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1749,10 +1527,23 @@ class EngineeringInvariantTests(unittest.TestCase):
             )
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
-            for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
-                if scope.startswith("backend/"):
-                    self.assertIn(scope, findings[0].message)
+            self.assertIn("would suppress backend;", findings[0].message)
             self.assertNotIn("prks_app.py", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_excluding_one_backend_module(self):
+        """A backend file that fails type checking is fixed, not excluded (#1429)."""
+        for key in ("exclude", "ignore"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._write_valid_pyright_tree(root)
+                typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+                typed[key] = ["**/__pycache__", "backend/domain/objects/status.py"]
+                (root / "pyrightconfig.typed-slice.json").write_text(
+                    json.dumps(typed), encoding="utf-8"
+                )
+                findings = checker.check_pyright_configs(root)
+                self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+                self.assertIn("would suppress backend;", findings[0].message)
 
     def test_pyright_typed_slice_allows_unrelated_backend_exclude(self):
         with tempfile.TemporaryDirectory() as tmp:
