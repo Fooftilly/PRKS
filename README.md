@@ -174,7 +174,7 @@ Every setting, its scope and default is in the [configuration reference](docs/co
 | `PRKS_BACKUP_MAX_UPLOAD_BYTES` | Maximum size of an uploaded `.prks-backup` restore archive. Default 64 GiB. A valid `Content-Length` is required. |
 | `PRKS_CONFIG_FILE` | Override path of the bootstrap configuration file (default: `~/.config/prks/config.json` on Linux, `~/Library/Application Support/PRKS/config.json` on macOS, `%LOCALAPPDATA%\PRKS\config.json` on Windows). Ignored in testing mode. |
 
-If `PRKS_STORAGE` is **unset**, non-testing runs use the project’s **`data/`** directory: managed PDFs and portraits, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
+If `PRKS_STORAGE` is **unset**, non-testing runs use the folder recorded in the bootstrap configuration (see below) when one is recorded, and otherwise the project’s **`data/`** directory: managed PDFs and portraits, `data/thumbs/`, and person portrait cache `data/people/` (lossy WebP, max 512px edge, keyed by person id + `image_url` hash).
 
 The storage root is chosen by the first of these that is set, and a set but invalid choice is a startup error rather than a fall-through: `python prks_app.py --storage-root PATH` (this run only), `PRKS_STORAGE`, `storage.local_root` in the bootstrap configuration file (written only before setup claims a root, by `python prks_app.py storage choose PATH` with PRKS stopped or by the setup page's folder choice; it applies at the next start), then the default above. Testing mode never reads the bootstrap file. A relative or `~` path is made absolute once at startup.
 
