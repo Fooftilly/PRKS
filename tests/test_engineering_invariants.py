@@ -1527,10 +1527,23 @@ class EngineeringInvariantTests(unittest.TestCase):
             )
             findings = checker.check_pyright_configs(root)
             self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
-            for scope in checker.PYRIGHT_TYPED_SLICE_SCOPES:
-                if scope.startswith("backend/"):
-                    self.assertIn(scope, findings[0].message)
+            self.assertIn("would suppress backend;", findings[0].message)
             self.assertNotIn("prks_app.py", findings[0].message)
+
+    def test_pyright_typed_slice_rejects_excluding_one_backend_module(self):
+        """A backend file that fails type checking is fixed, not excluded (#1429)."""
+        for key in ("exclude", "ignore"):
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                self._write_valid_pyright_tree(root)
+                typed = json.loads((root / "pyrightconfig.typed-slice.json").read_text())
+                typed[key] = ["**/__pycache__", "backend/domain/objects/status.py"]
+                (root / "pyrightconfig.typed-slice.json").write_text(
+                    json.dumps(typed), encoding="utf-8"
+                )
+                findings = checker.check_pyright_configs(root)
+                self.assertEqual([f.code for f in findings], ["INV-PYRIGHT-002"])
+                self.assertIn("would suppress backend;", findings[0].message)
 
     def test_pyright_typed_slice_allows_unrelated_backend_exclude(self):
         with tempfile.TemporaryDirectory() as tmp:
