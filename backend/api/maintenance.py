@@ -163,9 +163,9 @@ def restore_staged(library: Any, ctx: Any, root: str, data: dict[str, Any]) -> t
     try:
         staged.discard(archive)
     except OSError as exc:
-        # The restore is committed: a staged file left behind is pruned after
-        # its TTL and never turns the restore into a failure the client would
-        # answer by keeping the old epoch.
+        # The restore is committed: a staged file left behind never turns it
+        # into a failure the client would answer by keeping the old epoch. The
+        # next upload's stage_archive prunes it once its TTL has passed.
         LOGGER.warning("restore_staged_discard_failed error_type=%s", safe_error_type(exc))
     LOGGER.info("restore_committed epoch=%d objects_held=%d", result.epoch, result.objects_held)
     return 200, {"status": "restored", "epoch": result.epoch, "objects_held": result.objects_held,
