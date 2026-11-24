@@ -1092,7 +1092,7 @@ class PageCollector:
 class AppServer:
     """One PRKS subprocess + temp storage. Seed before start()."""
 
-    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=(), first_run=False):
+    def __init__(self, seed_fn=None, extra_env=None, auth=None, members=(), first_run=False, choosable=False):
         self._tmpdir = tempfile.TemporaryDirectory(prefix="prks-e2e-")
         # The storage root is a fresh, empty child directory so PRKS treats it
         # as a new root (storage-architecture §7.1); server output lives beside
@@ -1127,6 +1127,15 @@ class AppServer:
         self._first_run = bool(first_run)
         if self._first_run and (seed_fn is not None or auth is not None or members):
             raise ValueError("a first-run server has no seed, auth mode or members: setup creates the owner")
+        # `choosable=True` (first run only): the server runs without
+        # --testing, its folder selected by a bootstrap config file in the
+        # temporary directory rather than by PRKS_STORAGE, so setup still
+        # offers another folder (#720). A choice rewrites that file and takes
+        # effect at the next start().
+        self._choosable = bool(choosable)
+        if self._choosable and not self._first_run:
+            raise ValueError("only a first-run server can still choose its folder")
+        self.config_file = os.path.join(self._tmpdir.name, "config", "config.json")
 
     def start(self):
         # The test this server belongs to, for the coverage map: its
@@ -1151,10 +1160,19 @@ class AppServer:
             with profile_e2e_phase("seed_build"):
                 self.ids = seed_postgres_library(self._seed_fn, self.storage_root, self.library)
         env = os.environ.copy()
-        env["PRKS_TESTING"] = "1"
-        env["PRKS_STORAGE"] = self.storage_root
         env.pop("PRKS_FOR_PROCESSING_DIR", None)
-        env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
+        if self._choosable:
+            self._select_storage_by_config_file()
+            for name in ("PRKS_TESTING", "PRKS_STORAGE"):
+                env.pop(name, None)
+            env["PRKS_CONFIG_FILE"] = self.config_file
+            # Nothing may fall back to the real home's PRKS config or data.
+            env["HOME"] = self._tmpdir.name
+            env["PRKS_LOG_FILE"] = os.path.join(self._tmpdir.name, "prks-errors.log")
+        else:
+            env["PRKS_TESTING"] = "1"
+            env["PRKS_STORAGE"] = self.storage_root
+            env["PRKS_LOG_FILE"] = os.path.join(self.storage_root, "prks-errors.log")
         env["PYTHONUNBUFFERED"] = "1"
         env["PLAYWRIGHT_BROWSERS_PATH"] = str(apply_playwright_browser_env())
         # Only this server's own database: never a live deployment's settings.
@@ -1222,6 +1240,22 @@ class AppServer:
             return self
         raise RuntimeError("PRKS E2E server could not obtain a free port")
 
+    def _select_storage_by_config_file(self):
+        """Record ``storage_root`` in the config file, once, as ``storage choose`` would.
+
+        A folder the config file selects must already carry its marker, so
+        the root is stamped first. A later start keeps whatever the file says
+        by then, including a folder the browser chose.
+        """
+        if os.path.exists(self.config_file):
+            return
+        from backend.storage import root_binding
+        from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent
+        from backend.storage.config import StorageConfig
+
+        root_binding.open_storage_root(StorageConfig.for_testing(self.storage_root), register=False).release()
+        BootstrapConfigStore(self.config_file).compare_and_set(expect=expect_absent(), local_root=self.storage_root)
+
     def _spawn(self, env):
         # Registered before the readiness probe, so a shutdown that lands while
         # the server is still starting still tears it down.
@@ -1240,7 +1274,7 @@ class AppServer:
             [
                 *interpreter,
                 str(REPO / "prks_app.py"),
-                "--testing",
+                *(() if self._choosable else ("--testing",)),
                 "--host",
                 HOST,
                 "--port",
