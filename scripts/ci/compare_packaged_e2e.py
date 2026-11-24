@@ -15,7 +15,7 @@ import requests
 
 WORKFLOW = ".github/workflows/e2e-classic-distribution-gate.yml"
 FULL_JOB = re.compile(r"Packaged classic bundles \(([1-8])/8\)\Z")
-SMOKE_JOB = "Packaged classic smoke (manual pilot)"
+SMOKE_JOB = "Packaged classic smoke"
 # Smoke runs skip the plan job, so the matrix-named job stays unexpanded.
 SKIPPED_FULL_MATRIX = "Packaged classic bundles (${{ matrix.shard }}/${{ matrix.total }})"
 PLAN_JOB = "Packaged E2E plan"

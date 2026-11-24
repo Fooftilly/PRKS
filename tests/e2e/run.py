@@ -80,7 +80,6 @@ from tests.e2e.policy import (
     save_last_failed,
     select_affected,
     select_features,
-    select_packaged_routine,
     select_smoke,
     service_worker_diff_for_plan,
 )
@@ -1975,14 +1974,6 @@ def build_parser():
         help="Run the curated smoke suite (small essential shell + critical workflows).",
     )
     parser.add_argument(
-        "--packaged-routine",
-        action="store_true",
-        help=(
-            "Run the packaged gate's routine set: smoke plus every offline and "
-            "local-store durability module (used on the bundled frontend)."
-        ),
-    )
-    parser.add_argument(
         "--packaged-plan",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -2113,7 +2104,6 @@ def _resolve_selection(args, all_ids):
         1
         for flag in (
             bool(args.smoke),
-            bool(args.packaged_routine),
             bool(args.feature),
             bool(args.affected),
             bool(args.last_failed),
@@ -2123,7 +2113,7 @@ def _resolve_selection(args, all_ids):
     )
     if selection_modes > 1:
         raise ValueError(
-            "use only one of: positional tests, --smoke, --packaged-routine, --feature, "
+            "use only one of: positional tests, --smoke, --feature, "
             "--affected, --last-failed"
         )
 
@@ -2168,10 +2158,6 @@ def _resolve_selection(args, all_ids):
     if args.smoke:
         ids = select_smoke(all_ids)
         return "smoke", ids, "%d curated smoke tests" % len(ids)
-
-    if args.packaged_routine:
-        ids = select_packaged_routine(all_ids)
-        return "packaged-routine", ids, "%d smoke and offline tests" % len(ids)
 
     if args.feature:
         names = []
@@ -2316,8 +2302,8 @@ def _main(argv=None) -> int:
         return 1
 
     if args.packaged_plan:
-        # Packaged gate: full when packaging paths change, else the routine
-        # set. An unusable comparison fails closed to the full run.
+        # Packaged gate: full when packaging paths change, else the smoke
+        # job. An unusable comparison fails closed to the full run.
         force = (os.environ.get("PRKS_E2E_CI_FORCE_FULL") or "").strip() in ("1", "true", "yes", "on")
         try:
             paths = [] if force else list_changed_paths(REPO, base=args.base, include_untracked=False)

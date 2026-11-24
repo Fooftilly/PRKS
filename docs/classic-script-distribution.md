@@ -48,12 +48,12 @@ earlier six-shard width; since November 2026 both gates run eight shards, and
 `scripts/ci/compare_e2e_gates.py` and `compare_packaged_e2e.py` only accept
 eight-shard runs, so compare new runs against a new eight-shard baseline.
 
-Before considering any future routine-PR smoke policy, compare full and
-smoke **on the same commit and runner class**, measure actual runner cost,
-then document which failure classes would be missed (in particular
-bundled-only, offline/SW upgrade, PDF and shared frontend regressions).
-Keep complete packaged validation for releases and high-risk changes, and
-require maintainer approval before changing any automatic gate.
+Since November 2026 (maintainer decision), routine pull requests run only the
+packaged smoke job, beside the Docker build and service worker upgrade/rollback
+jobs. Pull requests that change packaging paths (`PACKAGED_FULL_PATHS` in
+`tests/e2e/policy.py`) and the nightly master CI still run every test on the
+packaged frontend, so a bundled-only regression from another change surfaces
+on master the night after it merges. See `docs/e2e-performance.md`.
 
 ## Build and deterministic output
 

@@ -49,7 +49,7 @@ def full_jobs() -> list[dict]:
         job("Packaged E2E plan", 12),
         *(job(f"Packaged classic bundles ({n}/8)", seconds)
           for n, seconds in enumerate((371, 372, 371, 372, 372, 371, 372, 372), start=1)),
-        job("Packaged classic smoke (manual pilot)", 0, "skipped"),
+        job("Packaged classic smoke", 0, "skipped"),
     ]
 
 
@@ -57,7 +57,7 @@ def smoke_jobs() -> list[dict]:
     return [
         job("Docker classic bundle and rollback build smoke", 18),
         job("Classic bundle SW upgrade and rollback (real Chromium)", 21),
-        job("Packaged classic smoke (manual pilot)", 53),
+        job("Packaged classic smoke", 53),
         job("Packaged E2E plan", 0, "skipped"),
         job(SKIPPED_FULL_MATRIX, 0, "skipped"),
     ]
@@ -163,7 +163,7 @@ class PackagedCostComparisonTests(unittest.TestCase):
                 with self.assertRaises(InvalidBenchmark):
                     summarize(run(1), changed, mode)
                 changed = [dict(j) for j in jobs]
-                selected = "Packaged classic smoke (manual pilot)" if mode == "smoke" else "Packaged classic bundles (1/8)"
+                selected = "Packaged classic smoke" if mode == "smoke" else "Packaged classic bundles (1/8)"
                 for value in changed:
                     if value["name"] == selected:
                         value["conclusion"] = "failure"
