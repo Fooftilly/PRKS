@@ -1,9 +1,9 @@
 """HTTP authentication boundary (``docs/postgresql-architecture.md`` §9.3, §9.4, §10.4; L-ID-1 #626).
 
 Every web process uses it (PG-C2 #641; ``PRKS_AUTH`` picks the mode,
-:mod:`backend.domain.identity.web_start`). ``backend.server`` calls
+:mod:`backend.domain.identity.web_start`). ``backend.web.dispatch`` calls
 :func:`handle` once for every ``/api/`` request, before any route runs, and
-either dispatches the route (:class:`Admitted`) or sends the :class:`Reply`.
+either runs the route (:class:`Admitted`) or sends the :class:`Reply`.
 
 **Identity routes** (no Library epoch; they act on no Library content):
 
@@ -68,7 +68,7 @@ import ipaddress
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from email.message import Message
+from backend.web.http import Headers
 from typing import Any, Optional, Union
 
 from backend.db.errors import DatabaseError, TransientDatabaseError
@@ -139,7 +139,7 @@ class Admitted:
     """Run the route; ``epoch`` is the Library's current epoch for the response header.
 
     ``context`` is the :class:`RequestContext` admission authorized: the
-    server keeps it as ``_prks_request_context`` and every route passes it to
+    dispatcher keeps it as ``Request.context`` and every route passes it to
     the domain commands, so a route acts for this session and claimed epoch.
     """
 
@@ -159,7 +159,7 @@ Outcome = Union[Reply, Admitted, _Answered]
 class HttpRequest:
     method: str
     path: str
-    headers: Message
+    headers: Headers
     peer: str  # the TCP peer address
     request_host: tuple[str, Optional[int]]  # the validated Host header
     scheme: str  # "https" when PRKS itself served the request over TLS
@@ -171,7 +171,7 @@ class HttpRequest:
     route_fences_epoch: bool = False
 
     def all(self, name: str) -> list[str]:
-        return list(self.headers.get_all(name) or [])
+        return self.headers.get_all(name)
 
 
 # --- replies -------------------------------------------------------------------------------

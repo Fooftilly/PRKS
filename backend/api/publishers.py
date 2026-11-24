@@ -13,16 +13,11 @@ admitted request's context on the served Library's database. The commands
 open the transactions, so authorization stays in ``library_query`` and
 ``library_command``, and a write's maintenance and epoch fence in
 ``library_command``.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+The commands are imported when a route runs: the served app loads no
+PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 """
 
 from __future__ import annotations
-
-from typing import Any, Optional
 
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.publishers import (
@@ -31,105 +26,70 @@ from backend.api_contract.publishers import (
     PublisherDeleted,
     PublisherInUse,
 )
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
 
-COLLECTION = "/api/publishers"
-_PREFIX = COLLECTION + "/"
 
-
-def _commands() -> Any:
-    """``backend.domain.people.publisher_commands``, imported when a route runs.
-
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
+def in_use(req: Request) -> Response:
     from backend.domain.people import publisher_commands
 
-    return publisher_commands
+    if req.query_value("used") in ("1", "true", "yes"):
+        return json_response(req, 200, dump_response(PublisherInUse, publisher_commands.in_use(*req.actor)))
+    return json_response(req, 200, [])
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a publisher route ran without an admitted request context")
-    return db.database, ctx
+def create(req: Request) -> Response:
+    from backend.domain.people import publisher_commands
 
-
-def _is_aliases(path: str) -> bool:
-    return path.startswith(_PREFIX) and path.endswith("/aliases")
-
-
-def _aliases_owner(path: str) -> Optional[str]:
-    """The publisher id of ``/api/publishers/:id/aliases``, else ``None``."""
-    parts = path.split("/")
-    if len(parts) == 5 and parts[4] == "aliases":
-        return parts[3]
-    return None
-
-
-def handle_get(handler: Any, db: Any, path: str, query: dict[str, list[str]]) -> bool:
-    if path != COLLECTION:
-        return False
-    if query.get("used", [""])[0] in ("1", "true", "yes"):
-        handler.send_json(200, dump_response(PublisherInUse, _commands().in_use(*_actor(handler, db))))
-    else:
-        handler.send_json(200, [])
-    return True
-
-
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path == COLLECTION:
-        request, err = parse_request(PublisherCreateRequest, data)
-        if err is not None or request is None:
-            handler.send_json(400, err)
-            return True
-        try:
-            # Domain already committed on return; send its dict as is
-            # (docs/api-contract-boundary.md).
-            out = _commands().create(*_actor(handler, db), request.name)
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, out)
-        return True
-    if not _is_aliases(path):
-        return False
-    publisher_id = _aliases_owner(path)
-    if publisher_id is None:
-        handler.send_error(404, "API endpoint not found")
-        return True
-    alias_request, err = parse_request(PublisherAliasRequest, data)
-    if err is not None or alias_request is None:
-        handler.send_json(400, err)
-        return True
+    parsed, err = parse_request(PublisherCreateRequest, req.data)
+    if err is not None or parsed is None:
+        return json_response(req, 400, err)
     try:
-        _commands().add_alias(*_actor(handler, db), publisher_id, alias_request.alias.strip())
+        # Domain already committed on return; send its dict as is
+        # (docs/api-contract-boundary.md).
+        out = publisher_commands.create(*req.actor, parsed.name)
     except ValueError as e:
-        handler.send_json(400, {"error": str(e)})
-        return True
-    handler.send_json(200, {"status": "added"})
-    return True
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, out)
 
 
-def handle_delete(handler: Any, db: Any, path: str, query: dict[str, list[str]]) -> bool:
-    if _is_aliases(path):
-        publisher_id = _aliases_owner(path)
-        if publisher_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        # parse_qs already decoded the value once; a second unquote mangled
-        # aliases that contain "%" (and turned "%2500" into NUL).
-        alias = (query.get("alias") or [""])[0]
-        if not alias.strip():
-            handler.send_json(400, {"error": "missing alias"})
-            return True
-        if _commands().delete_alias(*_actor(handler, db), publisher_id, alias):
-            handler.send_json(200, dump_response(PublisherDeleted, {"status": "deleted"}))
-        else:
-            handler.send_json(404, {"error": "alias not found"})
-        return True
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        _commands().delete(*_actor(handler, db), path.split("/")[-1])
-        handler.send_json(200, dump_response(PublisherDeleted, {"status": "deleted"}))
-        return True
-    return False
+def add_alias(req: Request) -> Response:
+    from backend.domain.people import publisher_commands
+
+    parsed, err = parse_request(PublisherAliasRequest, req.data)
+    if err is not None or parsed is None:
+        return json_response(req, 400, err)
+    try:
+        publisher_commands.add_alias(*req.actor, req.params["publisher_id"], parsed.alias.strip())
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, {"status": "added"})
+
+
+def delete_alias(req: Request) -> Response:
+    from backend.domain.people import publisher_commands
+
+    # parse_qs already decoded the value once; a second unquote mangled
+    # aliases that contain "%" (and turned "%2500" into NUL).
+    alias = req.query_value("alias")
+    if not alias.strip():
+        return json_response(req, 400, {"error": "missing alias"})
+    if publisher_commands.delete_alias(*req.actor, req.params["publisher_id"], alias):
+        return json_response(req, 200, dump_response(PublisherDeleted, {"status": "deleted"}))
+    return json_response(req, 404, {"error": "alias not found"})
+
+
+def delete(req: Request) -> Response:
+    from backend.domain.people import publisher_commands
+
+    publisher_commands.delete(*req.actor, req.params["publisher_id"])
+    return json_response(req, 200, dump_response(PublisherDeleted, {"status": "deleted"}))
+
+
+ROUTES = (
+    route("GET", "/api/publishers", in_use),
+    route("POST", "/api/publishers", create),
+    route("DELETE", "/api/publishers/{publisher_id}", delete),
+    route("POST", "/api/publishers/{publisher_id}/aliases", add_alias),
+    route("DELETE", "/api/publishers/{publisher_id}/aliases", delete_alias),
+)

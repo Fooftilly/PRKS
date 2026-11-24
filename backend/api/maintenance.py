@@ -22,8 +22,8 @@ Every step is the PostgreSQL maintenance lane's:
 
 Every route requires ``ADMIN_LIBRARY`` in its own authorized snapshot first,
 so only an owner learns whether a backup or a staged upload exists.
-``AccessRefused`` propagates to ``server.py``, which answers it as every
-PostgreSQL route does. Maintenance SQL and the staged files stay in
+``AccessRefused`` propagates to the dispatcher (``backend.web.dispatch``),
+which answers it as every PostgreSQL route does. Maintenance SQL and the staged files stay in
 ``backend/domain/maintenance``; this module maps requests and answers.
 """
 
@@ -31,9 +31,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Callable, Optional
+
+from backend.domain.maintenance.upload import RestoreError, backup_max_upload_bytes, stream_upload_to_file
+from backend.log_safety import safe_error_type, safe_log_id
+from backend.web.hosts import octet_stream_content_type_allowed
+from backend.web.http import Request, Response, Write, json_response
+from backend.web.routing import Body, route
 
 LOGGER = logging.getLogger("prks.api.maintenance")
 
@@ -125,14 +132,12 @@ def stage_upload(library: Any, ctx: Any, root: str, receive: Callable[[str], Non
     return {"token": result.token, "verified": True, "summary": result.summary, "warnings": []}
 
 
-def restore_staged(library: Any, ctx: Any, root: str, data: Any) -> tuple[int, dict[str, Any], Optional[int]]:
+def restore_staged(library: Any, ctx: Any, root: str, data: dict[str, Any]) -> tuple[int, dict[str, Any], Optional[int]]:
     """Restore a staged archive over the actor's Library: ``(status, body, new epoch or None)``."""
     from backend.domain.maintenance import jobs as backup_jobs
     from backend.domain.maintenance import restore, staged
     from backend.domain.objects.jobs import root_storage
 
-    if not isinstance(data, dict):
-        return 400, {"error": "JSON object body required"}, None
     backup_jobs.authorize_admin(library.database, ctx)
     token = data.get("token")
     if data.get("confirm") != CONFIRM:
@@ -163,3 +168,128 @@ def restore_staged(library: Any, ctx: Any, root: str, data: Any) -> tuple[int, d
 
 def ndjson(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+# -- routes -----------------------------------------------------------------------------
+
+
+def progress(req: Request) -> Response:
+    """``POST /api/backups/progress``: NDJSON progress lines until the backup job ends."""
+    library, ctx = req.library, req.ctx
+
+    def stream(write: Write) -> None:
+        def write_line(payload: dict[str, Any]) -> None:
+            write(ndjson(payload))
+
+        try:
+            stream_backup(library, ctx, write_line)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:
+            LOGGER.error("backup_progress_failed error_type=%s request_id=%s",
+                         safe_error_type(exc), safe_log_id(req.request_id))
+            write_line({"phase": "failed", "percent": 0, "error": "Backup could not be created."})
+
+    return Response(200, [("Content-Type", "application/x-ndjson; charset=utf-8"),
+                          ("Cache-Control", "no-store")], stream=stream)
+
+
+def _stage_length(req: Request) -> "int | Response":
+    """The upload's declared length, or the refusal of its headers."""
+    types = req.headers.get_all("Content-Type")
+    if len(types) != 1 or not octet_stream_content_type_allowed(types[0]):
+        LOGGER.info("request_rejected reason=unsupported_media_type request_id=%s", safe_log_id(req.request_id))
+        return json_response(req, 415, {"error": "unsupported_media_type"})
+    raw_length = req.headers.get("Content-Length")
+    try:
+        content_length = int(raw_length) if raw_length is not None else -1
+    except ValueError:
+        content_length = -1
+    if content_length < 0:
+        return json_response(req, 400, {"error": "invalid Content-Length", "code": "invalid_request"})
+    if content_length > backup_max_upload_bytes():
+        return json_response(req, 413, {"error": "request_too_large"})
+    return content_length
+
+
+def stage(req: Request) -> Response:
+    """``POST /api/backups/stage``: stream the uploaded archive to the staging directory.
+
+    The body is read with the Processing upload's idle timeout and deadline,
+    so a stalled client cannot hold a request thread; every answer that
+    leaves it unread closes the connection.
+    """
+    from backend.api import processing as processing_api
+
+    root = req.app.require_storage().root
+    content_length = _stage_length(req)
+    if isinstance(content_length, Response):
+        return content_length
+    previous_timeout = req.body.gettimeout()
+
+    def receive(dest: str) -> None:
+        body = processing_api.TimedBody(req.body, content_length)
+        stream_upload_to_file(body, dest, expected_length=content_length, max_bytes=backup_max_upload_bytes())
+
+    try:
+        summary = stage_upload(req.library, req.ctx, root, receive)
+    except processing_api.UploadTimedOut:
+        return json_response(req, 408, {"error": "The backup upload stalled; try again.",
+                                        "reason": "upload_timeout", "request_id": req.request_id})
+    except StageRefused as exc:
+        return json_response(req, exc.status, {"error": exc.message, "reason": exc.reason,
+                                               "request_id": req.request_id})
+    except RestoreError as exc:
+        return json_response(req, exc.http_status, {"error": exc.message, "reason": exc.reason,
+                                                    "request_id": req.request_id})
+    finally:
+        req.body.settimeout(previous_timeout)
+    return json_response(req, 200, summary)
+
+
+def restore(req: Request) -> Response:
+    """``POST /api/backups/restore``: restore the staged archive over the actor's Library."""
+    status, body, epoch = restore_staged(req.library, req.ctx, req.app.require_storage().root, req.data)
+    if epoch is not None:
+        # The Library the browser knew is gone: it reads the new epoch.
+        req.library_epoch = epoch
+    if status != 200:
+        body = {**body, "request_id": req.request_id}
+    return json_response(req, status, body)
+
+
+def download(req: Request) -> Response:
+    """``GET /api/backups/download?token=<run>``: a published archive of the actor's Library."""
+    root = req.app.require_storage().root
+    path = archive_for_download(req.library, req.ctx, root, req.query_value("token"))
+    if path is None:
+        return json_response(req, 404, {"error": "Backup is not available.", "reason": "unknown_token",
+                                        "request_id": req.request_id})
+    handle = open(path, "rb")
+    try:
+        size = os.fstat(handle.fileno()).st_size
+    except BaseException:
+        handle.close()
+        raise
+
+    def stream(write: Write) -> None:
+        while True:
+            chunk = handle.read(65536)
+            if not chunk:
+                return
+            write(chunk)
+
+    return Response(200, [
+        ("Content-Type", "application/octet-stream"),
+        ("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"'),
+        ("Cache-Control", "no-store"),
+        ("Content-Length", str(size)),
+    ], stream=stream, cleanup=handle.close)
+
+
+ROUTES = (
+    route("POST", "/api/backups/progress", progress),
+    route("POST", "/api/backups/stage", stage, Body.STREAM),
+    route("POST", "/api/backups/restore", restore),
+    route("GET", "/api/backups/download", download),
+)
