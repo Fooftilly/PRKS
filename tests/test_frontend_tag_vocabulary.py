@@ -70,7 +70,7 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         at = self.store.index('function coalesceWorkTag(')
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('tagCreationDependency(', body)
-        self.assertIn('depends_on: createOp ? [createOp.op_id] : []', body)
+        self.assertIn('dependsOn: createOp ? [createOp.op_id] : []', body)
         self.assertIn('assertTagIsNotBeingDeleted(', body)
         self.assertIn('assertTagIsNotBeingMerged(', body)
 

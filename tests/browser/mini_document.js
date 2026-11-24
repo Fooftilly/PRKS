@@ -67,6 +67,8 @@ function makeEl(tag) {
             el.classList.add(value);
         } else if (name === 'value') {
             el.value = String(value);
+        } else if (name.indexOf('data-') === 0) {
+            el.dataset[name.slice(5).replace(/-([a-z])/g, function (_m, c) { return c.toUpperCase(); })] = String(value);
         }
     };
     el.getAttribute = function (name) {
