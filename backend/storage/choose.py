@@ -50,7 +50,6 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from backend.db.errors import DatabaseError
 
 from backend.storage import paths, resolver
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_unchanged
@@ -94,16 +93,11 @@ def _refuse_unless_setup_unconfigured(setup_state: SetupState) -> None:
     Setup commits the instance row before it writes the marker; a setup that
     stopped between the two leaves the marker unclaimed while the database
     already names the root, and setup on any other folder is then refused.
+
+    A database error propagates: each caller words it for its own reader
+    (the setup page answers 503, the command line names its settings).
     """
-    try:
-        state = setup_state()
-    except DatabaseError as exc:  # DatabaseConfigError too: no usable settings
-        raise _refuse(
-            "choose_database_unavailable",
-            "PRKS could not read its database to check that setup has not started. "
-            "Run the command with the same database settings as PRKS (PRKS_DATABASE_URL).",
-        ) from exc
-    if state != SETUP_UNCONFIGURED:
+    if setup_state() != SETUP_UNCONFIGURED:
         raise _refuse("choose_root_claimed", "Setup has already started on the current Library folder.")
 
 

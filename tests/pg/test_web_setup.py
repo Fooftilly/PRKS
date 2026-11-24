@@ -427,6 +427,32 @@ class SetupStorageChoiceTests(SetupHttpTests):
         self.assertFalse(os.path.exists(target))
         self.assertIsNone(_marker(root).instance_id)
 
+    def test_a_database_error_at_the_locked_recheck_is_unavailable_not_a_command_hint(self) -> None:
+        from backend.db.errors import DatabaseUnavailableError
+        from backend.domain.identity import web_setup as web_setup_mod
+
+        name = self.database()
+        phase, root = self.choosable_phase(name)
+        token = self.issue(name).reveal()
+        port = self.serve(phase)
+        calls: list[int] = []
+        real_read_state = web_setup_mod.read_state
+
+        def fails_the_second_time(db: Any) -> str:
+            calls.append(1)
+            if len(calls) == 2:  # the recheck inside choose_root
+                raise DatabaseUnavailableError()
+            return real_read_state(db)
+
+        target = os.path.join(self.tmp, "unread")
+        with mock.patch.object(web_setup_mod, "read_state", side_effect=fails_the_second_time):
+            status, got = self.choose(port, {"token": token, "folder": target})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(status, 503, got)
+        self.assertNotIn("PRKS_DATABASE_URL", json.dumps(got))
+        self.assertEqual(self.selected(), root)
+        self.assertFalse(os.path.exists(target))
+
     def test_the_token_holder_chooses_a_folder_and_setup_waits_for_a_restart(self) -> None:
         name = self.database()
         phase, root = self.choosable_phase(name)

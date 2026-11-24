@@ -644,6 +644,24 @@ def _database_setup_state(environ):
     return read
 
 
+def _refusing_unreadable(read):
+    """``read``, with a database it cannot read refused in the command's own words."""
+    from backend.db.errors import DatabaseError
+    from backend.storage.errors import StorageRootRefused
+
+    def guarded():
+        try:
+            return read()
+        except DatabaseError as exc:  # DatabaseConfigError too: no usable settings
+            raise StorageRootRefused(
+                "choose_database_unavailable",
+                "PRKS could not read its database to check that setup has not started. "
+                "Run the command with the same database settings as PRKS (PRKS_DATABASE_URL).",
+            ) from exc
+
+    return guarded
+
+
 def run_storage(argv, environ=None, *, out=None, err=None, setup_state=None):
     """``storage choose PATH``: pick the Library folder before setup claims it (#720).
 
@@ -672,7 +690,7 @@ def run_storage(argv, environ=None, *, out=None, err=None, setup_state=None):
     try:
         env = os.environ if environ is None else environ
         chosen = choose_root(
-            args.path, environ=env, setup_state=setup_state or _database_setup_state(env)
+            args.path, environ=env, setup_state=_refusing_unreadable(setup_state or _database_setup_state(env))
         )
     except StorageRootError as exc:
         print(f"PRKS cannot use that folder: {exc.message}", file=stderr)
