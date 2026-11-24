@@ -1,7 +1,7 @@
 """The Position and Argument sync handlers on PostgreSQL (L-R-1 #634).
 
-``tests/test_arguments_parity.py`` proves each operation answers as on
-SQLite. These tests cover what only PostgreSQL has: a refused create that
+:class:`AnswerTests` spells out what each operation answers. The other
+tests cover a refused create that
 leaves nothing although its refusal is ledgered, ids of another Library,
 citations a legacy list cannot pin and Version-aware lists (§8.5), Works
 merged away (§14.2),
@@ -11,6 +11,7 @@ stale operation after a record was deleted and created again under its id.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -24,6 +25,7 @@ from backend.sync.families import FamilyHandler
 from backend.sync.handlers import argument as argument_handlers
 from backend.domain.research import argument_rules
 from tests.pg.test_arguments import ResearchTestCase, pinned, source, target
+from tests.pg.answers import AnswerAssertions
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
 
@@ -525,3 +527,133 @@ class ArgumentDeleteTests(ResearchSyncTestCase):
                      self.targets_op(a, [target("position", self.position("P"))], 0)):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data)[1]["code"], "REVISION_CONFLICT")
+
+
+_MISSING_POSITION = "P-" + "0" * 32
+_MISSING_ARGUMENT = "A-" + "0" * 32
+_MISSING_WORK = "W-" + "0" * 32
+
+
+class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
+    """What the Position and Argument operations answer, spelled out as decision tables."""
+
+    def op(self, operation: str, entity_id: str, payload: dict[str, Any], base: Optional[int] = None,
+           **changes: Any) -> Any:
+        return self.labels.show(self.send(self.envelope(operation, entity_id, payload, base, **changes)))
+
+    def test_positions(self) -> None:
+        position_id = self.labels.name(generate("P"), "<P Claim>")
+        payload = {"name": "  A   claim ", "description": ""}
+        created = {"code": "ACKNOWLEDGED", "position_id": "<P Claim>",
+                   "position": {"description": "", "id": "<P Claim>", "name": "A claim"}}
+        op_id = str(uuid.uuid4())
+        self.assertEqual(self.op("CREATE_POSITION", position_id, payload, op_id=op_id), (200, {**created, "changed": True}))
+        self.assertEqual(self.op("CREATE_POSITION", position_id, payload, op_id=op_id),  # a replay
+                         (200, {**created, "changed": True}))
+        self.assertEqual(self.op("CREATE_POSITION", position_id, {"name": "Other", "description": ""}),
+                         (200, {**created, "changed": False}))
+        invalid = (400, {"code": "INVALID_ENVELOPE"})
+        self.assertEqual(self.op("CREATE_POSITION", "P-1", payload), invalid)
+        self.assertEqual(self.op("CREATE_POSITION", generate("P"), {"name": " ", "description": ""}), invalid)
+        self.assertEqual(self.op("CREATE_POSITION", generate("P"), payload, 0), (400, {"code": "INVALID_BASE_REVISION"}))
+        field = {"field": "name", "value": "B"}
+        set_name = {"code": "ACKNOWLEDGED", "field": "name", "position_id": "<P Claim>", "server_revision": 1,
+                    "value_omitted": True}
+        self.assertEqual(self.op("SET_POSITION_FIELD", position_id, field, 0), (200, {**set_name, "changed": True}))
+        self.assertEqual(self.op("SET_POSITION_FIELD", position_id, field, 0),  # stale, the same value
+                         (200, {**set_name, "changed": False}))
+        clash = {"current_revision": 1, "current_value": "B", "field": "name", "position_id": "<P Claim>",
+                 "requested_value": "C"}
+        self.assertEqual(self.op("SET_POSITION_FIELD", position_id, {"field": "name", "value": "C"}, 0),
+                         (409, {**clash, "code": "REVISION_CONFLICT"}))
+        self.assertEqual(self.op("SET_POSITION_FIELD", position_id, {"field": "name", "value": "C"}, 3),
+                         (400, {**clash, "code": "FUTURE_REVISION"}))
+        self.assertEqual(self.op("SET_POSITION_FIELD", position_id, {"field": "kind", "value": "C"}, 1), invalid)
+        self.assertEqual(self.op("SET_POSITION_FIELD", _MISSING_POSITION, field, 0),
+                         (404, {"code": "ENTITY_NOT_FOUND", "field": "name", "position_id": "<unknown id>"}))
+        self.assertEqual(self.labels.show(self.library.get_position_sync_state(position_id)), {
+            "fields": {"description": {"revision": 0}, "name": {"revision": 1}}, "position_id": "<P Claim>"})
+        argument_id = self.labels.name(generate("A"), "<A Answer>")
+        self.assertEqual(self.op("CREATE_ARGUMENT", argument_id, {
+            "name": "Answer", "kind": "argument", "main_text": "", "sources": [],
+            "targets": [target("position", position_id, "holds")]}),
+            (200, {"argument_id": "<A Answer>", "changed": True, "code": "ACKNOWLEDGED"}))
+        self.assertEqual(self.op("DELETE_POSITION", position_id, {}),
+                         (409, {"code": "POSITION_IN_USE", "position_id": "<P Claim>"}))
+        self.assertEqual(self.op("DELETE_ARGUMENT", argument_id, {}),
+                         (200, {"argument_id": "<A Answer>", "changed": True, "code": "ACKNOWLEDGED"}))
+        deleted = {"code": "ACKNOWLEDGED", "position_id": "<P Claim>"}
+        self.assertEqual(self.op("DELETE_POSITION", position_id, {}), (200, {**deleted, "changed": True}))
+        self.assertEqual(self.op("DELETE_POSITION", position_id, {}), (200, {**deleted, "changed": False}))
+        self.assertEqual(self.op("DELETE_POSITION", position_id, {"x": 1}), invalid)
+        self.assertEqual(self.library.list_positions(), [])
+
+    def test_arguments(self) -> None:
+        one = self.labels.name(self.library.add_work("One"), "<W One>")
+        two = self.labels.name(self.library.add_work("Two"), "<W Two>")
+        claim = self.labels.name(self.position("Claim"), "<P Claim>")
+        base = self.labels.name(self.argument("Base"), "<A Base>")
+        reply = self.labels.name(generate("A"), "<A Reply>")
+
+        def payload(**lists: Any) -> dict[str, Any]:
+            return {"name": "Reply", "kind": "argument", "main_text": "", "sources": [], "targets": [], **lists}
+
+        def ack(argument_id: str = "<A Reply>", **more: Any) -> Any:
+            return (200, {"argument_id": argument_id, "code": "ACKNOWLEDGED", **more})
+
+        self.assertEqual(self.op("CREATE_ARGUMENT", reply, payload(sources=[source(one, "9")])), ack(changed=True))
+        self.assertEqual(self.op("CREATE_ARGUMENT", reply, payload()), ack(changed=False))  # converges
+        for label, lists, expected in (
+                ("<A Missing>", {"sources": [source(_MISSING_WORK)]}, (404, "WORK_NOT_FOUND")),
+                ("<A Unknown>", {"targets": [target("position", _MISSING_POSITION, "holds")]},
+                 (404, "POSITION_NOT_FOUND")),
+                ("<A Verdict>", {"targets": [target("position", claim, "maybe")]}, (409, "INVALID_VERDICT"))):
+            with self.subTest(label=label):
+                refused = self.labels.name(generate("A"), label)
+                self.assertEqual(self.op("CREATE_ARGUMENT", refused, payload(**lists)),
+                                 (expected[0], {"argument_id": label, "code": expected[1]}))
+        invalid = (400, {"code": "INVALID_ENVELOPE"})
+        self.assertEqual(self.op("CREATE_ARGUMENT", generate("A"), payload(sources=[source(one), source(one)])),
+                         invalid)
+        self.assertEqual(self.op("CREATE_ARGUMENT", generate("A"), payload(kind="essay")), invalid)
+        self.assertEqual(self.op("SET_ARGUMENT_FIELD", reply, {"field": "main_text", "value": "Body"}, 0),
+                         ack(changed=True, field="main_text", server_revision=1, value_omitted=True))
+        self.assertEqual(self.op("SET_ARGUMENT_FIELD", reply, {"field": "main_text", "value": "Other"}, 0), (409, {
+            "argument_id": "<A Reply>", "code": "REVISION_CONFLICT", "current_revision": 1, "current_value": "Body",
+            "field": "main_text", "requested_value": "Other"}))
+        self.assertEqual(self.op("SET_ARGUMENT_FIELD", reply, {"field": "kind", "value": "stance"}, 0),
+                         ack(changed=True, field="kind", server_revision=1, value_omitted=True))
+        listed = {"sources": [source(two), source(one, "9")]}
+        self.assertEqual(self.op("SET_ARGUMENT_SOURCES", reply, listed, 0), ack(changed=True, server_revision=1))
+        self.assertEqual(self.op("SET_ARGUMENT_SOURCES", reply, listed, 0), ack(changed=False, server_revision=1))
+        clash = {"argument_id": "<A Reply>", "current_count": 2, "current_revision": 1, "requested_count": 1}
+        stale = {"sources": [source(one)]}
+        self.assertEqual(self.op("SET_ARGUMENT_SOURCES", reply, stale, 0), (409, {**clash, "code": "REVISION_CONFLICT"}))
+        self.assertEqual(self.op("SET_ARGUMENT_SOURCES", reply, stale, 5), (400, {**clash, "code": "FUTURE_REVISION"}))
+        self.assertEqual(self.op("SET_ARGUMENT_SOURCES", reply, {"sources": [source(_MISSING_WORK)]}, 1),
+                         (404, {"argument_id": "<A Reply>", "code": "WORK_NOT_FOUND"}))
+        chosen = [target("argument", base, "opposes"), target("position", claim, "supports")]
+        self.assertEqual(self.op("SET_ARGUMENT_TARGETS", reply, {"targets": chosen}, 0),
+                         ack(changed=True, server_revision=1))
+        self.assertEqual(self.op("SET_ARGUMENT_TARGETS", base, {"targets": [target("argument", reply, "opposes")]}, 0),
+                         (409, {"argument_id": "<A Base>", "code": "ARGUMENT_CYCLE"}))
+        self.assertEqual(self.op("SET_ARGUMENT_TARGETS", reply, {"targets": chosen[:1]}, 0),
+                         (409, {**clash, "code": "REVISION_CONFLICT"}))
+        self.assertEqual(self.op("SET_ARGUMENT_TARGETS", _MISSING_ARGUMENT, {"targets": []}, 0),
+                         (404, {"argument_id": "<unknown id>", "code": "ENTITY_NOT_FOUND"}))
+        self.assertEqual(self.op("DELETE_ARGUMENT", base, {}), (409, {"argument_id": "<A Base>", "code": "ARGUMENT_TARGETED"}))
+        self.answer(self.library.get_argument_sync_state(reply), {
+            "argument_id": "<A Reply>", "fields": {"kind": {"revision": 1}, "main_text": {"revision": 1},
+                                                   "name": {"revision": 0}},
+            "sources": {"revision": 1}, "targets": {"revision": 1}})
+        self.answer(self.library.get_argument(reply), {
+            "kind": "stance", "main_text": "Body", "name": "Reply",
+            "sources": [{"order_index": 0, "pages": "", "work_id": "<W Two>"},
+                        {"order_index": 1, "pages": "9", "work_id": "<W One>"}],
+            "targets": [{"id": "<A Base>", "order_index": 0, "verdict_id": "opposes"},
+                        {"id": "<P Claim>", "order_index": 1, "verdict_id": "supports"}]})
+        self.assertEqual(self.op("DELETE_ARGUMENT", reply, {}), ack(changed=True))
+        self.assertEqual(self.op("DELETE_ARGUMENT", base, {}), ack("<A Base>", changed=True))
+        self.assertEqual(self.op("DELETE_ARGUMENT", base, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(self.library.list_arguments(), [])
+

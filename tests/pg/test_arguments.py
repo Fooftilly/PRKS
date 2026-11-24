@@ -1,7 +1,7 @@
-"""Positions, Arguments and Stances, their targets and citations on PostgreSQL: what parity cannot show (L-R-1 #634).
+"""Positions, Arguments and Stances, their targets and citations on PostgreSQL (L-R-1 #634).
 
-``tests/test_arguments_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: refused creates that leave
+:class:`AnswerTests` spells out what the facade answers. The other tests
+cover refused creates that leave
 nothing, scopes a delete moves on, citations pinned to a Version
 (``docs/work-identity-model.md`` §8.5), legacy or Version-aware, and the
 Work delete that removes them, Library isolation, and concurrent writers
@@ -22,6 +22,7 @@ from backend.domain.works import commands, merge, notes
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
+from tests.pg.answers import AnswerAssertions
 from tests.pg.test_concepts import ConceptTestCase
 from tests.narrowing import require
 
@@ -604,3 +605,208 @@ class ConcurrencyTests(ResearchTestCase):
         # Argument is the notes slice's rule.
         self.assertEqual(contender, (True, 2))
         self.assertIsNone(self.library.get_argument(b))
+
+
+_MISSING_POSITION = "P-" + "0" * 32
+_MISSING_ARGUMENT = "A-" + "0" * 32
+_MISSING_WORK = "W-" + "0" * 32
+
+
+class AnswerTests(AnswerAssertions, ResearchTestCase):
+    """What the Position and Argument calls answer and refuse, spelled out."""
+
+    def refusal(self, call: Any, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
+        with self.assertRaises(ResearchError) as caught:
+            call(*args, **kwargs)
+        return caught.exception.code, str(caught.exception), caught.exception.http_status
+
+    def named(self, entity_id: str, label: str) -> str:
+        return self.labels.name(entity_id, label)
+
+    def test_positions(self) -> None:
+        claim = self.named(self.position("  A   claim ", "About"), "<P claim>")
+        self.named(self.position("b claim"), "<P b>")
+        for args, expected in ((("  ",), ("invalid_name", "Name is required.", 400)),
+                               (("a\x01",), ("invalid_name", "Name contains invalid characters.", 400)),
+                               (("x" * 241,), ("invalid_name", "Name is too long.", 400)),
+                               (("Ok", "\x07"), ("invalid_text", "Text contains invalid characters.", 400))):
+            with self.subTest(args=[arg[:8] for arg in args]):
+                self.assertEqual(self.refusal(self.library.create_position, *args), expected)
+        self.answer(self.library.update_position(claim, name="Renamed"), {
+            "arguments": [], "created_at": "<s>", "description": "About", "id": "<P claim>", "name": "Renamed",
+            "updated_at": "<s>"})
+        self.answer(self.library.update_position(claim, name="Renamed", description="New"),
+                    {"description": "New", "name": "Renamed"})
+        not_found = ("not_found", "Position not found.", 404)
+        for position_id, kwargs, expected in (
+                (claim, {}, ("nothing_to_update", "Nothing to update.", 400)),
+                (_MISSING_POSITION, {"name": "X"}, not_found), (" ", {"name": "X"}, not_found),
+                (claim, {"name": ""}, ("invalid_name", "Name is required.", 400)),
+                (claim, {"description": 3}, ("invalid_text", "Text must be a string.", 400))):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.refusal(self.library.update_position, position_id, **kwargs), expected)
+        answer = self.named(self.argument("Answer", targets=[target("position", claim, "opposes")]), "<A Answer>")
+        self.answer(self.library.get_position(claim), {
+            "arguments": [{"id": "<A Answer>", "kind": "argument", "name": "Answer", "verdict_id": "opposes",
+                           "verdict_label": "Opposes"}],
+            "description": "New", "id": "<P claim>", "name": "Renamed"})
+        self.assertIsNone(self.library.get_position(_MISSING_POSITION))
+        self.answer(self.library.get_position_sync_state(claim), {
+            "fields": {"description": {"revision": 1}, "name": {"revision": 1}}, "position_id": "<P claim>"})
+        self.answer(self.library.list_positions(), [
+            {"created_at": "<s>", "description": "", "id": "<P b>", "name": "b claim", "updated_at": "<s>"},
+            {"created_at": "<s>", "description": "New", "id": "<P claim>", "name": "Renamed", "updated_at": "<s>"}])
+        self.assertEqual(self.refusal(self.library.delete_position, claim), (
+            "position_in_use", "This Position is still targeted by an Argument or Stance.", 409))
+        self.answer(self.library.replace_argument_targets(answer, []), {
+            "created_at": "<s>", "id": "<A Answer>", "kind": "argument", "main_text": "", "name": "Answer",
+            "responses": [], "sources": [], "targets": [], "updated_at": "<s>"})
+        self.assertIsNone(self.library.delete_position(claim))
+        self.assertEqual(self.refusal(self.library.delete_position, claim), not_found)
+        self.answer(self.library.list_positions(), [{"id": "<P b>", "name": "b claim"}])
+
+    def test_arguments_and_their_lists(self) -> None:
+        one = self.named(self.library.add_work("One"), "<W One>")
+        two = self.named(self.library.add_work("Two"), "<W Two>")
+        plato = self.named(self.library.add_person("", "Plato"), "<PE Plato>")
+        self.library.add_role(plato, one, "Author")
+        claim = self.named(self.position("Claim"), "<P Claim>")
+        base = self.named(self.argument("Base", "stance"), "<A Base>")
+        reply = self.named(self.argument("Reply", sources=[source(one, " 514a "), source(two)],
+                                         targets=[target("argument", base, "opposes"),
+                                                  target("position", claim, "supports")]), "<A Reply>")
+        plato_cited = {"authors": [{"credit_name": None, "first_name": "", "id": "<PE Plato>", "last_name": "Plato",
+                                    "order_index": 0, "role_type": "Author"}],
+                       "pages": "514a", "work_id": "<W One>", "work_title": "One"}
+        two_cited = {"authors": [], "pages": "", "work_id": "<W Two>", "work_title": "Two"}
+        base_target = {"id": "<A Base>", "kind": "stance", "name": "Base", "type": "argument", "verdict_id": "opposes",
+                       "verdict_label": "Opposes"}
+        claim_target = {"id": "<P Claim>", "name": "Claim", "type": "position"}
+        self.answer(self.library.get_argument(base), {
+            "created_at": "<s>", "id": "<A Base>", "kind": "stance", "main_text": "", "name": "Base",
+            "responses": [{"id": "<A Reply>", "kind": "argument", "name": "Reply", "verdict_id": "opposes",
+                           "verdict_label": "Opposes"}], "sources": [], "targets": [], "updated_at": "<s>"})
+        reply_read = {
+            "created_at": "<s>", "id": "<A Reply>", "kind": "argument", "main_text": "", "name": "Reply",
+            "responses": [], "updated_at": "<s>",
+            "sources": [{**plato_cited, "order_index": 0}, {**two_cited, "order_index": 1}],
+            "targets": [{**base_target, "order_index": 0},
+                        {**claim_target, "order_index": 1, "verdict_id": "supports", "verdict_label": "Supports"}]}
+        self.answer(self.library.get_argument(reply), reply_read)
+        unchanged = {"fields": {"kind": {"revision": 0}, "main_text": {"revision": 0}, "name": {"revision": 0}},
+                     "sources": {"revision": 0}, "targets": {"revision": 0}}
+        self.answer(self.library.get_argument_sync_state(reply), {**unchanged, "argument_id": "<A Reply>"})
+        self.assertIsNone(self.library.get_argument(_MISSING_ARGUMENT))
+        self.answer(self.library.get_position(claim), {"arguments": [
+            {"id": "<A Reply>", "kind": "argument", "name": "Reply", "verdict_id": "supports",
+             "verdict_label": "Supports"}]})
+        base_row = {"created_at": "<s>", "id": "<A Base>", "kind": "stance", "name": "Base", "response_count": 1,
+                    "sources": [], "targets": [], "updated_at": "<s>"}
+        self.answer(self.library.list_arguments(), [
+            base_row, {"id": "<A Reply>", "response_count": 0, "sources": reply_read["sources"],
+                       "targets": reply_read["targets"]}])
+        self.answer(self.library.list_arguments("stance"), [base_row])
+        self.assertEqual(self.library.list_verdicts(), [
+            {"enabled": 1, "id": "supports", "label": "Supports", "sort_order": 1},
+            {"enabled": 1, "id": "opposes", "label": "Opposes", "sort_order": 2},
+            {"enabled": 1, "id": "qualifies", "label": "Qualifies", "sort_order": 3},
+            {"enabled": 1, "id": "holds", "label": "Holds", "sort_order": 4}])
+        self.assertEqual(self.refusal(self.library.list_arguments, "essay"),
+                         ("invalid_kind", "Invalid Argument kind.", 400))
+        self.answer(self.library.update_argument(reply, name="Reply 2", kind="stance", main_text="Body"),
+                    {"name": "Reply 2", "kind": "stance", "main_text": "Body"})
+        for argument_id, kwargs, expected in (
+                (reply, {"name": "X", "kind": "essay"}, ("invalid_kind", "Kind must be argument or stance.", 400)),
+                (reply, {}, ("nothing_to_update", "Nothing to update.", 400)),
+                (_MISSING_ARGUMENT, {"name": "X"}, ("not_found", "Argument not found.", 404))):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.refusal(self.library.update_argument, argument_id, **kwargs), expected)
+        self.answer(self.library.replace_argument_sources(reply, [source(two, "3"), source(one, "514a")]), {
+            "sources": [{**two_cited, "pages": "3", "order_index": 0}, {**plato_cited, "order_index": 1}]})
+        for listed, expected in (
+                ("x", ("invalid_sources", "Sources must be a JSON array.", 400)),
+                ([3], ("invalid_sources", "Each source must be an object.", 400)),
+                ([{"pages": ""}], ("invalid_sources", "Each source needs a work_id.", 400)),
+                ([source(one), source(one, "2")], ("invalid_sources", "Duplicate source Work.", 400)),
+                ([source(one, "x" * 101)], ("invalid_pages", "Pages is too long.", 400)),
+                ([source(_MISSING_WORK)], ("work_not_found", "Source Work not found.", 404))):
+            with self.subTest(sources=str(listed)[:30]):
+                self.assertEqual(self.refusal(self.library.replace_argument_sources, reply, listed), expected)
+        self.answer(self.library.replace_argument_targets(
+            reply, [target("position", claim, "holds"), target("argument", base, "opposes")]), {
+            "targets": [{**claim_target, "order_index": 0, "verdict_id": "holds", "verdict_label": "Holds"},
+                        {**base_target, "order_index": 1}]})
+        cycle = ("argument_cycle", "That target would create an Argument response cycle.", 409)
+        for listed, expected in (
+                ("x", ("invalid_targets", "Targets must be a JSON array.", 400)),
+                ([3], ("invalid_targets", "Each target must be an object.", 400)),
+                ([{"type": "work", "id": "x", "verdict_id": "holds"}],
+                 ("invalid_targets", "Target type must be position or argument.", 400)),
+                ([target("position", " ", "holds")], ("invalid_targets", "Target id is required.", 400)),
+                ([target("position", claim, "")], ("invalid_verdict", "Every target requires a verdict.", 400)),
+                ([target("position", claim, "maybe")], ("invalid_verdict", "Unknown verdict.", 400)),
+                ([target("position", claim, "holds"), target("position", claim, "opposes")],
+                 ("invalid_targets", "Duplicate Position target.", 400)),
+                ([target("position", _MISSING_POSITION, "holds")], ("position_not_found", "Position not found.", 404)),
+                ([target("argument", "A-x!", "holds")], ("invalid_targets", "Target Argument id is invalid.", 400)),
+                ([target("argument", _MISSING_ARGUMENT, "holds")],
+                 ("argument_not_found", "Target Argument not found.", 404)),
+                ([target("argument", reply, "holds")], cycle)):
+            with self.subTest(targets=str(listed)[:40]):
+                self.assertEqual(self.refusal(self.library.replace_argument_targets, reply, listed), expected)
+        self.assertEqual(self.refusal(self.library.replace_argument_targets, base,
+                                      [target("argument", reply, "holds")]), cycle)
+        self.answer(self.library.get_argument_sync_state(reply), {
+            "argument_id": "<A Reply>", "fields": {"kind": {"revision": 1}, "main_text": {"revision": 1},
+                                                   "name": {"revision": 1}},
+            "sources": {"revision": 1}, "targets": {"revision": 1}})
+        self.answer(self.library.get_argument_sync_state(base), {**unchanged, "argument_id": "<A Base>"})
+        self.answer(self.library.get_argument(base), {"responses": [
+            {"id": "<A Reply>", "kind": "stance", "name": "Reply 2", "verdict_id": "opposes",
+             "verdict_label": "Opposes"}]})
+
+    def test_refused_creates(self) -> None:
+        one = self.library.add_work("One")
+        claim = self.position("Claim")
+        for lists, expected in (
+                ({"name": " "}, ("invalid_name", "Name is required.", 400)),
+                ({"kind": "essay"}, ("invalid_kind", "Kind must be argument or stance.", 400)),
+                ({"main_text": "\x07"}, ("invalid_text", "Text contains invalid characters.", 400)),
+                ({"sources": "x"}, ("invalid_sources", "Sources must be a JSON array.", 400)),
+                ({"sources": [{"work_id": _MISSING_WORK}]}, ("work_not_found", "Source Work not found.", 404)),
+                ({"targets": [target("position", claim, "maybe")]}, ("invalid_verdict", "Unknown verdict.", 400)),
+                ({"sources": [source(one)], "targets": [target("argument", _MISSING_ARGUMENT, "holds")]},
+                 ("argument_not_found", "Target Argument not found.", 404))):
+            with self.subTest(lists=sorted(lists)):
+                self.assertEqual(self.refusal(self.library.create_argument, **{"name": "X", "kind": "argument",
+                                                                               **lists}), expected)
+        self.assertEqual(self.library.list_arguments(), [])
+
+    def test_delete(self) -> None:
+        a = self.named(self.argument("A"), "<A A>")
+        b = self.named(self.argument("B", targets=[target("argument", a, "supports")]), "<A B>")
+        self.assertEqual(self.refusal(self.library.delete_argument, a), (
+            "argument_targeted", "Another Argument or Stance still responds to this record.", 409))
+        self.library.replace_argument_targets(b, [])
+        work = self.library.add_work("W")
+        self.research_note(work, f"[[argument:{a}]]")
+        self.assertEqual(self.refusal(self.library.delete_argument, a), (
+            "argument_in_use", "This Argument is still referenced in research notes.", 409))
+        self.research_note(work, f"`[[argument:{a}]]`")  # code, not a reference
+        self.assertIsNone(self.library.delete_argument(a))
+        for argument_id in (a, " "):
+            self.assertEqual(self.refusal(self.library.delete_argument, argument_id),
+                             ("not_found", "Argument not found.", 404))
+        self.answer(self.library.list_arguments(), [
+            {"created_at": "<s>", "id": "<A B>", "kind": "argument", "name": "B", "response_count": 0, "sources": [],
+             "targets": [], "updated_at": "<s>"}])
+
+    def test_a_work_delete_drops_its_citations(self) -> None:
+        one = self.library.add_work("One")
+        two = self.named(self.library.add_work("Two"), "<W Two>")
+        a = self.argument("A", sources=[source(one, "1"), source(two)])
+        self.library.delete_work_record(one)
+        remaining = [{"authors": [], "order_index": 1, "pages": "", "work_id": "<W Two>", "work_title": "Two"}]
+        self.answer(self.library.get_argument(a), {"sources": remaining})
+        self.answer(self.library.list_arguments(), [{"sources": remaining}])
+
