@@ -617,7 +617,24 @@ runs only on PostgreSQL, and the database is paired with exactly one root
   names a `storage_root_id`, no other root passes the start check, so a
   running instance has nothing to choose. Before the claim, choosing writes
   the bootstrap config through the guarded compare-and-set and takes effect
-  at the next start; it never rebinds a running process.
+  at the next start; it never rebinds a running process. It is
+  `prks_app.py storage choose PATH` and a token-gated step of the browser
+  setup page (`POST /api/setup/storage`), both `backend/storage/choose.py`.
+  The command holds the config lock, then the current root's lease
+  (exclusive, without waiting, unless the caller is the setup page's own
+  process), then the target's lease, and writes the config last. It
+  resolves the current root under the config lock and checks its claim again
+  under that root's lease. Setup commits the instance row before it claims
+  the marker, so "claimed" means either: both callers also read the
+  database's setup state under the config lock and that lease, and refuse
+  unless it is `unconfigured` (the command line also refuses when it cannot
+  read the database). A process that read the old selection (from the
+  bootstrap file or a default) re-reads the bootstrap file under its new
+  lease and refuses (`storage_selection_changed`) when the selection moved
+  on. Setup claims a root under the same config lock (web setup page and
+  `prks_app.py admin bootstrap`), so a choice never replaces a root that
+  setup is claiming, and a setup page whose root another process's choice
+  replaced asks for a restart instead of claiming it.
 - **Open another library** is refused under PostgreSQL. Only a copy of this
   root could pass the start check, and switching to a copy is a relocation
   without §8.2's P2 fence and P4 verification, which leaves two usable copies

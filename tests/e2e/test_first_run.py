@@ -80,6 +80,10 @@ class FirstRunSetupTests(unittest.TestCase):
         heading = page.locator("#prks-setup-heading")
         heading.wait_for()
         self.assertEqual(heading.inner_text(), "Set up PRKS")
+        # A testing run's folder is set on the host (PRKS_STORAGE), so the page
+        # offers no folder choice (#720).
+        self.assertEqual(context.request.get(self.server.origin + "/api/setup").json()["storage"], "fixed")
+        self.assertEqual(page.locator("#prks-setup-folder").count(), 0)
 
         assert self.server.library is not None
         page.fill("#prks-setup-token", issue_setup_token(self.server.library))

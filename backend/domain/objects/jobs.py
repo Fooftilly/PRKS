@@ -74,6 +74,7 @@ from backend.domain.objects.lifecycle import CLEANUP_KIND, Settled
 from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import JobRun
+from backend.storage.paths import SQLITE_CATALOGUES
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
     NAMESPACE_PORTRAITS,
@@ -95,8 +96,6 @@ SCHEDULE_EVERY = timedelta(minutes=1)
 HEARTBEAT_EVERY = 25
 # The sweep's order; a cursor names one of these.
 SWEEP_NAMESPACES = (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS, NAMESPACE_REMOTE_IMAGES)
-# The SQLite catalogue of a data root (production and testing names).
-SQLITE_CATALOGUES = ("prks_data.db", "prks_data_testing.db")
 
 LOGGER = logging.getLogger("prks.objects")
 

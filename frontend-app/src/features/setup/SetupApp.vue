@@ -10,6 +10,11 @@
  * any other refusal stays on the review with the reason. After setup the
  * page waits for PRKS to switch over to the application and opens it.
  *
+ * When the server says the Library folder is still choosable (#720), the
+ * token step offers "Use a different folder": with the same token, PRKS
+ * records the folder for its next start, and setup waits until PRKS has
+ * restarted on it.
+ *
  * Messages are fixed text chosen by the server's code. A token or password is
  * never logged, echoed or kept after the page leaves.
  */
@@ -21,13 +26,16 @@ import PrksState from '../../components/PrksState.vue'
 import {
   DEFAULT_LIBRARY_NAME,
   TOKEN_PATTERN,
+  chooseFolder,
   readSetupState,
   submitSetup,
   waitForApplication,
+  type ChooseFolderResult,
   type SetupResult,
+  type SetupStorage,
 } from './setup-service'
 
-type Step = 'loading' | 'unreachable' | 'token' | 'account' | 'review' | 'opening' | 'stuck'
+type Step = 'loading' | 'unreachable' | 'token' | 'account' | 'review' | 'opening' | 'stuck' | 'restart'
 
 const props = withDefaults(
   defineProps<{
@@ -59,6 +67,11 @@ const displayNameError = ref('')
 const finishError = ref('')
 const busy = ref(false)
 const resumed = ref(false)
+const storage = ref<SetupStorage>('fixed')
+const folder = ref('')
+const folderError = ref('')
+const chosenFolder = ref('')
+const choosing = ref(false)
 const heading = ref<HTMLElement | null>(null)
 
 const stepNumber = computed(() => (step.value === 'token' ? 1 : step.value === 'account' ? 2 : 3))
@@ -86,16 +99,21 @@ async function opening(): Promise<void> {
 
 async function load(): Promise<void> {
   step.value = 'loading'
-  const state = await readSetupState()
-  if (state === null) {
+  const status = await readSetupState()
+  if (status === null) {
     await go('unreachable')
     return
   }
-  if (state === 'ready') {
+  if (status.state === 'ready') {
     await opening()
     return
   }
-  resumed.value = state === 'bootstrapping'
+  storage.value = status.storage
+  if (status.storage === 'restart_required') {
+    await go('restart')
+    return
+  }
+  resumed.value = status.state === 'bootstrapping'
   await go('token')
 }
 
@@ -155,6 +173,51 @@ function messageFor(result: Extract<SetupResult, { ok: false }>): string {
   }
 }
 
+function folderMessage(result: Extract<ChooseFolderResult, { ok: false }>): string {
+  switch (result.error) {
+    case 'storage_refused':
+      return result.message ?? 'PRKS cannot use that folder.'
+    case 'restart_required':
+      return 'A folder was already chosen. Restart PRKS, then reload this page.'
+    case 'invalid_request':
+      return 'Enter the full path of a folder on the computer that runs PRKS.'
+    default:
+      return messageFor(result as Extract<SetupResult, { ok: false }>)
+  }
+}
+
+async function useFolder(): Promise<void> {
+  if (choosing.value) return
+  folderError.value = ''
+  if (!checkToken()) return
+  if (!folder.value.trim()) {
+    folderError.value = 'Enter the full path of a folder on the computer that runs PRKS.'
+    return
+  }
+  choosing.value = true
+  try {
+    const result = await chooseFolder({ token: token.value, folder: folder.value })
+    if (result.ok) {
+      chosenFolder.value = result.folder
+      storage.value = 'restart_required'
+      await go('restart')
+      return
+    }
+    if (result.error.startsWith('bootstrap_token_')) {
+      tokenError.value = messageFor(result as Extract<SetupResult, { ok: false }>)
+      return
+    }
+    if (result.error === 'restart_required') {
+      storage.value = 'restart_required'
+      await go('restart')
+      return
+    }
+    folderError.value = folderMessage(result)
+  } finally {
+    choosing.value = false
+  }
+}
+
 function fieldError(result: Extract<SetupResult, { ok: false }>): boolean {
   if (result.error !== 'invalid_request') return false
   const tooLong = result.reason === 'too_long'
@@ -203,6 +266,11 @@ async function finish(): Promise<void> {
       await opening()
       return
     }
+    if (result.error === 'restart_required') {
+      storage.value = 'restart_required'
+      await go('restart')
+      return
+    }
     if (fieldError(result)) return
     if (result.error.startsWith('bootstrap_token_')) {
       tokenError.value = messageFor(result)
@@ -233,6 +301,21 @@ defineExpose({ step })
       </PrksInlineMessage>
       <div class="prks-form-actions">
         <PrksButton variant="primary" @click="load">Try again</PrksButton>
+      </div>
+    </template>
+
+    <template v-else-if="step === 'restart'">
+      <h1 id="prks-setup-heading" ref="heading" class="prks-setup__title" tabindex="-1">Restart PRKS</h1>
+      <p v-if="chosenFolder" class="prks-setup__lead">
+        PRKS will keep the Library's files in <code id="prks-setup-chosen-folder">{{ chosenFolder }}</code> from its next start.
+      </p>
+      <p v-else class="prks-setup__lead">A new folder for the Library's files was chosen.</p>
+      <p class="prks-setup__note">
+        Restart PRKS on the computer that runs it, then reload this page and finish setup. The same setup token
+        still works.
+      </p>
+      <div class="prks-form-actions">
+        <PrksButton variant="primary" @click="load">Reload</PrksButton>
       </div>
     </template>
 
@@ -295,6 +378,44 @@ defineExpose({ step })
         <div class="prks-form-actions">
           <PrksButton variant="primary" type="submit">Continue</PrksButton>
         </div>
+        <details v-if="storage === 'choosable'" id="prks-setup-folder" class="work-upload-meta__details prks-setup__folder">
+          <summary class="work-upload-meta__summary">
+            <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
+            <span class="work-upload-meta__summary-text">
+              <span class="work-upload-meta__summary-title-row">
+                <span class="work-upload-meta__summary-title">Use a different folder for the Library's files</span>
+                <span class="work-upload-meta__summary-optional">Optional</span>
+              </span>
+            </span>
+          </summary>
+          <div class="work-upload-meta__details-body prks-setup__folder-body">
+            <p class="prks-setup__note">
+              PRKS keeps the Library's files in its default data folder unless you choose another one now.
+              Use an empty or new folder on the computer that runs PRKS. After you choose, restart PRKS, then finish
+              setup. Once setup is done, the folder can no longer be changed here.
+            </p>
+            <PrksField label="Folder" for-id="prks-setup-folder-path" :error="folderError">
+              <template #default="{ labelledBy, describedBy }">
+                <input
+                  id="prks-setup-folder-path"
+                  v-model="folder"
+                  :aria-labelledby="labelledBy"
+                  :aria-describedby="describedBy"
+                  class="prks-input"
+                  type="text"
+                  name="folder"
+                  autocomplete="off"
+                  spellcheck="false"
+                  autocapitalize="none"
+                  :aria-invalid="folderError ? 'true' : 'false'"
+                />
+              </template>
+            </PrksField>
+            <div class="prks-form-actions">
+              <PrksButton :busy="choosing" busy-label="Checking the folder…" @click="useFolder">Use this folder</PrksButton>
+            </div>
+          </div>
+        </details>
       </form>
 
       <form v-else-if="step === 'account'" class="prks-stack" novalidate @submit.prevent="accountNext">
