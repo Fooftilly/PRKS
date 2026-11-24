@@ -661,7 +661,7 @@ async function tagSettledInAnotherTab(path) {
     coalesceResults.length = 0;
     focus('main');
     const main = prksMountTabContext('main', document.getElementById('main-host'));
-    showWork(main, 'work-a', { tags: [] });
+    showWork(main, 'work-a', { tags: [{ id: 't2', name: 'Beta', color: '' }] });
     ownPanel(main);
     main.ui.workDetailsMode = 'view';
     global.prksVueRefreshWorkPanelRead = function () { return true; };
@@ -704,6 +704,10 @@ async function tagSettledInAnotherTab(path) {
         assert('the Work takes the other tab\'s ACK', hasAlpha());
         assert('the retried remove leaves no error', !state.error, String(state.error));
         assert('the re-read moves only this Tag\'s base', t2Unchanged(), JSON.stringify(state.options));
+        await prksWorkTagEdit(main, 't2', false);
+        const other = tagWrites[2] || [];
+        assert('removing the other Tag is measured against the base its chip shows',
+            other[1] === 't2' && other[2] === false && other[3] === true && other[4] === 3, JSON.stringify(tagWrites));
     } else {
         await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
         await until(function () { return optionReads === 1 && state.operations.length === 0; }, 'adopting paint');
