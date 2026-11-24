@@ -1,7 +1,7 @@
 """Work search reads on PostgreSQL (L-S-1 #637; §8.3, §8.7).
 
-``tests/test_search_parity.py`` proves the facade lists what SQLite lists
-where both agree. These tests cover what only PostgreSQL does: the §8.7
+:class:`AnswerTests` spells out what each search path lists. The other
+tests cover the §8.7
 vectors (Unicode folding on both sides of every match, the infix fallback,
 whole-string filters that keep punctuation, wildcards that stay literal,
 NFD queries), the L-S-2 ranking (#638), and Library isolation.
@@ -10,8 +10,10 @@ NFD queries), the L-S-2 ranking (#638), and Library isolation.
 from __future__ import annotations
 
 import unicodedata
+from typing import Any
 
 from backend.domain.search import queries
+from tests.pg.answers import AnswerAssertions
 from tests.pg.test_search_refresh import SearchTestCase
 
 
@@ -231,3 +233,117 @@ class IsolationTests(SearchQueryTestCase):
         for label in ("Physics", "phys"):
             with self.subTest(label=label):
                 self.assertEqual([row["id"] for row in self.library.get_works_by_tag_name(label)], [mine])
+
+
+class AnswerTests(AnswerAssertions, SearchTestCase):
+    """What keyword search, the filters, the Tag filter and OR mode list, spelled out.
+
+    Each Work is edited a minute after the previous one, so an order never
+    rests on a tie.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.minute = 0
+
+    def work(self, label: str, **fields: Any) -> str:
+        fields.setdefault("title", label)
+        work_id = self.labels.name(self.library.add_work(**fields), f"<W {label}>")
+        self.minute += 1
+        self.sql("UPDATE prks.works SET updated_at = %s::timestamptz WHERE id = %s",
+                 (f"2026-01-01 10:{self.minute:02d}:00+00", work_id))
+        return work_id
+
+    def credit(self, work_id: str, first_name: str, last_name: str, aliases: str = "") -> None:
+        self.library.add_role(self.library.add_person(first_name, last_name, aliases=aliases), work_id, "Author")
+
+    def listed(self, rows: list[dict[str, Any]]) -> list[str]:
+        return [self.labels.show(row["id"]) for row in rows]
+
+    def ids(self, work_ids: list[str]) -> list[str]:
+        return sorted(self.labels.show(work_ids))
+
+    def test_keyword_search_finds_every_path(self) -> None:
+        # A prefix, an override, a note and an abstract infix, and a linked person.
+        self.credit(self.work("Fourth"), "Malphan", "Quill")
+        second = self.work("Second")
+        self.sql("UPDATE prks.manifestations SET abstract = 'xalphax' WHERE id ="
+                 " (SELECT primary_manifestation_id FROM prks.works WHERE id = %s)", (second,))
+        self.refresh(second)
+        self.work("Third", text_content="zalphaz")
+        self.work("Third again", abstract="yalphay")
+        self.work("Alphabet")
+        self.work("Unrelated")
+        self.assertEqual(sorted(self.listed(self.library.search_works("alpha"))),
+                         ["<W Alphabet>", "<W Fourth>", "<W Second>", "<W Third again>", "<W Third>"])
+
+    def test_tokens_split_on_hyphens_and_must_all_match(self) -> None:
+        self.work("Multi-Author survey")
+        self.work("Multi survey")
+        for query in ("multi author", "Multi-Author", "MULTI_author"):
+            with self.subTest(query=query):
+                self.answer(self.library.search_works(query), [{
+                    "id": "<W Multi-Author survey>", "title": "Multi-Author survey", "status": "Not Started",
+                    "doc_type": "article", "created_at": "<s>", "updated_at": "<s>", "linked_people": []}])
+        self.assertEqual(self.library.search_works("nothing here"), [])
+        self.assertEqual(self.library.search_works("   "), [])
+
+    def test_a_linked_person_is_found_by_name_alias_or_last_name(self) -> None:
+        self.credit(self.work("Credited"), "Albrecht", "Zweistein", aliases="Doctor Z")
+        self.work("Uncredited")
+        for query in ("brecht zwei", "albrecht zweistein", "octor", "weistein"):
+            with self.subTest(query=query):
+                self.assertEqual(self.listed(self.library.search_works(query)), ["<W Credited>"])
+
+    def test_author_and_publisher_filters(self) -> None:
+        self.work("Kept", author_text="Ann Lee", publisher="TestPub")
+        self.work("Wrong publisher", author_text="Ann Lee", publisher="Other")
+        self.work("Wrong author", author_text="Bob", publisher="TestPub")
+        self.credit(self.work("Credited", publisher="TestPub"), "Joan", "Annerl")
+        search = self.library.search_works
+        self.assertEqual(self.ids(self.library.work_ids_matching_author("ann")),
+                         ["<W Credited>", "<W Kept>", "<W Wrong publisher>"])
+        self.assertEqual(self.ids(self.library.work_ids_matching_publisher("testpub")),
+                         ["<W Credited>", "<W Kept>", "<W Wrong author>"])
+        self.assertEqual(self.listed(search("", author_filter="ann", publisher_filter="testpub")),
+                         ["<W Credited>", "<W Kept>"])
+        self.assertEqual(self.listed(search("", publisher_filter="other")), ["<W Wrong publisher>"])
+        self.assertEqual(self.listed(search("", author_filter="ann", publisher_filter="none")), [])
+        self.assertEqual(self.listed(search("kept", author_filter="ann")), ["<W Kept>"])
+        self.assertEqual(self.listed(search("kept", author_filter="bob")), [])
+        self.assertEqual(self.library.work_ids_matching_author("  "), [])
+
+    def test_a_publisher_record_brings_in_its_names_and_aliases(self) -> None:
+        record = self.library.add_publisher("Oxford University Press")
+        self.library.add_publisher_alias(record["id"], "OUP")
+        self.work("Short", publisher="oup")
+        self.work("Long", publisher="Oxford University Press")
+        self.work("Other", publisher="Cambridge")
+        for needle in ("oxford", "OUP", "university"):
+            with self.subTest(needle=needle):
+                self.assertEqual(self.ids(self.library.work_ids_matching_publisher(needle)), ["<W Long>", "<W Short>"])
+
+    def test_the_tag_filter_lists_tagged_works_newest_first(self) -> None:
+        works = [self.work(label) for label in ("Older", "Newer", "Untagged")]
+        tag = self.library.add_tag("Physics")
+        self.library.add_tag_alias(tag["id"], "phys")
+        for work_id in works[:2]:
+            self.library.add_tag_to_work(work_id, tag["id"])
+        for minute, work_id in enumerate(works, start=1):
+            self.sql("UPDATE prks.works SET created_at = %s::timestamptz WHERE id = %s",
+                     (f"2025-01-01 09:{minute:02d}:00+00", work_id))
+        for label in ("physics", "PHYS", " Physics "):
+            with self.subTest(label=label):
+                self.assertEqual(self.listed(self.library.get_works_by_tag_name(label)), ["<W Newer>", "<W Older>"])
+        self.assertEqual(self.library.get_works_by_tag_name("unknown"), [])
+        self.assertEqual(self.library.get_works_by_tag_name("  "), [])
+
+    def test_any_mode_appends_author_and_publisher_matches(self) -> None:
+        self.work("Orbis")
+        self.work("By author", author_text="Morbison")
+        self.work("By publisher", publisher="Orbis Press")
+        self.work("Nothing")
+        self.assertEqual(self.listed(self.library.search_works_any("orbis")),
+                         ["<W Orbis>", "<W By author>", "<W By publisher>"])
+        self.assertEqual(self.library.search_works_any(" "), [])
+
