@@ -19,8 +19,8 @@ from backend.domain.research.concept_rules import MAX_PARENTS, scope_key
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.research import concepts
 from backend.domain.research.rules import CONCEPT_NAME_MAX, ResearchError
-from backend.entity_ids import generate, is_distributed, is_generated
-from backend.research_markup import CONCEPT_REF_MAX
+from backend.domain.entity_ids import generate, is_distributed, is_generated
+from backend.domain.research.research_markup import CONCEPT_REF_MAX
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import concept as concept_handlers
 from tests.pg.test_concepts import ConceptTestCase

@@ -37,7 +37,7 @@ from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import lifecycle, tags
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.sync.families import Environment, FamilyHandler, Result
 
 

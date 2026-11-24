@@ -16,7 +16,7 @@ import sys
 import time
 from typing import Any
 
-from backend import process_roles
+from backend.runtime import process_roles
 from backend.domain.identity import root_pairing
 from backend.storage import root_binding
 from backend.storage.file_lock import ExclusiveFileLock

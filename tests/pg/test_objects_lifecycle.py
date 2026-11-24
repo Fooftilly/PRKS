@@ -27,7 +27,7 @@ from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.objects import jobs, lifecycle
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.works import commands
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,

@@ -25,7 +25,7 @@ import prks_app
 from backend.db.config import DatabaseConfig
 from backend.db.database import Database
 from backend.domain.identity import root_pairing
-from backend.readiness import PostgresReadiness
+from backend.runtime.readiness import PostgresReadiness
 from backend.storage import root_binding, root_marker
 from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at

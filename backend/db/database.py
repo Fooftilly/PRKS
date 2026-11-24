@@ -46,7 +46,7 @@ from backend.db.errors import (
     is_retryable,
     map_database_error,
 )
-from backend.performance import clock_ns, record_db_call
+from backend.runtime.performance import clock_ns, record_db_call
 
 T = TypeVar("T")
 

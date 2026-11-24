@@ -1044,7 +1044,7 @@ Asset AS-…  (one File in the UI; owns annotations, page state, thumbnails)
   since been materialized. **Legacy Assets do not take part reliably in
   exact-byte duplicate detection.** Their only hash, `content_sha256`,
   describes working bytes that ingestion has already linearized.
-  `backend/pdf_linearize.py` runs `qpdf --linearize <in> <out>` **without**
+  `backend/pdf/pdf_linearize.py` runs `qpdf --linearize <in> <out>` **without**
   `--deterministic-id`, and qpdf documents that such output is not
   byte-for-byte reproducible (its document IDs have a random element). So the
   same original PDF can produce different working bytes on every ingestion. A

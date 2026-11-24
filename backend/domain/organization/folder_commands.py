@@ -25,7 +25,7 @@ from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import folders, links
 from backend.domain.works import projection, queries
 from backend.domain.works.rules import finish_work_summary_rows
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 
 T = TypeVar("T")
 

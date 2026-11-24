@@ -75,7 +75,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertNotIn(work["id"], self.found("oldtermreplacepdf"))
 
     def test_a_replace_whose_extraction_fails_leaves_neither_text(self) -> None:
-        from backend import pdf_text
+        from backend.pdf import pdf_text
 
         work = self.upload("Overwrite Fail Work", "overwritefailoldterm", "overwrite_fail.pdf")
         self.run_jobs()
@@ -111,7 +111,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         it is never served for the new PDF and never evicts the new copy."""
         import threading
 
-        from backend.derived_caches import prks_thumb_cache_stem
+        from backend.media.derived_caches import prks_thumb_cache_stem
 
         work = self.upload("Thumb Race", "thumbraceold", "thumb_race.pdf")
         original = self.server_module._prks_thumbnail_bytes_from_pixmap
@@ -162,7 +162,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         copies older than the PDF it rendered, so the new copy survives."""
         import threading
 
-        from backend.derived_caches import prks_thumb_cache_stem
+        from backend.media.derived_caches import prks_thumb_cache_stem
 
         work = self.upload("Thumb Prune Race", "thumbpruneold", "thumb_prune_race.pdf")
         original = self.server_module.prks_prune_thumbnail_page

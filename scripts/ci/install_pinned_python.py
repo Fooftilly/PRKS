@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.dependency_gate import read_requirements_pins  # noqa: E402
+from backend.runtime.dependency_check import read_requirements_pins  # noqa: E402
 
 # Workflows select explicit, purpose-limited dev requirements.
 DEV_PROFILES: dict[str, tuple[str, ...]] = {

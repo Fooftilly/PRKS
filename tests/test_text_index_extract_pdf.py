@@ -12,8 +12,8 @@ import unittest
 from typing import Callable, Iterator, List, Optional, Sequence
 from unittest.mock import patch
 
-from backend.log_safety import safe_error_type
-from backend.pdf_text import (
+from backend.runtime.log_safety import safe_error_type
+from backend.pdf.pdf_text import (
     PDFTextExtraction,
     PDFTextExtractionError,
     PDFTextExtractorUnavailable,

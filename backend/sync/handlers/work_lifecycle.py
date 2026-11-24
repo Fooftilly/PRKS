@@ -44,7 +44,7 @@ def _text(value: Optional[str]) -> Optional[str]:
 
 def new_work(work_id: str, fields: dict[str, Any], identity: dict[str, Any]) -> commands.NewWork:
     """The Work ``insert_work_on_conn`` writes, as Work, Manifestation and stream Asset."""
-    from backend.entity_ids import generate
+    from backend.domain.entity_ids import generate
 
     return commands.NewWork(
         work_id=work_id,

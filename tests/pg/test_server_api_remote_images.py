@@ -17,7 +17,7 @@ from unittest import mock
 from urllib.parse import quote
 
 from backend.domain.maintenance import backup, restore
-from backend.person_image import PortraitImage, decode_and_transcode
+from backend.media.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
 

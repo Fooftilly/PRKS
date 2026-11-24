@@ -128,7 +128,7 @@ class ConcurrentHttpTests(ProcessingHttpTestCase):
         """A saved remote image's first view waits on another site (#1351): it
         holds only the read scope, so an edit runs meanwhile, and the copy is
         still saved once the fetch returns."""
-        from backend.person_image import PortraitImage, decode_and_transcode
+        from backend.media.person_image import PortraitImage, decode_and_transcode
         from PIL import Image
         from urllib.parse import quote
 

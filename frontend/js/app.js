@@ -681,7 +681,7 @@ async function prksOfflineListFetch(listKey, path, signal, options) {
     });
 }
 
-// Server projection bounds; keep aligned with backend/research_graph.py.
+// Server projection bounds; keep aligned with backend/domain/research/research_graph.py.
 const PRKS_RESEARCH_GRAPH_MAX_NODES = 2500;
 const PRKS_RESEARCH_GRAPH_MAX_EDGES = 7500;
 const PRKS_RESEARCH_GRAPH_ROUTES = Object.freeze({

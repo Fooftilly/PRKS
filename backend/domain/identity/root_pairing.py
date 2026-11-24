@@ -57,7 +57,7 @@ from typing import Any, Optional
 import psycopg
 from psycopg.rows import dict_row
 
-from backend import entity_ids
+from backend.domain import entity_ids
 from backend.db.database import Database, Isolation, Transaction
 from backend.db.errors import DatabaseError
 from backend.domain.identity import login_names, passwords

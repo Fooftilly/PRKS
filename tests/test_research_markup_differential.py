@@ -1,6 +1,6 @@
 """Differential fuzzing: the Python and JavaScript research-markup parsers agree.
 
-``backend/research_markup.py`` decides which spans of a note are Concept and
+``backend/domain/research/research_markup.py`` decides which spans of a note are Concept and
 Argument references (the research index and graph); ``frontend/js/research-links.js``
 decides the same for the preview. ``tests/fixtures/research_markup.json`` pins
 chosen cases; these properties draw notes from the markers, code fences,
@@ -28,7 +28,7 @@ from typing import Any
 
 from hypothesis import example, given, strategies as st
 
-from backend.research_markup import normalize_concept_key, parse_research_markup
+from backend.domain.research.research_markup import normalize_concept_key, parse_research_markup
 from tests.hypothesis_profiles import FUZZ
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

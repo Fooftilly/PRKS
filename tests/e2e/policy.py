@@ -470,7 +470,7 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/research-graph.js",
             "frontend-app/src/features/research-graph/**",
-            "backend/research_graph.py",
+            "backend/domain/research/research_graph.py",
             "tools/research-graph/**",
         ),
         "exclude_paths": (
@@ -502,7 +502,7 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/concepts.js",
             "frontend/js/concept-state.js",
-            "backend/research_markup.py",
+            "backend/domain/research/research_markup.py",
         ),
         "features": ("concepts", "graph", "notes"),
     },
@@ -562,11 +562,11 @@ AFFECTED_RULES = (
             "frontend/js/pdf-annotation-state.js",
             "frontend/js/pdf-annotation-reconcile.js",
             "frontend/js/pdf-work-runtime.js",
-            "backend/pdf_annotations.py",
+            "backend/pdf/pdf_annotations.py",
             "backend/domain/annotations/rules.py",
-            "backend/pdf_materialization.py",
-            "backend/pdf_annotation_adopt.py",
-            "backend/services/work_pdf_replace.py",
+            "backend/pdf/pdf_materialization.py",
+            "backend/pdf/pdf_annotation_adopt.py",
+            "backend/pdf/work_pdf_replace.py",
             "backend/api/annotations.py",
             "backend/domain/annotations/**",
         ),

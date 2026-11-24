@@ -5,7 +5,7 @@ deployment setting, its effective value and whether it came from the
 environment or the default. Read-only: the values are set on the host
 (environment, Compose ``.env``, secret files) and need a restart, so no
 route writes them. A secret or a host path shows only that it is set
-(``backend.config_reference.browser_view``). ``backend/api/session.py``
+(``backend.runtime.config_reference.browser_view``). ``backend/api/session.py``
 admits only the owner (``ADMIN_LIBRARY``).
 """
 
@@ -36,7 +36,7 @@ def body(environ: Any = None, root_source: Any = None) -> dict[str, Any]:
     """
     from backend.api_contract.boundary import dump_response
     from backend.api_contract.deployment import DeploymentSettings
-    from backend.config_reference import BY_KEY, Effective, browser_view
+    from backend.runtime.config_reference import BY_KEY, Effective, browser_view
 
     rows = browser_view(os.environ if environ is None else environ)
     source = _ROOT_SOURCES.get(root_source or "")

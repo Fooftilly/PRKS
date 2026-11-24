@@ -6,7 +6,7 @@ see a half-written cache entry.
 
 This module is the reviewed ``os.replace`` boundary for those derived
 caches. New managed/canonical replacements must not land here — use
-``backend.fs_durability`` / ``backend.services.work_pdf_replace``.
+``backend.storage.fs_durability`` / ``backend.pdf.work_pdf_replace``.
 
 Concurrency: each publication uses a **unique** sibling temp (exclusive
 create under a random ``.prks-cache-*.tmp`` name), not a shared

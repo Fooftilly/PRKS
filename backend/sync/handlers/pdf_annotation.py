@@ -15,7 +15,7 @@ from typing import Any, Callable
 from backend.domain.annotations import rules as rules
 from backend.domain.annotations import operations, store
 from backend.domain.identity.library_scope import LibraryScope
-from backend.pdf_annotations import WorkAnnotationError, normalize_annotation
+from backend.pdf.pdf_annotations import WorkAnnotationError, normalize_annotation
 from backend.sync.families import Environment, FamilyHandler, Result
 
 

@@ -22,7 +22,7 @@ from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import links, tags
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 
 T = TypeVar("T")
 

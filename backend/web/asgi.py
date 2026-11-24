@@ -44,7 +44,7 @@ import uvicorn
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from backend import server as server_module
-from backend.log_safety import safe_error_type, safe_log_id
+from backend.runtime.log_safety import safe_error_type, safe_log_id
 
 LOGGER = logging.getLogger(__name__)
 

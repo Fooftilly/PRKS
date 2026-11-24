@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Iterable, Optional
 
-from backend.pdf_annotations import (
+from backend.pdf.pdf_annotations import (
     WorkAnnotationError,
     normalize_annotation,
 )
@@ -399,7 +399,7 @@ def adopt_byte_only_user_markup_on_conn(
     adopt bumps only the canonical generation (leaving materialization lag),
     never jointly advances ``materialized_pdf_annotation_revision``.
     """
-    from backend import pdf_materialization
+    from backend.pdf import pdf_materialization
     from backend.domain.annotations import rules
 
     is_user = is_user_markup or default_is_user_markup

@@ -54,14 +54,14 @@ def install_command() -> str:
 
 def pinned_playwright_version() -> str:
     """Exact Playwright pin from requirements-dev.txt (via dependency_gate)."""
-    from backend.dependency_gate import pinned_playwright_version as _pinned
+    from backend.runtime.dependency_check import pinned_playwright_version as _pinned
 
     return _pinned(REPO)
 
 
 def installed_playwright_version() -> str | None:
     """Installed Playwright distribution version, or None if the package is absent."""
-    from backend.dependency_gate import installed_distribution_version
+    from backend.runtime.dependency_check import installed_distribution_version
 
     return installed_distribution_version("playwright")
 

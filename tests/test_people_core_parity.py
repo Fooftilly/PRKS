@@ -22,7 +22,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from tests.backend_parity import parametrize_backends
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 from tests.people_parity_helpers import PeopleParityTestCase
 
 _PROFILE = {

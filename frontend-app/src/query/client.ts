@@ -4,7 +4,7 @@ import { prksQueryRetryDelay, prksQueryShouldRetry } from './retry'
 
 /**
  * Query `meta` a read may carry. `clientErrorSource` is the sanitized
- * `/api/client-errors` source (allowlisted in backend/log_safety.py) that the
+ * `/api/client-errors` source (allowlisted in backend/runtime/log_safety.py) that the
  * read's final failure reports under, the same source its classic wrapper used.
  */
 export type PrksQueryMeta = {

@@ -10,7 +10,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.person_image import decode_and_transcode  # noqa: E402
+from backend.media.person_image import decode_and_transcode  # noqa: E402
 
 
 def _large_test_png_bytes(width: int = 1200, height: int = 900) -> bytes:

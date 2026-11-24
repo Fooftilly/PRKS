@@ -39,7 +39,7 @@ from backend.db.database import Database
 from backend.domain.maintenance import archive as r0
 from backend.domain.maintenance import staging
 from backend.domain.maintenance.archive import ArchiveRefused, Limits
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.domain.maintenance.connection import maintenance_connection
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor

@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 
-from backend.fs_durability import fsync_directory, replace_file_atomically
+from backend.storage.fs_durability import fsync_directory, replace_file_atomically
 from backend.storage.errors import StorageRootRefused
 from backend.storage.file_lock import (
     ExclusiveFileLock,

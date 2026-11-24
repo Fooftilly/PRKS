@@ -13,7 +13,7 @@ from __future__ import annotations
 
 
 from backend.domain.works.rules import normalize_doc_type
-from backend.entity_ids import is_distributed
+from backend.domain.entity_ids import is_distributed
 from backend.domain.works import metadata_rules
 from backend.domain.people import role_rules
 from backend.domain.works import source_rules

@@ -14,7 +14,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.log_config import setup_logging
+from backend.runtime.log_config import setup_logging
 from backend.storage.config import StorageConfig
 
 
@@ -125,7 +125,7 @@ class TestSetupLogging(unittest.TestCase):
                     self.assertEqual(os.stat(log_file).st_mode & 0o077, 0)
 
     def test_handlers_use_privacy_safe_formatter(self):
-        from backend.log_safety import PrivacySafeFormatter
+        from backend.runtime.log_safety import PrivacySafeFormatter
 
         with tempfile.TemporaryDirectory(prefix="prks-log-") as tmp:
             log_file = os.path.join(tmp, "prks-errors.log")
@@ -143,7 +143,7 @@ class SharedLogRotationTests(unittest.TestCase):
     """Two processes' handlers on one error log (web processes beside each other)."""
 
     def setUp(self):
-        from backend.log_config import _OwnerOnlyTimedRotatingFileHandler
+        from backend.runtime.log_config import _OwnerOnlyTimedRotatingFileHandler
 
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -195,7 +195,7 @@ class SharedLogRotationTests(unittest.TestCase):
         import time
         from unittest import mock
 
-        from backend import log_config
+        from backend.runtime import log_config
 
         folder = os.path.dirname(self.path)
         for day in ("2026-11-16", "2026-11-17"):  # two days already kept
@@ -230,7 +230,7 @@ class SharedLogRotationTests(unittest.TestCase):
                 other.start()
                 self.assertTrue(waiting.wait(5))
 
-        with (mock.patch("backend.log_config.os.link", link_then_let_the_other_rotate),
+        with (mock.patch("backend.runtime.log_config.os.link", link_then_let_the_other_rotate),
               mock.patch.object(log_config.ExclusiveFileLock, "acquire", acquire)):
             try:
                 self.write(first, "a2")
@@ -273,7 +273,7 @@ class SharedLogRotationTests(unittest.TestCase):
 
         script = (
             "import logging\n"
-            "from backend.log_config import _OwnerOnlyTimedRotatingFileHandler as H\n"
+            "from backend.runtime.log_config import _OwnerOnlyTimedRotatingFileHandler as H\n"
             "h = H('/dev/stderr', when='midnight', backupCount=7, encoding='utf-8')\n"
             "h.setFormatter(logging.Formatter('%(message)s'))\n"
             "h.handle(logging.LogRecord('prks', logging.ERROR, 'x', 1, 'on-the-pipe', None, None))\n"
@@ -289,7 +289,7 @@ class SharedLogRotationTests(unittest.TestCase):
     def test_a_symlink_to_a_log_not_created_yet_resolves_to_its_target(self):
         from unittest import mock
 
-        from backend import log_config
+        from backend.runtime import log_config
 
         folder = os.path.dirname(self.path)
         target = os.path.join(folder, "later.log")
@@ -305,11 +305,11 @@ class SharedLogRotationTests(unittest.TestCase):
                     created.append(path)
                     open(target, "w").close()  # another process creates it now
 
-        with mock.patch("backend.log_config.os.stat", target_appears_after_the_check):
+        with mock.patch("backend.runtime.log_config.os.stat", target_appears_after_the_check):
             self.assertEqual(log_config._log_target(link), os.path.realpath(target))
 
     def test_a_symlinked_log_is_rotated_where_it_points_and_the_link_stays(self):
-        from backend import log_config
+        from backend.runtime import log_config
 
         folder = os.path.dirname(self.path)
         target = os.path.join(folder, "real", "errors.log")

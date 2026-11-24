@@ -30,8 +30,8 @@ from backend.domain.objects import lifecycle
 from backend.domain.objects.ingest import IngestedPdf
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.works import commands
-from backend.entity_ids import generate
-from backend.pdf_materialization import STALE_CODE
+from backend.domain.entity_ids import generate
+from backend.pdf.pdf_materialization import STALE_CODE
 from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey

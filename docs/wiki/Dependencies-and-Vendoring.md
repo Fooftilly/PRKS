@@ -35,7 +35,7 @@ require new notices; maintainers must still review those changes.
 
 ## Dependency gate
 
-The repository contains dependency-gate logic in `backend/dependency_gate.py` and `scripts/dependency_gate.py`. It exists to catch mismatches between declarations, vendored artifacts, and the supported dependency model.
+The runtime dependency check is `backend/runtime/dependency_check.py` (run at startup); the repository consistency gate and its CLI are `scripts/dependency_gate.py`. It exists to catch mismatches between declarations, vendored artifacts, and the supported dependency model.
 
 When adding/updating a dependency, update every authoritative declaration/inventory required by the gate rather than patching only the file that first fails.
 

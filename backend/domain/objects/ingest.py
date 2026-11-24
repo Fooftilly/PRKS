@@ -28,8 +28,8 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from backend.domain.objects.lifecycle import StoredObject
-from backend.log_safety import safe_error_type, safe_log_label
-from backend.pdf_linearize import is_pdf_linearized, linearize_pdf_to
+from backend.runtime.log_safety import safe_error_type, safe_log_label
+from backend.pdf.pdf_linearize import is_pdf_linearized, linearize_pdf_to
 from backend.storage.objects import (
     IO_CHUNK_SIZE,
     NAMESPACE_ASSET_OBJECTS,

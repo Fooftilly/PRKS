@@ -24,7 +24,7 @@ if _PROJECT_DIR not in sys.path:
 from backend.library import NotPortedError, PostgresLibrary
 
 # The HTTP adapter: the modules that hold the bound Library as ``db``.
-ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/services/*.py")
+ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/pdf/work_pdf_replace.py")
 
 
 def adapter_library_calls() -> dict[str, set[str]]:

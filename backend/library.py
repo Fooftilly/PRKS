@@ -1,7 +1,7 @@
 """The Library handle the HTTP adapter is handed, and its typed refusal (PG-C3 #642).
 
 :class:`PostgresLibrary` is one PostgreSQL database and its data root: what
-``server.py``, ``api/`` and ``services/`` hold as ``db``. It has no Library
+``server.py`` and ``api/`` hold as ``db``. It has no Library
 methods. Every route family calls domain commands and queries
 (``backend/api/<family>.py``) with ``db.database``, ``db.storage`` and the
 admitted :class:`~backend.domain.identity.request_context.RequestContext`,

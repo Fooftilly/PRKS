@@ -36,8 +36,8 @@ from typing import Any, LiteralString, Optional
 
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.pdf_annotations import WorkAnnotationError, reconstruct_annotation
-from backend.pdf_materialization import STALE_CODE
+from backend.pdf.pdf_annotations import WorkAnnotationError, reconstruct_annotation
+from backend.pdf.pdf_materialization import STALE_CODE
 
 SCOPE_TYPE = "asset-annotation"
 NO_PDF = "work_pdf_not_found"

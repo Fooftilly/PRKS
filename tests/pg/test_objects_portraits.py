@@ -29,7 +29,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle, portraits
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.people import persons
-from backend.person_image import PortraitImage, decode_and_transcode
+from backend.media.person_image import PortraitImage, decode_and_transcode
 from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
@@ -172,7 +172,7 @@ class SuccessTests(PortraitTestCase):
 
     def test_a_jpeg_portrait_keeps_its_encoding(self) -> None:
         person_id = self.person()
-        with mock.patch("backend.person_image._encode_webp", return_value=None):
+        with mock.patch("backend.media.person_image._encode_webp", return_value=None):
             picture = image()
         self.assertEqual(picture.subtype, "jpeg")
         done = self.cache(person_id, picture)

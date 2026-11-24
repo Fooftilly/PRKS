@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 from psycopg_pool import PoolTimeout
 
-from backend import performance
+from backend.runtime import performance
 from tests.library_adapter import TestLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_search_text import pdf_bytes

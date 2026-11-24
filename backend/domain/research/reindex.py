@@ -54,14 +54,14 @@ from typing import Any, LiteralString, Optional
 
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.research import rules as research_rules
-from backend.research_markup import canonical_concept_name
+from backend.domain.research.research_markup import canonical_concept_name
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope
 from backend.jobs import queue
 from backend.jobs.handlers import handler
 from backend.jobs.runner import JobRun
 from backend.domain.research.rules import note_snippet
-from backend.research_markup import parse_research_markup
+from backend.domain.research.research_markup import parse_research_markup
 
 KIND = "research.reindex_work"
 

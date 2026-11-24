@@ -20,15 +20,15 @@ from urllib.request import urlopen, Request
 
 # Add the parent directory to sys.path to ensure 'backend' module is resolvable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from backend.derived_caches import (
+from backend.media.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
     prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
 )
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
-from backend.byte_range import parse_byte_range
-from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.web.byte_range import parse_byte_range
+from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.api import processing as processing_api
 from backend.api import saved_views as saved_views_api
 from backend.api import arguments as arguments_api
@@ -67,11 +67,11 @@ from backend.api_contract.performance import (
     PerformanceDiagnosticsResetRequest,
     PerformanceSnapshot,
 )
-from backend.research_graph import GraphTooLargeError
-from backend.derived_cache_publish import publish_derived_cache_bytes
+from backend.domain.research.research_graph import GraphTooLargeError
+from backend.media.derived_cache_publish import publish_derived_cache_bytes
 from backend.storage.config import StorageConfig
 from backend.storage.root_binding import assert_config_matches_bound_root
-from backend.log_safety import (
+from backend.runtime.log_safety import (
     client_error_log_fields,
     format_client_error_log,
     safe_bind_scope,
@@ -80,7 +80,7 @@ from backend.log_safety import (
     safe_log_label,
     safe_route,
 )
-from backend.performance import (
+from backend.runtime.performance import (
     begin_request,
     clear_request,
     clock_ns,
@@ -99,7 +99,7 @@ from backend.domain.maintenance.upload import (
     backup_max_upload_bytes,
     stream_upload_to_file,
 )
-from backend.person_image import identify_cached_portrait_subtype
+from backend.media.person_image import identify_cached_portrait_subtype
 from backend.web.handler_base import HttpHandlerBase
 
 if TYPE_CHECKING:
@@ -1057,7 +1057,7 @@ class PRKSHandler(HttpHandlerBase):
 
         This never invokes API session admission or returns configuration.
         ``/readyz`` answers 200 only when the server carries a readiness
-        check (``backend.readiness``: pool, schema, setup, paired root and
+        check (``backend.runtime.readiness``: pool, schema, setup, paired root and
         reconciled start generation) and it passes; a server started without
         one stays not ready.
         """
@@ -2329,7 +2329,7 @@ def run_server(port=PORT, host=DEFAULT_HOST, auth=None, jobs=None, readiness=Non
         # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
         # embedded worker and the job diagnostics. None only for test servers.
         httpd.prks_jobs = jobs
-        # GET /readyz (backend.readiness.PostgresReadiness); None keeps it 503.
+        # GET /readyz (backend.runtime.readiness.PostgresReadiness); None keeps it 503.
         httpd.prks_readiness = readiness
         if auth is not None and auth.settings.public_origin is not None:
             httpd.prks_trusted_hosts = trusted_hosts | {auth.settings.public_origin[1]}

@@ -1,6 +1,6 @@
 """Performance-diagnostics HTTP response DTOs.
 
-Shape only. The in-process registry in ``backend.performance`` still owns
+Shape only. The in-process registry in ``backend.runtime.performance`` still owns
 measurement. These models do not store diagnostics, and they are not a
 durable or offline protocol.
 """

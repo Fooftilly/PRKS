@@ -12,7 +12,7 @@ All on-disk paths are resolved through ``safe_pdf_path_under_dir`` immediately
 before use so DB/user-derived basenames cannot escape the managed pdfs dir.
 
 Every write that publishes canonical managed-PDF bytes follows the
-``backend.fs_durability`` convention through that module's primitives, never a
+``backend.storage.fs_durability`` convention through that module's primitives, never a
 bare ``os.fsync``: the contents are flushed with the strongest barrier the
 platform offers before anything may treat them as stored, and the containing
 directory is flushed afterwards.
@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.pdf_materialization import STALE_CODE
+from backend.pdf.pdf_materialization import STALE_CODE
 
 
 def stale_materialization_body(materialization: dict[str, Any] | None) -> dict[str, Any]:

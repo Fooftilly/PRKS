@@ -30,7 +30,7 @@ these same helpers, so a group can never change without its revision.
 """
 import json
 
-from backend.entity_ids import is_distributed
+from backend.domain.entity_ids import is_distributed
 
 # The editable columns on `person_groups`. `id`, `created_at` and `updated_at`
 # are not user-editable and are absent by construction rather than by filtering.

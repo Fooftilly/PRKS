@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend.derived_cache_publish import (
+from backend.media.derived_cache_publish import (
     _contained_cache_path,
     publish_derived_cache_bytes,
 )
@@ -63,7 +63,7 @@ class DerivedCachePublishTests(unittest.TestCase):
                 except BaseException as exc:  # noqa: BLE001 — collect for assert
                     errors.append(exc)
 
-            with mock.patch("backend.derived_cache_publish.os.open", spy_open):
+            with mock.patch("backend.media.derived_cache_publish.os.open", spy_open):
                 threads = [
                     threading.Thread(target=worker, args=(b"aaaaaaaaaa",)),
                     threading.Thread(target=worker, args=(b"bbbbbbbbbb",)),
@@ -102,7 +102,7 @@ class DerivedCachePublishTests(unittest.TestCase):
                     fp.write = fail_write  # type: ignore[method-assign]
                 return fp
 
-            with mock.patch("backend.derived_cache_publish.os.fdopen", boom_fdopen):
+            with mock.patch("backend.media.derived_cache_publish.os.fdopen", boom_fdopen):
                 with self.assertRaises(OSError):
                     publish_derived_cache_bytes(tmp, "card.webp", b"payload")
 

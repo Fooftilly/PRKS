@@ -27,7 +27,7 @@ import stat
 from dataclasses import dataclass
 from typing import Optional
 
-from backend.fs_durability import fsync_directory, fsync_open_file
+from backend.storage.fs_durability import fsync_directory, fsync_open_file
 from backend.storage.errors import StorageRootError, StorageRootRefused
 from backend.storage.file_lock import is_link_or_reparse_point
 

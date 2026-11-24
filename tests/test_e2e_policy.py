@@ -1010,7 +1010,7 @@ class AffectedMappingTests(unittest.TestCase):
             ("backend/domain/research/position_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
             ("backend/domain/organization/playlist_rules.py", "playlists", ("playlists",)),
             ("backend/domain/works/note_rules.py", "notes", ("notes",)),
-            ("backend/pdf_annotations.py", "pdf-annotations", ("pdf-annotations",)),
+            ("backend/pdf/pdf_annotations.py", "pdf-annotations", ("pdf-annotations",)),
             ("backend/domain/annotations/rules.py", "pdf-annotations", ("pdf-annotations",)),
             ("backend/domain/works/lifecycle_rules.py", "work-lifecycle", ("offline", "folders", "sync")),
             ("backend/domain/organization/work_tag_rules.py", "sync-families", ("sync", "offline")),

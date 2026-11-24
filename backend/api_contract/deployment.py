@@ -1,6 +1,6 @@
 """Deployment-settings HTTP response DTOs (#612).
 
-Shape only. ``backend.config_reference.browser_view`` builds the rows from
+Shape only. ``backend.runtime.config_reference.browser_view`` builds the rows from
 the web process's environment. Read-only by design: deployment values come
 from the host (environment, Compose ``.env``, secret files) and need a
 restart; the browser can never change them. A secret or a host path shows

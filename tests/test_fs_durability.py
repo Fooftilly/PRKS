@@ -1,4 +1,4 @@
-"""``backend.fs_durability``: the directory and file barriers every durable write uses.
+"""``backend.storage.fs_durability``: the directory and file barriers every durable write uses.
 
 Moved from ``tests/test_restore_durability.py`` (PG-C2 #641): the SQLite
 restore journal goes with SQLite, but these primitives stay in use (the
@@ -17,7 +17,7 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
-from backend import fs_durability
+from backend.storage import fs_durability
 
 
 class TestDurabilityPrimitives(unittest.TestCase):

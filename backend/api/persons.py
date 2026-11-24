@@ -28,10 +28,10 @@ import logging
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from backend.derived_caches import prks_delete_person_image_cache
-from backend.etags import etag_for_representation
-from backend.log_safety import safe_error_type, safe_log_id
-from backend.person_image import PersonImageUrlError, fetch_and_prepare, normalize_person_image_url
+from backend.media.derived_caches import prks_delete_person_image_cache
+from backend.web.etags import etag_for_representation
+from backend.runtime.log_safety import safe_error_type, safe_log_id
+from backend.media.person_image import PersonImageUrlError, fetch_and_prepare, normalize_person_image_url
 
 LOGGER = logging.getLogger("prks.server")
 

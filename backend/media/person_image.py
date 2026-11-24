@@ -20,7 +20,7 @@ from email.message import Message
 from io import BytesIO
 from urllib.parse import urlsplit
 
-from backend.performance import span as perf_span
+from backend.runtime.performance import span as perf_span
 
 PRKS_PORTRAIT_FETCH_TIMEOUT_SECONDS = 6
 PRKS_PORTRAIT_MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024

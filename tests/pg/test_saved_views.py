@@ -21,7 +21,7 @@ from unittest import mock
 from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require

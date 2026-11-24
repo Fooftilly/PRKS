@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 
 COLLECTION = "/api/tags"
 _PREFIX = COLLECTION + "/"

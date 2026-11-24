@@ -20,7 +20,7 @@ from backend.domain.identity.authorization import AccessRefused
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import folders, links, tags
 from backend.domain.works import commands
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.domain.organization.folder_rules import FolderRuleError, scope_key
 from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase

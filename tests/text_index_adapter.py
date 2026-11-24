@@ -24,7 +24,7 @@ from tests.acting_context import current_context
 
 if TYPE_CHECKING:
     from backend.db.database import Database
-    from backend.pdf_text import TextIndexSyncResult
+    from backend.pdf.pdf_text import TextIndexSyncResult
 
 
 class PostgresTextIndex:
@@ -35,7 +35,7 @@ class PostgresTextIndex:
 
     def sync_work(self, work_id: str, file_path: str, **_options: Any) -> TextIndexSyncResult:
         """Nothing to do: the command that changed the PDF queued ``text.extract`` in its transaction."""
-        from backend.pdf_text import TextIndexSyncResult
+        from backend.pdf.pdf_text import TextIndexSyncResult
 
         return TextIndexSyncResult(action="queued")
 

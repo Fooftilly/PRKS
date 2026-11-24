@@ -166,7 +166,7 @@ def stored_labels(storage: StorageBackend, key: StorageKey) -> list[str]:
     Streams the object in ``READ_CHUNK`` reads, so memory stays bounded
     whatever its size, and keeps the first ``MAX_LABELS`` names.
     """
-    from backend.pdf_byte_mentions import iter_pdf_mentioned_labels_chunked
+    from backend.pdf.pdf_byte_mentions import iter_pdf_mentioned_labels_chunked
 
     labels: dict[str, None] = {}
     with storage.open_read(key) as handle:

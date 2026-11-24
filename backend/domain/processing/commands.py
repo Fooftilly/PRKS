@@ -79,7 +79,7 @@ def upload(db: Database, ctx: RequestContext, storage: StorageBackend, *, upload
     marker is refused ``PROCESSING_ITEM_DELETED``). Any refusal raised
     before the store has read nothing of ``body``.
     """
-    from backend.entity_ids import generate
+    from backend.domain.entity_ids import generate
 
     upload_key = uploads.check_upload_key(upload_key)
     filename = uploads.display_filename(filename)

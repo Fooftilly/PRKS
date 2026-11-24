@@ -17,8 +17,8 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from backend.domain.works import metadata_rules
 from backend.domain.works import source_rules
-from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
-from backend.performance import clock_ns, record_counter, record_span
+from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.runtime.performance import clock_ns, record_counter, record_span
 
 PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "remove_tags"})
 

@@ -28,9 +28,9 @@ import base64
 import binascii
 from typing import Any, Optional
 
-from backend.etags import etag_for_representation
-from backend.pdf_annotations import WorkAnnotationError
-from backend.services.work_pdf_replace import stale_materialization_body
+from backend.web.etags import etag_for_representation
+from backend.pdf.pdf_annotations import WorkAnnotationError
+from backend.pdf.work_pdf_replace import stale_materialization_body
 
 _PREFIX = "/api/works/"
 
@@ -170,7 +170,7 @@ def _write_pdf(handler: Any, db: Any, work_id: str, pdf_bytes: bytes,
     rendered annotations and mark the Work materialized; without it they
     replace the Work's PDF.
     """
-    from backend.pdf_materialization import STALE_CODE
+    from backend.pdf.pdf_materialization import STALE_CODE
 
     def write(out) -> None:
         out.write(pdf_bytes)

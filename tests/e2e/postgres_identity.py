@@ -248,7 +248,7 @@ def issue_setup_token(library: E2ELibrary) -> str:
 
 def _add_member(db, library_id: str, login: str) -> str:
     """One more editor of the Library, signing in with :data:`PASSWORD`."""
-    from backend import entity_ids
+    from backend.domain import entity_ids
 
     user_id = entity_ids.generate("U")
 
