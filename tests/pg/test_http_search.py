@@ -33,17 +33,17 @@ from tests.pg.test_search_text import pdf_bytes
 class SearchHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
-        module = self.server_module
-        previous = module.db
+        module = self.app
+        previous = module.library
         self.addCleanup(self._restore, previous)
-        self.storage = module._bound_storage
+        self.storage = module.storage
         self.facade = TestLibrary(self.db, storage=self.storage)
-        module.db = self.facade
+        module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()
 
     def _restore(self, previous: Any) -> None:
-        self.server_module.db = previous
+        self.app.library = previous
 
     def acting(self) -> Any:
         valid = sessions.resolve_session(self.db, self.cookies["prks_session"])

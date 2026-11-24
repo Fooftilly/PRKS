@@ -136,7 +136,7 @@ def peak_rss_kib() -> int:
 class AdversarialPdfCorpusTests(ProcessingHttpTestCase):
     def setUp(self) -> None:
         super().setUp()
-        storage = self.server_module._bound_storage
+        storage = self.app.storage
         assert storage is not None
         self.objects = LocalFilesystemStorage.for_config(storage)
 

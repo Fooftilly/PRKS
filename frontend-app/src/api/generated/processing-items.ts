@@ -839,10 +839,10 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description Any JSON value, ignored. Send `{}`. */
+        /** @description A JSON object, ignored. Send `{}`. */
         requestBody: {
             content: {
-                "application/json": unknown;
+                "application/json": Record<string, never>;
             };
         };
         responses: {
@@ -864,7 +864,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemImported"];
                 };
             };
-            /** @description A refused draft value (VALIDATION_ERROR). */
+            /** @description A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object (invalid_request). */
             400: {
                 headers: {
                     [name: string]: unknown;

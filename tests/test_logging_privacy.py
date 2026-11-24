@@ -1,16 +1,13 @@
 import json
 import logging
-import contextlib
 import os
 import re
 import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
-from email.message import Message
 from types import SimpleNamespace
 from unittest.mock import patch
-from urllib.parse import urlparse
 
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +28,10 @@ from backend.log_safety import (
     safe_route,
 )
 from backend.pdf_linearize import linearize_pdf_to
-from backend.server import PRKSHandler
+from backend.api import diagnostics
+from backend.web.app import App
+from backend.web.dispatch import finalize, internal_error
+from backend.web.http import Headers, Request, Response, error_response
 
 
 SECRET_TITLE = "PRIVATE_RESEARCH_TITLE_X9Q7"
@@ -86,15 +86,19 @@ def _capture_formatted(logger_name: str, level: int = logging.DEBUG):
         logger.setLevel(old_level)
 
 
-def _bare_handler(**kwargs):
-    handler = object.__new__(PRKSHandler)
-    handler._prks_request_id = kwargs.get("request_id", "aabbccddeeff")
-    handler.command = kwargs.get("method", "GET")
-    handler.path = kwargs.get("path", "/")
-    handler.client_address = kwargs.get("client_address", (SECRET_CLIENT, 54321))
-    handler.headers = Message()
-    handler.send_json = lambda *a, **k: None
-    return handler
+def _request(path="/", *, method="GET", query="", headers=(), json=None):
+    """A request as the dispatcher sees it; ``path`` never carries the query."""
+    return Request(
+        method=method,
+        path=path,
+        query_string=query,
+        headers=Headers(headers),
+        app=App(),
+        request_id="aabbccddeeff",
+        peer=(SECRET_CLIENT, 54321),
+        json=json,
+        json_absent=json is None,
+    )
 
 
 class TestSafeRoute(unittest.TestCase):
@@ -275,12 +279,9 @@ class TestPrivacySafeFormatter(unittest.TestCase):
 
 class TestAccessLogging(unittest.TestCase):
     def test_access_log_is_debug_and_drops_secrets(self):
-        handler = _bare_handler(
-            path=f"/api/search?q={SECRET_QUERY}",
-            method="GET",
-        )
+        request = _request("/api/search", query=f"q={SECRET_QUERY}", headers=[("User-Agent", SECRET_UA)])
         with _capture_formatted("prks.server") as records:
-            handler.log_request(200, 12)
+            finalize(request, Response(200, [("Content-Length", "12")], b"x" * 12))
         text = _formatted_text(records)
         self.assertIn("request_access", text)
         self.assertIn("method=GET", text)
@@ -291,26 +292,25 @@ class TestAccessLogging(unittest.TestCase):
             self.assertNotIn(secret, text)
 
     def test_pdf_access_omits_filename(self):
-        handler = _bare_handler(path=f"/api/pdfs/{SECRET_TITLE}.pdf")
+        request = _request(f"/api/pdfs/{SECRET_TITLE}.pdf")
         with _capture_formatted("prks.server") as records:
-            handler.log_request(200)
+            finalize(request, Response(200))
         text = _formatted_text(records)
         self.assertIn("route=/api/pdfs/:pdf", text)
         self.assertNotIn(SECRET_TITLE, text)
         self.assertNotIn(".pdf", text)
 
-    def test_log_error_does_not_interpolate(self):
-        handler = _bare_handler()
+    def test_error_answers_log_the_status_only(self):
         with _capture_formatted("prks.server") as records:
-            handler.log_error('"%s" %s', f"GET /api/search?q={SECRET_QUERY} HTTP/1.1", "404")
+            error_response(404, f"GET /api/search?q={SECRET_QUERY}")
         text = _formatted_text(records)
-        self.assertIn("http_error", text)
+        self.assertIn("http_error status=404", text)
         self.assertNotIn(SECRET_QUERY, text)
 
     def test_request_access_omits_arbitrary_non_api_path(self):
-        handler = _bare_handler(path=f"/{SECRET_TITLE}")
+        request = _request(f"/{SECRET_TITLE}")
         with _capture_formatted("prks.server") as records:
-            handler.log_request(404)
+            finalize(request, Response(404))
         text = _formatted_text(records)
         self.assertIn("request_access", text)
         self.assertIn("route=/:static", text)
@@ -319,12 +319,12 @@ class TestAccessLogging(unittest.TestCase):
 
 class TestInternalErrorLogging(unittest.TestCase):
     def test_unhandled_api_error_omits_query_and_exception_text(self):
-        handler = _bare_handler(path=f"/api/search?q={SECRET_QUERY}")
+        request = _request("/api/search", query=f"q={SECRET_QUERY}")
         with _capture_formatted("prks.server") as records:
             try:
                 raise RuntimeError(f"{SECRET_TITLE} {SECRET_PATH}")
             except RuntimeError as exc:
-                handler._send_internal_error(exc)
+                self.assertEqual(internal_error(request, exc).status, 500)
         text = _formatted_text(records)
         self.assertIn("unhandled_api_error", text)
         self.assertIn("RuntimeError", text)
@@ -348,11 +348,9 @@ class TestClientErrorPrivacy(unittest.TestCase):
             "source": "https://host/private/SECRET_X9Q7.js",
             "request_id": "abc123",
         }
-        handler = _bare_handler()
-        handler.headers["User-Agent"] = SECRET_UA
-        handler._read_json_body = lambda: payload
+        request = _request("/api/client-errors", method="POST", headers=[("User-Agent", SECRET_UA)], json=payload)
         with _capture_formatted("prks.server") as records:
-            handler.handle_api_post(urlparse("/api/client-errors"))
+            self.assertEqual(diagnostics.client_error(request).status, 200)
         text = _formatted_text(records)
         self.assertIn("client_error", text)
         self.assertIn("kind=window_error", text)

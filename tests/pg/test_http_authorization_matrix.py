@@ -75,7 +75,9 @@ _CSL = ('<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version=
 ROWS: tuple[Row, ...] = (
     Row("works", READ, "GET", "/api/works/{work}"),
     Row("works", EDIT, "PATCH", "/api/works/{work}", {"title": "Renamed by the matrix"}),
-    Row("works", READ, "GET", "/api/pdfs/{pdf}"),  # streams a managed file
+    Row("pdfs", READ, "GET", "/api/pdfs/{pdf}"),  # streams a managed file
+    Row("thumbnails", READ, "GET", "/api/works/{work}/thumbnail", allowed=(404,)),  # no PDF page to render
+    Row("research_graph", READ, "GET", "/api/research-graph"),
     Row("research_notes", EDIT, "PATCH", "/api/works/{work}", {"text_content": "A note from the matrix {unique}"},
         verify="note_saved"),
     Row("annotations", READ, "GET", "/api/works/{work}/annotations"),
@@ -116,28 +118,31 @@ ROWS: tuple[Row, ...] = (
     # Where the Library's files are (#720): carries host paths, the owner only.
     Row("storage", ADMIN, "GET", "/api/storage-status"),
     # An empty envelope is the protocol's own refusal, after admission.
-    Row("session", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
+    Row("sync", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
+    Row("diagnostics", READ, "GET", "/api/diagnostics/performance"),
+    Row("diagnostics", ADMIN, "POST", "/api/diagnostics/performance/reset", {}),
 )
 # Modules that are not a route family of their own. ``setup`` serves only a
 # first run's setup phase, before any session or Library exists (#612); its
 # token, origin and rate-limit rules are in tests/pg/test_web_setup.py.
-_NOT_FAMILIES = frozenset({"__init__", "setup"})
-# Families with no mutating route.
+# ``session`` is admission itself, ``common`` holds shared helpers, and
+# ``health`` serves the unauthenticated probes (tests/test_health_probes.py).
+_NOT_FAMILIES = frozenset({"__init__", "setup", "session", "common", "health"})
 # Families with no mutating route. A saved remote image is written only by a
 # read (``GET /api/remote-images`` fills it, as the portrait route does).
-_READ_ONLY = frozenset({"search", "remote_images", "deployment"})
+_READ_ONLY = frozenset({"search", "remote_images", "deployment", "pdfs", "thumbnails", "research_graph"})
 
 
 class AuthorizationMatrixTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
-        module = self.server_module
-        previous = module.db
-        self.addCleanup(setattr, module, "db", previous)
-        storage = module._bound_storage
+        module = self.app
+        previous = module.library
+        self.addCleanup(setattr, module, "library", previous)
+        storage = module.storage
         assert storage is not None
         self.facade = TestLibrary(self.db, storage=storage)
-        module.db = self.facade
+        module.library = self.facade
         self.serve()
         owner_cookie = self.session_cookie()
         self.seed(storage, owner_cookie)

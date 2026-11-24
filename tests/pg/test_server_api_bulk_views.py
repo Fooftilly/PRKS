@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 from urllib.parse import quote, urlsplit
 
+from backend import performance
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 SEARCH = {"mode": "all", "q": "", "tag": "", "author": "", "publisher": ""}
@@ -91,7 +92,7 @@ class BulkTests(ServerApiTestCase):
         work_id = self.create_work(sentinel, status="Paused")["id"]
         with captured("prks.server", "prks.db") as records:
             self.ok(self.bulk([work_id], status="Completed"))
-            snapshot = self.server_module.performance_snapshot()
+            snapshot = performance.snapshot()
         self.assertNotIn(sentinel, "\n".join(records) + json.dumps(snapshot))
         self.assertNotIn(sentinel, self.logs.getvalue())
         self.assertTrue(any("bulk_work_update" in line for line in records))
@@ -250,7 +251,7 @@ class SavedViewTests(ServerApiTestCase):
             created = self.create(sentinel, q=sentinel)
             self.views("GET", f"/api/saved-views/{created['id']}")
             self.views("PATCH", f"/api/saved-views/{created['id']}", {"search": search})
-            snapshot = self.server_module.performance_snapshot()
+            snapshot = performance.snapshot()
         self.assertNotIn(sentinel, "\n".join(records) + json.dumps(snapshot))
         self.assertNotIn(sentinel, self.logs.getvalue())
         self.assertTrue(any("saved_view_created" in line for line in records))

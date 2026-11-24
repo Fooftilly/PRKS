@@ -4545,11 +4545,16 @@ class HttpAdapterBoundaryTests(unittest.TestCase):
                 "import os\ndef stage(tmp_path):\n"
                 "    return os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)\n"
             ),
-            "backend/api/new_controller.py": "import subprocess\n",
         }
         for relpath, source in cases.items():
             with self.subTest(relpath=relpath):
                 self.assertEqual(_codes(source, relpath), [])
+
+    def test_the_route_families_and_the_http_layer_are_the_adapter(self):
+        """#1424 moved the routes out of ``backend/server.py``: the rules follow them."""
+        for relpath in ("backend/server.py", "backend/api/new_controller.py", "backend/web/new_layer.py"):
+            with self.subTest(relpath=relpath):
+                self.assertEqual(_codes("import subprocess\n", relpath), ["INV-ADAPTER-002"])
 
     def test_ordinary_adapter_code_passes(self):
         cases = {

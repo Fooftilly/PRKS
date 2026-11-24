@@ -23,20 +23,27 @@ if _PROJECT_DIR not in sys.path:
 
 from backend.library import NotPortedError, PostgresLibrary
 
-# The HTTP adapter: the modules that hold the bound Library as ``db``.
-ADAPTER_GLOBS = ("backend/server.py", "backend/api/*.py", "backend/services/*.py")
+# The HTTP adapter: the modules that reach the bound Library (``req.library``,
+# ``app.library``, a ``library`` or ``db`` local).
+ADAPTER_GLOBS = ("backend/server.py", "backend/web/*.py", "backend/api/*.py", "backend/services/*.py")
+
+
+def _is_library(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in ("db", "library")
+    return isinstance(node, ast.Attribute) and node.attr == "library"
+
 
 
 def adapter_library_calls() -> dict[str, set[str]]:
-    """Every ``db.<name>`` the HTTP adapter reaches, with the files reaching it."""
+    """Every Library member the HTTP adapter reaches, with the files reaching it."""
     found: dict[str, set[str]] = {}
     for pattern in ADAPTER_GLOBS:
         for path in sorted(glob.glob(os.path.join(_PROJECT_DIR, pattern))):
             with open(path, encoding="utf-8") as handle:
                 tree = ast.parse(handle.read(), path)
             for node in ast.walk(tree):
-                if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
-                        and node.value.id == "db"):
+                if isinstance(node, ast.Attribute) and _is_library(node.value):
                     found.setdefault(node.attr, set()).add(os.path.relpath(path, _PROJECT_DIR))
     return found
 

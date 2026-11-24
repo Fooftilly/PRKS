@@ -12,22 +12,15 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 import backend.server as server_module
-from backend.server import (
+from backend.server import run_server
+from backend.storage.config import StorageConfig
+from backend.web.app import App
+from backend.web.hosts import (
     is_trusted_request_host,
     parse_request_host,
     parse_request_origin,
     parse_trusted_hosts,
-    run_server,
 )
-from backend.storage.config import StorageConfig
-
-
-def _capture_bind():
-    return server_module._bound_storage
-
-
-def _restore_bind(snapshot):
-    server_module._bound_storage = snapshot
 
 
 class TestParseRequestHost(unittest.TestCase):
@@ -172,13 +165,11 @@ class TestParseOrigin(unittest.TestCase):
 
 class TestMalformedTrustedHostsAbortListen(unittest.TestCase):
     def setUp(self):
-        self._prev = _capture_bind()
         self._tmpdir = tempfile.mkdtemp(prefix="prks-trust-bind-")
         # ``run_server`` only needs a bound root; the Library is not opened here.
-        server_module._bound_storage = StorageConfig.for_testing(self._tmpdir)
+        self.app = App(storage=StorageConfig.for_testing(self._tmpdir))
 
     def tearDown(self):
-        _restore_bind(self._prev)
         try:
             import shutil
 
@@ -192,7 +183,7 @@ class TestMalformedTrustedHostsAbortListen(unittest.TestCase):
                 os.environ, {"PRKS_TRUSTED_HOSTS": "https://evil.example"}, clear=False
             ):
                 with self.assertRaises(ValueError):
-                    run_server(port=9000)
+                    run_server(self.app, port=9000)
             ctor.assert_not_called()
 
 

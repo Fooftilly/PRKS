@@ -22,11 +22,9 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.api import saved_views as saved_views_api
 from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
-from tests.acting_context import current_context
 from tests.backend_parity import parametrize_backends
-from tests.library_adapter import SavedViewCommandsOver, route_commands_over
+from tests.library_adapter import SavedViewCommandsOver, call_route, route_commands_over
 from tests.test_tags_parity import TagParityTestCase, TagSide
 
 _SV = re.compile(r"\bSV-[0-9A-F]{32}\b")
@@ -46,19 +44,6 @@ class ViewSide(TagSide):
         if isinstance(value, str):
             value = _SV.sub(lambda match: self.labels.get(match.group(0), "<unknown id>"), value)
         return super().normal(value)
-
-
-class _Handler:
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, Any]] = []
-
-    @property
-    def _prks_request_context(self) -> Any:
-        """The admitted request's context: the actor this test is bound to."""
-        return current_context()
-
-    def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
-        self.calls.append((status, body))
 
 
 class SavedViewParityTestCase(TagParityTestCase):
@@ -153,26 +138,27 @@ class SavedViewFacadeParityTests(SavedViewParityTestCase):
         self.same("get_saved_views")
 
     def test_the_http_controller_answers_alike(self) -> None:
-        handlers = (_Handler(), _Handler())
+        from backend.domain.saved_views import commands
+
         created: list[str] = []
+        last: list[Any] = [None, None]
 
         def run(method: str, path: str, *body: Any) -> int:
-            for index, (side, handler) in enumerate(zip(self.sides(), handlers)):
+            for index, side in enumerate(self.sides()):
                 target = path.replace("<id>", created[index]) if created else path
-                route = getattr(saved_views_api, f"handle_{method}")
                 if side is self.leg:
-                    self.assertTrue(route(handler, side.db, target, *body))
+                    last[index] = call_route(side.db, method.upper(), target, *body)
                     continue
                 # The reference replays SQLite's calls by name: the route's commands become them.
-                with route_commands_over(saved_views_api, SavedViewCommandsOver(side.db)):
-                    self.assertTrue(route(handler, side.db, target, *body))
-            mine, theirs = handlers[0].calls[-1], handlers[1].calls[-1]
+                with route_commands_over(commands, SavedViewCommandsOver(side.db)):
+                    last[index] = call_route(side.db, method.upper(), target, *body)
+            mine, theirs = last
             self.assertEqual(self.leg.normal(mine), self.ref.normal(theirs), (method, path))
             return mine[0]
 
         self.assertEqual(run("post", "/api/saved-views", {"name": "Industry", "search": _ADVANCED}), 201)
-        for side, handler in zip(self.sides(), handlers):
-            created.append(side.label(handler.calls[-1][1]["id"], "<SV Industry>"))
+        for index, side in enumerate(self.sides()):
+            created.append(side.label(last[index][1]["id"], "<SV Industry>"))
         statuses = [
             run("get", "/api/saved-views/<id>"),
             run("patch", "/api/saved-views/<id>", {"name": "Renamed"}),

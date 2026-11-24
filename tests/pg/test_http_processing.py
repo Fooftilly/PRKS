@@ -50,10 +50,10 @@ def _conform(body: dict[str, Any]) -> None:
 class ProcessingHttpTestCase(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
-        module = self.server_module
-        previous = module.db
-        self.addCleanup(setattr, module, "db", previous)
-        module.db = TestLibrary(self.db, storage=module._bound_storage)
+        module = self.app
+        previous = module.library
+        self.addCleanup(setattr, module, "library", previous)
+        module.library = TestLibrary(self.db, storage=module.storage)
         self.serve()
         self.cookies = self.session_cookie()
 
@@ -102,6 +102,11 @@ class ProcessingHttpTestCase(HttpAuthTestCase):
         if res.header("Content-Type")[:1] == ["application/json; charset=utf-8"] and isinstance(res.body, dict):
             _conform(res.body)
         return res.body
+
+    def not_an_object(self, res: Response) -> None:
+        """The dispatcher's common refusal of a body that is not a JSON object (#1424)."""
+        self.assertEqual((res.status, res.body), (400, {"error": "JSON object body required",
+                                                       "code": "invalid_request"}), res.raw)
 
     def refused(self, res: Response, status: int, code: str) -> dict[str, Any]:
         self.assertEqual(res.status, status, res.raw)
@@ -481,30 +486,33 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
             {"revision": 1.5},
             {"revision": 5, "roles": "Author"},
             {"revision": 5, "tags": {"id": tag}},
-            ["title"],
         ):
             with self.subTest(body=body):
                 self.refused(self.parity("PATCH", path, body, valid=False), 400, "VALIDATION_ERROR")
+        # A body that is not an object is the dispatcher's common refusal (#1424).
+        self.not_an_object(self.parity("PATCH", path, ["title"], valid=False))
         self.assertEqual(self.ok(self.get(path))["revision"], 5)
 
     def test_import_bodies_agree(self) -> None:
         item = self.upload()
         path = f"/api/processing-items/{item['id']}/import"
-        # The single import takes any JSON value and ignores it.
+        # The single import takes any JSON object and ignores it; anything
+        # else is the dispatcher's common refusal (#1424).
+        self.ok(self.parity("POST", path, {}, valid=True), 201)
+        again = self.ok(self.parity("POST", path, {"ignored": 1}, valid=True))
+        self.assertFalse(again["created"])
         for body in ([1], "x"):
             with self.subTest(body=body):
-                self.assertTrue(self.schema_accepts("POST", path, body))
-        self.ok(self.parity("POST", path, {}, valid=True), 201)
-        again = self.ok(self.parity("POST", path, ["ignored"], valid=True))
-        self.assertFalse(again["created"])
+                self.not_an_object(self.parity("POST", path, body, valid=False))
         second = self.upload()
         batch = "/api/processing-items/import"
         results = self.ok(self.parity("POST", batch, {"item_ids": [second["id"]]}, valid=True))["results"]
         self.assertEqual([(one["item_id"], one["ok"]) for one in results], [(second["id"], True)])
         for body in ({}, {"item_ids": []}, {"item_ids": [1]}, {"item_ids": "x"}, {"item_ids": ["x"] * 501},
-                     {"item_ids": [second["id"]], "extra": 1}, [second["id"]]):
+                     {"item_ids": [second["id"]], "extra": 1}):
             with self.subTest(body=str(body)[:40]):
                 self.refused(self.parity("POST", batch, body, valid=False), 400, "VALIDATION_ERROR")
+        self.not_an_object(self.parity("POST", batch, [second["id"]], valid=False))
 
     def test_no_write_omits_its_json_body(self) -> None:
         item = self.upload()

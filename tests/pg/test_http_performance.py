@@ -92,20 +92,20 @@ class TransactionTimingTests(HttpAuthTestCase):
 class PerformanceHttpTests(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
-        module = self.server_module
-        previous = module.db
+        module = self.app
+        previous = module.library
         self.addCleanup(self._restore, previous)
-        self.storage = module._bound_storage
+        self.storage = module.storage
         assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
-        module.db = self.facade
+        module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()
         performance.reset()
 
     def _restore(self, previous: Any) -> None:
-        self.server_module.db = previous
+        self.app.library = previous
 
     def get(self, path: str, headers: Optional[list[tuple[str, str]]] = None) -> Response:
         return self.call("GET", path, cookies=self.cookies, headers=headers)
@@ -197,7 +197,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
         self.assertNotIn(SECRET_NOTE, _dump(self.snapshot()))
 
     def test_an_instrumentation_failure_does_not_fail_the_request(self) -> None:
-        with patch.object(self.server_module, "finish_request", side_effect=RuntimeError("perf boom")):
+        with patch("backend.web.dispatch.finish_request", side_effect=RuntimeError("perf boom")):
             self.assertEqual(self.get("/api/works").status, 200)
 
     def test_json_and_gzip_spans_and_response_bytes(self) -> None:

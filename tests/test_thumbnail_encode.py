@@ -9,7 +9,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.server import (  # noqa: E402
+from backend.api.thumbnails import (  # noqa: E402
     _prks_pixmap_to_card_webp_bytes,
     _prks_pixmap_to_lossless_webp_bytes,
 )

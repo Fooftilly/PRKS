@@ -493,12 +493,14 @@ class FrontendWorkCreateTests(unittest.TestCase):
         self.assertIn('aria-describedby="work-date-error"', modal)
 
     def test_backend_video_url_is_authoritative(self):
-        server = _read(os.path.join(_PROJECT_DIR, "backend", "server.py"))
-        self.assertIn("_validate_youtube_url", server)
-        self.assertIn("Invalid YouTube URL", server)
+        works = _read(os.path.join(_PROJECT_DIR, "backend", "api", "works.py"))
+        self.assertIn("validate_youtube_url", works)
+        self.assertIn("Invalid YouTube URL", works)
         # Hostname matching must be an explicit set, not substring matching.
-        self.assertIn("_YOUTUBE_HOSTS", server)
-        self.assertNotIn("'youtube.com' in host", server)
+        self.assertIn("is_youtube_host", works)
+        self.assertNotIn("'youtube.com' in host", works)
+        rules = _read(os.path.join(_PROJECT_DIR, "backend", "work_source_sync.py"))
+        self.assertIn("YOUTUBE_HOSTS = frozenset(", rules)
 
     def test_css_sticky_create_footer(self):
         css = _read(_CSS)

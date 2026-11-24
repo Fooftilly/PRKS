@@ -19,6 +19,7 @@ from typing import Any
 from unittest import mock
 from urllib.parse import unquote
 
+from backend.api import works as works_api
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 PDF = b"%PDF-1.4\n%%EOF\n"
@@ -84,7 +85,7 @@ class UploadTests(ServerApiTestCase):
 class OembedTests(ServerApiTestCase):
     def test_a_malformed_source_url_keeps_the_lookup_best_effort(self) -> None:
         lone_surrogate = json.loads('"https://www.youtube.com/watch?v=\\ud800"')
-        self.assertIsNone(self.server_module._fetch_youtube_oembed(lone_surrogate))
+        self.assertIsNone(works_api.fetch_youtube_oembed(lone_surrogate))
         res = self.send("POST", "/api/works", {"title": "Malformed Source URL", "source_url": lone_surrogate})
         self.assertIn(res.status, (200, 400), res.raw)
         if res.status == 200:
@@ -107,9 +108,9 @@ class OembedTests(ServerApiTestCase):
             seen.append(req.full_url)
             return FakeResponse()
 
-        with mock.patch.object(self.server_module, "urlopen", fake_urlopen):
-            meta = self.server_module._fetch_youtube_oembed("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
-            rejected = self.server_module._fetch_youtube_oembed("https://example.invalid/watch?v=dQw4w9WgXcQ")
+        with mock.patch.object(works_api, "urlopen", fake_urlopen):
+            meta = works_api.fetch_youtube_oembed("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1&t=30")
+            rejected = works_api.fetch_youtube_oembed("https://example.invalid/watch?v=dQw4w9WgXcQ")
         self.assertEqual((meta, rejected), ({"title": "T"}, None))
         self.assertEqual(len(seen), 1)
         prefix = "https://www.youtube.com/oembed?format=json&url="

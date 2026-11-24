@@ -17,6 +17,7 @@ from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
+from backend.api import thumbnails
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -114,7 +115,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         from backend.derived_caches import prks_thumb_cache_stem
 
         work = self.upload("Thumb Race", "thumbraceold", "thumb_race.pdf")
-        original = self.server_module._prks_thumbnail_bytes_from_pixmap
+        original = thumbnails._prks_thumbnail_bytes_from_pixmap
         rendering, replaced = threading.Event(), threading.Event()
         self.addCleanup(replaced.set)
         first = [True]
@@ -127,7 +128,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
             return original(pix)
 
         result: dict[str, Any] = {}
-        with mock.patch.object(self.server_module, "_prks_thumbnail_bytes_from_pixmap", slow):
+        with mock.patch.object(thumbnails, "_prks_thumbnail_bytes_from_pixmap", slow):
             viewer = threading.Thread(target=lambda: result.setdefault(
                 "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
             viewer.start()
@@ -165,7 +166,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         from backend.derived_caches import prks_thumb_cache_stem
 
         work = self.upload("Thumb Prune Race", "thumbpruneold", "thumb_prune_race.pdf")
-        original = self.server_module.prks_prune_thumbnail_page
+        original = thumbnails.prks_prune_thumbnail_page
         pruning, replaced = threading.Event(), threading.Event()
         self.addCleanup(replaced.set)
         first = [True]
@@ -181,7 +182,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
             original(*args, **kwargs)
 
         result: dict[str, Any] = {}
-        with mock.patch.object(self.server_module, "prks_prune_thumbnail_page", held):
+        with mock.patch.object(thumbnails, "prks_prune_thumbnail_page", held):
             viewer = threading.Thread(target=lambda: result.setdefault(
                 "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
             viewer.start()
@@ -204,7 +205,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         import threading
 
         work = self.upload("Thumb Delete Race", "thumbdeleterace", "thumb_delete_race.pdf")
-        original = self.server_module.publish_derived_cache_bytes
+        original = thumbnails.publish_derived_cache_bytes
         publishing, deleted = threading.Event(), threading.Event()
         self.addCleanup(deleted.set)
         # The handler swallows errors from its cache write, so the held call
@@ -221,7 +222,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
             return out
 
         result: dict[str, Any] = {}
-        with mock.patch.object(self.server_module, "publish_derived_cache_bytes", held):
+        with mock.patch.object(thumbnails, "publish_derived_cache_bytes", held):
             viewer = threading.Thread(target=lambda: result.setdefault(
                 "res", self.get(f"/api/works/{work['id']}/thumbnail?page=1")), daemon=True)
             viewer.start()
@@ -301,8 +302,9 @@ class AdoptionSpellingTests(ManagedPdfTestCase):
                 body = self.refused(self.send("POST", "/api/works", {"title": "Adopt", "file_path": spelling}), 400)
                 self.assertEqual(body.get("error"), "file_path is not a managed PDF")
         self.assertEqual(self.titles(), ["Spelling Owner"])
-        for suffix in ("?x", ";x"):
-            with self.subTest(suffix=suffix):
-                res = self.get(f"{path}{suffix}")
-                self.assertEqual(res.status, 200, "the route serves the path, never the delimiter")
-                self.assertIn(b"%PDF", res.raw[:32])
+        res = self.get(f"{path}?x")
+        self.assertEqual(res.status, 200, "a query string is not part of the path")
+        self.assertIn(b"%PDF", res.raw[:32])
+        # The path is taken as sent: ";x" is part of the file name, which no
+        # managed PDF has.
+        self.assertEqual(self.get(f"{path};x").status, 404)

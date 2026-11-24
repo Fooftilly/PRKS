@@ -433,6 +433,7 @@ AFFECTED_RULES = (
             "frontend/index.html",
             "frontend/sw.js",
             "backend/server.py",
+            "backend/web/**",
             "prks_app.py",
         ),
         "features": ("smoke", "shell", "tabs", "offline", "sync", "modals"),
