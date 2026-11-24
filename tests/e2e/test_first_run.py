@@ -23,8 +23,6 @@ import json
 import os
 import unittest
 
-import psycopg
-
 from tests.e2e.harness import AppServer, PageCollector, require_chromium
 from tests.e2e.postgres_identity import issue_setup_token
 
@@ -195,6 +193,9 @@ class ChooseFolderSetupTests(unittest.TestCase):
         # Setup claimed the chosen folder, so it can no longer change.
         self.assertEqual(self.setup_status(context), {"state": "ready", "storage": "fixed"})
         # The database is paired with the chosen folder, not the one PRKS first ran on.
+        # psycopg is imported here: the E2E planner discovers this module without it.
+        import psycopg
+
         with psycopg.connect(self.server.library.conninfo) as conn:
             row = conn.execute("SELECT id, storage_root_id FROM prks.instance").fetchone()
         assert row is not None
