@@ -260,8 +260,16 @@ class PackagedGatePlanTests(unittest.TestCase):
             "+const DEPENDENCY_REVISION = 'ba9876543210';",
             "+self.addEventListener('fetch', () => {});",
         )
+        moved = "\n".join([
+            "diff --git a/frontend/sw.js b/frontend/sw.js", "--- a/frontend/sw.js",
+            "+++ b/frontend/sw.js", "@@ -1,3 +1,2 @@",
+            "-const DEPENDENCY_REVISION = '0123456789ab';", " const A = 1;",
+            "@@ -20,2 +19,3 @@", " const SHELL_CACHE = `shell-${DEPENDENCY_REVISION}`;",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+        ])
         for label, changed, diffs in (
             ("logic edit", paths, {"frontend/sw.js": logic}),
+            ("moved declaration", paths, {"frontend/sw.js": moved}),
             ("missing diff", paths, None),
             ("no bundle", ["frontend/sw.js"], {"frontend/sw.js": stamp}),
         ):

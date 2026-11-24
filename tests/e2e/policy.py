@@ -1507,26 +1507,35 @@ def sw_js_diff_is_dependency_revision_only(diff_text: str | None) -> bool:
     """True when a unified diff of ``frontend/sw.js`` changes only the stamp.
 
     Missing or unreadable diffs fail closed. The build writes exactly
-    ``const DEPENDENCY_REVISION = '<12 hex>';``.
+    ``const DEPENDENCY_REVISION = '<12 hex>';`` in place, so the removed and
+    added line must be adjacent in one hunk; a moved declaration does not count.
     """
     if not diff_text or not str(diff_text).strip():
         return False
-    removed = []
-    added = []
+    changes = []
     for line in str(diff_text).splitlines():
         if line.startswith(
-            ("diff ", "index ", "@@", "\\", "new file", "deleted file", "old mode", "new mode")
+            ("diff ", "index ", "\\", "new file", "deleted file", "old mode", "new mode")
         ):
             continue
         if line.startswith("--- ") or line.startswith("+++ "):
             continue
-        if line.startswith("-"):
-            removed.append(line[1:].strip())
+        if line.startswith("@@"):
+            changes.append("@@")
+        elif line.startswith("-"):
+            changes.append(("-", line[1:].strip()))
         elif line.startswith("+"):
-            added.append(line[1:].strip())
-    if len(removed) != 1 or len(added) != 1:
+            changes.append(("+", line[1:].strip()))
+        else:
+            changes.append(" ")
+    edits = [i for i, entry in enumerate(changes) if isinstance(entry, tuple)]
+    if len(edits) != 2 or edits[1] != edits[0] + 1:
         return False
-    return bool(_SW_REVISION_LINE.match(removed[0]) and _SW_REVISION_LINE.match(added[0]))
+    (old_sign, old), (new_sign, new) = changes[edits[0]], changes[edits[1]]
+    return bool(
+        old_sign == "-" and new_sign == "+"
+        and _SW_REVISION_LINE.match(old) and _SW_REVISION_LINE.match(new)
+    )
 
 
 _VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
