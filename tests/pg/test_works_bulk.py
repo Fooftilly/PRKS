@@ -1,8 +1,7 @@
-"""Bulk Work actions on PostgreSQL: what parity cannot show (L-W-2 #631).
+"""Bulk Work actions on PostgreSQL (L-W-2 #631).
 
-``tests/test_works_bulk_parity.py`` proves the facade answers as SQLite
-does. These tests cover what only PostgreSQL has: the revisions each action
-leaves behind and the stale operations they refuse, atomic rollback when a
+These tests spell out what each action answers and leaves behind: the
+answer bodies and refusal messages, the revisions and the stale operations they refuse, atomic rollback when a
 later Work fails, Library isolation and roles, and concurrent writers, each
 race holding one transaction open until the other is waiting on it (§7.1).
 """
@@ -113,11 +112,18 @@ class ActionTests(BulkTestCase):
             self.library.move_work_to_folder(work_id, x)
         self.library.move_work_to_folder(b, y)
         result = self.bulk("move_folder", [a, b], folder_id=f"  {y}  ")
-        self.assertEqual((result["updated"], result["target_count"]), (2, 1))
+        self.assertEqual(result, {"action": "move_folder", "requested": 2, "status": "updated",
+                                  "target_count": 1, "updated": 2})
+        self.assertEqual([(row["title"], row["work_count"]) for row in self.library.get_all_folders()],
+                         [("X", 1), ("Y", 2)])
         self.assertEqual(self.filed(), sorted([(a, y), (b, y), (c, x)]))
         self.assertEqual([self.work_folder(w) for w in (a, b, c)], [(y, 2), (y, 2), (x, 1)])
-        self.bulk("move_folder", [a, b, c], folder_id=None)
+        self.assertEqual(self.bulk("move_folder", [a, b, c], folder_id=None),
+                         {"action": "move_folder", "requested": 3, "status": "updated", "target_count": 1,
+                          "updated": 3})
         self.assertEqual(self.filed(), [])
+        self.assertEqual([(row["title"], row["work_count"]) for row in self.library.get_all_folders()],
+                         [("X", 0), ("Y", 0)])
         self.assertEqual([self.work_folder(w) for w in (a, b, c)], [("", 3), ("", 3), ("", 2)])
         self.bulk("move_folder", [a, b], folder_id=None)  # nothing to clear
         self.assertEqual([self.work_folder(w)[1] for w in (a, b)], [3, 3])
@@ -128,13 +134,18 @@ class ActionTests(BulkTestCase):
         self.library.add_tag_to_work(a, t1)
         self.library.add_tag_to_work(c, t1)
         result = self.bulk("add_tags", [a, b], tag_ids=[t2, t1, t2])
-        self.assertEqual((result["requested"], result["target_count"]), (2, 2))
+        self.assertEqual(result, {"action": "add_tags", "requested": 2, "status": "updated", "target_count": 2,
+                                  "updated": 2})
         self.assertEqual([self.tag_ids(w) for w in (a, b, c)], [sorted([t1, t2]), sorted([t1, t2]), [t1]])
         self.assertEqual(self.revisions("work-tag"), {
             links.WORK.scope_id(a, t1): 1, links.WORK.scope_id(a, t2): 1,
             links.WORK.scope_id(b, t1): 1, links.WORK.scope_id(b, t2): 1, links.WORK.scope_id(c, t1): 1})
         self.bulk("add_tags", [a, b], tag_ids=[t1, t2])  # all present: nothing moves
-        self.bulk("remove_tags", [a, c], tag_ids=[t2])  # c never had t2: no scope row for it
+        self.assertEqual(self.bulk("remove_tags", [a, c], tag_ids=[t2]),  # c never had t2: no scope row for it
+                         {"action": "remove_tags", "requested": 2, "status": "updated", "target_count": 1,
+                          "updated": 2})
+        self.assertEqual([(row["name"], row["work_count"]) for row in self.library.get_tags_in_use()],
+                         [("T1", 3), ("T2", 1)])
         self.assertEqual([self.tag_ids(w) for w in (a, b, c)], [[t1], sorted([t1, t2]), [t1]])
         revisions = self.revisions("work-tag")
         self.assertEqual((revisions[links.WORK.scope_id(a, t2)], revisions[links.WORK.scope_id(b, t2)]), (2, 1))
@@ -147,6 +158,8 @@ class RefusalTests(BulkTestCase):
         work = self.library.add_work("W", status="Planned")
         cases: list[tuple[Any, str]] = [
             ([], "JSON object body required"),
+            ("x", "JSON object body required"),
+            ({"work_ids": [work]}, "Unknown bulk action."),
             ({"action": "delete_everything", "work_ids": [work]}, "Unknown bulk action."),
             ({"action": "set_status", "work_ids": work, "status": "Completed"}, "work_ids must be a JSON array."),
             ({"action": "set_status", "work_ids": [], "status": "Completed"}, "No files selected."),
@@ -155,9 +168,11 @@ class RefusalTests(BulkTestCase):
             ({"action": "set_status", "work_ids": [f"W-{i}" for i in range(PRKS_BULK_WORK_MAX + 1)],
               "status": "Completed"}, "Too many files selected."),
             ({"action": "set_status", "work_ids": [work], "status": "Finished"}, "Invalid status."),
+            ({"action": "set_status", "work_ids": [work], "status": None}, "Invalid status."),
             ({"action": "move_folder", "work_ids": [work]}, "folder_id is required."),
             ({"action": "move_folder", "work_ids": [work], "folder_id": "  "}, "folder_id is invalid."),
             ({"action": "move_folder", "work_ids": [work], "folder_id": 7}, "folder_id must be a string or null."),
+            ({"action": "add_tags", "work_ids": [work]}, "tag_ids must be a JSON array."),
             ({"action": "add_tags", "work_ids": [work], "tag_ids": []}, "No tags selected."),
             ({"action": "remove_tags", "work_ids": [work], "tag_ids": [f"T-{i}" for i in range(501)]},
              "Too many tags selected."),
