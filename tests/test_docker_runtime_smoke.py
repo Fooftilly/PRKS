@@ -24,7 +24,7 @@ EXPECTED_TRIGGER_PATHS = (
     "requirements.txt",
     "requirements-lock.txt",
     "dependency-inventory.json",
-    "backend/dependency_gate.py",
+    "backend/runtime/dependency_check.py",
     "backend/storage/config.py",
     "backend/storage/resolver.py",
     "backend/storage/root_binding.py",

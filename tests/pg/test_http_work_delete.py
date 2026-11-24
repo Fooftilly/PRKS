@@ -15,7 +15,7 @@ import os
 from typing import Any
 from unittest.mock import patch
 
-from backend.derived_caches import prks_thumb_cache_stem
+from backend.media.derived_caches import prks_thumb_cache_stem
 from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
 from tests.library_adapter import TestLibrary
@@ -93,7 +93,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
                 raise OSError("forced thumbnail cleanup failure")
             real_remove(path, *args, **kwargs)
 
-        with patch("backend.derived_caches.os.remove", side_effect=remove):
+        with patch("backend.media.derived_caches.os.remove", side_effect=remove):
             self.delete(work_id)
         self.assertFalse(self.work_exists(work_id))
         self.assertTrue(os.path.isfile(stuck))

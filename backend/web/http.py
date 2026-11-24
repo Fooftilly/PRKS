@@ -21,8 +21,8 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Optional, Protocol
 from urllib.parse import parse_qs
 
-from backend.log_safety import safe_log_id, safe_log_label, safe_route
-from backend.performance import clock_ns, record_span
+from backend.runtime.log_safety import safe_log_id, safe_log_label, safe_route
+from backend.runtime.performance import clock_ns, record_span
 
 if TYPE_CHECKING:
     from backend.db.database import Database

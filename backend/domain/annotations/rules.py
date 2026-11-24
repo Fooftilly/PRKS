@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from backend.pdf_annotations import (
+from backend.pdf.pdf_annotations import (
     WorkAnnotationError,
     normalize_annotation,
     round_trip_annotation,

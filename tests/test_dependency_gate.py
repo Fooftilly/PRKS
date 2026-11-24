@@ -14,15 +14,11 @@ _PROJECT = Path(__file__).resolve().parents[1]
 if str(_PROJECT) not in sys.path:
     sys.path.insert(0, str(_PROJECT))
 
-from backend.dependency_gate import (
+from backend.runtime.dependency_check import (
     RequirementsPinError,
     assert_remediation_is_safe,
     default_venv_python_cmd,
-    derived_inventory_names,
     detect_platform_context,
-    dockerfile_apt_packages,
-    dockerfile_python_base_version,
-    dockerfile_python_versions,
     format_pip_install_command,
     format_venv_create_commands,
     parse_requirements_pins,
@@ -30,15 +26,22 @@ from backend.dependency_gate import (
     pinned_playwright_version,
     python_min_version,
     remediation_message,
-    run_repo_gate,
     run_runtime_gate,
     run_unit_contract_gate,
-    validate_dockerfile,
     validate_installed_pins,
-    validate_inventory,
-    validate_npm_island,
     validate_python_version,
     validate_requirements_file,
+)
+
+from scripts.dependency_gate import (
+    derived_inventory_names,
+    dockerfile_apt_packages,
+    dockerfile_python_base_version,
+    dockerfile_python_versions,
+    run_repo_gate,
+    validate_dockerfile,
+    validate_inventory,
+    validate_npm_island,
     validate_runtime_lock,
     parse_runtime_lock,
     validate_vue_production,
@@ -2129,7 +2132,7 @@ class RepoGateLiveTests(unittest.TestCase):
             self.assertIn(required, names)
 
     def test_dependency_manifest_deterministic(self):
-        from backend.dependency_gate import build_dependency_manifest
+        from scripts.dependency_gate import build_dependency_manifest
 
         a = build_dependency_manifest(_PROJECT)
         b = build_dependency_manifest(_PROJECT)
@@ -2139,7 +2142,7 @@ class RepoGateLiveTests(unittest.TestCase):
         self.assertNotIn("fetched", blob.lower())
 
     def test_sw_uses_dependency_revision(self):
-        from backend.dependency_gate import (
+        from scripts.dependency_gate import (
             dependency_manifest_revision,
             read_sw_dependency_revision,
         )
@@ -2153,7 +2156,7 @@ class RepoGateLiveTests(unittest.TestCase):
     def test_workspace_model_bytes_change_dependency_revision(self):
         from unittest.mock import patch
 
-        from backend import dependency_gate as gate
+        from scripts import dependency_gate as gate
 
         real_sha = gate.sha256_file
         seen = {"model": 0}

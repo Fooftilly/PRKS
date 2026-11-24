@@ -21,8 +21,8 @@ from typing import Any, Mapping
 
 from backend.api.common import objects
 from backend.api.persons import image_response
-from backend.log_safety import safe_log_id
-from backend.person_image import fetch_and_prepare
+from backend.runtime.log_safety import safe_log_id
+from backend.media.person_image import fetch_and_prepare
 from backend.web.http import Request, Response, json_response, not_modified
 from backend.web.routing import route
 

@@ -519,7 +519,7 @@ unaffected.
 ### 6.3 IDs (PG7)
 
 IDs are 32 upper-case hex characters from a UUID with a type
-prefix (`backend/entity_ids.py`), minted by the server or by the browser for
+prefix (`backend/domain/entity_ids.py`), minted by the server or by the browser for
 durable creates. They appear in URLs, workspace tabs, IndexedDB rows,
 revision scopes and fixtures.
 

@@ -1,6 +1,6 @@
 """The Research Graph rules both backends share (kept by PG-C2 #641).
 
-``backend/research_graph.py`` holds the node and edge ids, the size bounds
+``backend/domain/research/research_graph.py`` holds the node and edge ids, the size bounds
 and the snapshot assembly ``backend/domain/research/graph.py`` uses on
 PostgreSQL. These checks are pure; ``tests/pg/test_research_graph.py``
 reads the graph through the PostgreSQL boundary.
@@ -14,8 +14,8 @@ import re
 import unittest
 
 from backend.domain.research import graph
-from backend.log_safety import safe_route
-from backend.research_graph import MAX_GRAPH_EDGES, MAX_GRAPH_NODES, graph_node_id
+from backend.runtime.log_safety import safe_route
+from backend.domain.research.research_graph import MAX_GRAPH_EDGES, MAX_GRAPH_NODES, graph_node_id
 
 _GRAPH = pathlib.Path(__file__).resolve().parents[1] / "backend" / "domain" / "research" / "graph.py"
 

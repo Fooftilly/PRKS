@@ -71,7 +71,7 @@ from backend.domain.maintenance.format import (
 from backend.domain.maintenance.archive import ArchiveRefused, check_schema, open_archive
 from backend.domain.maintenance.connection import maintenance_connection, pin_interchange_settings
 from backend.domain.maintenance.staging import drop_staging, stage
-from backend.fs_durability import fsync_directory, fsync_open_file
+from backend.storage.fs_durability import fsync_directory, fsync_open_file
 from backend.storage.objects import (
     StorageBackend,
     StorageKey,

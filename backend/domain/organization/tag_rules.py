@@ -23,8 +23,8 @@ Tag is exactly what the Work-Tag family refuses to do when a Tag turns out to
 have been merged.
 """
 
-from backend.entity_ids import is_distributed
-from backend.tag_color import normalized_tag_color
+from backend.domain.entity_ids import is_distributed
+from backend.domain.organization.tag_color import normalized_tag_color
 
 MAX_NAME_BYTES = 200
 def canonical_name(value):

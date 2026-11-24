@@ -27,7 +27,7 @@ Nothing in this module imports the database layer; the handler is handed the
 """
 import json
 
-from backend.person_image import PersonImageUrlError, normalize_person_image_url
+from backend.media.person_image import PersonImageUrlError, normalize_person_image_url
 from backend.domain.people.person_rules import FIELDS as PERSON_FIELDS
 
 # The editable profile columns, in the creation family's order. `id`,

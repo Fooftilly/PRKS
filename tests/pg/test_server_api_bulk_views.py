@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 from urllib.parse import quote, urlsplit
 
-from backend import performance
+from backend.runtime import performance
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 SEARCH = {"mode": "all", "q": "", "tag": "", "author": "", "publisher": ""}

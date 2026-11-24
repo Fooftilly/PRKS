@@ -3,8 +3,8 @@ import os
 import shutil
 import subprocess
 
-from backend.log_safety import safe_error_type, safe_log_label
-from backend.performance import span as perf_span
+from backend.runtime.log_safety import safe_error_type, safe_log_label
+from backend.runtime.performance import span as perf_span
 
 
 LOGGER = logging.getLogger("prks.pdf")
@@ -16,7 +16,7 @@ _MISSING_QPDF_WARNED = False
 QPDF_TIMEOUT_SECONDS = 120
 # qpdf exits 3 when it finished with warnings, usually after repairing a
 # damaged file (#1322). Its copy is used only when PyMuPDF shows the same
-# content as the source (backend.pdf_text._pdf_fingerprint: pages, text,
+# content as the source (backend.pdf.pdf_text._pdf_fingerprint: pages, text,
 # rendered pixels, links, annotations, form fields, outline, page labels,
 # attachments); the comparison runs in a child process killed after this
 # many seconds, which keeps the source.
@@ -109,7 +109,7 @@ def _repaired_copy_matches(src_path: str, dst_path: str) -> bool:
     the source kept. The comparison runs in a child process killed at that
     bound, so a slow page cannot hold the upload.
     """
-    from backend.pdf_text import same_pages_bounded
+    from backend.pdf.pdf_text import same_pages_bounded
 
     return is_pdf_linearized(dst_path) and same_pages_bounded(src_path, dst_path, REPAIRED_CHECK_SECONDS)
 

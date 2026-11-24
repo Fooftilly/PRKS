@@ -85,7 +85,7 @@ def prove_testing_database(conninfo: str) -> None:
 def prove_testing_connection(conn: psycopg.Connection[Any]) -> None:
     """:func:`prove_testing_database` on an open connection, inside the caller's transaction.
 
-    Reads only. A caller about to write (``backend.testing_reset``) runs it in
+    Reads only. A caller about to write (``backend.runtime.testing_reset``) runs it in
     the same transaction as the write, so the proof cannot go stale between
     the check and the change. ``psycopg.Error`` is left to the caller.
     """

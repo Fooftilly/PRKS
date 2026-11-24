@@ -15,7 +15,7 @@ import os
 import threading
 from typing import TYPE_CHECKING, Any, Optional
 
-from backend.log_safety import safe_bind_scope
+from backend.runtime.log_safety import safe_bind_scope
 from backend.storage.config import StorageConfig
 from backend.storage.root_binding import assert_config_matches_bound_root
 from backend.web.app import DEFAULT_HOST, App
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from backend.domain.identity.web_setup import SetupPhase
     from backend.domain.identity.web_start import WebAuth
     from backend.jobs.embedded import WebJobs
-    from backend.readiness import PostgresReadiness
+    from backend.runtime.readiness import PostgresReadiness
     from backend.web.asgi import UvicornServing
     from backend.web.settings import HttpServerSettings
 
@@ -98,7 +98,7 @@ def run_server(
     # The PRKS_AUTH runtime's jobs (backend.jobs.embedded.WebJobs): the
     # embedded worker and the job diagnostics. None only for test servers.
     app.jobs = jobs
-    # GET /readyz (backend.readiness.PostgresReadiness); None keeps it 503.
+    # GET /readyz (backend.runtime.readiness.PostgresReadiness); None keeps it 503.
     app.readiness = readiness
     if auth is not None:
         app.trust_public_origin(auth.settings.public_origin)

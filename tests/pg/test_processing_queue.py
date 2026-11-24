@@ -159,7 +159,7 @@ class QueueTestCase(MutationTestCase):
 class UploadTests(QueueTestCase):
     def test_an_upload_is_a_ready_item_with_an_empty_draft_and_the_bytes_as_sent(self) -> None:
         data = pdf()
-        with mock.patch("backend.pdf_linearize.linearize_pdf_to", side_effect=AssertionError("linearized")):
+        with mock.patch("backend.pdf.pdf_linearize.linearize_pdf_to", side_effect=AssertionError("linearized")):
             done = self.upload(data, key="k-1", filename="C:\\Users\\me\\Paper One.pdf")
         item = done.item
         row = self.row(item["id"])

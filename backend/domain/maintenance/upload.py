@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
-from backend.fs_durability import fsync_open_file
+from backend.storage.fs_durability import fsync_open_file
 
 IO_CHUNK_SIZE = 64 * 1024
 DEFAULT_MAX_UPLOAD_BYTES = 64 * 1024 * 1024 * 1024

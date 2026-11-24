@@ -24,14 +24,14 @@ from types import SimpleNamespace
 from typing import Any, Optional
 from unittest import mock
 
-from backend import pdf_linearize
+from backend.pdf import pdf_linearize
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import ingest, lifecycle
 from backend.domain.objects.ingest import IngestedPdf
 from backend.domain.objects.lifecycle import ObjectMissing, Settled
 from backend.domain.works import commands
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 from tests.pg.test_objects_lifecycle import ObjectsTestCase

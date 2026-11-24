@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from backend.domain.works import note_rules
-from backend.log_safety import safe_error_type, safe_log_id
+from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 

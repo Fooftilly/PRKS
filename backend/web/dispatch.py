@@ -31,8 +31,8 @@ import re
 from typing import Any, NoReturn, Optional, Union
 from urllib.parse import unquote
 
-from backend.log_safety import safe_error_type, safe_log_id, safe_log_label, safe_route
-from backend.performance import (
+from backend.runtime.log_safety import safe_error_type, safe_log_id, safe_log_label, safe_route
+from backend.runtime.performance import (
     begin_request,
     clear_request,
     finish_request,

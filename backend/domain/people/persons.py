@@ -33,7 +33,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups
 from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
-from backend.person_image import PersonImageUrlError
+from backend.media.person_image import PersonImageUrlError
 from backend.domain.people.person_rules import FIELDS
 from backend.domain.people.role_rules import parse_person_aliases
 

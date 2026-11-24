@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Optional
 
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
 
 if TYPE_CHECKING:

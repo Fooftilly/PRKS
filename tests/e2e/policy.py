@@ -471,7 +471,7 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/research-graph.js",
             "frontend-app/src/features/research-graph/**",
-            "backend/research_graph.py",
+            "backend/domain/research/research_graph.py",
             "tools/research-graph/**",
         ),
         "exclude_paths": (
@@ -494,6 +494,10 @@ AFFECTED_RULES = (
             "backend/api/positions.py",
             "backend/api/research_notes.py",
         ),
+        # The read-only graph projection keeps its focused ``graph`` rule. The
+        # markup parser stays here (full): Argument target validation uses its
+        # id pattern, so a markup edit can break Argument flows too.
+        "exclude_paths": ("backend/domain/research/research_graph.py",),
         "features": ("concepts", "positions", "arguments", "graph", "notes"),
         "ci_mode": "full",
         "note": "domain/research owns Concepts/Positions/Arguments (CI: full)",
@@ -503,7 +507,7 @@ AFFECTED_RULES = (
         "paths": (
             "frontend/js/components/concepts.js",
             "frontend/js/concept-state.js",
-            "backend/research_markup.py",
+            "backend/domain/research/research_markup.py",
         ),
         "features": ("concepts", "graph", "notes"),
     },
@@ -563,11 +567,11 @@ AFFECTED_RULES = (
             "frontend/js/pdf-annotation-state.js",
             "frontend/js/pdf-annotation-reconcile.js",
             "frontend/js/pdf-work-runtime.js",
-            "backend/pdf_annotations.py",
+            "backend/pdf/pdf_annotations.py",
             "backend/domain/annotations/rules.py",
-            "backend/pdf_materialization.py",
-            "backend/pdf_annotation_adopt.py",
-            "backend/services/work_pdf_replace.py",
+            "backend/pdf/pdf_materialization.py",
+            "backend/pdf/pdf_annotation_adopt.py",
+            "backend/pdf/work_pdf_replace.py",
             "backend/api/annotations.py",
             "backend/domain/annotations/**",
         ),

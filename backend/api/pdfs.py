@@ -18,8 +18,8 @@ import logging
 import os
 from typing import BinaryIO
 
-from backend.byte_range import parse_byte_range
-from backend.managed_pdf_names import safe_pdf_path_under_dir
+from backend.web.byte_range import parse_byte_range
+from backend.pdf.managed_pdf_names import safe_pdf_path_under_dir
 from backend.web.http import Request, Response, Write, error_response
 from backend.web.routing import route
 

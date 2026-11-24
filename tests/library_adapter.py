@@ -140,7 +140,7 @@ class TestLibrary(PostgresLibrary):
         return self._query(lambda scope: tags.resolve_label(scope, label))
 
     def etag_tags_all(self) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation("tags", self.get_all_tags())
 
@@ -292,7 +292,7 @@ class TestLibrary(PostgresLibrary):
 
     @staticmethod
     def etag_for_representation(label: str, rows: Any) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation(label, rows)
 
@@ -349,7 +349,7 @@ class TestLibrary(PostgresLibrary):
 
     @staticmethod
     def _generate_id(prefix: str) -> str:
-        from backend.entity_ids import generate
+        from backend.domain.entity_ids import generate
 
         return generate(prefix)
 
@@ -515,7 +515,7 @@ class TestLibrary(PostgresLibrary):
         return folder_commands.catalog(self.database, current_context())
 
     def etag_folders_catalog(self, rows: Optional[List[Dict[str, Any]]] = None) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation("folders", self.get_all_folders() if rows is None else rows)
 
@@ -593,7 +593,7 @@ class TestLibrary(PostgresLibrary):
         return playlist_commands.catalog(self.database, current_context())
 
     def etag_playlists_catalog(self, rows: List[Dict[str, Any]]) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation("playlists", rows)
 
@@ -683,7 +683,7 @@ class TestLibrary(PostgresLibrary):
                                       None if self.storage is None else self.storage.pdfs_dir)
 
     def etag_persons_catalog(self, rows: List[Dict[str, Any]]) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation("persons", rows)
 
@@ -717,7 +717,7 @@ class TestLibrary(PostgresLibrary):
 
     def _cache_person_portrait(self, person_id: str, prepare: Any = None) -> Optional[Dict[str, Any]]:
         from backend.domain.people import person_commands
-        from backend.person_image import fetch_and_prepare
+        from backend.media.person_image import fetch_and_prepare
 
         return person_commands.cache_portrait(self.database, current_context(), self._portrait_objects(),
                                               person_id, prepare or fetch_and_prepare)
@@ -926,7 +926,7 @@ class TestLibrary(PostgresLibrary):
         return group_commands.detail(self.database, current_context(), group_id)
 
     def etag_person_groups_catalog(self, rows: List[Dict[str, Any]]) -> str:
-        from backend.etags import etag_for_representation
+        from backend.web.etags import etag_for_representation
 
         return etag_for_representation("person-groups", rows)
 

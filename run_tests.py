@@ -67,13 +67,13 @@ def dependency_preflight(project_dir: str, mode: str) -> int:
     (unit-contract; no Playwright required).
     e2e: runtime + Playwright pins (and other requirements-dev pins).
     """
-    from backend.dependency_gate import (
+    from backend.runtime.dependency_check import (
         format_gate_report,
-        run_repo_gate,
         run_runtime_gate,
         run_test_gate,
         run_unit_contract_gate,
     )
+    from scripts.dependency_gate import run_repo_gate
 
     root = Path(project_dir)
     if mode in ("unit", "all"):

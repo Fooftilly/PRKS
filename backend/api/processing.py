@@ -37,7 +37,7 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, unquote
 
-from backend.log_safety import safe_log_label
+from backend.runtime.log_safety import safe_log_label
 from backend.web.http import Request, RequestBody, Response, json_response
 from backend.web.routing import Body, route
 

@@ -21,7 +21,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend import etags
+from backend.web import etags
 from tests.backend_parity import parametrize_backends
 from tests.works_parity_helpers import PDF_BYTES as _PDF_BYTES
 from tests.works_parity_helpers import VIDEO as _VIDEO

@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVE = ROOT / "tests" / "browser" / "serve.py"
 sys.path.insert(0, str(ROOT))
 
-from backend.pdf_annotations import (  # noqa: E402
+from backend.pdf.pdf_annotations import (  # noqa: E402
     annotations_semantically_equal,
     round_trip_annotation,
     semantic_annotation_view,

@@ -26,9 +26,9 @@ from typing import Optional
 from urllib.parse import unquote
 
 from backend.api.common import objects, optional_pdfs_dir, revalidated
-from backend.derived_caches import prks_delete_person_image_cache
-from backend.log_safety import safe_error_type, safe_log_id
-from backend.person_image import (
+from backend.media.derived_caches import prks_delete_person_image_cache
+from backend.runtime.log_safety import safe_error_type, safe_log_id
+from backend.media.person_image import (
     PersonImageUrlError,
     fetch_and_prepare,
     identify_cached_portrait_subtype,

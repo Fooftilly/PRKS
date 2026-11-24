@@ -14,7 +14,7 @@ import base64
 import json
 from typing import Any
 
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 

@@ -86,7 +86,7 @@ Rules for all issues:
 
 ## Layout
 
-- `prks_app.py`: the only process entry; roles `serve` (default), `migrate`, `worker`, `admin` (`backend/process_roles.py`).
+- `prks_app.py`: the only process entry; roles `serve` (default), `migrate`, `worker`, `admin` (`backend/runtime/process_roles.py`).
 - `backend/server.py`: binds the storage root and Library into a `backend.web.app.App` and starts/stops the server.
 - `backend/web/`: the HTTP layer (`docs/http-server.md`): typed `Request`/`Response` (`http.py`), the route table (`routing.py`), the dispatcher (`dispatch.py`: host/origin checks, admission, the JSON body, error mapping, security headers), the Uvicorn adapter (`asgi.py`) and static files.
 - `backend/api/<family>.py`: one HTTP controller per route family, declaring its `ROUTES` (`backend/api/__init__.py` collects them). Handlers are `(Request) -> Response`; they call the family's commands (`backend/domain/<family>/commands.py` or a family-specific `*_commands.py`) with `*req.actor` (the Library's database and the admitted context), and import those commands inside the handler (the served app loads no PostgreSQL module at import time; `tests/test_e2e_policy.py`).
@@ -98,7 +98,8 @@ Rules for all issues:
 - `backend/sync/`: the durable-operation ledger (`protocol.py`) and per-family handlers; the shared envelope and operation registry are `envelope.py`; each family's payload rules live with its domain in `backend/domain/<area>/*_rules.py` (`backend/domain/annotations/rules.py` for PDF annotations).
 - `backend/jobs/`: the PostgreSQL job queue, runner, worker and embedded worker (`docs/job-worker.md`).
 - `backend/storage/`: root selection (`resolver.py` only), root marker and leases (`root_binding.py`, `root_marker.py`), and `objects.py` (`StorageBackend`). Design: `docs/storage-architecture.md`.
-- `backend/readiness.py`: `GET /readyz`. `docker-compose.yml`: the only Compose file (`db`, `migrate`, `web`, `worker`); README "Docker" is the operator doc.
+- `backend/pdf/`: managed PDF names and paths, byte replacement (`work_pdf_replace.py`), linearization, text extraction, mentions, annotation adoption and materialization. `backend/media/`: derived caches and Person portraits. `backend/web/`: the ASGI server and HTTP helpers (`etags.py`, `byte_range.py`). `backend/runtime/`: settings reference, logging, process roles, readiness, startup timing, performance, the runtime dependency check (`dependency_check.py`; the repository gate is `scripts/dependency_gate.py`) and the testing reset. Top-level `backend/` holds only packages plus `server.py` and `library.py`.
+- `backend/runtime/readiness.py`: `GET /readyz`. `docker-compose.yml`: the only Compose file (`db`, `migrate`, `web`, `worker`); README "Docker" is the operator doc.
 - `backend/domain/text_identity.py`: the name identity key, twin of SQL `prks.identity_key` (shared vectors in `tests/fixtures/text_identity_vectors.json`).
 - Processing is a managed upload queue (`backend/domain/processing/`); do not bring back a scanned inbox directory.
 - `frontend/`: legacy UI shell and runtime (`js/tab-context.js`, `js/workspace-tabs.js`, `js/offline-store.js`, `js/offline-runtime.js`, `sw.js`); see `frontend/AGENTS.md` "Offline / PWA".
@@ -111,7 +112,7 @@ New substantial behavior, in order of preference:
 
 1. Extend the focused module that already owns it.
 2. Otherwise add a focused domain module.
-3. Use `backend/services/` only to coordinate several concerns (database, files, PDF, indexing).
+3. Put workflows that coordinate several concerns (database, files, PDF, indexing) in the package that owns the files they write (for managed PDF bytes, `backend/pdf/`).
 4. Put a cohesive HTTP route family in `backend/api/<family>.py`. No `routes/` package, extra layers or frameworks ahead of real need.
 
 ### HTTP adapter decomposition

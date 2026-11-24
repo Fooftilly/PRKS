@@ -1,12 +1,12 @@
 """Diagnostics and the served API description (#1424).
 
 - ``GET /api/diagnostics/performance``: this process's request counters
-  (``backend.performance``); ``POST /api/diagnostics/performance/reset``
+  (``backend.runtime.performance``); ``POST /api/diagnostics/performance/reset``
   ``{"confirm": ...}`` clears them.
 - ``GET /api/diagnostics/jobs``: owner-only job diagnostics (§12.4). A
   server started without jobs answers it like any unknown route.
 - ``POST /api/client-errors``: a browser error report, logged as metadata
-  only (``backend.log_safety.client_error_log_fields``).
+  only (``backend.runtime.log_safety.client_error_log_fields``).
 - ``GET /api/openapi.json`` and ``/api/openapi/<slice>.json``: the OpenAPI
   vertical slices (#180), not yet the full PRKS surface.
 """
@@ -24,9 +24,9 @@ from backend.api_contract.performance import (
     PerformanceDiagnosticsResetRequest,
     PerformanceSnapshot,
 )
-from backend.log_safety import client_error_log_fields, format_client_error_log
-from backend.performance import reset as reset_performance
-from backend.performance import snapshot as performance_snapshot
+from backend.runtime.log_safety import client_error_log_fields, format_client_error_log
+from backend.runtime.performance import reset as reset_performance
+from backend.runtime.performance import snapshot as performance_snapshot
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import Route, route
 

@@ -39,7 +39,7 @@ except ImportError:  # pragma: no cover - Windows has no token files
 from backend.db.database import Database, Transaction
 from backend.db.errors import DatabaseError
 from backend.domain.identity.errors import RootPairingRefused
-from backend.fs_durability import fsync_directory, fsync_open_file
+from backend.storage.fs_durability import fsync_directory, fsync_open_file
 from backend.storage.resolver import bootstrap_config_path
 
 TOKEN_BYTES = 32

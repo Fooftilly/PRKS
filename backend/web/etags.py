@@ -1,4 +1,4 @@
-"""Weak ETags for JSON API representations (PG-C2 #641).
+"""Weak ETags for JSON API representations.
 
 Moved from ``PRKSDatabase`` in ``backend/db_manager.py`` so every Library
 backend derives ETags the same way.

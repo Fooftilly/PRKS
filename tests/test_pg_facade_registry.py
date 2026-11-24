@@ -25,7 +25,7 @@ from backend.library import NotPortedError, PostgresLibrary
 
 # The HTTP adapter: the modules that reach the bound Library (``req.library``,
 # ``app.library``, a ``library`` or ``db`` local).
-ADAPTER_GLOBS = ("backend/server.py", "backend/web/*.py", "backend/api/*.py", "backend/services/*.py")
+ADAPTER_GLOBS = ("backend/server.py", "backend/web/*.py", "backend/api/*.py", "backend/pdf/work_pdf_replace.py")
 
 
 def _is_library(node: ast.expr) -> bool:

@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from backend.api_contract.openapi import processing_items_openapi_document
 from backend.api_contract.processing_items import ProcessingImportRequest, ProcessingItem, ProcessingItemRefusal
-from backend.log_safety import safe_route
+from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ARTIFACT = _ROOT / "docs" / "api" / "openapi-processing-items.json"

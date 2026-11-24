@@ -18,7 +18,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.log_safety import (
+from backend.runtime.log_safety import (
     PrivacySafeFormatter,
     client_error_log_fields,
     format_client_error_log,
@@ -27,7 +27,7 @@ from backend.log_safety import (
     safe_log_id,
     safe_route,
 )
-from backend.pdf_linearize import linearize_pdf_to
+from backend.pdf.pdf_linearize import linearize_pdf_to
 from backend.api import diagnostics
 from backend.web.app import App
 from backend.web.dispatch import finalize, internal_error
@@ -396,10 +396,10 @@ class TestQpdfPrivacy(unittest.TestCase):
                 stdout="",
                 stderr=f"{SECRET_QPDF} {SECRET_PATH}",
             )
-            with patch("backend.pdf_linearize._linearize_enabled", return_value=True):
-                with patch("backend.pdf_linearize.shutil.which", return_value="/usr/bin/qpdf"):
+            with patch("backend.pdf.pdf_linearize._linearize_enabled", return_value=True):
+                with patch("backend.pdf.pdf_linearize.shutil.which", return_value="/usr/bin/qpdf"):
                     with patch(
-                        "backend.pdf_linearize.subprocess.run",
+                        "backend.pdf.pdf_linearize.subprocess.run",
                         return_value=completed,
                     ):
                         with _capture_formatted("prks.pdf") as records:

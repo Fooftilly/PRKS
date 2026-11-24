@@ -46,7 +46,7 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 from backend.web.app import App
 from backend.web.dispatch import HSTS_VALUE, SECURITY_HEADERS, begin, dispatch, finalize, finish
 from backend.web.http import Headers, Request, Response, error_response
-from backend.log_safety import safe_error_type, safe_log_id
+from backend.runtime.log_safety import safe_error_type, safe_log_id
 
 LOGGER = logging.getLogger(__name__)
 

@@ -34,7 +34,7 @@ Logs are metadata-only. Never log user/library content, request bodies/query str
 titles, notes, annotations, names, filenames/absolute paths, user URLs, headers,
 raw browser messages/stacks, qpdf stderr, or str/repr(exception).
 
-Use `backend/log_safety.py` for route/id/error normalization.
+Use `backend/runtime/log_safety.py` for route/id/error normalization.
 Unexpected traceback logging must go through the privacy-safe formatter.
 Lowering `PRKS_LOG_LEVEL` / `PRKS_LOG_FILE_LEVEL` must never unlock raw data.
 
@@ -100,7 +100,7 @@ restored one. Objects the old catalogue named and the restored one does not
 get a `hold` claim and are never deleted automatically.
 
 Backup archives and uploaded restore archives written under the root follow
-the `backend/fs_durability.py` convention (`domain/maintenance/backup.py`,
+the `backend/storage/fs_durability.py` convention (`domain/maintenance/backup.py`,
 `upload.py`): the file is flushed before it is renamed or used, and the
 directory is synced after a rename.
 

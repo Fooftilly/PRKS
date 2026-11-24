@@ -22,7 +22,7 @@ still look current.
 """
 import json
 
-from backend.entity_ids import is_distributed
+from backend.domain.entity_ids import is_distributed
 
 FIELDS = ("title", "description", "original_url")
 FIELD_SET = frozenset(FIELDS)

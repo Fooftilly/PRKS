@@ -22,7 +22,7 @@ target of an Argument before any server has heard of either.
 import json
 
 from backend.domain.research import rules as research_rules
-from backend.entity_ids import is_distributed
+from backend.domain.entity_ids import is_distributed
 from backend.domain.research.rules import ResearchError
 
 FIELDS = ("name", "description")

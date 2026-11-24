@@ -1,4 +1,4 @@
-"""The configuration contract (#612 Phase A): ``backend/config_reference.py``.
+"""The configuration contract (#612 Phase A): ``backend/runtime/config_reference.py``.
 
 Every ``PRKS_*`` name the backend reads is listed, with its scope; Compose
 variables match ``.env.example`` and ``docker-compose.yml``; the generated
@@ -19,8 +19,8 @@ from unittest import mock
 from pathlib import Path
 
 import prks_app
-from backend import config_reference
-from backend.config_reference import BY_KEY, Scope, effective, problems, render_reference
+from backend.runtime import config_reference
+from backend.runtime.config_reference import BY_KEY, Scope, effective, problems, render_reference
 
 ROOT = Path(__file__).resolve().parents[1]
 _NAME = re.compile(r"^PRKS_[A-Z0-9_]+$")
@@ -41,7 +41,7 @@ def literal_names() -> set[str]:
 class InventoryTests(unittest.TestCase):
     def test_every_name_the_code_reads_is_listed(self) -> None:
         unlisted = sorted(literal_names() - set(BY_KEY))
-        self.assertEqual(unlisted, [], "add these to backend/config_reference.py SETTINGS")
+        self.assertEqual(unlisted, [], "add these to backend/runtime/config_reference.py SETTINGS")
 
     def test_every_listed_process_setting_is_still_read(self) -> None:
         read = literal_names()
@@ -73,7 +73,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_the_generated_reference_is_current(self) -> None:
         current = Path(config_reference.DOC_PATH).read_text(encoding="utf-8")
-        self.assertEqual(current, render_reference(), "run: python -m backend.config_reference --write")
+        self.assertEqual(current, render_reference(), "run: python -m backend.runtime.config_reference --write")
 
 
 class ValidationTests(unittest.TestCase):
@@ -264,7 +264,7 @@ class AppTests(unittest.TestCase):
         # --reset-db goes on for a blank value and refuses 0, before touching anything.
         config = type("Config", (), {"root": "/nonexistent-root"})()
         url = {"PRKS_DATABASE_URL": "postgresql://u:pw@db/prks_testing"}
-        with mock.patch("backend.testing_reset.main_reset") as main_reset:
+        with mock.patch("backend.runtime.testing_reset.main_reset") as main_reset:
             prks_app.reset_testing_instance(config, {**url, "PRKS_MIGRATE_ON_START": "  "})
             self.assertEqual(main_reset.call_count, 1)
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as refused:

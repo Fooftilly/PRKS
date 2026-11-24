@@ -18,7 +18,7 @@ from backend.sync import envelope
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.works import commands, lifecycle, merge
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.sync import protocol
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import argument as argument_handlers

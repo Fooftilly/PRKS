@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from backend.domain.identity.web_start import WebAuth
     from backend.jobs.embedded import WebJobs
     from backend.library import PostgresLibrary
-    from backend.readiness import PostgresReadiness
+    from backend.runtime.readiness import PostgresReadiness
     from backend.storage.config import StorageConfig
 
 #: The frontend the server serves (``frontend/``).

@@ -37,7 +37,7 @@ import uuid
 from typing import Any, Callable, Optional
 
 from backend.domain.maintenance.upload import RestoreError, backup_max_upload_bytes, stream_upload_to_file
-from backend.log_safety import safe_error_type, safe_log_id
+from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.web.hosts import octet_stream_content_type_allowed
 from backend.web.http import Request, Response, Write, json_response
 from backend.web.routing import Body, route

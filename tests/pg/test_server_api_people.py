@@ -26,9 +26,9 @@ from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
-from backend.derived_caches import prks_person_image_cache_safe_id
+from backend.media.derived_caches import prks_person_image_cache_safe_id
 from backend.domain.maintenance import backup, restore
-from backend.person_image import PortraitImage, decode_and_transcode
+from backend.media.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
@@ -174,15 +174,15 @@ class PortraitTests(ServerApiTestCase):
         person_id = self.ok(self.send("POST", "/api/persons", {"first_name": "Legacy", "last_name": "Loopback"}))["id"]
         self.sql("UPDATE prks.persons SET image_url = %s WHERE id = %s RETURNING id",
                  ("http://127.0.0.1/image", person_id))
-        with mock.patch("backend.person_image._getaddrinfo") as dns, \
-                mock.patch("backend.person_image._create_socket") as sock:
+        with mock.patch("backend.media.person_image._getaddrinfo") as dns, \
+                mock.patch("backend.media.person_image._create_socket") as sock:
             self.assertEqual(self.image(person_id).status, 404)
         dns.assert_not_called()
         sock.assert_not_called()
 
     def test_remote_bytes_that_are_not_an_image_are_never_served(self) -> None:
         person_id = self.person("Html", "Remote", "https://example.invalid/not-image")
-        with mock.patch("backend.person_image._fetch_remote_response", return_value=(b"<html>nope</html>", "text/html")):
+        with mock.patch("backend.media.person_image._fetch_remote_response", return_value=(b"<html>nope</html>", "text/html")):
             self.assertEqual(self.image(person_id).status, 404)
         with mock.patch("backend.api.persons.fetch_and_prepare", return_value=None):
             self.assertEqual(self.image(person_id).status, 404)

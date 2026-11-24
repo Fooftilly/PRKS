@@ -8,7 +8,7 @@ another site (CSP ``img-src 'self'``), the remote site never learns who reads
 the note or when, and the copy outlives the site that served it.
 
 A copy is the image the URL names, fetched and transcoded like a portrait
-(:func:`backend.person_image.fetch_and_prepare`, WebP or JPEG, at most
+(:func:`backend.media.person_image.fetch_and_prepare`, WebP or JPEG, at most
 :data:`MAX_EDGE` pixels on its longer edge), stored under a fresh key in the
 ``remote-images`` namespace and named by one ``prks.remote_images`` row per
 Library and source URL:
@@ -54,7 +54,7 @@ from backend.domain.objects import lifecycle
 from backend.domain.objects.lifecycle import StoredObject
 from backend.jobs import queue
 from backend.jobs.handlers import handler
-from backend.person_image import (
+from backend.media.person_image import (
     PersonImageUrlError,
     PortraitImage,
     identify_cached_portrait_subtype,

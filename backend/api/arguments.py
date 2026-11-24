@@ -24,7 +24,7 @@ from __future__ import annotations
 from urllib.parse import unquote
 
 from backend.domain.research.rules import ResearchError
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 

@@ -19,7 +19,7 @@ write's maintenance and epoch fence in ``library_command``.
 
 from __future__ import annotations
 
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 

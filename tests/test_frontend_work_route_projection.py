@@ -170,7 +170,7 @@ class WorkRouteProjectionContractTests(unittest.TestCase):
         self.assertLess(precache, app_precache)
 
     def test_dependency_manifest_hashes_the_classic_script(self):
-        from backend.dependency_gate import build_dependency_manifest
+        from scripts.dependency_gate import build_dependency_manifest
 
         manifest = build_dependency_manifest(_PROJECT)
         entry = next(item for item in manifest["dependencies"] if item["name"] == "prks-work-route-projection")

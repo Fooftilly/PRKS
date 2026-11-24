@@ -1,7 +1,7 @@
 /**
  * Research-note references: legacy literal [[concept:Name]], encoded
  * [[concept-encoded:URIComponent(Name)]] for names with delimiters, and
- * [[argument:A-ID|Label]]. Keep parity with backend/research_markup.py.
+ * [[argument:A-ID|Label]]. Keep parity with backend/domain/research/research_markup.py.
  */
 (function (root) {
     'use strict';

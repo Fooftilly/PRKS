@@ -18,7 +18,7 @@ from backend.domain.identity.library_scope import library_query
 from backend.domain.identity.request_context import RequestContext
 
 if TYPE_CHECKING:
-    from backend.research_graph import GraphSnapshot
+    from backend.domain.research.research_graph import GraphSnapshot
 
 def research_refs(db: Database, ctx: RequestContext, work_id: Any) -> Dict[str, Any]:
     """``{concepts, arguments, pending}``; empty lists for a Work that does not exist."""

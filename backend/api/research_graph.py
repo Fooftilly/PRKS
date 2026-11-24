@@ -6,7 +6,7 @@ and edge counts (``GraphTooLargeError``).
 
 from __future__ import annotations
 
-from backend.research_graph import GraphTooLargeError
+from backend.domain.research.research_graph import GraphTooLargeError
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 

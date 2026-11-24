@@ -1,4 +1,4 @@
-"""Fuzzing the PDF ``Range`` header parser (``backend.byte_range.parse_byte_range``).
+"""Fuzzing the PDF ``Range`` header parser (``backend.web.byte_range.parse_byte_range``).
 
 The PDF routes stream Work and Processing bytes with ``Range`` support, so the
 header is attacker-chosen text read before any byte is sent. The contract,
@@ -21,7 +21,7 @@ import unittest
 
 from hypothesis import assume, example, given, strategies as st
 
-from backend.byte_range import ByteRangeAnswer, parse_byte_range
+from backend.web.byte_range import ByteRangeAnswer, parse_byte_range
 from tests.hypothesis_profiles import FUZZ
 
 _SIZES = st.integers(min_value=0, max_value=4096)

@@ -15,7 +15,7 @@ from backend.api import storage as storage_api
 from backend.api.session import route_capability
 from backend.api_contract.openapi import storage_status_openapi_document
 from backend.domain.identity.authorization import Capability
-from backend.log_safety import safe_route
+from backend.runtime.log_safety import safe_route
 from backend.storage import root_binding, status
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootError

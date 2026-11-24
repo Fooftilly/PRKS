@@ -15,15 +15,15 @@ import logging
 import os
 from typing import Any, Optional
 
-from backend.derived_cache_publish import publish_derived_cache_bytes
-from backend.derived_caches import (
+from backend.media.derived_cache_publish import publish_derived_cache_bytes
+from backend.media.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
     prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
 )
-from backend.log_safety import safe_error_type, safe_log_id
-from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
-from backend.performance import clock_ns, record_counter, record_span
+from backend.runtime.log_safety import safe_error_type, safe_log_id
+from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.runtime.performance import clock_ns, record_counter, record_span
 from backend.web.http import Request, Response, bytes_response, error_response
 from backend.web.routing import route
 

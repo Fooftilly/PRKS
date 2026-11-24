@@ -62,7 +62,7 @@
     "tests/test_tags_parity.py::TagFacadeParityTests.test_work_and_folder_tags_and_their_options",
     "tests/pg/test_works_bulk.py::ActionTests.test_tag_actions_are_idempotent_and_advance_only_changed_links"
    ],
-   "note": "The options ETag is backend.etags.etag_for_representation of the options, a pure function, so it moves exactly when the options asserted here move."
+   "note": "The options ETag is backend.web.etags.etag_for_representation of the options, a pure function, so it moves exactly when the options asserted here move."
   },
   "WorkTagSyncTests.test_strict_envelope": {
    "replaced_by": [

@@ -112,7 +112,7 @@ disposed (#1327).
 The previous baseline ran on the SQLite library. This run uses PostgreSQL, with
 epoch admission and the durable sync queue, so these server counters are not
 comparable across the two runs. The new run also reports some requests under
-`/api/:unknown`, because `backend/log_safety.py` `safe_route` does not yet name
+`/api/:unknown`, because `backend/runtime/log_safety.py` `safe_route` does not yet name
 the newer route families. That is a gap in the labels only; the requests
 themselves succeeded.
 

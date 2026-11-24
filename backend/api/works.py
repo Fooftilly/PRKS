@@ -38,7 +38,7 @@ from backend.domain.works import source_rules
 from backend.api.common import objects, pdfs_dir, revalidated, text_field
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
-from backend.log_safety import safe_error_type, safe_log_id, safe_log_label
+from backend.runtime.log_safety import safe_error_type, safe_log_id, safe_log_label
 from backend.web.dispatch import not_ported
 from backend.web.http import Request, Response, bytes_response, error_response, json_response
 from backend.web.routing import route
@@ -401,7 +401,7 @@ def delete_work(req: Request, work_id: str, *, keep_managed_pdf: bool = False) -
     the orphan sweep removes the bytes (§11.2); the text and Research indexes
     are the database's.
     """
-    from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id
+    from backend.media.derived_caches import prks_delete_pdf_thumbnails_for_work_id
     from backend.domain.works import work_commands
 
     deleted = work_commands.delete(*req.actor, work_id, claim_pdf=not keep_managed_pdf)

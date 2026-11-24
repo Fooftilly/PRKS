@@ -47,11 +47,11 @@ from typing import Any, LiteralString, Optional, Sequence
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.research import concept_rules as rules
 from backend.domain.research import rules as research_rules
-from backend.research_markup import canonical_concept_name
+from backend.domain.research.research_markup import canonical_concept_name
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.entity_ids import generate as generate_id
-from backend.research_markup import parse_research_markup
+from backend.domain.entity_ids import generate as generate_id
+from backend.domain.research.research_markup import parse_research_markup
 from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE

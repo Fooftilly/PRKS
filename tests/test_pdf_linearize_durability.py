@@ -7,7 +7,7 @@ calls ``linearize_pdf_to()``, which writes a linearized *copy* to scratch and
 never touches its source; the caller stores the copy under a new key through
 its ``StorageBackend``, which makes it durable. These tests pin that the source
 is left untouched whatever qpdf does, the reasons it reports, and that the logs
-never carry a path. The ``backend.fs_durability`` primitives stay below.
+never carry a path. The ``backend.storage.fs_durability`` primitives stay below.
 
 qpdf is not installed in the test environment and must not be required: every
 test here drives a fake ``subprocess.run`` that writes the "linearized" output
@@ -22,9 +22,9 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from backend import fs_durability
-from backend import pdf_linearize
-from backend.pdf_linearize import linearize_pdf_to
+from backend.storage import fs_durability
+from backend.pdf import pdf_linearize
+from backend.pdf.pdf_linearize import linearize_pdf_to
 
 
 ORIGINAL = b"%PDF-1.4\n% original managed bytes\n%%EOF\n"
@@ -98,7 +98,7 @@ class TestLinearizeToACopy(_LinearizeCase):
             seen.append((first, second, timeout))
             return same
 
-        with patch("backend.pdf_text.same_pages_bounded", side_effect=compare):
+        with patch("backend.pdf.pdf_text.same_pages_bounded", side_effect=compare):
             answer = self.run_linearize(qpdf=_fake_qpdf(output=output, returncode=3))
         return answer, seen
 

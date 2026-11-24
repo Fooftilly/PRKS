@@ -8,7 +8,7 @@ import time
 
 _IMPORT_STARTED = time.perf_counter()
 
-from backend.log_config import setup_logging
+from backend.runtime.log_config import setup_logging
 from backend.server import DEFAULT_HOST, PORT, bind_storage, run_server
 from backend.web.hosts import normalize_listen_host, parse_request_origin
 from backend.storage.config import StorageConfig
@@ -190,13 +190,13 @@ def reset_testing_instance(config, environ=None):
 
     Returns when the instance was reset, so the start that follows applies the
     schema and sets the instance up as on a first start; exits 1 when the
-    person cancels and 2 on any refusal (``backend.testing_reset``). With
+    person cancels and 2 on any refusal (``backend.runtime.testing_reset``). With
     ``PRKS_MIGRATE_ON_START=0`` the start would refuse the emptied database,
     so the reset is refused before anything is deleted.
     """
     from backend.db.config import load_database_config
     from backend.db.errors import DatabaseConfigError
-    from backend.testing_reset import main_reset
+    from backend.runtime.testing_reset import main_reset
 
     env = os.environ if environ is None else environ
     if _migrate_on_start_value(env) != "1":
@@ -474,8 +474,8 @@ def migrate_on_start(db, environ, *, testing=False):
 
 
 def readiness_for(auth, root):
-    """``GET /readyz`` of the web process (``backend.readiness``)."""
-    from backend.readiness import PostgresReadiness
+    """``GET /readyz`` of the web process (``backend.runtime.readiness``)."""
+    from backend.runtime.readiness import PostgresReadiness
 
     return PostgresReadiness(auth.db, instance_id=auth.instance_id, root=os.path.realpath(root))
 
@@ -508,7 +508,7 @@ def run_role(role, argv):
     """``migrate``, ``worker`` or ``admin``: the PostgreSQL roles beside ``serve`` (§12.2)."""
     # Every role fails before any import of the PostgreSQL packages when the
     # Python environment is wrong, as serve does.
-    from backend.dependency_gate import ensure_runtime_or_exit
+    from backend.runtime.dependency_check import ensure_runtime_or_exit
 
     ensure_runtime_or_exit()
     if role == "admin":
@@ -532,13 +532,13 @@ def run_role(role, argv):
             conninfo = None  # the role reports the configuration error itself
         if conninfo is not None:
             refuse_untested_database(conninfo)
-    from backend import process_roles
+    from backend.runtime import process_roles
 
     if role == "migrate":
         return process_roles.run_migrate(root=root, testing=testing)
     import logging
 
-    from backend.log_config import stderr_log_level
+    from backend.runtime.log_config import stderr_log_level
 
     logging.basicConfig(level=stderr_log_level(), format="%(asctime)s %(levelname)s %(message)s")
     return process_roles.run_worker(root=root, testing=testing)
@@ -558,13 +558,13 @@ def enter_testing_mode(environ=None):
 
 
 def refuse_invalid_environment(environ=None):
-    """Exit with status 2 while any setting is invalid or retired (``backend.config_reference``, #612).
+    """Exit with status 2 while any setting is invalid or retired (``backend.runtime.config_reference``, #612).
 
     Every role runs it first, before the database, the storage root or the
     network: a deployment never runs on a value PRKS would otherwise replace
     with a default, nor with configuration written for an earlier release.
     """
-    from backend.config_reference import problems
+    from backend.runtime.config_reference import problems
 
     found = problems(os.environ if environ is None else environ)
     if found:
@@ -583,7 +583,7 @@ def run_config(argv, environ=None, *, out=None):
     effective deployment values and their source, secrets hidden. Exit 0
     when a start would accept the configuration, 2 otherwise.
     """
-    from backend.config_reference import Effective, effective, problems
+    from backend.runtime.config_reference import Effective, effective, problems
 
     parser = argparse.ArgumentParser(
         prog="prks_app.py config", description="Validate and show this deployment's configuration."
@@ -735,7 +735,7 @@ def _delegated_checks(environ, args):
     pass on the whole environment adds the problems of combinations, and
     every value one of them names is refused too.
     """
-    from backend.config_reference import Scope, in_scope
+    from backend.runtime.config_reference import Scope, in_scope
 
     delegated = [
         setting.key for setting in in_scope(Scope.DEPLOYMENT)
@@ -779,7 +779,7 @@ def _probe_groups(delegated):
 
 
 def _parser_of(group):
-    from backend.config_reference import BY_KEY
+    from backend.runtime.config_reference import BY_KEY
 
     return _PARSER_OF_OWNER.get(BY_KEY[group[0]].owner)
 
@@ -882,7 +882,7 @@ def serve_identity(args, config, identity, http_settings):
     (on Python 3.13 it held every stop for seconds) and which Python 3.14
     refuses, printing a traceback. Closing twice is harmless.
     """
-    from backend.startup_profile import phase as startup_phase
+    from backend.runtime.startup_profile import phase as startup_phase
 
     library_database = identity[0]
     try:
@@ -929,7 +929,7 @@ def serve_identity(args, config, identity, http_settings):
 
 
 if __name__ == "__main__":
-    from backend.startup_profile import phase as startup_phase, record_imports
+    from backend.runtime.startup_profile import phase as startup_phase, record_imports
 
     record_imports(_IMPORT_STARTED)
     role, role_argv = split_role(sys.argv[1:])
@@ -949,7 +949,7 @@ if __name__ == "__main__":
 
     # Fail before storage/DB/migrations/server when the Python env is wrong.
     with startup_phase("startup_dependency_gate"):
-        from backend.dependency_gate import ensure_runtime_or_exit
+        from backend.runtime.dependency_check import ensure_runtime_or_exit
 
         ensure_runtime_or_exit()
 

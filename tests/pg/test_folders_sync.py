@@ -18,7 +18,7 @@ from typing import Any, Optional
 from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.organization import folders
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.domain.organization.folder_rules import scope_key
 from tests import acting_context as facade_context
 from backend.sync.families import Environment, FamilyHandler

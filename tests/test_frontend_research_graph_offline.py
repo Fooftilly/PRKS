@@ -17,7 +17,7 @@ class ResearchGraphOfflineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_bounds_match_backend(self):
-        from backend.research_graph import MAX_GRAPH_NODES, MAX_GRAPH_EDGES
+        from backend.domain.research.research_graph import MAX_GRAPH_NODES, MAX_GRAPH_EDGES
         app = (ROOT / 'frontend/js/app.js').read_text()
         self.assertIn('PRKS_RESEARCH_GRAPH_MAX_NODES = %d;' % MAX_GRAPH_NODES, app)
         self.assertIn('PRKS_RESEARCH_GRAPH_MAX_EDGES = %d;' % MAX_GRAPH_EDGES, app)

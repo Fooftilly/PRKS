@@ -2,7 +2,7 @@
 
 Public routes: neither runs session admission nor returns configuration.
 ``/healthz`` does no I/O. ``/readyz`` answers 200 only when the server
-carries a readiness check (``backend.readiness``: pool, schema, setup,
+carries a readiness check (``backend.runtime.readiness``: pool, schema, setup,
 paired root and reconciled start generation) and it passes; a server
 started without one stays not ready. A trailing slash or a percent-encoded
 spelling of the path reaches the same probe.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from backend.log_safety import safe_error_type
+from backend.runtime.log_safety import safe_error_type
 from backend.web.http import Request, Response, bytes_response
 from backend.web.routing import route
 

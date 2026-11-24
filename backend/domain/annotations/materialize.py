@@ -46,7 +46,7 @@ from backend.domain.annotations import store
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
 from backend.domain.objects.ingest import IngestedPdf
-from backend.pdf_materialization import STALE_CODE
+from backend.pdf.pdf_materialization import STALE_CODE
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey, StorageObjectError
 
 NOT_FOUND = "ENTITY_NOT_FOUND"

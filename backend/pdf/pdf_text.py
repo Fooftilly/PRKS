@@ -1,8 +1,7 @@
-"""PDF text extraction shared by every Library backend (PG-C2 #641).
+"""PDF text extraction for the text index.
 
 PyMuPDF extraction with its size cap and privacy-safe failure labels, the
-per-Work sync result and the empty rebuild summary. No store. Moved from
-``backend/text_index.py``.
+per-Work sync result and the empty rebuild summary. No store.
 
 :func:`extract_pdf_bounded` runs :func:`extract_pdf` in a child process
 that is killed after ``EXTRACT_TIMEOUT_SECONDS`` (#1321): a page loop can
@@ -23,14 +22,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
-from backend.log_safety import safe_error_type
+from backend.runtime.log_safety import safe_error_type
 
 _MAX_EXTRACTED_CHARS = 2_000_000
 
 # Wall-time bound for one PDF. PyMuPDF reads ordinary books in seconds; only
 # a pathological file gets near this.
 EXTRACT_TIMEOUT_SECONDS = 300
-_PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+_PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
 _RESULT_NAME = "result.json"
 
 
@@ -103,7 +102,7 @@ def extract_pdf(
 
 
 def _run_child(args: List[str], timeout: float) -> tuple[str, Dict[str, Any]]:
-    """Run ``python -m backend.pdf_text *args``: ``("ok", result)``, ``("timeout", {})`` or ``("crashed", {})``.
+    """Run ``python -m backend.pdf.pdf_text *args``: ``("ok", result)``, ``("timeout", {})`` or ``("crashed", {})``.
 
     The child writes its JSON result as ``_RESULT_NAME`` in its working
     directory, a fresh scratch, and imports backend through PYTHONPATH. The
@@ -115,7 +114,7 @@ def _run_child(args: List[str], timeout: float) -> tuple[str, Dict[str, Any]]:
         env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_ROOT, env.get("PYTHONPATH")) if p)
         try:
             subprocess.run(  # nosec B603 - fixed argv, no shell
-                [sys.executable, "-m", "backend.pdf_text", *args],
+                [sys.executable, "-m", "backend.pdf.pdf_text", *args],
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -218,7 +217,7 @@ def _pdf_fingerprint(pdf_path: str) -> Dict[str, Any]:
 
 
 def _child_main(argv: List[str]) -> int:
-    """``python -m backend.pdf_text extract PDF MAX_CHARS`` or ``... compare PDF PDF``.
+    """``python -m backend.pdf.pdf_text extract PDF MAX_CHARS`` or ``... compare PDF PDF``.
 
     Writes its JSON result as ``_RESULT_NAME`` in the working directory (the
     parent's scratch), never to a path from argv.

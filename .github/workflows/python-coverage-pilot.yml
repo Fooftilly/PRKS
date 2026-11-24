@@ -7,7 +7,7 @@ on:
     paths:
       - ".github/workflows/python-coverage-pilot.yml"
       - "backend/domain/text_identity.py"
-      - "backend/research_markup.py"
+      - "backend/domain/research/research_markup.py"
       - "tests/test_text_identity.py"
       - "tests/fixtures/text_identity_vectors.json"
       - "scripts/changed_line_coverage.py"

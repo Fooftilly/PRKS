@@ -1,8 +1,8 @@
 """The Research Graph on PostgreSQL (L-R-1 #634; ``docs/postgresql-architecture.md`` §8.4).
 
-``backend/research_graph.py``'s snapshot of one Library, read in one
+``backend/domain/research/research_graph.py``'s snapshot of one Library, read in one
 snapshot: the same node and edge ids, types, labels, routes, extras, order
-and size bounds (its :func:`~backend.research_graph.finish_snapshot`), so
+and size bounds (its :func:`~backend.domain.research.research_graph.finish_snapshot`), so
 the response is SQLite's. Nodes are the Library's Concepts, Positions and
 Arguments; edges are the Concept hierarchy, Argument targets with their
 verdicts, citations (``argument_source``, one per Argument and Work, with
@@ -27,7 +27,7 @@ from typing import Any, LiteralString
 
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
 from backend.domain.identity.library_scope import LibraryScope
-from backend.research_graph import (
+from backend.domain.research.research_graph import (
     GraphSnapshot,
     finish_snapshot,
     graph_edge,

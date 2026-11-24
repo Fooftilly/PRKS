@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from backend.research_markup import canonical_concept_name
+from backend.domain.research.research_markup import canonical_concept_name
 
 CONCEPT_NAME_MAX = 160
 CONCEPT_ALIAS_MAX = 160

@@ -13,7 +13,7 @@ import unicodedata
 import unittest
 
 from backend.domain.text_identity import WHITESPACE, UnsupportedTextError, identity_key
-from backend.research_markup import normalize_concept_key
+from backend.domain.research.research_markup import normalize_concept_key
 
 VECTORS_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "text_identity_vectors.json")
 

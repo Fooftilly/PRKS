@@ -67,7 +67,7 @@ Today one Work row represents the intellectual work, one citeable publication, a
 
 ## IDs and offline creation
 
-Durable local-first creation requires IDs that can safely exist before a server round-trip. Domain-specific synchronization modules and `backend/entity_ids.py` handle the relevant boundaries.
+Durable local-first creation requires IDs that can safely exist before a server round-trip. Domain-specific synchronization modules and `backend/domain/entity_ids.py` handle the relevant boundaries.
 
 ## Database authority
 

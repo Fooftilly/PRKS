@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import unittest
 
-from backend.pdf_byte_mentions import (
+from backend.pdf.pdf_byte_mentions import (
     iter_double_bracket_inners,
     iter_double_bracket_inners_chunked,
     iter_pdf_mentioned_labels_chunked,

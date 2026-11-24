@@ -16,11 +16,11 @@ import logging
 from typing import Any
 from unittest import mock
 
-from backend import research_graph
+from backend.domain.research import research_graph
 from backend.domain.identity.library_scope import LibraryScope
 from tests.research_index_adapter import PostgresResearchIndex
 from tests import acting_context as facade_context
-from backend.research_graph import graph_node_id
+from backend.domain.research.research_graph import graph_node_id
 from tests.pg.test_research_index import ResearchIndexTestCase
 
 

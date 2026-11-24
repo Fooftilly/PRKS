@@ -24,7 +24,7 @@ from urllib.parse import unquote
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.saved_views import SavedView, SavedViewDeleted
 from backend.domain.saved_views.rules import SavedViewError
-from backend.log_safety import safe_log_id, safe_log_label
+from backend.runtime.log_safety import safe_log_id, safe_log_label
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 

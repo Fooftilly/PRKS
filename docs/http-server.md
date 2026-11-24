@@ -220,7 +220,7 @@ Everything below was read from master 02845f1, before the request layer
   - closing the connection after an unread body.
 - **Streaming responses:**
   - NDJSON backup progress (`POST /api/backups/progress`, a write and flush per line);
-  - PDF bytes with RFC 9110 Range (`backend.byte_range.parse_byte_range`, 206 and 416);
+  - PDF bytes with RFC 9110 Range (`backend.web.byte_range.parse_byte_range`, 206 and 416);
   - backup download.
 - **Streaming request bodies:**
   - Processing upload (`POST /api/processing-items`, up to 2 GiB);

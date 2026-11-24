@@ -10,7 +10,7 @@ from run_tests import apply_isolated_test_env
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.pdf_annotations import (
+from backend.pdf.pdf_annotations import (
     annotations_semantically_equal,
     round_trip_annotation,
     semantic_annotation_view,

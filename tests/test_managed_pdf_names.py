@@ -1,4 +1,4 @@
-"""The managed-PDF name rules (``backend/managed_pdf_names.py``).
+"""The managed-PDF name rules (``backend/pdf/managed_pdf_names.py``).
 
 Pure rules with no database: which ``/api/pdfs/`` spellings name a managed
 file, which basename a row owns or protects, and the containment check.
@@ -11,7 +11,7 @@ import shutil
 import tempfile
 import unittest
 
-from backend.managed_pdf_names import (
+from backend.pdf.managed_pdf_names import (
     managed_basenames_protected_by,
     managed_pdf_filename,
     owned_managed_pdf_basename,

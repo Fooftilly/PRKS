@@ -27,8 +27,8 @@ import binascii
 from typing import Any
 
 from backend.api.common import objects, revalidated
-from backend.pdf_annotations import WorkAnnotationError
-from backend.services.work_pdf_replace import stale_materialization_body
+from backend.pdf.pdf_annotations import WorkAnnotationError
+from backend.pdf.work_pdf_replace import stale_materialization_body
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -88,7 +88,7 @@ def post_pdf(req: Request) -> Response:
     replace the Work's PDF.
     """
     from backend.domain.annotations import annotation_commands
-    from backend.pdf_materialization import STALE_CODE
+    from backend.pdf.pdf_materialization import STALE_CODE
 
     data = req.data
     file_b64 = data.get("file_b64", "")

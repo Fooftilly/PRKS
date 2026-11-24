@@ -14,7 +14,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from backend import startup_profile
+from backend.runtime import startup_profile
 from tests.e2e import harness
 
 

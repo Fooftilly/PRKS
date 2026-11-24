@@ -33,8 +33,8 @@ from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.objects import ingest, replace
-from backend.log_safety import safe_error_type, safe_log_id
-from backend.pdf_annotations import parse_annotations_json
+from backend.runtime.log_safety import safe_error_type, safe_log_id
+from backend.pdf.pdf_annotations import parse_annotations_json
 from backend.storage.objects import StorageBackend, StorageObjectError, Writer
 
 T = TypeVar("T")

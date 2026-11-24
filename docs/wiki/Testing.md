@@ -50,11 +50,11 @@ The property tests are `tests/pg/test_tags_properties.py` and `tests/pg/test_wor
 
 ## Research markup differential
 
-`tests/test_research_markup_differential.py` fuzzes the two research-markup parsers against each other: `backend/research_markup.py` (the research index and graph) and `frontend/js/research-links.js` (the preview), run in one Node process through `tests/browser/research_markup_oracle.js`. Notes drawn from markers, code fences, escapes, percent-encodings and both languages' whitespace must give the same references at the same code-point offsets, with the same names and labels, and the preview's Concept key must group names exactly as `normalize_concept_key` (`prks.identity_key`) does, checked on every assigned code point.
+`tests/test_research_markup_differential.py` fuzzes the two research-markup parsers against each other: `backend/domain/research/research_markup.py` (the research index and graph) and `frontend/js/research-links.js` (the preview), run in one Node process through `tests/browser/research_markup_oracle.js`. Notes drawn from markers, code fences, escapes, percent-encodings and both languages' whitespace must give the same references at the same code-point offsets, with the same names and labels, and the preview's Concept key must group names exactly as `normalize_concept_key` (`prks.identity_key`) does, checked on every assigned code point.
 
 ## PDF Range header fuzzing
 
-`tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.byte_range.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
+`tests/test_byte_range_properties.py` fuzzes the PDF `Range` header parser (`backend.web.byte_range.parse_byte_range`), which every Work and Processing PDF route reads before streaming. It never raises; a 206 is one range inside the file, and a single well-formed range answers exactly the slice it names or 416; another unit, signs, non-ASCII digits, `last < first` or several ranges are ignored and the whole file is sent (RFC 9110 §14).
 
 ## Hypothesis profiles
 
@@ -73,7 +73,7 @@ When the nightly run fails, it prints the shrunk input and a `@reproduce_failure
 
 ## Mutation testing (#651 B2)
 
-`scripts/ci/mutation_testing.py` runs [mutmut](https://github.com/boxed/mutmut) on a few pure modules. mutmut changes one small piece of a module at a time (a comparison, a constant, a boolean operator) and reruns that module's unit tests. A mutant the tests still pass on has **survived**: a behaviour change no test notices. Each target in `TARGETS` names the modules to mutate and the database-free tests that cover them: `text-identity`, `sync-envelope` (`backend/sync/envelope.py`), `research-markup`, `byte-range` (the PDF `Range` header parser, `backend/byte_range.py`), `pdf-byte-mentions` (the `[[label]]` scan over stored PDF bytes), `entity-ids` (the id generator and parser), `tag-color` (the Tag color grammar) and `docs-only-ci` (the docs-only classifier, Markdown validator and wiki link rules).
+`scripts/ci/mutation_testing.py` runs [mutmut](https://github.com/boxed/mutmut) on a few pure modules. mutmut changes one small piece of a module at a time (a comparison, a constant, a boolean operator) and reruns that module's unit tests. A mutant the tests still pass on has **survived**: a behaviour change no test notices. Each target in `TARGETS` names the modules to mutate and the database-free tests that cover them: `text-identity`, `sync-envelope` (`backend/sync/envelope.py`), `research-markup`, `byte-range` (the PDF `Range` header parser, `backend/web/byte_range.py`), `pdf-byte-mentions` (the `[[label]]` scan over stored PDF bytes), `entity-ids` (the id generator and parser), `tag-color` (the Tag color grammar) and `docs-only-ci` (the docs-only classifier, Markdown validator and wiki link rules).
 
 The [advisory workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/mutation-testing.yml) runs every target weekly, on manual dispatch, and on pull requests that change the mutation setup. The job summary gives counts and the functions with survivors. Survivors never fail the job; only an incomplete run does. The run copies the tracked files into a temporary workspace and writes mutmut's `[mutmut]` section there, so the checkout is never changed.
 
