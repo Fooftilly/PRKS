@@ -154,3 +154,8 @@ def derive_log_file(*, root: str, log_override: str) -> str:
         return configured
     return os.path.join(root, "prks-errors.log")
 
+
+# A pre-0.8 Library kept its catalogue in one of these SQLite files at the
+# root. PostgreSQL PRKS never reads one, so a root holding one is refused
+# (object maintenance would treat its files as orphans).
+SQLITE_CATALOGUES = ("prks_data.db", "prks_data_testing.db")

@@ -482,6 +482,65 @@ class BootstrapTests(RootPairingTestCase):
         self.bootstrap(name, root)
         self.assert_paired(name, root, 1)
 
+    def test_storage_choose_refuses_after_the_instance_row_names_the_root(self) -> None:
+        # Setup stopped after the instance commit, before the marker claim:
+        # the marker still looks unclaimed, but the database names this root,
+        # so a folder chosen now could never be set up (§8.1).
+        import io
+
+        import prks_app
+        from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent
+
+        name, root = self.database(), self.new_root()
+        lease = root_binding.acquire_shared_root_lease(root)
+        with self.assertRaises(Crash):
+            self.bootstrap(name, root, lease=lease, faults=crash_at(root_pairing.FAULT_AFTER_INSTANCE_COMMIT))
+        lease.release()  # the process stopped
+        self.assertIsNone(self.marker(root).instance_id)
+        config_file = os.path.join(self.tmp, "config.json")
+        BootstrapConfigStore(config_file).compare_and_set(expect=expect_absent(), local_root=root)
+        environ = {
+            "HOME": self.tmp,
+            "PRKS_CONFIG_FILE": config_file,
+            "PRKS_DATABASE_URL": self.harness.conninfo(name),
+        }
+        target = os.path.join(self.tmp, "elsewhere")
+        out, err = io.StringIO(), io.StringIO()
+        code = prks_app.run_storage(["choose", target], environ=environ, out=out, err=err)
+        self.assertEqual((code, out.getvalue()), (2, ""))
+        self.assertIn("Setup has already started", err.getvalue())
+        self.assertFalse(os.path.exists(target))
+        with open(config_file, encoding="utf-8") as handle:
+            self.assertIn(root, handle.read())
+
+    def test_storage_choose_succeeds_against_a_database_before_its_first_start(self) -> None:
+        # Real database reads, no stubs: a database the first start has not
+        # installed yet, and a migrated one with no instance row, both count
+        # as unconfigured.
+        import io
+
+        import prks_app
+        from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent, read_bootstrap_config
+
+        for label, empty in (("fresh", True), ("migrated", False)):
+            with self.subTest(label):
+                name = self.harness.create_database(label, empty=empty)
+                self.addCleanup(self._drop, name)
+                root = self.new_root(f"{label}-lib")
+                config_file = os.path.join(self.tmp, f"{label}.json")
+                BootstrapConfigStore(config_file).compare_and_set(expect=expect_absent(), local_root=root)
+                environ = {
+                    "HOME": self.tmp,
+                    "PRKS_CONFIG_FILE": config_file,
+                    "PRKS_DATABASE_URL": self.harness.conninfo(name),
+                }
+                target = os.path.join(self.tmp, f"{label}-chosen")
+                out, err = io.StringIO(), io.StringIO()
+                code = prks_app.run_storage(["choose", target], environ=environ, out=out, err=err)
+                self.assertEqual((code, err.getvalue()), (0, ""))
+                config = read_bootstrap_config(config_file)
+                self.assertEqual(config.local_root if config is not None else None, target)
+
     def test_concurrent_bootstrap_with_another_root_never_claims_it(self) -> None:
         name, root, other = self.database(), self.new_root(), self.new_root("other")
         token = self.issue(name)  # the same setup, submitted against two roots

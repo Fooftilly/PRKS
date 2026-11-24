@@ -59,7 +59,7 @@ from backend.storage.file_lock import (
     is_link_or_reparse_point,
 )
 from backend.storage.bootstrap_config import LOCK_SUFFIX
-from backend.storage.resolver import SOURCE_CONFIG_FILE
+from backend.storage.resolver import SOURCE_CONFIG_FILE, SOURCE_DEVELOPMENT_DEFAULT, SOURCE_PLATFORM_DEFAULT
 from backend.storage.preflight import (
     PREFLIGHT_DIRNAME,
     preflight_is_scaffold,
@@ -1290,9 +1290,45 @@ def _open_storage_root(
             # the lease shared. Until then the exclusive lease keeps every
             # other process out, so a second web started meanwhile is refused.
             _share(bound)
+    try:
+        _check_selection_unchanged(config, config_file_path)
+    except BaseException:
+        bound._release_locks()
+        raise
     if register:
         _register(bound)
     return bound
+
+
+_SELECTION_SOURCES = frozenset({SOURCE_CONFIG_FILE, SOURCE_PLATFORM_DEFAULT, SOURCE_DEVELOPMENT_DEFAULT})
+
+
+def _check_selection_unchanged(config: Any, config_file_path: Optional[str]) -> None:
+    """Refuse a root the bootstrap file stopped selecting while this process leased it (§8.1).
+
+    A process reads the bootstrap file, then leases the root it names. A
+    choice (``backend.storage.choose``) written in between holds the old
+    root's lease while it writes, so it finishes before this lease is taken,
+    and this re-read, under the lease, sees it. No process then serves a
+    root the committed selection does not name.
+
+    A default root is checked too: a first choice writes the file a default
+    start found empty, and from then on the file, not the default, selects.
+    """
+    source = getattr(config, "root_source", None)
+    if source not in _SELECTION_SOURCES or not config_file_path:
+        return
+    from backend.storage.resolver import recorded_local_root
+
+    selected = recorded_local_root(config_file_path)
+    if source != SOURCE_CONFIG_FILE and selected is None:
+        return  # still no selection: the default still applies
+    if selected is None or os.path.normpath(selected) != os.path.normpath(config.root):
+        raise StorageRootRefused(
+            "storage_selection_changed",
+            "The Library folder in the PRKS bootstrap configuration changed while PRKS was starting. "
+            "Start PRKS again to use the folder it selects now.",
+        )
 
 
 def _look_before_leasing(

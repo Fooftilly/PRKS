@@ -426,10 +426,19 @@ def _complete(args: argparse.Namespace, environ: Mapping[str, str], db: Database
         lease = acquire_shared_root_lease(root)
     except StorageRootError as exc:
         raise _lease_refusal(exc) from None
+    from backend.storage.choose import selection_fence
+
     try:
-        result = root_pairing.bootstrap(
-            db, owner, token=token, root=root, lease=lease, testing=bool(args.testing)
-        )
+        # Under the config lock: a folder choice never interleaves with the
+        # claim (storage-architecture §8.1). The root is named explicitly here,
+        # so it need not be the one the bootstrap file selects.
+        env = {**environ, "PRKS_TESTING": "1"} if args.testing else environ
+        with selection_fence(env, root, require_selected=False):
+            result = root_pairing.bootstrap(
+                db, owner, token=token, root=root, lease=lease, testing=bool(args.testing)
+            )
+    except StorageRootError as exc:
+        raise RootPairingRefused(exc.reason, exc.message, retryable=True) from None
     finally:
         lease.release()
     default_file = bootstrap_tokens.default_token_file(environ)

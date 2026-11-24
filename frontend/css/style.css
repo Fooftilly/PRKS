@@ -11617,6 +11617,18 @@ button.prks-research-row {
     border-radius: var(--radius-sm);
 }
 
+/* The folder choice reuses the Create File Optional-disclosure grammar
+   (.work-upload-meta__details / __summary, DESIGN.md "Optional"). */
+.prks-setup__folder-body {
+    display: grid;
+    gap: var(--space-sm);
+}
+
+.prks-setup__lead code {
+    overflow-wrap: anywhere;
+    font-size: var(--text-xs);
+}
+
 .prks-setup__review {
     display: grid;
     grid-template-columns: max-content 1fr;

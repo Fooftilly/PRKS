@@ -73,6 +73,22 @@ class StorageConfig:
             root_source=resolved.source,
         )
 
+    @classmethod
+    def for_chosen_root(cls, root: str, *, environ: Mapping[str, str]) -> StorageConfig:
+        """A production snapshot for ``root``, already normalized (V1: expanded once).
+
+        For ``backend.storage.choose``: the folder is validated as a start would
+        bind it from the bootstrap file, which reads it literally, and as an
+        explicitly selected root, so a new, empty folder may become a root.
+        """
+        refuse_retired_processing_dir(environ)
+        return cls._from_parts(
+            testing=False,
+            configured_root=root,
+            log_override=(environ.get("PRKS_LOG_FILE") or "").strip(),
+            root_source=resolver.SOURCE_CLI,
+        )
+
     def anchored_to(self, root_real: str) -> StorageConfig:
         """This snapshot with every root-relative path re-anchored beneath ``root_real``.
 

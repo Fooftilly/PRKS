@@ -7,8 +7,11 @@ const TOKEN = 'a'.repeat(43)
 
 type Answer = { status: number; body: unknown; headers?: Record<string, string> }
 let state: string
+let storage: string
 let answer: Answer
+let folderAnswer: Answer
 let posts: Array<Record<string, unknown>>
+let folderPosts: Array<Record<string, unknown>>
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -19,16 +22,23 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
 
 beforeEach(() => {
   state = 'unconfigured'
+  storage = 'fixed'
   answer = { status: 200, body: { state: 'ready', created: true, signed_in: true } }
+  folderAnswer = { status: 200, body: { folder: '/srv/library', created: true, restart_required: true } }
   posts = []
+  folderPosts = []
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (_path: string, init?: RequestInit) => {
+    vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && path === '/api/setup/storage') {
+        folderPosts.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return json(folderAnswer.status, folderAnswer.body, folderAnswer.headers)
+      }
       if (init?.method === 'POST') {
         posts.push(JSON.parse(String(init.body)) as Record<string, unknown>)
         return json(answer.status, answer.body, answer.headers)
       }
-      return json(200, { state })
+      return json(200, { state, storage })
     }),
   )
 })
@@ -203,6 +213,67 @@ describe('SetupApp', () => {
   })
 })
 
+describe('choosing the Library folder (#720)', () => {
+  it('offers no folder choice when the host sets the folder', async () => {
+    const { wrapper } = await mounted()
+    expect(wrapper.find('#prks-setup-folder').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('chooses a folder with the token, then asks for a restart', async () => {
+    storage = 'choosable'
+    const { wrapper } = await mounted()
+    expect(wrapper.find('#prks-setup-folder').exists()).toBe(true)
+    await wrapper.get('#prks-setup-folder-path').setValue(' /srv/library ')
+    // The token comes first: nothing is sent without one.
+    await wrapper.get('#prks-setup-folder button').trigger('click')
+    await flushPromises()
+    expect(folderPosts).toHaveLength(0)
+    expect(wrapper.text()).toContain('Enter the setup token.')
+    await wrapper.get('#prks-setup-token').setValue(TOKEN)
+    await wrapper.get('#prks-setup-folder button').trigger('click')
+    await flushPromises()
+    expect(folderPosts).toEqual([{ token: TOKEN, folder: '/srv/library' }])
+    expect(wrapper.get('#prks-setup-heading').text()).toBe('Restart PRKS')
+    expect(wrapper.get('#prks-setup-chosen-folder').text()).toBe('/srv/library')
+    expect(posts).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('shows why a folder was refused and stays on the token step', async () => {
+    storage = 'choosable'
+    folderAnswer = {
+      status: 409,
+      body: { error: 'storage_refused', reason: 'open_another_library_refused', message: 'That folder already holds a Library paired with a database.' },
+    }
+    const { wrapper } = await mounted()
+    await wrapper.get('#prks-setup-token').setValue(TOKEN)
+    await wrapper.get('#prks-setup-folder-path').setValue('/srv/other')
+    await wrapper.get('#prks-setup-folder button').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('That folder already holds a Library paired with a database.')
+    expect(wrapper.find('#prks-setup-token').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('opens on the restart notice when a folder was already chosen', async () => {
+    storage = 'restart_required'
+    const { wrapper } = await mounted()
+    expect(wrapper.get('#prks-setup-heading').text()).toBe('Restart PRKS')
+    wrapper.unmount()
+  })
+
+  it('goes to the restart notice when setup is refused for a pending restart', async () => {
+    answer = { status: 409, body: { error: 'restart_required' } }
+    const { wrapper } = await mounted()
+    await fillToReview(wrapper)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('#prks-setup-heading').text()).toBe('Restart PRKS')
+    wrapper.unmount()
+  })
+})
+
 describe('setup service', () => {
   it('reads only known states', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(200, { state: 'other' })))
@@ -210,7 +281,9 @@ describe('setup service', () => {
     vi.stubGlobal('fetch', vi.fn(async () => json(503, { error: 'unavailable' })))
     expect(await readSetupState()).toBeNull()
     vi.stubGlobal('fetch', vi.fn(async () => json(200, { state: 'bootstrapping' })))
-    expect(await readSetupState()).toBe('bootstrapping')
+    expect(await readSetupState()).toEqual({ state: 'bootstrapping', storage: 'fixed' })
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { state: 'unconfigured', storage: 'choosable' })))
+    expect(await readSetupState()).toEqual({ state: 'unconfigured', storage: 'choosable' })
   })
 
   it('maps an unreachable server and a body without a code', async () => {
