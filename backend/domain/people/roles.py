@@ -270,7 +270,7 @@ def work_roles(scope: LibraryScope, work_id: str) -> list[dict[str, Any]]:
 
 
 def roles_state(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any]]:
-    """``role_rules.get_roles_state``: the Work-scoped role revisions, tombstones included."""
+    """The Work-scoped role revisions, tombstones included."""
     if scope.execute(_WORK_EXISTS_SQL, {"work_id": work_id}).fetchone() is None:
         return None
     prefix = _scope_prefix(work_id)
