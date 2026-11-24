@@ -1,4 +1,4 @@
-"""The derived thumbnail cache helpers (``backend/derived_caches.py``).
+"""The derived thumbnail cache helpers (``backend/media/derived_caches.py``).
 
 Driver-free: the helpers touch only files under the thumbnails directory.
 Moved out of ``tests/test_work_deletion.py`` when PG-C2 (#641) retired its
@@ -13,7 +13,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from backend.derived_caches import (
+from backend.media.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
     prks_prune_thumbnail_page,
     prks_thumb_cache_stem,
@@ -33,7 +33,7 @@ class ThumbnailCleanupTests(unittest.TestCase):
 
     def test_thumbnail_helper_listdir_failure_is_reported(self) -> None:
         thumb = self._thumb("W-LISTFAIL", 1)
-        with patch("backend.derived_caches.os.listdir", side_effect=OSError("cannot list")):
+        with patch("backend.media.derived_caches.os.listdir", side_effect=OSError("cannot list")):
             failed = prks_delete_pdf_thumbnails_for_work_id("W-LISTFAIL", self.thumbs_dir)
         self.assertEqual(failed, (self.thumbs_dir,))
         self.assertTrue(os.path.isfile(thumb))

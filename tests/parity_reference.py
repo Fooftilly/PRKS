@@ -41,7 +41,7 @@ from typing import Any, Callable, Optional
 
 RECORD_ENV = "PRKS_PARITY_RECORD"
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "parity_reference")
-# Entity ids (``backend.entity_ids.generate``) and UUIDs (op and device ids).
+# Entity ids (``backend.domain.entity_ids.generate``) and UUIDs (op and device ids).
 _VARYING = re.compile(
     r"\b(?:[A-Z]{1,4}-[0-9A-F]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
     r"|[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})\b"

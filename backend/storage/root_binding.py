@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Iterator, Optional
 
-from backend.fs_durability import fsync_directory
+from backend.storage.fs_durability import fsync_directory
 from backend.storage import distribution as _distribution
 from backend.storage import paths
 from backend.storage.errors import (
@@ -805,7 +805,7 @@ def check_no_foreign_tree(root_real: str) -> None:
     """V7 and V13 for a caller about to delete inside the root: no mount point, link or other device.
 
     ``StorageRootRefused`` names the first entry that would carry a recursive
-    delete outside the root's own filesystem tree (``backend.testing_reset``).
+    delete outside the root's own filesystem tree (``backend.runtime.testing_reset``).
     Regular files on another device (overlayfs) are not refused: unlinking one
     never reaches past it.
     """

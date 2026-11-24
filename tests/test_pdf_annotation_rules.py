@@ -1,7 +1,7 @@
 """The PDF annotation rules both backends share (kept by PG-C2 #641).
 
-``backend/pdf_annotations.py`` parses and normalizes a viewer annotation into
-its columns and geometry and reconstructs it; ``backend/pdf_annotation_adopt.py``
+``backend/pdf/pdf_annotations.py`` parses and normalizes a viewer annotation into
+its columns and geometry and reconstructs it; ``backend/pdf/pdf_annotation_adopt.py``
 decides which viewer items are user markup. These are pure;
 ``tests/pg/test_annotations.py`` and ``tests/pg/test_annotations_materialize.py``
 exercise them through the PostgreSQL boundary.
@@ -13,8 +13,8 @@ import json
 import tracemalloc
 import unittest
 
-from backend import pdf_annotation_adopt
-from backend.pdf_annotations import (
+from backend.pdf import pdf_annotation_adopt
+from backend.pdf.pdf_annotations import (
     WorkAnnotationError,
     normalize_annotation,
     parse_annotations_json,
@@ -90,7 +90,7 @@ class TestAnnotationNormalizer(unittest.TestCase):
     def test_the_storage_walks_use_memory_bounded_by_depth_not_width(self):
         """A wide geometry list is allowed by the body limit; the walks must not copy it."""
         from backend.domain.annotations.store import _holds_unstorable_text
-        from backend.pdf_annotations import _holds_non_finite
+        from backend.pdf.pdf_annotations import _holds_non_finite
 
         wide = {"id": "a", "geometry": {"points": list(range(1_000_000)), "label": "x"}}
         for walk in (_holds_non_finite, _holds_unstorable_text):

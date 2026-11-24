@@ -6,8 +6,8 @@ envelope for an id that already exists acknowledges the stored row without
 overwriting it -- creation is not an update.
 """
 
-from backend.entity_ids import is_distributed
-from backend.person_image import PersonImageUrlError, normalize_person_image_url
+from backend.domain.entity_ids import is_distributed
+from backend.media.person_image import PersonImageUrlError, normalize_person_image_url
 
 FIELDS = (
     "first_name",

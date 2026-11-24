@@ -24,7 +24,7 @@ from backend.domain.identity.authorization import AccessRefused, Capability, Ref
 from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, lifecycle, merge, work_commands
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from backend.sync import protocol

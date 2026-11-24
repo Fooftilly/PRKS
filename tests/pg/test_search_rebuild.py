@@ -23,7 +23,7 @@ from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import Outcome
 from tests import acting_context as facade_context
-from backend.pdf_text import PDFTextExtractorUnavailable
+from backend.pdf.pdf_text import PDFTextExtractorUnavailable
 from tests.pg.test_search_text import TextTestCase
 
 

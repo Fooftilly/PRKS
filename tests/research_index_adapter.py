@@ -40,7 +40,7 @@ from tests.acting_context import current_context
 if TYPE_CHECKING:
     from backend.db.database import Database
     from backend.domain.identity.library_scope import LibraryScope
-    from backend.research_graph import GraphSnapshot
+    from backend.domain.research.research_graph import GraphSnapshot
 
 T = TypeVar("T")
 

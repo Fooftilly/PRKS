@@ -32,7 +32,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import BinaryIO, Callable, Iterator, Mapping, Optional, Protocol, runtime_checkable
 
-from backend.fs_durability import fsync_directory, fsync_open_file
+from backend.storage.fs_durability import fsync_directory, fsync_open_file
 from backend.storage import paths
 from backend.storage.file_lock import is_link_or_reparse_point
 
@@ -269,7 +269,7 @@ def mint_name(namespace: str, hint: str) -> str:
     fresh name from ``backend.domain.objects.portraits``.
     """
     if namespace == NAMESPACE_ASSET_OBJECTS:
-        from backend.managed_pdf_names import mint_managed_pdf_filename
+        from backend.pdf.managed_pdf_names import mint_managed_pdf_filename
 
         return validate_key_name(mint_managed_pdf_filename(hint))
     if namespace in NAMESPACES:

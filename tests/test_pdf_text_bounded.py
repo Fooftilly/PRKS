@@ -1,6 +1,6 @@
 """Time-bounded PDF text extraction in a child process (#1321).
 
-``extract_pdf_bounded`` runs ``extract_pdf`` in ``python -m backend.pdf_text``
+``extract_pdf_bounded`` runs ``extract_pdf`` in ``python -m backend.pdf.pdf_text``
 and kills it after a timeout. A timeout or a child that leaves no result is a
 per-PDF ``PDFTextExtractionError``, never an empty document; a child without
 PyMuPDF is ``PDFTextExtractorUnavailable`` so the job is retried.
@@ -15,8 +15,8 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from backend import pdf_text
-from backend.pdf_text import (
+from backend.pdf import pdf_text
+from backend.pdf.pdf_text import (
     PDFTextExtractionError,
     PDFTextExtractorUnavailable,
     extract_pdf_bounded,
@@ -82,7 +82,7 @@ class BoundedExtractionTests(unittest.TestCase):
                 {"text": "", "empty": True, "truncated": False})) as run:
             extract_pdf_bounded(self.pdf, max_chars=7)
         argv = run.call_args.args[0]
-        self.assertEqual(argv[1:], ["-m", "backend.pdf_text", "extract", self.pdf, "7"])
+        self.assertEqual(argv[1:], ["-m", "backend.pdf.pdf_text", "extract", self.pdf, "7"])
         self.assertNotIn("shell", run.call_args.kwargs)
 
 

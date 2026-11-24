@@ -42,7 +42,7 @@ from tests.e2e.policy import (
 )
 from tests.e2e import coverage_map
 from tests.e2e.postgres_identity import provision_library, provision_unconfigured, seed_postgres_library
-from backend.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
+from backend.runtime.startup_profile import PROFILE_ENV as CHILD_STARTUP_PROFILE_ENV, parse_records
 
 REPO = Path(__file__).resolve().parents[2]
 HOST = "127.0.0.1"

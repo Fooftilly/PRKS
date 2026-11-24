@@ -3,7 +3,7 @@
 The decision tables, codes and result shapes are those of
 ``backend/domain/annotations/rules.py`` (the ``CREATE``/``SET``/``DELETE_PDF_ANNOTATION``
 families), ``PRKSDatabase.sync_work_annotations`` (the legacy full-list
-replace) and ``backend/pdf_annotation_adopt.py`` (byte-only markup
+replace) and ``backend/pdf/pdf_annotation_adopt.py`` (byte-only markup
 adoption); payloads are validated and compared by the same functions. Each
 command locks its target first (:func:`.store.lock_target`) and decides on
 committed state under that lock. Differences from SQLite, each deliberate:
@@ -27,15 +27,15 @@ from backend.domain.annotations import rules as rules
 from backend.domain.annotations import store
 from backend.domain.annotations.store import Target
 from backend.domain.identity.library_scope import LibraryScope
-from backend.pdf_annotation_adopt import _annotation_id, default_is_non_user, default_is_user_markup
-from backend.pdf_annotations import (
+from backend.pdf.pdf_annotation_adopt import _annotation_id, default_is_non_user, default_is_user_markup
+from backend.pdf.pdf_annotations import (
     WorkAnnotationError,
     annotations_semantically_equal,
     normalize_annotation,
     normalize_annotation_list,
     round_trip_annotation,
 )
-from backend.pdf_materialization import STALE_CODE
+from backend.pdf.pdf_materialization import STALE_CODE
 
 Result = tuple[int, dict[str, Any]]
 

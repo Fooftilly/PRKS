@@ -37,8 +37,8 @@ from unittest import mock
 
 from backend.domain.objects import ingest
 from backend.domain.search import text as search_text
-from backend.pdf_linearize import is_pdf_linearized
-from backend.pdf_text import same_pages_bounded
+from backend.pdf.pdf_linearize import is_pdf_linearized
+from backend.pdf.pdf_text import same_pages_bounded
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job

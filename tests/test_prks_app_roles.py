@@ -45,7 +45,7 @@ class SplitRoleTests(unittest.TestCase):
 
         for role in ("migrate", "worker", "admin"):
             with self.subTest(role=role):
-                with patch("backend.dependency_gate.ensure_runtime_or_exit", side_effect=Gate):
+                with patch("backend.runtime.dependency_check.ensure_runtime_or_exit", side_effect=Gate):
                     with self.assertRaises(Gate):
                         prks_app.run_role(role, ["--help"] if role != "admin" else ["bootstrap", "--help"])
 

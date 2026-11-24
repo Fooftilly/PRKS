@@ -31,8 +31,8 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend import research_graph
-from backend.research_graph import GraphTooLargeError
+from backend.domain.research import research_graph
+from backend.domain.research.research_graph import GraphTooLargeError
 from tests.parity_reference import reference_for
 from tests.backend_parity import parametrize_backends
 from tests.test_arguments_parity import ArgumentParityTestCase, ArgumentSide

@@ -22,8 +22,8 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend import person_image  # noqa: E402
-from backend.person_image import (  # noqa: E402
+from backend.media import person_image  # noqa: E402
+from backend.media.person_image import (  # noqa: E402
     PersonImageUrlError,
     decode_and_transcode,
     fetch_and_prepare,
@@ -188,15 +188,15 @@ def _install_network(created, response=b"", addrinfo=None, ssl_ctx=None, connect
         return sock
 
     patches = [
-        patch("backend.person_image._create_socket", fake_socket),
+        patch("backend.media.person_image._create_socket", fake_socket),
     ]
     if addrinfo is not None:
         patches.append(
-            patch("backend.person_image._getaddrinfo", return_value=addrinfo)
+            patch("backend.media.person_image._getaddrinfo", return_value=addrinfo)
         )
     if ssl_ctx is not None:
         patches.append(
-            patch("backend.person_image.ssl.create_default_context", return_value=ssl_ctx)
+            patch("backend.media.person_image.ssl.create_default_context", return_value=ssl_ctx)
         )
     return patches
 
@@ -413,7 +413,7 @@ class TestFraming(unittest.TestCase):
 
 class TestAddrinfoPolicy(unittest.TestCase):
     def test_literal_loopback_no_dns(self):
-        with patch("backend.person_image._getaddrinfo") as g:
+        with patch("backend.media.person_image._getaddrinfo") as g:
             self.assertIsNone(
                 person_image._validated_addrinfo_records("127.0.0.1", 80)
             )
@@ -421,7 +421,7 @@ class TestAddrinfoPolicy(unittest.TestCase):
 
     def test_dns_public_ok(self):
         info = _public_addrinfo()
-        with patch("backend.person_image._getaddrinfo", return_value=info) as g:
+        with patch("backend.media.person_image._getaddrinfo", return_value=info) as g:
             recs = person_image._validated_addrinfo_records("example.com", 443)
             self.assertEqual(recs, info)
             g.assert_called_once()
@@ -431,7 +431,7 @@ class TestAddrinfoPolicy(unittest.TestCase):
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443)),
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443)),
         ]
-        with patch("backend.person_image._getaddrinfo", return_value=info):
+        with patch("backend.media.person_image._getaddrinfo", return_value=info):
             self.assertIsNone(
                 person_image._validated_addrinfo_records("example.com", 443)
             )
@@ -440,11 +440,11 @@ class TestAddrinfoPolicy(unittest.TestCase):
         private = [
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.1", 443)),
         ]
-        with patch("backend.person_image._getaddrinfo", return_value=private):
+        with patch("backend.media.person_image._getaddrinfo", return_value=private):
             self.assertIsNone(
                 person_image._validated_addrinfo_records("example.com", 443)
             )
-        with patch("backend.person_image._getaddrinfo", return_value=[]):
+        with patch("backend.media.person_image._getaddrinfo", return_value=[]):
             self.assertIsNone(
                 person_image._validated_addrinfo_records("example.com", 443)
             )
@@ -453,11 +453,11 @@ class TestAddrinfoPolicy(unittest.TestCase):
         unix = (getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM, 0, "", "/tmp/x")
         inet = (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))
         with patch(
-            "backend.person_image._getaddrinfo", return_value=[unix, inet]
+            "backend.media.person_image._getaddrinfo", return_value=[unix, inet]
         ):
             recs = person_image._validated_addrinfo_records("example.com", 443)
             self.assertEqual(recs, [inet])
-        with patch("backend.person_image._getaddrinfo", return_value=[unix]):
+        with patch("backend.media.person_image._getaddrinfo", return_value=[unix]):
             self.assertIsNone(
                 person_image._validated_addrinfo_records("example.com", 443)
             )
@@ -473,11 +473,11 @@ class TestAddrinfoPolicy(unittest.TestCase):
         for host, family, sockaddr in cases:
             info = [(family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", sockaddr)]
             with self.subTest(host=host):
-                with patch("backend.person_image._getaddrinfo", return_value=info):
+                with patch("backend.media.person_image._getaddrinfo", return_value=info):
                     self.assertIsNone(
                         person_image._validated_addrinfo_records("example.com", 443)
                     )
-                with patch("backend.person_image._create_socket") as sock_cls:
+                with patch("backend.media.person_image._create_socket") as sock_cls:
                     self.assertIsNone(
                         person_image._validated_addrinfo_records(host, 80)
                     )
@@ -702,8 +702,8 @@ class TestPinnedFetch(unittest.TestCase):
             )
 
     def test_loopback_url_never_connects(self):
-        with patch("backend.person_image._getaddrinfo") as g:
-            with patch("backend.person_image._create_socket") as s:
+        with patch("backend.media.person_image._getaddrinfo") as g:
+            with patch("backend.media.person_image._create_socket") as s:
                 self.assertIsNone(fetch_and_prepare("http://127.0.0.1/image.jpg"))
                 g.assert_not_called()
                 s.assert_not_called()
@@ -718,10 +718,10 @@ class TestPinnedFetch(unittest.TestCase):
             clock[0] = 1007.0
             return _public_addrinfo()
 
-        with patch("backend.person_image.time.monotonic", fake_mono):
-            with patch("backend.person_image._getaddrinfo", fake_getaddrinfo):
+        with patch("backend.media.person_image.time.monotonic", fake_mono):
+            with patch("backend.media.person_image._getaddrinfo", fake_getaddrinfo):
                 with patch(
-                    "backend.person_image._create_socket",
+                    "backend.media.person_image._create_socket",
                     side_effect=AssertionError("socket after deadline"),
                 ):
                     self.assertIsNone(
@@ -754,11 +754,11 @@ class TestPinnedFetch(unittest.TestCase):
             clock[0] += 2
             return sock
 
-        with patch("backend.person_image.time.monotonic", fake_mono):
-            with patch("backend.person_image._getaddrinfo", return_value=info):
-                with patch("backend.person_image._create_socket", fake_socket):
+        with patch("backend.media.person_image.time.monotonic", fake_mono):
+            with patch("backend.media.person_image._getaddrinfo", return_value=info):
+                with patch("backend.media.person_image._create_socket", fake_socket):
                     with patch(
-                        "backend.person_image.ssl.create_default_context",
+                        "backend.media.person_image.ssl.create_default_context",
                         return_value=FakeSSLContext(),
                     ):
                         self.assertIsNone(
@@ -787,7 +787,7 @@ class TestPinnedFetch(unittest.TestCase):
                 if t is not None and t <= 0:
                     raise TimeoutError("deadline")
 
-        with patch("backend.person_image.time.monotonic", lambda: clock[0]):
+        with patch("backend.media.person_image.time.monotonic", lambda: clock[0]):
             out = person_image._read_bounded_body(SlowResp(), DummySock(), 1006.0)
         self.assertIsNone(out)
 

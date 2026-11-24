@@ -354,7 +354,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("hydrateAnnotationBaseFromServer", works_pdf)
         # Adoption skips known-stale bytes / unresolved ops.
         self.assertIn("adoptBlocked", works_pdf)
-        adopt_py = (ROOT / "backend" / "pdf_annotation_adopt.py").read_text(encoding="utf-8")
+        adopt_py = (ROOT / "backend" / "pdf" / "pdf_annotation_adopt.py").read_text(encoding="utf-8")
         self.assertIn("known-stale PDF bytes", adopt_py)
         self.assertIn("STALE_CODE", adopt_py)
         # Local durable save path must not immediately flush PDF bytes.

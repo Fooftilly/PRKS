@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.openapi import job_diagnostics_openapi_document
-from backend.log_safety import safe_route
+from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ARTIFACT = _ROOT / "docs" / "api" / "openapi-job-diagnostics.json"

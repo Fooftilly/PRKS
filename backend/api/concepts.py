@@ -27,7 +27,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.domain.research.rules import ResearchError
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 
 COLLECTION = "/api/concepts"
 _PREFIX = COLLECTION + "/"

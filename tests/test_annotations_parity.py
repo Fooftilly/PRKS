@@ -24,7 +24,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.pdf_annotations import WorkAnnotationError
+from backend.pdf.pdf_annotations import WorkAnnotationError
 from tests.backend_parity import parametrize_backends
 from tests.works_parity_helpers import WorksParityTestCase
 

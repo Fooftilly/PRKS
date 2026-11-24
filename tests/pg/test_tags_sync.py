@@ -20,7 +20,7 @@ from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links, tags
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import FamilyHandler

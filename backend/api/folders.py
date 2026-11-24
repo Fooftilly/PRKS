@@ -27,7 +27,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.api import works as works_api
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 
 COLLECTION = "/api/folders"
 _PREFIX = COLLECTION + "/"

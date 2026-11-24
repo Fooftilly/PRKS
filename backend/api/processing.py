@@ -38,7 +38,7 @@ import time
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote
 
-from backend.log_safety import safe_log_label
+from backend.runtime.log_safety import safe_log_label
 
 LOGGER = logging.getLogger("prks.api.processing")
 

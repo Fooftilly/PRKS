@@ -37,7 +37,7 @@ from backend.api_contract.positions import (
     parse_position_request,
 )
 from backend.domain.research.rules import ResearchError
-from backend.etags import etag_for_representation
+from backend.web.etags import etag_for_representation
 
 COLLECTION = "/api/positions"
 _PREFIX = COLLECTION + "/"

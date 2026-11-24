@@ -14,8 +14,8 @@ on:
       - requirements.txt
       - requirements-lock.txt
       - prks_app.py
-      - backend/process_roles.py
-      - backend/readiness.py
+      - backend/runtime/process_roles.py
+      - backend/runtime/readiness.py
       - backend/db/**
       - backend/domain/identity/**
       - backend/jobs/worker.py
@@ -35,8 +35,8 @@ on:
       - requirements.txt
       - requirements-lock.txt
       - prks_app.py
-      - backend/process_roles.py
-      - backend/readiness.py
+      - backend/runtime/process_roles.py
+      - backend/runtime/readiness.py
       - backend/db/**
       - backend/domain/identity/**
       - backend/jobs/worker.py

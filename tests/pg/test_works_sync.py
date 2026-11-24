@@ -30,7 +30,7 @@ from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import playlists
 from backend.domain.research.rules import ResearchError
 from backend.domain.works import commands, notes
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from backend.library import NotPortedError
 from tests import acting_context as facade_context
 from backend.sync import protocol

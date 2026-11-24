@@ -6,7 +6,7 @@ import sys
 import time
 from logging.handlers import TimedRotatingFileHandler
 
-from backend.log_safety import PrivacySafeFormatter, safe_error_type
+from backend.runtime.log_safety import PrivacySafeFormatter, safe_error_type
 from backend.storage.file_lock import ExclusiveFileLock, LockBusy, LockUnavailable
 from backend.storage.config import StorageConfig
 

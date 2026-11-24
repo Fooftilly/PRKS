@@ -26,7 +26,7 @@ from backend.domain.objects import lifecycle, remote_images
 from backend.domain.objects.lifecycle import Settled, StoredObject
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
-from backend.person_image import PortraitImage, decode_and_transcode
+from backend.media.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStorage, StorageKey
 from tests import acting_context as facade_context
 from tests.pg.jobs_fixtures import LEASE

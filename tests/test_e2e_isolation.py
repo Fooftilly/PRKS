@@ -57,7 +57,7 @@ class E2EIsolationTests(unittest.TestCase):
         self.assertNotIn("playwright", docker.lower())
 
     def test_dev_requirements_pin_playwright(self):
-        from backend.dependency_gate import pinned_playwright_version
+        from backend.runtime.dependency_check import pinned_playwright_version
         from tests.e2e.install_browser import pinned_playwright_version as install_pin
 
         pin = pinned_playwright_version()

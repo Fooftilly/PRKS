@@ -27,8 +27,8 @@ from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
 from backend.domain.organization import tag_rules as rules
-from backend import tag_color
-from backend.tag_color import normalized_tag_color
+from backend.domain.organization import tag_color
+from backend.domain.organization.tag_color import normalized_tag_color
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import lifecycle, links
 from backend.domain.works import revisions

@@ -318,7 +318,7 @@ def create(db: Database, ctx: RequestContext, pdfs_dir: str, objects: StorageBac
     from backend.domain.objects import ingest
     from backend.domain.works import commands
     from backend.domain.works.rules import _canonical_new_source, normalize_doc_type
-    from backend.entity_ids import generate
+    from backend.domain.entity_ids import generate
 
     file_path = fields["file_path"]
     if upload is not None and file_path:
@@ -387,7 +387,7 @@ def _new_asset(pdfs_dir: str, kind: Optional[str], file_path: str, url: Optional
 
 def _managed_file(pdfs_dir: str, file_path: str) -> Any:
     from backend.domain.works import commands
-    from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+    from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 
     name = managed_pdf_filename(file_path)
     path = safe_pdf_path_under_dir(pdfs_dir, name) if name else None

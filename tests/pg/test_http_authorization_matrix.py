@@ -160,7 +160,7 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
             handle.write(pdf_bytes("Matrix Work"))
         from PIL import Image
 
-        from backend.person_image import PortraitImage
+        from backend.media.person_image import PortraitImage
 
         portrait = io.BytesIO()
         Image.new("RGB", (4, 4), (200, 30, 30)).save(portrait, format="JPEG")

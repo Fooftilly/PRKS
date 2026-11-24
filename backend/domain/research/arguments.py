@@ -76,7 +76,7 @@ from backend.domain.research import argument_rules as rules
 from backend.domain.research import rules as research_rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.research_markup import ARGUMENT_ID_RE, parse_research_markup
+from backend.domain.research.research_markup import ARGUMENT_ID_RE, parse_research_markup
 from backend.domain.research.rules import ResearchError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE

@@ -167,7 +167,7 @@ def queue_text_rebuild(db: Database, ctx: RequestContext) -> dict:
     from backend.domain.identity.authorization import Capability
     from backend.domain.identity.library_scope import library_command
     from backend.domain.search import rebuild
-    from backend.pdf_text import _empty_summary
+    from backend.pdf.pdf_text import _empty_summary
 
     def enqueue(scope: LibraryScope) -> bool:
         return rebuild.enqueue(scope, ["text"]) is not None

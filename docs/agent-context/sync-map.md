@@ -99,7 +99,7 @@ Read `offline-foundations.md` + `offline-entity-surfaces.md` + `offline-entity-c
 - Concepts: "Concepts (3H)" and `backend/domain/research/concept_rules.py`.
 - Positions: "Positions (3I)" and `backend/domain/research/position_rules.py`.
 - Arguments/Stances: "Arguments and Stances (3J)" and `backend/domain/research/argument_rules.py`.
-- Research graph offline behavior: `backend/research_graph.py` plus the research-graph offline tests.
+- Research graph offline behavior: `backend/domain/research/research_graph.py` plus the research-graph offline tests.
 
 ## Work notes
 Read:

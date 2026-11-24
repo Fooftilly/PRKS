@@ -176,9 +176,9 @@ A smoke/feature/affected PASS is **not** a full-gate PASS. Reports print the tie
 | `backend/domain/` | Library commands and queries by area, identity and authorization, objects, backup/restore, search. |
 | `backend/storage/config.py` | Frozen storage snapshot and env parser. |
 | `backend/storage/paths.py` | Path derivation and testing-mode containment. |
-| `backend/performance.py` | In-memory API/DB/span performance diagnostics. |
-| `backend/pdf_annotations.py` | Canonical PDF annotation normalize/validate/reconstruct. |
-| `backend/research_markup.py` | Authoritative `[[concept:]]` / `[[argument:]]` parser. |
+| `backend/runtime/performance.py` | In-memory API/DB/span performance diagnostics. |
+| `backend/pdf/pdf_annotations.py` | Canonical PDF annotation normalize/validate/reconstruct. |
+| `backend/domain/research/research_markup.py` | Authoritative `[[concept:]]` / `[[argument:]]` parser. |
 | `frontend/` | Static SPA (HTML, CSS, legacy JS, committed Vue bundle), PWA assets. |
 | `frontend-app/` | Vue 3 + TypeScript source. Maintainer Node build only. |
 | `frontend/vue/` | Committed Vite production bundle served by the Python app. |

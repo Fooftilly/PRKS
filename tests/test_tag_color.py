@@ -1,7 +1,7 @@
 """Tag color validation independent of database backend."""
 import unittest
 
-from backend.tag_color import DEFAULT_COLOR, normalized_tag_color
+from backend.domain.organization.tag_color import DEFAULT_COLOR, normalized_tag_color
 
 
 class TagColorTests(unittest.TestCase):

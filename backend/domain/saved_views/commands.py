@@ -24,7 +24,7 @@ from backend.domain.identity.library_scope import LibraryScope, library_command,
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.saved_views import views
 from backend.domain.saved_views.rules import SavedViewError
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 
 T = TypeVar("T")
 

@@ -65,7 +65,7 @@ class NewIds:
 
     @classmethod
     def mint(cls) -> NewIds:
-        from backend.entity_ids import generate
+        from backend.domain.entity_ids import generate
 
         return cls(generate("W"), generate("MF"), generate("AS"), generate("F"))
 

@@ -16,7 +16,7 @@ from typing import Any, Optional
 
 from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.organization.playlist_rules import scope_key
 from backend.sync.families import Environment, FamilyHandler

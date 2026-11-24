@@ -23,7 +23,7 @@ from backend.api_contract.performance import (
     PerformanceSnapshot,
     PerformanceSpanStat,
 )
-from backend.performance import COUNTER_NAMES, reset, snapshot
+from backend.runtime.performance import COUNTER_NAMES, reset, snapshot
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CLIENT = _ROOT / "frontend-app" / "src" / "api" / "performance-diagnostics.ts"

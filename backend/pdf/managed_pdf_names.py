@@ -1,4 +1,4 @@
-"""Managed PDF file names and safe paths under the PDF directory (PG-C2 #641).
+"""Managed PDF file names and safe paths under the PDF directory.
 
 Which file names PRKS owns, how new ones are minted and bounded, and
 which Work rows reference them. No database access. Moved from

@@ -49,8 +49,11 @@ Important backend areas include:
 - `backend/sync/` — durable operation protocol, envelope and handlers; the per-family rules are `backend/domain/<area>/*_rules.py`.
 - `backend/domain/maintenance/` — verified backup (format 2) and restore.
 - `backend/jobs/` — the PostgreSQL job queue and worker (text extraction, derived rebuilds, object cleanup, backups).
-- `backend/pdf_*.py` — PDF annotation, adoption, materialization, and related services.
-- `backend/research_*.py` — research graph and markup.
+- `backend/pdf/` — managed PDF files: names, byte replacement, linearization, text extraction, mentions, and annotation adoption and materialization.
+- `backend/media/` — derived caches (PDF thumbnails, Person images) and Person portrait fetch.
+- `backend/web/` — the HTTP server (ASGI, settings, response surface) and HTTP helpers (`etags.py`, `byte_range.py`).
+- `backend/runtime/` — process concerns: settings reference, logging, process roles, readiness, startup timing, performance diagnostics, the runtime dependency check, and the testing reset.
+- `backend/storage/` — storage roots, bindings, and file durability primitives.
 
 PostgreSQL is the only Library store (PG-C2). Library writes run inside `library_command` transactions, which check the actor's capability and the Library epoch and take the Library maintenance lock; concurrency between requests and processes is handled by the database (row locks, advisory locks, SERIALIZABLE where a rule needs it), not by a process-local lock.
 

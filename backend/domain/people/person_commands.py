@@ -31,8 +31,8 @@ from backend.domain.identity.request_context import RequestContext
 from backend.domain.objects import portraits
 from backend.domain.people import persons, queries
 from backend.domain.works.rules import finish_work_summary_rows
-from backend.entity_ids import generate, is_distributed
-from backend.person_image import PortraitImage, identify_cached_portrait_subtype
+from backend.domain.entity_ids import generate, is_distributed
+from backend.media.person_image import PortraitImage, identify_cached_portrait_subtype
 from backend.storage.objects import StorageBackend, StorageObjectError
 
 T = TypeVar("T")
@@ -168,7 +168,7 @@ def cache_portrait(db: Database, ctx: RequestContext, objects: StorageBackend, p
     """Fetch the Person's ``image_url``, transcode it and make it the cached portrait.
 
     The Person and ``EDIT_LIBRARY`` are checked before anything is fetched or
-    written; ``prepare`` (normally :func:`backend.person_image.fetch_and_prepare`)
+    written; ``prepare`` (normally :func:`backend.media.person_image.fetch_and_prepare`)
     turns the URL into WebP or JPEG bytes; they go to a fresh key; one
     command names it under the Person row lock
     (:func:`backend.domain.objects.portraits.commit`). Returns what

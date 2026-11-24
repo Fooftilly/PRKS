@@ -360,7 +360,7 @@
 
     /* ---- the Research Graph ---- */
 
-    /* What the Graph actually represents, from backend/research_graph.py:
+    /* What the Graph actually represents, from backend/domain/research/research_graph.py:
      *
      *   - the people layer indexes the `Author` role ONLY, so no other role
      *     can produce or remove an edge;

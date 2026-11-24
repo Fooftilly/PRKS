@@ -58,7 +58,7 @@ operations both use.
 | `backend/domain/works/source_rules.py` | Source-identity aggregate, YouTube parser, SET_WORK_SOURCE handler |
 | `backend/domain/people/role_rules.py` | Role-element revisions, credit validation, ADD/REMOVE/CREDIT handler |
 | `backend/domain/people/person_rules.py` | CREATE_PERSON handler, shared Person-field contract |
-| `backend/entity_ids.py` | Collision-resistant `{prefix}-` + 32 hex ids; legacy 8-hex still valid |
+| `backend/domain/entity_ids.py` | Collision-resistant `{prefix}-` + 32 hex ids; legacy 8-hex still valid |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay and sync handler |
 | `frontend/js/work-open-state.js` | Recent overlay, acknowledged merge, sync handler |

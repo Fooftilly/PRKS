@@ -51,7 +51,7 @@ class ScreenshotFreshnessPathParityTests(unittest.TestCase):
             "requirements-dev.txt",
             "requirements.txt",
             "tests/e2e/install_browser.py",
-            "backend/services/work_pdf_replace.py",
+            "backend/pdf/work_pdf_replace.py",
         }
         self.assertTrue(required.issubset(check.AFFECTING_PATHS))
 

@@ -35,7 +35,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping, Optional
 
-from backend.fs_durability import replace_file_atomically
+from backend.storage.fs_durability import replace_file_atomically
 from backend.storage.errors import (
     BootstrapConfigConflict,
     BootstrapConfigError,

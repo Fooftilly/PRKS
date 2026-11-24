@@ -19,8 +19,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping, Sequence
 
-from backend.log_safety import safe_log_id
-from backend.person_image import fetch_and_prepare
+from backend.runtime.log_safety import safe_log_id
+from backend.media.person_image import fetch_and_prepare
 
 LOGGER = logging.getLogger("prks.server")
 

@@ -11,9 +11,9 @@ from openapi_core.testing import MockRequest, MockResponse
 from backend.api import deployment as deployment_api
 from backend.api.session import route_capability
 from backend.api_contract.openapi import deployment_settings_openapi_document
-from backend.config_reference import Scope, in_scope
+from backend.runtime.config_reference import Scope, in_scope
 from backend.domain.identity.authorization import Capability
-from backend.log_safety import safe_route
+from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ARTIFACT = _ROOT / "docs" / "api" / "openapi-deployment-settings.json"

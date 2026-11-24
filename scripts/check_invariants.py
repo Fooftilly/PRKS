@@ -60,13 +60,13 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/api_contract/processing_items.py",
     "backend/api_contract/publishers.py",
     "backend/api_contract/saved_views.py",
-    "backend/byte_range.py",
+    "backend/web/byte_range.py",
     "backend/db/__init__.py",
     "backend/db/config.py",
     "backend/db/migrate.py",
     "backend/db/testing_guard.py",
-    "backend/testing_reset.py",
-    "backend/derived_cache_publish.py",
+    "backend/runtime/testing_reset.py",
+    "backend/media/derived_cache_publish.py",
     "backend/domain/__init__.py",
     "backend/domain/annotations/__init__.py",
     "backend/domain/annotations/materialize.py",
@@ -126,8 +126,8 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/domain/works/queries.py",
     "backend/domain/works/revisions.py",
     "backend/domain/works/wiki_links.py",
-    "backend/etags.py",
-    "backend/fs_durability.py",
+    "backend/web/etags.py",
+    "backend/storage/fs_durability.py",
     "backend/jobs/__init__.py",
     "backend/jobs/diagnostics.py",
     "backend/jobs/embedded.py",
@@ -135,14 +135,14 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/jobs/prune.py",
     "backend/jobs/runner.py",
     "backend/library.py",
-    "backend/config_reference.py",
-    "backend/pdf_byte_mentions.py",
-    "backend/process_roles.py",
-    "backend/readiness.py",
-    "backend/research_markup.py",
-    "backend/services/__init__.py",
-    "backend/services/work_pdf_replace.py",
-    "backend/startup_profile.py",
+    "backend/runtime/config_reference.py",
+    "backend/pdf/pdf_byte_mentions.py",
+    "backend/runtime/process_roles.py",
+    "backend/runtime/readiness.py",
+    "backend/domain/research/research_markup.py",
+    "backend/pdf/__init__.py",
+    "backend/pdf/work_pdf_replace.py",
+    "backend/runtime/startup_profile.py",
     "backend/storage/__init__.py",
     "backend/storage/config.py",
     "backend/storage/distribution.py",
@@ -154,7 +154,7 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/sync/__init__.py",
     "backend/sync/families.py",
     "backend/sync/handlers/__init__.py",
-    "backend/tag_color.py",
+    "backend/domain/organization/tag_color.py",
 )
 # "basic" is no longer accepted: the slice was raised to "standard" in #69
 # slice 6, and a lower mode would silently drop the checks that added.
@@ -198,10 +198,10 @@ OS_REPLACE_ALLOWLIST = {
     # Disposable thumb / Person-image cache publication only — not canonical
     # library state. Keep ``backend/server.py`` non-exempt so new raw replaces
     # in the HTTP adapter fail INV-DURABILITY-001 by default.
-    "backend/derived_cache_publish.py",
-    "backend/fs_durability.py",
-    "backend/pdf_linearize.py",
-    "backend/services/work_pdf_replace.py",
+    "backend/media/derived_cache_publish.py",
+    "backend/storage/fs_durability.py",
+    "backend/pdf/pdf_linearize.py",
+    "backend/pdf/work_pdf_replace.py",
     # The StorageBackend's local publication boundary (storage-architecture
     # §10.3): put_new/replace are fs_durability's fsync-before/sync-after
     # contract, the same one work_pdf_replace implements today.
@@ -213,7 +213,7 @@ OS_REPLACE_ALLOWLIST = {
 # Bare os.fsync belongs only in fs_durability. Managed-PDF code must use
 # fsync_open_file / fsync_directory — work_pdf_replace is not an fsync island.
 OS_FSYNC_ALLOWLIST = {
-    "backend/fs_durability.py",
+    "backend/storage/fs_durability.py",
 }
 
 # INV-BACKUP-001: ZipFile.extractall() trusts member names/types and is never
@@ -338,11 +338,11 @@ MANAGED_PDF_ADOPTION_GUARD = "managed_pdf_adoption_guard"
 # module, a module alias's attribute, or the definition itself -- never just a
 # same-named method on an arbitrary object.
 _CAPABILITY_HELPER_HOMES = {
-    MANAGED_PDF_ADOPTION_GUARD: "backend/services/work_pdf_replace.py",
-    "allocate_exclusive_managed_filename": "backend/services/work_pdf_replace.py",
-    "store_new_managed_pdf_bytes": "backend/services/work_pdf_replace.py",
-    "store_new_managed_pdf_from_path": "backend/services/work_pdf_replace.py",
-    "mint_managed_pdf_filename": "backend/managed_pdf_names.py",
+    MANAGED_PDF_ADOPTION_GUARD: "backend/pdf/work_pdf_replace.py",
+    "allocate_exclusive_managed_filename": "backend/pdf/work_pdf_replace.py",
+    "store_new_managed_pdf_bytes": "backend/pdf/work_pdf_replace.py",
+    "store_new_managed_pdf_from_path": "backend/pdf/work_pdf_replace.py",
+    "mint_managed_pdf_filename": "backend/pdf/managed_pdf_names.py",
 }
 
 # INV-STORAGE-002: a raw removal of a managed-PDF path is survivor-aware
@@ -377,7 +377,7 @@ MANAGED_PDF_REMOVE_CAPABILITIES: dict[tuple[str, str], str] = {
     ("backend/work_deletion.py", "retry_pending_pdf_cleanup"): "survivor-aware retry",
     # Rollback of exclusive bytes the current request just minted (callers
     # restricted by RAW_MANAGED_PDF_UNLINK_HELPERS below).
-    ("backend/services/work_pdf_replace.py", "unlink_managed_pdf_best_effort"): (
+    ("backend/pdf/work_pdf_replace.py", "unlink_managed_pdf_best_effort"): (
         "self-minted rollback"
     ),
 }
@@ -387,11 +387,11 @@ RAW_MANAGED_PDF_UNLINK_HELPERS: dict[str, frozenset[tuple[str, str]]] = {
     "unlink_managed_pdf_best_effort": frozenset(
         {
             # Partial exclusive create that never reported its name.
-            ("backend/services/work_pdf_replace.py", "_exclusive_create_write_and_fsync"),
+            ("backend/pdf/work_pdf_replace.py", "_exclusive_create_write_and_fsync"),
             # Holds managed_pdf_path_lock and re-checks live references first.
-            ("backend/services/work_pdf_replace.py", "discard_unowned_managed_pdf"),
+            ("backend/pdf/work_pdf_replace.py", "discard_unowned_managed_pdf"),
             # COW exclusive bytes whose retarget never committed.
-            ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"),
+            ("backend/pdf/work_pdf_replace.py", "replace_managed_work_pdf"),
         }
     ),
 }
@@ -427,14 +427,14 @@ WORK_FILE_PATH_CAPABILITIES: dict[tuple[str, str], str] = {
     # The persistence primitive behind every create; callers are checked.
     ("backend/db_manager.py", "PRKSDatabase.add_work"): "create primitive",
     # The COW retarget primitive; its one caller is the exemption below.
-    ("backend/services/work_pdf_replace.py", "retarget_work_managed_file_path"): (
+    ("backend/pdf/work_pdf_replace.py", "retarget_work_managed_file_path"): (
         "retarget primitive"
     ),
     # Copy-on-write retargets the Work to an exclusive name it just minted
     # (allocate_exclusive_managed_filename) while holding that name's lock.
     # The retarget runs behind a ``cow_retarget`` flag the flow analysis
     # cannot correlate with the minting branch, hence the function exemption.
-    ("backend/services/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
+    ("backend/pdf/work_pdf_replace.py", "replace_managed_work_pdf"): "COW retarget",
     # The PostgreSQL Library adopts an existing file inside the create's own
     # transaction (PostgresLibrary.add_work); its cleanup settle re-checks
     # every Asset under the per-object lock (§7.4, §11.2), so the SQLite
@@ -1200,8 +1200,8 @@ def _callee_leaf_names(func: ast.expr, scopes: list[_Scope]) -> set[str]:
 
 
 def _absolute_module(module: str, relpath: str) -> str:
-    """``..services.work_pdf_replace`` from ``backend/x/y.py`` ->
-    ``backend.services.work_pdf_replace``; absolute names are unchanged."""
+    """``..pdf.work_pdf_replace`` from ``backend/x/y.py`` ->
+    ``backend.pdf.work_pdf_replace``; absolute names are unchanged."""
     level = len(module) - len(module.lstrip("."))
     if not level:
         return module
@@ -1227,7 +1227,7 @@ def _canonical_capability_names(func: ast.expr, scopes: list[_Scope]) -> set[str
         if home is None:
             continue
         if module:
-            # The full module: ``backend.services.work_pdf_replace``, or a
+            # The full module: ``backend.pdf.work_pdf_replace``, or a
             # relative import resolved against this file's package.
             if _absolute_module(module, scopes[0].relpath) == home.removesuffix(".py").replace(
                 "/", "."
@@ -2823,8 +2823,8 @@ class _InvariantVisitor(ast.NodeVisitor):
                     f"direct {primitive} is outside the approved durability boundary; "
                     "it is the same atomic rename as os.replace and publishes bytes "
                     "without the fsync-before/fsync-after contract. Use "
-                    "backend.fs_durability or an existing durable domain helper "
-                    "(managed PDFs: backend.services.work_pdf_replace)"
+                    "backend.storage.fs_durability or an existing durable domain helper "
+                    "(managed PDFs: backend.pdf.work_pdf_replace)"
                 ),
             )
         )
@@ -2915,7 +2915,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                 (
                     f"{helper}() unlinks a managed PDF without a live-reference "
                     "re-check and is reserved for rolling back bytes the same request "
-                    "just minted inside backend.services.work_pdf_replace. Use "
+                    "just minted inside backend.pdf.work_pdf_replace. Use "
                     "work_pdf_replace.discard_unowned_managed_pdf (locked, "
                     "survivor-checked) or backend.work_deletion cleanup instead"
                 ),
@@ -3049,7 +3049,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                 f"{what} persists a works.file_path that is neither proven freshly "
                 "minted nor the value an entered managed_pdf_adoption_guard validated. "
                 "Claiming an EXISTING /api/pdfs/<name> must hold that guard "
-                "(backend.services.work_pdf_replace.managed_pdf_adoption_guard: it "
+                "(backend.pdf.work_pdf_replace.managed_pdf_adoption_guard: it "
                 "takes managed_pdf_path_lock, re-checks the bytes still exist and "
                 "yields the exact ownership basename to persist), or post-delete "
                 "cleanup can unlink the bytes the new row now points at. New uploads "
@@ -3317,7 +3317,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                 "safe_pdf_path_under_dir) from the HTTP adapter. backend/server.py must "
                 "not store managed-PDF bytes itself: that skips the exclusive name "
                 "claim, fsync-before-publish and rollback of unowned bytes. Store or "
-                "replace through backend.services.work_pdf_replace "
+                "replace through backend.pdf.work_pdf_replace "
                 "(store_new_managed_pdf_bytes / store_new_managed_pdf_from_path / "
                 "replace_managed_work_pdf)"
             ),
@@ -3332,10 +3332,10 @@ class _InvariantVisitor(ast.NodeVisitor):
                 "touch(exist_ok=False), or a mode/flags value that is not a literal) "
                 "in the HTTP adapter. An exclusive create claims a filename as storage "
                 "authority, which backend/server.py must not own. Managed PDFs: "
-                "backend.services.work_pdf_replace (store_new_managed_pdf_bytes / "
+                "backend.pdf.work_pdf_replace (store_new_managed_pdf_bytes / "
                 "store_new_managed_pdf_from_path / allocate_exclusive_managed_filename); "
                 "other storage: a focused backend module (e.g. "
-                "backend.derived_cache_publish)"
+                "backend.media.derived_cache_publish)"
             ),
         )
 
@@ -3346,7 +3346,7 @@ class _InvariantVisitor(ast.NodeVisitor):
             (
                 f"{what} orchestrates an external process from the HTTP adapter. "
                 "backend/server.py must not run qpdf or any other subprocess: PDF "
-                "linearization belongs in backend.pdf_linearize (call "
+                "linearization belongs in backend.pdf.pdf_linearize (call "
                 "linearize_pdf_to / is_pdf_linearized); other external "
                 "tools belong in a focused backend module"
             ),
@@ -3410,7 +3410,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                         node.lineno,
                         (
                             f"direct shutil.{name}() is forbidden in backend production code; "
-                            "publish managed PDFs through backend.services.work_pdf_replace "
+                            "publish managed PDFs through backend.pdf.work_pdf_replace "
                             "(store_new_managed_pdf_bytes/store_new_managed_pdf_from_path), "
                             "or use a domain-specific storage capability"
                         ),
@@ -3426,7 +3426,7 @@ class _InvariantVisitor(ast.NodeVisitor):
                         node.lineno,
                         (
                             "direct os.fsync() is outside the approved durability boundary; "
-                            "use backend.fs_durability helpers"
+                            "use backend.storage.fs_durability helpers"
                         ),
                     )
                 )

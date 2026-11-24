@@ -19,7 +19,7 @@ from backend.domain.identity.authorization import AccessRefused
 from backend.domain.identity.library_scope import LibraryScope, library_query
 from backend.domain.organization import lifecycle, links, tags
 from backend.domain.works import commands
-from backend.entity_ids import generate
+from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 from tests.narrowing import require

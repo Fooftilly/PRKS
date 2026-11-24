@@ -1,7 +1,7 @@
 """Person portraits as immutable objects (§11.2; L-A-1 #635).
 
 A Person's ``image_url`` is a profile field; the portrait is the image it
-names, fetched and transcoded by :mod:`backend.person_image` (WebP, or JPEG
+names, fetched and transcoded by :mod:`backend.media.person_image` (WebP, or JPEG
 where WebP cannot be encoded) and cached under the ``portraits`` namespace.
 On SQLite the cache is a file named by the Person and a hash of the URL,
 rewritten in place. Here every cached portrait is a fresh key
@@ -42,7 +42,7 @@ from typing import BinaryIO, LiteralString, Optional, Union
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
 from backend.domain.objects.lifecycle import StoredObject
-from backend.person_image import PortraitImage, identify_cached_portrait_subtype
+from backend.media.person_image import PortraitImage, identify_cached_portrait_subtype
 from backend.storage.objects import NAMESPACE_PORTRAITS, StorageBackend, StorageKey, validate_key_name
 
 NOT_FOUND = "ENTITY_NOT_FOUND"

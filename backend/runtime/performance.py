@@ -8,7 +8,7 @@ durations): for n sorted samples, index = ceil(p/100 * n) - 1, clamped to
 [0, n-1]. They describe that recent window, not a permanent distribution.
 
 DB time is measured time in instrumented PRKS DB operations (execute_query)
-and may not include every low-level direct SQLite call.
+and may not include every low-level direct database call.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
-from backend.log_safety import safe_log_id, safe_log_label
+from backend.runtime.log_safety import safe_log_id, safe_log_label
 
 LOGGER = logging.getLogger("prks.perf")
 

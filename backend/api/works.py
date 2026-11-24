@@ -26,8 +26,8 @@ import logging
 from typing import Any, Optional
 
 from backend.domain.works import source_rules
-from backend.etags import etag_for_representation
-from backend.log_safety import safe_error_type, safe_log_id
+from backend.web.etags import etag_for_representation
+from backend.runtime.log_safety import safe_error_type, safe_log_id
 
 COLLECTION = "/api/works"
 _PREFIX = COLLECTION + "/"
@@ -233,7 +233,7 @@ def delete(handler: Any, db: Any, work_id: str, *, keep_managed_pdf: bool = Fals
     the orphan sweep removes the bytes (§11.2); the text and Research indexes
     are the database's.
     """
-    from backend.derived_caches import prks_delete_pdf_thumbnails_for_work_id
+    from backend.media.derived_caches import prks_delete_pdf_thumbnails_for_work_id
 
     deleted = _commands().delete(*_actor(handler, db), work_id, claim_pdf=not keep_managed_pdf)
     thumbs_dir = db.storage.thumbs_dir if db.storage is not None else None
@@ -325,7 +325,7 @@ def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
 def handle_bulk(handler: Any, db: Any, path: str, data: Any) -> bool:
     """``POST /api/works/bulk``: one action on many Works, all or nothing."""
     from backend.domain.works.rules import BulkWorkError
-    from backend.log_safety import safe_log_label
+    from backend.runtime.log_safety import safe_log_label
 
     if path != COLLECTION + "/bulk":
         return False

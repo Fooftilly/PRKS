@@ -161,7 +161,7 @@ class TestCompareAndSet(BootstrapTestCase):
 
     def test_write_is_atomic_and_durable(self):
         calls = []
-        from backend import fs_durability
+        from backend.storage import fs_durability
 
         real_sync = fs_durability.fsync_open_file
 
@@ -176,7 +176,7 @@ class TestCompareAndSet(BootstrapTestCase):
         self.assertEqual(leftovers, [])
 
     def test_failed_content_sync_leaves_previous_file(self):
-        from backend import fs_durability
+        from backend.storage import fs_durability
 
         self.store.compare_and_set(expect=bc.expect_absent(), local_root=self.root("a"))
 

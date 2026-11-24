@@ -14,7 +14,7 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-from backend.research_markup import (
+from backend.domain.research.research_markup import (
     CONCEPT_REF_MAX,
     canonical_concept_name,
     normalize_concept_key,

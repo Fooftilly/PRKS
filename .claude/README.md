@@ -15,7 +15,7 @@ They only matter if you use [Claude Code](https://code.claude.com/) with the
    - POSIX / Git Bash (`run_hook.sh`): `python3`, then `python`, then `py -3`
    - Native Windows PowerShell (`run_hook.ps1`, local override only): `python`,
      then `py -3`, then `python3` (see `tools/resolve-python3.mjs` /
-     `backend/dependency_gate.py`)
+     `backend/runtime/dependency_check.py`)
 2. Install the SonarQube CLI for your OS (Linux, macOS ARM64, or Windows).
 3. Authenticate locally (`sonar auth login`). Tokens stay on the machine; they
    are never committed (`.mcp.json` is token-free).

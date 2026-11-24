@@ -1,4 +1,4 @@
-"""Derived file caches under the storage root: PDF thumbnails and Person images (PG-C2 #641).
+"""Derived file caches under the storage root: PDF thumbnails and Person images.
 
 File names, paths and deletion of cache entries derived from Library
 content. No database access. Moved from ``backend/db_manager.py``.

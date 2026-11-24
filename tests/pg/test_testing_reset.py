@@ -1,6 +1,6 @@
 """``prks_app.py --testing --reset-db`` empties only a testing instance, and only once confirmed.
 
-``backend.testing_reset`` drops every PRKS schema of a database that
+``backend.runtime.testing_reset`` drops every PRKS schema of a database that
 ``backend.db.testing_guard`` accepts and deletes the data root's files, after
 the person types ``RESET`` at a terminal. Anything else (another answer, no
 terminal, an unmarked database, a root that is not this instance's, a running
@@ -32,8 +32,8 @@ from backend.storage.root_marker import (
     marker_path,
     new_marker_document,
 )
-from backend import testing_reset
-from backend.testing_reset import CONFIRM_WORD, ResetRefused, plan_reset, run, warning_text
+from backend.runtime import testing_reset
+from backend.runtime.testing_reset import CONFIRM_WORD, ResetRefused, plan_reset, run, warning_text
 from tests.pg.harness import get_harness
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))

@@ -1,7 +1,7 @@
 """Collision-resistant entity ids: new 32-hex form, legacy 8-hex still valid."""
 import unittest
 
-from backend import entity_ids
+from backend.domain import entity_ids
 
 
 class EntityIdTests(unittest.TestCase):
