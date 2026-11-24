@@ -127,7 +127,7 @@ def profile_image(req: Request) -> Response:
 def update(req: Request) -> Response:
     from backend.domain.people import person_commands
 
-    p_id = req.params["person_id"]
+    p_id = unquote(req.params["person_id"])
     data = dict(req.data)
     group_ids = data.pop("group_ids", None)
     image_url_changed = "image_url" in data
@@ -188,7 +188,7 @@ def delete(req: Request) -> Response:
     from backend.domain.people import person_commands
 
     try:
-        person_commands.delete_if_unlinked(*req.actor, req.params["person_id"])
+        person_commands.delete_if_unlinked(*req.actor, unquote(req.params["person_id"]))
     except ValueError as e:
         msg = str(e)
         if "not found" in msg.lower():

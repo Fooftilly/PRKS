@@ -351,12 +351,14 @@ def _head_refusal(request: Request, http_version: str) -> Optional[Response]:
     request_line = len(f"{request.method} {request.target} HTTP/{http_version}".encode("latin-1", "replace")) + 2
     fields = request.headers.items()
     head_bytes = request_line + 2 + sum(len(name) + len(value) + 4 for name, value in fields)
+    # The request line first: it counts toward the head too, so a long target
+    # with short fields would otherwise be answered 431.
+    if request_line > MAX_LINE_BYTES:
+        return error_response(414, "Request-URI Too Long")
     if len(fields) > MAX_HEADERS or head_bytes > MAX_REQUEST_HEAD_BYTES or any(
         len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in fields
     ):
         return error_response(431, "Request header fields too large")
-    if request_line > MAX_LINE_BYTES:
-        return error_response(414, "Request-URI Too Long")
     return None
 
 class _Workers:
@@ -515,9 +517,11 @@ class PrksAsgiApp:
                 finalize(request, response)
                 _Sender(bridge, send, receiver).respond(response, head_only=request.method == "HEAD")
             finally:
-                if response is not None and response.cleanup is not None:
-                    response.cleanup()
-                finish(request)
+                try:
+                    if response is not None and response.cleanup is not None:
+                        response.cleanup()
+                finally:
+                    finish(request)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as exc:  # logged metadata-only; the connection closes

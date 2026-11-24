@@ -193,7 +193,8 @@ class Request:
 
     def if_none_match(self, etag: str) -> bool:
         """Whether ``If-None-Match`` names ``etag`` (or ``*``)."""
-        client = (self.headers.get("If-None-Match") or "").strip()
+        # Every field line counts: two lines name the same tags as one joined line.
+        client = ",".join(self.headers.get_all("If-None-Match")).strip()
         if not client:
             return False
         if client == "*":
@@ -234,6 +235,32 @@ def _etag_value_for_compare(raw: str) -> str:
     return s
 
 
+def accepts_gzip(accept_encoding: str) -> bool:
+    """Whether ``Accept-Encoding`` takes gzip with a positive weight (RFC 9110 12.5.3).
+
+    ``gzip;q=0`` refuses it even when ``*`` would take it.
+    """
+    weights: dict[str, float] = {}
+    for item in accept_encoding.split(","):
+        coding, _, params = item.partition(";")
+        coding = coding.strip().lower()
+        if not coding:
+            continue
+        weight = 1.0
+        for param in params.split(";"):
+            name, _, value = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    weight = float(value.strip())
+                except ValueError:
+                    weight = 0.0
+        weights[coding] = weight
+    for name in ("gzip", "x-gzip", "*"):
+        if name in weights:
+            return weights[name] > 0
+    return False
+
+
 def phrase(code: int) -> str:
     try:
         return HTTPStatus(code).phrase
@@ -267,15 +294,14 @@ def json_response(
     ``cache_control`` says otherwise), and a client that holds it gets 304.
     """
     if etag and status == 200 and request.if_none_match(etag):
-        return not_modified(etag)
+        return not_modified(etag, cache_control or "private, no-cache")
     t0 = clock_ns()
     body = json.dumps(payload).encode("utf-8")
     try:
         record_span("json_encode", clock_ns() - t0)
     except Exception:
         pass
-    accept = (request.headers.get("Accept-Encoding") or "").lower()
-    use_gzip = "gzip" in accept and len(body) >= JSON_GZIP_MIN_BYTES
+    use_gzip = len(body) >= JSON_GZIP_MIN_BYTES and accepts_gzip(",".join(request.headers.get_all("Accept-Encoding")))
     if use_gzip:
         t1 = clock_ns()
         body = gzip.compress(body, compresslevel=6)

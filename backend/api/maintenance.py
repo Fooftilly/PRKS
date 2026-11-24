@@ -160,7 +160,13 @@ def restore_staged(library: Any, ctx: Any, root: str, data: dict[str, Any]) -> t
     except backup_jobs.CopyFailed as exc:
         return 507, {"error": "The backup could not be copied for the restore; nothing was changed.",
                      "reason": exc.reason}, None
-    staged.discard(archive)
+    try:
+        staged.discard(archive)
+    except OSError as exc:
+        # The restore is committed: a staged file left behind is pruned after
+        # its TTL and never turns the restore into a failure the client would
+        # answer by keeping the old epoch.
+        LOGGER.warning("restore_staged_discard_failed error_type=%s", safe_error_type(exc))
     LOGGER.info("restore_committed epoch=%d objects_held=%d", result.epoch, result.objects_held)
     return 200, {"status": "restored", "epoch": result.epoch, "objects_held": result.objects_held,
                  "warnings": []}, result.epoch
@@ -175,7 +181,12 @@ def ndjson(payload: dict[str, Any]) -> bytes:
 
 def progress(req: Request) -> Response:
     """``POST /api/backups/progress``: NDJSON progress lines until the backup job ends."""
+    from backend.domain.maintenance import jobs as backup_jobs
+
     library, ctx = req.library, req.ctx
+    # Refused before the stream starts, so a non-admin gets the dispatcher's
+    # 403 rather than a 200 whose only line says the backup failed.
+    backup_jobs.authorize_admin(library.database, ctx)
 
     def stream(write: Write) -> None:
         def write_line(payload: dict[str, Any]) -> None:

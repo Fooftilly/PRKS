@@ -16,7 +16,7 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.web.app import App, served_routes  # noqa: E402
 from backend.web.dispatch import BodyRefused, decode_json, read_json_object  # noqa: E402
-from backend.web.http import Headers, Request, Response  # noqa: E402
+from backend.web.http import Headers, Request, Response, accepts_gzip, json_response  # noqa: E402
 from backend.web.routing import Body, Match, NoRoute, RouteTable, route  # noqa: E402
 
 
@@ -119,6 +119,31 @@ class PublicPathTests(unittest.TestCase):
 
     def test_an_encoded_probe_is_still_a_probe(self) -> None:
         self.assertEqual(self.get("/%68ealthz/").body, b"ok")
+
+
+class ConditionalAndEncodingTests(unittest.TestCase):
+    def request(self, *headers: tuple[str, str]) -> Request:
+        return Request("GET", "/api/x", "", Headers(list(headers)), App())
+
+    def test_every_if_none_match_line_counts(self) -> None:
+        req = self.request(("If-None-Match", '"v1"'), ("If-None-Match", '"v2"'))
+        self.assertTrue(req.if_none_match('"v2"'))
+        self.assertFalse(req.if_none_match('"v3"'))
+
+    def test_a_304_keeps_the_cache_policy_of_the_200(self) -> None:
+        req = self.request(("If-None-Match", '"v1"'))
+        res = json_response(req, 200, {}, etag='"v1"', cache_control="private, max-age=600")
+        self.assertEqual((res.status, res.header("Cache-Control")), (304, "private, max-age=600"))
+        res = json_response(req, 200, {}, etag='"v1"')
+        self.assertEqual(res.header("Cache-Control"), "private, no-cache")
+
+    def test_gzip_honours_accept_encoding_weights(self) -> None:
+        for header, expected in (("gzip", True), ("gzip, deflate, br", True), ("GZIP;q=0.5", True),
+                                 ("gzip;q=0, identity;q=1", False), ("identity", False), ("", False),
+                                 ("*", True), ("*;q=0", False), ("gzip;q=0, *", False), ("br, *;q=0.1", True),
+                                 ("gzip;q=bad", False)):
+            with self.subTest(header=header):
+                self.assertIs(accepts_gzip(header), expected)
 
 
 class _Body:

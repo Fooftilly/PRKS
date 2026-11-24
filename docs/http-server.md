@@ -77,6 +77,15 @@ limit 413, as before. No body is `{}`. `tests/pg/test_http_route_table.py`
 walks the route table and sends each JSON route these bodies, so a new route
 is covered without being listed.
 
+This replaced per-route body handling on purpose (#1424). Routes that took a
+non-object body now refuse it: the bare-array form of `PUT
+/api/arguments/{id}/sources|targets` and `PUT /api/concepts/{id}/parents|aliases`
+(send `{"sources": [...]}` and so on; the app writes these through sync),
+the ignored body of `POST /api/processing-items/{id}/import` (send `{}`), and
+the Processing PATCH and batch import, which answered `VALIDATION_ERROR`
+for a non-object body. A known path asked with a method it does not serve is
+405 with `Allow`, where some families answered 404.
+
 **Paths.** The route table sees the path as sent: `;params` are no longer
 stripped, so `;x` stays part of the segment. `/api/pdfs/<name>;x` names
 another file (404), and a frontend path such as `/index.html;x` falls back to

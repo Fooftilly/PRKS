@@ -752,6 +752,11 @@ class UvicornTransportTests(unittest.TestCase):
                 _, _, headers = self.request("GET", path)
                 self.assertNotIn("strict-transport-security", headers)
 
+    def test_a_long_request_target_is_414_not_431(self):
+        # The request line counts toward the head as well; it is checked first.
+        path = "/healthz?" + "a" * 66000
+        self.assertEqual(self.request("GET", path)[0], 414)
+
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}
         self.assertEqual(self.request("GET", "/healthz", headers=headers)[0], 431)
