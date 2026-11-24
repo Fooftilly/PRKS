@@ -39,6 +39,9 @@ const syncListeners = [];
 const tagWrites = [];
 const outboxRows = [];
 const coalesceFailures = [];
+/* What the store resolves, when a case needs it (the real store resolves the
+ * new operation, the existing one, or null for "no change"). */
+const coalesceResults = [];
 let onCoalesce = null;
 global.prksSync = {
     subscribe: function (fn) {
@@ -56,6 +59,7 @@ global.prksSync = {
             tagWrites.push(args);
             if (onCoalesce) onCoalesce(tagWrites.length);
             if (coalesceFailures.length) throw coalesceFailures.shift();
+            if (coalesceResults.length) return coalesceResults.shift();
             /* The store's cancel: an opposite-direction draft that was never
              * sent is deleted rather than followed by a second operation. */
             const draft = outboxRows.findIndex(function (r) {
@@ -578,7 +582,7 @@ async function tagRemoveWaitsForInFlightAdd(outcome) {
     state.catalogGeneration = 7;
     state.preparing = null;
     const add = { op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
-        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1 };
+        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1, base_revision: 0 };
     outboxRows.push(add);
     coalesceFailures.push(scopeBusy());
     const mounted = syncListeners.length;
@@ -645,6 +649,69 @@ async function tagChipBlockedOnlyWhileWaiting() {
     prksDestroyAllTabContexts();
 }
 
+/* Another tab's sender settled and retired the ADD this panel painted as
+ * syncing. No ACK reaches this tab, so its options and Work entity still say
+ * "absent". The store then finds no row and a remove measured against that
+ * stale base is a no-op ('click'); the next paint must not show the pre-ACK
+ * relationship either ('paint'). Both re-read the server's base once. */
+async function tagSettledInAnotherTab(path) {
+    resetCounts();
+    tagWrites.length = 0;
+    outboxRows.length = 0;
+    coalesceResults.length = 0;
+    focus('main');
+    const main = prksMountTabContext('main', document.getElementById('main-host'));
+    showWork(main, 'work-a', { tags: [] });
+    ownPanel(main);
+    main.ui.workDetailsMode = 'view';
+    global.prksVueRefreshWorkPanelRead = function () { return true; };
+    global.prksWorkTagBase = optionsBase;
+    let optionReads = 0;
+    global.prksReadWorkTagOptions = async function (workId) {
+        optionReads += 1;
+        return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }], known_absent: {} } };
+    };
+    panel().innerHTML = '<div id="work-tags-list"></div>';
+    const before = syncListeners.length;
+    prksMountWorkTags(main, 'work-a');
+    const state = main.getResource('workTagEditor');
+    await until(function () { return state.paintVersion >= 1; }, 'first paint');
+    await new Promise(function (resolve) { setTimeout(resolve, 0); });
+    state.options = { work_id: 'work-a', assigned: [], known_absent: {} };
+    state.catalog = [{ id: 't1', name: 'Alpha' }];
+    state.catalogGeneration = 7;
+    state.preparing = null;
+    /* What the panel last painted: the ADD on the wire. It is gone now. */
+    state.operations = [{ op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
+        operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1,
+        base_revision: 0, local_context: { tag: { id: 't1', name: 'Alpha', color: null } } }];
+    function hasAlpha() { return main.getEntity('work').tags.some(function (t) { return t.id === 't1'; }); }
+    if (path === 'click') {
+        coalesceResults.push(null);
+        await prksWorkTagEdit(main, 't1', false);
+        const retry = tagWrites[1] || [];
+        assert('a remove that was a no-op against the stale base is re-read once',
+            optionReads === 1 && tagWrites.length === 2, 'reads=' + optionReads + ' ' + JSON.stringify(tagWrites));
+        assert('the retried remove is recorded against the base the other tab produced',
+            retry[2] === false && retry[3] === true && retry[4] === 2, JSON.stringify(retry));
+        assert('the Work takes the other tab\'s ACK', hasAlpha());
+        assert('the retried remove leaves no error', !state.error, String(state.error));
+    } else {
+        await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
+        await until(function () { return optionReads === 1 && state.operations.length === 0; }, 'adopting paint');
+        assert('a paint adopts a change another tab settled', hasAlpha() &&
+            optionsBase(state.options, 't1').revision === 2, JSON.stringify(state.options));
+        await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
+        await new Promise(function (resolve) { setTimeout(resolve, 0); });
+        assert('an adopted change is read only once', optionReads === 1, 'reads=' + optionReads);
+    }
+    outboxRows.length = 0;
+    coalesceResults.length = 0;
+    global.prksWorkTagBase = function () { return tagBase; };
+    delete global.prksReadWorkTagOptions;
+    prksDestroyAllTabContexts();
+}
+
 async function main() {
     try {
         await deferredFolder('set');
@@ -664,6 +731,8 @@ async function main() {
         await tagRemoveWaitsForInFlightAdd('closed');
         await tagRemoveWaitsForInFlightAdd('reclaimed');
         await tagRemoveWaitsForInFlightAdd('ack-during-read');
+        await tagSettledInAnotherTab('click');
+        await tagSettledInAnotherTab('paint');
     } catch (error) {
         failed += 1;
         console.log('FAIL  runtime exception ' + (error && error.stack || error));

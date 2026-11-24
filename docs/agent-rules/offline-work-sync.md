@@ -346,7 +346,10 @@ remain connection-required. The Work-Tag implementation contract is in
   syncing: the click waits (bounded) for that send to settle and is recorded
   against the base it produced. Folder Tag controls still disable while syncing.
   A coalesce measures against an acknowledged, not yet retired row when it is
-  newer than the caller's base (the ACK is stored before it is emitted).
+  newer than the caller's base (the ACK is stored before it is emitted). A Work
+  Tag change another tab settled sends no ACK here: when a change this panel
+  showed as sent leaves the outbox and the base has not moved past its
+  envelope's base, the editor re-reads the base (paint and click alike).
   Explicit conflict reapplication creates a new ID against the reported server
   revision.
 - ACK reconciliation must complete before retiring the durable operation.

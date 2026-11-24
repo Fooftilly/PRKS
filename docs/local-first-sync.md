@@ -1185,7 +1185,11 @@ against the base that send produced; disabling it for the send's milliseconds
 only swallowed clicks already in flight. The sync runtime stores a row as
 acknowledged before it emits the ACK to the live editor, so a coalesce also
 takes an acknowledged, not yet retired row in the same scope as its base when
-that row is newer than the caller's. Folder Tag controls have no such wait and
+that row is newer than the caller's. Another tab's sender emits its ACK only in
+that tab, so when a Work Tag change this panel showed as sent leaves the outbox
+while the base has not moved past its envelope's base, the editor re-reads the
+server's base and applies it to the Work, on its next paint and on a click
+that would otherwise record nothing. Folder Tag controls have no such wait and
 still disable while syncing.
 
 Effective Tags are acknowledged Work state plus durable pending/conflicted

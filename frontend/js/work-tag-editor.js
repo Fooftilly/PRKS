@@ -31,6 +31,10 @@
         const paintVersion = state.paintVersion = (state.paintVersion || 0) + 1;
         const rows = await root.prksSync.store.listOperations();
         if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
+        for (const op of settledElsewhere(state, state.operations || [], rows)) {
+            await adoptSettledBase(ctx, state, op.payload.tag_id, 'settled', op);
+            if (!live(ctx, state) || paintVersion !== state.paintVersion) return;
+        }
         state.operations = rows.filter(o => o.entity_type === 'work' && o.entity_id === state.workId &&
             ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(o.operation) && o.status !== 'acknowledged');
         if (!owns(ctx, state)) return;
@@ -363,6 +367,38 @@
         if (outcome === 'settled') return null;
         return state.options ? root.prksWorkTagBase(state.options, tagId) : null;
     }
+    /** A change this panel showed as sent that left the outbox without its
+     * ACK reaching this tab: another tab's sender settled it. The ACK always
+     * moves the relationship past the envelope's base, so a base that has not
+     * moved is this tab's stale copy. */
+    function sentChange(op) {
+        return op && op.status !== 'conflict' && (op.status === 'syncing' || op.attempt_count > 0);
+    }
+    function staleAfter(state, op) {
+        return !!state.options && Number.isSafeInteger(op.base_revision) &&
+            !(root.prksWorkTagBase(state.options, op.payload.tag_id).revision > op.base_revision);
+    }
+    function settledElsewhere(state, previous, rows) {
+        return previous.filter(op => sentChange(op) && staleAfter(state, op) &&
+            !rows.some(r => r.op_id === op.op_id && r.status !== 'acknowledged'));
+    }
+    /**
+     * settledBase, and for a change settled in another tab also the Work's
+     * Tags: this tab's entity never received that ACK either, so without this
+     * the next paint would show the pre-ACK relationship.
+     */
+    async function adoptSettledBase(ctx, state, tagId, outcome, op) {
+        const base = await settledBase(ctx, state, tagId, outcome);
+        if (!base || outcome !== 'settled' || !live(ctx, state)) return base;
+        const work = ctx.getEntity('work');
+        const tag = (op && op.local_context && op.local_context.tag) ||
+            (work.tags || []).find(t => t.id === tagId) ||
+            (state.catalog || []).find(t => t.id === tagId);
+        if (!base.present || tag) {
+            applyWorkTagEntityAck(ctx, { work_id: state.workId, tag_id: tagId, present: base.present, tag });
+        }
+        return base;
+    }
     /**
      * `knownTag` is a Tag this device has just CREATED and not yet sent.
      *
@@ -400,10 +436,26 @@
              * this change against the base it produced rather than drop the
              * click. */
             const deadline = Date.now() + 10000;
+            /* The change this panel showed as sent. If another tab's sender
+             * settles and retires it, nothing here hears the ACK: the store
+             * then finds no row, and "remove what I just added" equals this
+             * tab's pre-ACK base and records nothing. That no-op is re-read
+             * once against the server's base rather than taken as done. */
+            const shown = state.operations.find(o => o.payload.tag_id === tagId && sentChange(o) &&
+                Number.isSafeInteger(o.base_revision));
+            let reread = false;
             let next = base;
             for (;;) {
                 try {
-                    await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, next.present, next.revision, tag);
+                    const result = await root.prksSync.store.coalesceWorkTag(state.workId, tagId, present, next.present, next.revision, tag);
+                    if (result === null && shown && !reread && !(next.revision > shown.base_revision)) {
+                        reread = true;
+                        if (!live(ctx, state) || !owns(ctx, state)) return;
+                        next = await adoptSettledBase(ctx, state, tagId, 'settled', shown);
+                        if (!next) throw new Error('Tag base unavailable');
+                        if (!live(ctx, state) || !owns(ctx, state)) return;
+                        continue;
+                    }
                     break;
                 } catch (error) {
                     const left = deadline - Date.now();
@@ -411,7 +463,7 @@
                     const outcome = await inFlightSettled(ctx, state, tagId, left);
                     if (!outcome) throw error;
                     if (!live(ctx, state) || !owns(ctx, state)) return;
-                    next = await settledBase(ctx, state, tagId, outcome);
+                    next = await adoptSettledBase(ctx, state, tagId, outcome, shown);
                     if (!next) throw error;
                     if (!live(ctx, state) || !owns(ctx, state)) return;
                 }
