@@ -203,7 +203,7 @@ def read_state_if_installed(db: Database) -> str:
 
     def read(tx: Transaction) -> str:
         installed = tx.execute("SELECT to_regclass('prks.instance') IS NOT NULL AS installed").fetchone()
-        if not installed["installed"]:
+        if installed is None or not installed["installed"]:
             return STATE_UNCONFIGURED
         row = tx.execute("SELECT setup_state FROM prks.instance").fetchone()
         return STATE_UNCONFIGURED if row is None else str(row["setup_state"])
