@@ -7,6 +7,7 @@ export const SETTINGS_CATEGORIES = [
   { id: 'reading', label: 'Reading & layout' },
   { id: 'export', label: 'Export' },
   { id: 'backup', label: 'Backup' },
+  { id: 'storage', label: 'Storage' },
   { id: 'maintenance', label: 'Maintenance' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'deployment', label: 'Deployment' },

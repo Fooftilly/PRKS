@@ -14163,6 +14163,21 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         self.assertEqual(panel.locator("input, select, textarea").count(), 0)
         self.assertIn("needs a restart", panel.inner_text())
 
+    def test_storage_status_is_shown_read_only(self):
+        server, page, _collector = self._start_app()
+        _open_settings(page)
+        with page.expect_response(lambda r: urlparse(r.url).path == "/api/storage-status") as info:
+            page.locator("#prks-settings-tab-storage").click()
+        self.assertEqual(info.value.status, 200)
+        self.assertEqual(info.value.headers.get("cache-control"), "no-store")
+        panel = page.locator("#prks-settings-panel-storage")
+        panel.locator("[data-prks-storage='files']").wait_for()
+        self.assertIn(os.path.realpath(server.storage_root), panel.locator("[data-prks-storage='files']").inner_text())
+        self.assertIn("PostgreSQL", panel.locator("[data-prks-storage='database']").inner_text())
+        self.assertRegex(panel.locator("[data-prks-storage='storage_root_id']").inner_text(), r"SR-[0-9a-f]{32}")
+        self.assertEqual(panel.locator("[data-prks-storage='missing'] dd").inner_text(), "0")
+        self.assertEqual(panel.locator("input, select, textarea").count(), 0)
+
     def test_diagnostics_table_remains_usable(self):
         _server, page, _collector = self._start_app()
         _open_settings(page)

@@ -7,6 +7,7 @@ const DOMAIN_KEYS: Record<PrksQueryDomain, string> = {
   performanceDiagnostics: 'performance-diagnostics',
   publishers: 'publishers',
   savedViews: 'saved-views',
+  storageStatus: 'storage-status',
 }
 
 describe('prksQueryKeys', () => {

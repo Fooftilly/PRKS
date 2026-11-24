@@ -16,6 +16,7 @@ import SettingsGeneral from './SettingsGeneral.vue'
 import SettingsMaintenance from './SettingsMaintenance.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import SettingsReading from './SettingsReading.vue'
+import SettingsStorage from './SettingsStorage.vue'
 
 function onNavKeydown(event: KeyboardEvent): void {
   const nav = event.currentTarget
@@ -79,6 +80,9 @@ onMounted(() => {
       </SettingsPanel>
       <SettingsPanel category="backup" :active="settingsActiveCategory === 'backup'">
         <SettingsBackup />
+      </SettingsPanel>
+      <SettingsPanel category="storage" :active="settingsActiveCategory === 'storage'">
+        <SettingsStorage />
       </SettingsPanel>
       <SettingsPanel category="maintenance" :active="settingsActiveCategory === 'maintenance'">
         <SettingsMaintenance />

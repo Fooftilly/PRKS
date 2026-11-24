@@ -63,6 +63,11 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
                     "docs/api/openapi-deployment-settings.json",
                     "frontend-app/src/api/generated/deployment-settings.ts",
                 ),
+                (
+                    "storage-status",
+                    "docs/api/openapi-storage-status.json",
+                    "frontend-app/src/api/generated/storage-status.ts",
+                ),
             ],
         )
         for item in families:

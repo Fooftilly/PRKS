@@ -113,6 +113,8 @@ ROWS: tuple[Row, ...] = (
     Row("maintenance", ADMIN, "POST", "/api/backups/stage", {}, allowed=(415,)),
     # How this PRKS is deployed, read-only (#612): the owner only.
     Row("deployment", ADMIN, "GET", "/api/deployment-settings"),
+    # Where the Library's files are (#720): carries host paths, the owner only.
+    Row("storage", ADMIN, "GET", "/api/storage-status"),
     # An empty envelope is the protocol's own refusal, after admission.
     Row("session", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
 )

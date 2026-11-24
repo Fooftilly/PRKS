@@ -35,6 +35,11 @@
       "name": "deployment-settings",
       "artifact": "docs/api/openapi-deployment-settings.json",
       "output": "frontend-app/src/api/generated/deployment-settings.ts"
+    },
+    {
+      "name": "storage-status",
+      "artifact": "docs/api/openapi-storage-status.json",
+      "output": "frontend-app/src/api/generated/storage-status.ts"
     }
   ]
 }

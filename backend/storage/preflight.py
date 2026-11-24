@@ -24,6 +24,7 @@ import logging
 import os
 import secrets
 import stat
+from dataclasses import dataclass
 from typing import Optional
 
 from backend.fs_durability import fsync_directory, fsync_open_file
@@ -193,3 +194,69 @@ def run_preflight(maintenance: str, *, capabilities: bool) -> Optional[bool]:
         except (OSError, StorageRootError):
             LOGGER.warning("storage_preflight_cleanup_failed")
     return directory_fsync
+
+
+# Name semantics (§11.1 diagnostics, §7.2 V14): measured with probe files,
+# never assumed from the operating system.
+NORMALIZATION_PRESERVED = "preserved"
+NORMALIZATION_INSENSITIVE = "insensitive"
+NORMALIZATION_NORMALIZED = "normalized"
+
+# "é" composed (NFC) and decomposed (NFD).
+_NFC_E = "é"
+_NFD_E = "é"
+
+
+@dataclass(frozen=True)
+class NameSemantics:
+    """How the root's filesystem treats file names.
+
+    ``case_sensitive``: whether ``a`` and ``A`` name two files.
+    ``normalization``: ``preserved`` when the NFC and NFD spellings of one
+    name are two files, ``insensitive`` when either spelling finds a file
+    stored as written (APFS), ``normalized`` when the filesystem stores a
+    different spelling than the one written (HFS+ stores NFD).
+    """
+
+    case_sensitive: bool
+    normalization: str
+
+
+def probe_name_semantics(maintenance: str) -> NameSemantics:
+    """Measure case sensitivity and Unicode normalization inside a preflight scaffold.
+
+    The caller must keep every other preflight out (``open.lock``, or the
+    exclusive lease): the scaffold is shared. Probe files are created with
+    exclusive create and removed on every exit, with the scaffold.
+    """
+    preflight = os.path.join(maintenance, PREFLIGHT_DIRNAME)
+    _remove_preflight(preflight)
+    try:
+        os.mkdir(preflight, 0o700)
+        stem = _probe_name()
+        lower = os.path.join(preflight, stem + "-case-a")
+        _write_probe(lower, b"prks-probe-case")
+        case_sensitive = not os.path.lexists(os.path.join(preflight, stem + "-case-A"))
+
+        composed = stem + "-nf-" + _NFC_E
+        _write_probe(os.path.join(preflight, composed), b"prks-probe-nf")
+        stored = [name for name in os.listdir(preflight) if name.startswith(stem + "-nf-")]
+        if stored != [composed]:
+            normalization = NORMALIZATION_NORMALIZED
+        elif os.path.lexists(os.path.join(preflight, stem + "-nf-" + _NFD_E)):
+            normalization = NORMALIZATION_INSENSITIVE
+        else:
+            normalization = NORMALIZATION_PRESERVED
+        return NameSemantics(case_sensitive=case_sensitive, normalization=normalization)
+    except StorageRootError:
+        raise
+    except OSError as exc:
+        raise StorageRootRefused(
+            "root_not_writable",
+            "The storage root is not writable (PRKS could not create a probe file in it).",
+        ) from exc
+    finally:
+        try:
+            _remove_preflight(preflight)
+        except (OSError, StorageRootError):
+            LOGGER.warning("storage_preflight_cleanup_failed")
