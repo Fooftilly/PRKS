@@ -30,6 +30,8 @@ from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
 from tests.pg.harness import PostgresHarness, get_harness
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
+from backend.web import etags
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -401,6 +403,148 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
 
     def harness_db_name(self) -> str:
         return str(self.sql("SELECT current_database() AS n")[0]["n"])
+
+
+_PDF_BYTES = b"%PDF-1.4\n% parity fixture\n%%EOF\n"
+_MISSING = "W-" + "0" * 32
+
+
+class WorksAnswerTestCase(AnswerAssertions, WorksFacadeTestCase):
+    """Works tests that spell out answers: Works are created under labels."""
+
+    def add(self, label: str, **fields: Any) -> str:
+        work_id = self.labels.name(self.library.add_work(**fields), f"<W {label}>")
+        work = require(self.library.get_work(work_id))
+        self.labels.name(work["primary_manifestation_id"], f"<MF {label}>")
+        if work["primary_asset_id"]:
+            self.labels.name(work["primary_asset_id"], f"<AS {label}>")
+        return work_id
+
+    def add_pdf(self, label: str, name: str, **fields: Any) -> str:
+        return self.add(label, file_path=self.store_pdf(name, _PDF_BYTES), source_kind="pdf", **fields)
+
+
+class AnswerTests(WorksAnswerTestCase):
+    """The answers of the Work reads, spelled out (formerly SQLite parity recordings)."""
+
+    def test_a_work_without_a_source(self) -> None:
+        work_id = self.add("plain", title="Plain", status="In Progress", abstract="An abstract",
+                           author_text="Ann Lee", year="2020", publisher="Press", journal="J", volume="3",
+                           issue="2", pages="1-9", isbn="978", doi="10.1/X", doc_type="book",
+                           published_date="2020-01-02", location="Paris", edition="2",
+                           urldate="2024-05-06", private_notes="  remember this  ")
+        self.answer(self.library.get_work(work_id), {
+            "abstract": "An abstract", "annotations": "[]", "arguments": [], "asset_count": 0,
+            "author_text": "Ann Lee", "canonical_annotation_set_revision": 0, "citation_style": "",
+            "created_at": "<s>", "doc_type": "book", "doi": "10.1/X", "edition": "2", "file_path": "",
+            "file_size_bytes": None, "folder_id": None, "folder_title": None, "hide_pdf_link_annotations": 0,
+            "id": "<W plain>", "isbn": "978", "issue": "2", "journal": "J", "last_opened_at": None,
+            "location": "Paris", "manifestation_count": 1, "materialized_pdf_annotation_revision": 0,
+            "pages": "1-9", "playlist_id": None, "playlist_title": None, "primary_asset_id": None,
+            "primary_manifestation_id": "<MF plain>", "private_notes": "remember this", "provider": None,
+            "provider_id": None, "published_date": "2020-01-02", "publisher": "Press",
+            "research_refs": {"arguments": [], "concepts": []}, "roles": [], "source_kind": None,
+            "source_mime": None, "source_url": None, "status": "In Progress", "tags": [], "text_content": "",
+            "thumb_page": None, "thumb_url": None, "title": "Plain", "updated_at": "<s>",
+            "urldate": "2024-05-06", "volume": "3", "year": "2020"})
+
+    def test_a_managed_pdf_records_its_file(self) -> None:
+        work_id = self.add_pdf("pdf", "paper.pdf", title="Paper", source_url="https://example.org/p",
+                               thumb_page=3, source_mime="application/pdf", thumb_url="https://t")
+        self.answer(self.library.get_work(work_id), {
+            "file_path": "/api/pdfs/paper.pdf", "file_size_bytes": len(_PDF_BYTES), "asset_count": 1,
+            "source_kind": "pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
+        self.answer(self.library.get_primary_thumbnail_fields(work_id), {
+            "file_path": "/api/pdfs/paper.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
+
+    def test_a_video_is_a_stream(self) -> None:
+        video = self.add("video", title="Video", source_kind="video", source_url=_VIDEO,
+                         thumb_url="https://i.ytimg.com/x.jpg", urldate="2024-01-01")
+        inferred = self.add("inferred", title="Inferred", source_url=_VIDEO)
+        for work_id in (video, inferred):
+            self.answer(self.library.get_work(work_id), {
+                "source_kind": "video", "provider": "youtube", "provider_id": "dQw4w9WgXcQ",
+                "asset_count": 1, "file_size_bytes": None, "file_path": ""})
+
+    def test_a_contradictory_source_is_refused(self) -> None:
+        for fields in (
+            {"source_kind": "web"},
+            {"source_kind": "video", "source_url": "https://example.org/not-a-video"},
+            {"source_kind": "video", "source_url": _VIDEO, "provider_id": "other"},
+            {"provider": "youtube"},
+        ):
+            with self.subTest(fields=fields):
+                with self.assertRaises(ValueError):
+                    self.library.add_work("Refused", **fields)
+        self.assertEqual(self.library.get_all_works(), [])
+
+    def test_an_unknown_work_reads_as_none(self) -> None:
+        self.assertIsNone(self.library.get_work(_MISSING))
+        self.assertIsNone(self.library.get_primary_thumbnail_fields(_MISSING))
+
+    def catalog(self) -> None:
+        for title in ("beta", "Alpha", "_under", "Zed", "Ä umlaut", "ä umlaut"):
+            self.add(title, title=title, abstract="x" * 150 if title == "Zed" else "")
+        self.add_pdf("file", "f.pdf", title="file")
+        self.add("stream", title="stream", source_url=_VIDEO)
+
+    def test_the_catalog_rows(self) -> None:
+        self.catalog()
+        common = {"asset_count": 1, "linked_authors": None, "linked_people": [], "manifestation_count": 1,
+                  "primary_author": None, "primary_editor": None, "status": "Not Started",
+                  "doc_type": "article", "author_text": "", "year": "", "published_date": "",
+                  "thumb_page": None, "thumb_url": None}
+        file_row = {**common, "id": "<W file>", "title": "file", "file_path": "/api/pdfs/f.pdf",
+                    "file_size_bytes": 32, "primary_asset_id": "<AS file>", "primary_manifestation_id": "<MF file>",
+                    "provider": None, "provider_id": None, "source_kind": "pdf", "source_url": None}
+        stream_row = {**common, "id": "<W stream>", "title": "stream", "file_path": "",
+                      "file_size_bytes": None, "primary_asset_id": "<AS stream>",
+                      "primary_manifestation_id": "<MF stream>", "provider": "youtube",
+                      "provider_id": "dQw4w9WgXcQ", "source_kind": "video", "source_url": _VIDEO}
+        detail = {"abstract": "", "created_at": "<s>", "updated_at": "<s>", "folder_id": None,
+                  "last_opened_at": None, "source_mime": None, "urldate": None}
+        for call in ("get_all_works", "get_recently_added_works", "get_recently_added_browse"):
+            with self.subTest(call=call):
+                rows = {row["title"]: row for row in self.labels.show(getattr(self.library, call)())}
+                self.assertEqual(len(rows), 8)
+                extra = detail if call != "get_recently_added_browse" else {"created_at": "<s>"}
+                self.answer([rows["file"], rows["stream"]], [{**file_row, **extra}, {**stream_row, **extra}])
+        browse = self.library.get_works_browse_catalog()
+        self.assertEqual([row["title"] for row in browse],
+                         ["_under", "Alpha", "beta", "file", "stream", "Zed", "Ä umlaut", "ä umlaut"])
+        self.answer(browse[3:5], [{**file_row, "abstract_excerpt": ""}, {**stream_row, "abstract_excerpt": ""}])
+        self.assertEqual(browse[5]["abstract_excerpt"], "x" * 100)
+
+    def test_limits(self) -> None:
+        self.catalog()
+        self.assertEqual(len(self.library.get_recently_added_browse(3)), 3)
+        self.assertEqual(len(self.library.get_recently_added_works(2)), 2)
+        self.assertEqual(len(self.library.get_recently_added_works(-1)), 8)
+
+    def test_nothing_opened_yet(self) -> None:
+        self.catalog()
+        self.assertEqual(self.library.get_recent_browse(), [])
+        self.assertEqual(self.library.get_recent_works(5), [])
+        self.assertEqual(self.library.etag_recent_works(), 'W/"prks-recent-0-"')
+
+    def test_summaries_follow_the_requested_order(self) -> None:
+        a = self.add("a", title="A")
+        b = self.add("b", title="B")
+        rows = self.library.get_work_summaries_by_ids_ordered([b, " ", "W-" + "F" * 32, a, b])
+        self.answer(rows, [{"id": "<W b>", "title": "B", "primary_manifestation_id": "<MF b>"},
+                           {"id": "<W a>", "title": "A"}, {"id": "<W b>", "title": "B"}])
+        self.assertEqual(self.library.get_work_summaries_by_ids_ordered([]), [])
+
+    def test_etags_follow_the_representation(self) -> None:
+        self.catalog()
+        rows = self.library.get_all_works()
+        tag = self.library.etag_works_catalog(rows)
+        self.assertEqual(tag, etags.etag_for_representation("works", rows))
+        self.assertEqual(self.library.etag_for_representation("works", rows), tag)
+        self.assertRegex(tag, r'^W/"prks-works-8-[0-9a-f]{32}"$')
+        self.answer(self.library.etag_recently_added_works(), 'W/"prks-recently-added-8-<s>"')
+        self.add("later", title="Later")
+        self.assertNotEqual(self.library.etag_works_catalog(self.library.get_all_works()), tag)
 
 
 if __name__ == "__main__":
