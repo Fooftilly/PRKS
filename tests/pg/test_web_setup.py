@@ -397,6 +397,36 @@ class SetupStorageChoiceTests(SetupHttpTests):
         self.assertIsNone(_marker(root).instance_id)
         self.assertEqual(self.selected(), target)
 
+    def test_a_choice_refuses_once_another_process_began_setup_meanwhile(self) -> None:
+        # Another process on this root commits the instance row after this
+        # page's own state check, then stops before claiming the marker. The
+        # choice, under the config lock, must see the row and write nothing.
+        from backend.storage import choose as choose_mod
+
+        name = self.database()
+        phase, root = self.choosable_phase(name)
+        token = self.issue(name).reveal()
+        port = self.serve(phase)
+        real_refusal = choose_mod.refusal_before_target
+        began: list[bool] = []
+
+        def other_process_begins_setup(environ: Any, current_root: str) -> Any:
+            if not began:
+                began.append(True)
+                with self.assertRaises(Crash):
+                    self.bootstrap(name, root, faults=crash_at(root_pairing.FAULT_AFTER_INSTANCE_COMMIT))
+            return real_refusal(environ, current_root)
+
+        target = os.path.join(self.tmp, "too-late")
+        with mock.patch.object(choose_mod, "refusal_before_target", side_effect=other_process_begins_setup):
+            status, got = self.choose(port, {"token": token, "folder": target})
+        self.assertTrue(began)
+        self.assertEqual(status, 409, got)
+        self.assertEqual((got.get("error"), got.get("reason")), ("storage_refused", "choose_root_claimed"))
+        self.assertEqual(self.selected(), root)
+        self.assertFalse(os.path.exists(target))
+        self.assertIsNone(_marker(root).instance_id)
+
     def test_the_token_holder_chooses_a_folder_and_setup_waits_for_a_restart(self) -> None:
         name = self.database()
         phase, root = self.choosable_phase(name)

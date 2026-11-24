@@ -341,7 +341,14 @@ class SetupPhase:
                     raise RootPairingRefused(
                         "already_ready", "This PRKS instance is already set up; bootstrap is closed."
                     )
-                chosen = choose_root(folder, environ=self._environ, held_current_root=self._root)
+                # Asked again under the config lock: another process's setup may
+                # have committed the instance row since the check above (§8.1).
+                chosen = choose_root(
+                    folder,
+                    environ=self._environ,
+                    held_current_root=self._root,
+                    setup_state=lambda: read_state(self.db),
+                )
                 self.chosen_root = chosen.root
             return chosen
         finally:
