@@ -9,14 +9,8 @@ import time
 _IMPORT_STARTED = time.perf_counter()
 
 from backend.log_config import setup_logging
-from backend.server import (
-    DEFAULT_HOST,
-    PORT,
-    bind_storage,
-    normalize_listen_host,
-    parse_request_origin,
-    run_server,
-)
+from backend.server import DEFAULT_HOST, PORT, bind_storage, run_server
+from backend.web.hosts import normalize_listen_host, parse_request_origin
 from backend.storage.config import StorageConfig
 from backend.storage.errors import StorageRootError
 from backend.storage.resolver import bootstrap_config_path
@@ -919,7 +913,7 @@ def serve_identity(args, config, identity, http_settings):
         # even if a root symlink is retargeted while the process runs.
         config = bound_root.anchor(config)
         with startup_phase("startup_bind"):
-            config = bind_storage(config, library_database=library_database)
+            app = bind_storage(config, library_database=library_database)
         with startup_phase("startup_logging"):
             setup_logging(config)
             bound_root.log_binding()
@@ -928,7 +922,7 @@ def serve_identity(args, config, identity, http_settings):
             with startup_phase("startup_worker_bind"):
                 jobs.bind_root(config.root)
 
-        run_server(port=port, host=args.host, auth=auth, jobs=jobs,
+        run_server(app, port=port, host=args.host, auth=auth, jobs=jobs,
                    readiness=readiness_for(auth, config.root), http=http_settings)
     finally:
         library_database.close()

@@ -93,7 +93,7 @@ def number(low: float, high: float) -> Check:
 
 
 def trusted_hosts(text: str) -> Optional[str]:
-    from backend.server import parse_trusted_hosts
+    from backend.web.hosts import parse_trusted_hosts
 
     try:
         parse_trusted_hosts(text)
@@ -163,7 +163,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_TRUSTED_PROXIES", _D, "Proxy addresses or networks whose X-Forwarded-For is believed.",
             "none", ("serve",), owner="backend.domain.identity.login_limiter"),
     Setting("PRKS_TRUSTED_HOSTS", _D, "Extra Host header names the server accepts, comma-separated.",
-            "none", ("serve",), check=trusted_hosts, owner="backend.server"),
+            "none", ("serve",), check=trusted_hosts, owner="backend.web.hosts"),
     Setting("PRKS_SESSION_IDLE_DAYS", _D, "Days a session stays valid without use, 1 to 365.",
             "30", ("serve",), owner="backend.domain.identity.sessions"),
     Setting("PRKS_LOGIN_WINDOW_SECONDS", _D, "Length of the sign-in rate-limit window.",
@@ -195,7 +195,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("PRKS_PDF_LINEARIZE", _D, "Linearize PDFs on import. Unset: on when qpdf is installed.",
             "auto", ("serve", "worker"), check=boolean, owner="backend.pdf_linearize"),
     Setting("PRKS_THUMB_LOSSLESS", _D, "Lossless thumbnail cache encoding (debugging).", "off", ("serve",),
-            check=boolean, owner="backend.server"),
+            check=boolean, owner="backend.api.thumbnails"),
     # --- compose (.env) ---------------------------------------------------------------
     Setting("UID", Scope.COMPOSE, "Host user the PRKS containers run as.", "1000", ("compose",)),
     Setting("GID", Scope.COMPOSE, "Host group the PRKS containers run as.", "1000", ("compose",)),
