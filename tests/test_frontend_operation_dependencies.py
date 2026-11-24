@@ -39,8 +39,10 @@ class OperationDependencyTests(unittest.TestCase):
         self.assertIn('UNSATISFIED_DEPENDENCY', listed)
 
     def test_the_server_and_client_agree_on_the_refusal_code(self):
-        from backend.sync import envelope
-        backend = (ROOT / 'backend' / 'sync' / 'envelope.py').read_text()
+        # The envelope refuses malformed dependencies; the ledger in
+        # protocol.py refuses unsatisfied ones (UNSATISFIED_DEPENDENCY).
+        backend = ''.join((ROOT / 'backend' / 'sync' / name).read_text()
+                          for name in ('envelope.py', 'protocol.py'))
         codes = set(re.findall(r'"code": "([A-Z_]+)"', backend))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         listed = runtime[runtime.index('const PROTOCOL_ERRORS'):]

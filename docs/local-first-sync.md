@@ -50,7 +50,8 @@ operations both use.
 
 | Layer | Owns |
 | --- | --- |
-| `backend/sync/envelope.py` | Envelope normalization, request hashing, ledger, OP_ID_REUSE, exact replay, one transaction, dispatch |
+| `backend/sync/envelope.py` | Envelope normalization, request hashing, the registry of accepted operations |
+| `backend/sync/protocol.py` | The ledger, OP_ID_REUSE, exact replay, dependencies, one transaction, dispatch to `backend/sync/handlers/` |
 | `backend/domain/organization/work_tag_rules.py` | Relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
 | `backend/domain/works/open_rules.py` | `last_opened_at` max-register, skew policy, MARK_WORK_OPENED handler |
 | `backend/domain/works/metadata_rules.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |

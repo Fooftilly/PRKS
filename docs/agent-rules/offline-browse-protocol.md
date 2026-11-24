@@ -119,7 +119,8 @@ registration, never another branch in a growing conditional.
 
 | Layer | Owns |
 | --- | --- |
-| `backend/sync/envelope.py` | Envelope normalization, request hashing, the `sync_operations` ledger, OP_ID_REUSE, exact replay, `BEGIN IMMEDIATE`, dispatch |
+| `backend/sync/envelope.py` | Envelope normalization, request hashing, the registry of accepted operations |
+| `backend/sync/protocol.py` | The ledger, OP_ID_REUSE, exact replay, dependencies, one epoch-fenced transaction per operation, dispatch to `backend/sync/handlers/` |
 | `backend/domain/organization/work_tag_rules.py` | Work-Tag relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
 | `backend/domain/works/open_rules.py` | `last_opened_at` max-register, clock-skew policy, MARK_WORK_OPENED handler |
 | `backend/domain/works/metadata_rules.py` | Synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
