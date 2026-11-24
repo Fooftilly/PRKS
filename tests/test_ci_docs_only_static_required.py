@@ -32,7 +32,7 @@ HEAVY = {
         "Set up Python for PostgreSQL and identity type imports",
         "Install pinned PostgreSQL and identity type dependencies",
         "Run Pyright data-flow checks",
-        "Run Pyright typed slice (backend/storage + backend utility modules; standard)",
+        "Run Pyright typed slice (backend, prks_app.py, scripts, tests; standard)",
     ),
     "eslint": (
         "Set up Node.js",
