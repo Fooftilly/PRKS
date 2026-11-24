@@ -20,7 +20,7 @@ export PRKS_DATABASE_URL='postgresql://prks:<password>@127.0.0.1:5432/prks'
 
 If the venv has no pip (for example one made by `uv venv`, or on Arch Linux), install with [uv](https://docs.astral.sh/uv/) instead: `uv pip install --python ./.venv/bin/python -r requirements.txt`. The dependency gate prints the right command for your interpreter.
 
-On a first run the server applies the schema and waits for setup, serving only a setup page. Get a one-time setup token with `./.venv/bin/python prks_app.py admin bootstrap issue-token --root data` (the server prints the exact command), open `http://127.0.0.1:8080`, enter the token and create the owner account and the Library. PRKS then opens the Library, signed in. To keep the Library's files somewhere other than `data/`, choose the folder before setup: on the setup page (*Use a different folder for the Library's files*) or with `prks_app.py storage choose PATH`, then restart PRKS. [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) also covers terminal-only and unattended setup.
+On a first run the server applies the schema and waits for setup, serving only a setup page. Get a one-time setup token with `./.venv/bin/python prks_app.py admin bootstrap issue-token --root data` (the server prints the exact command), open `http://127.0.0.1:8080`, enter the token and create the owner account and the Library. PRKS then opens the Library, signed in. To keep the Library's files somewhere other than `data/`, choose the folder before setup: on the setup page (*Use a different folder for the Library's files*) while PRKS runs, or with `prks_app.py storage choose PATH` while PRKS is stopped (the command refuses while the server holds the current folder). Then start PRKS again. [admin bootstrap](https://github.com/Fooftilly/PRKS/blob/master/docs/admin-bootstrap.md) also covers terminal-only and unattended setup.
 
 A different loopback port can be selected with `--port`. To make PRKS reachable on another interface, pass an explicit host such as `--host 0.0.0.0`. Every account signs in with its password, but do not expose PRKS to an untrusted network without an HTTPS reverse proxy; see [Security and Operations](Security-and-Operations.md).
 
@@ -58,7 +58,7 @@ For the exact current Docker, UID/GID, storage, and publish-host behavior, use t
 
 ## Storage location
 
-Set `PRKS_STORAGE` to choose the persistent-data root. When it is unset in a normal run, PRKS uses the repository's `data/` directory.
+Set `PRKS_STORAGE` to choose the persistent-data root. When it is unset in a normal run, PRKS uses the folder recorded in the bootstrap configuration (written by `prks_app.py storage choose` or the setup page's folder choice), and the repository's `data/` directory when none is recorded.
 
 Canonical data is the PostgreSQL Library database plus the managed files in the data root. Thumbnail/search/research indexes are derived and may be rebuilt. See [Storage, Backup, and Restore](Storage-Backup-and-Restore.md).
 

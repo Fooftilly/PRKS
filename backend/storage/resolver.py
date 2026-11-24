@@ -205,6 +205,19 @@ def normalize_root_spelling(
 BootstrapReader = Callable[[str], Optional[object]]
 
 
+def recorded_local_root(config_file_path: str) -> Optional[str]:
+    """The ``storage.local_root`` the bootstrap file records now, or ``None``.
+
+    The one other read of the bootstrap file besides resolution: a starting
+    process re-reads it under its root lease to see a folder choice committed
+    after it resolved (storage-architecture §8.1). Testing mode never calls it.
+    """
+    from backend.storage.bootstrap_config import read_bootstrap_config
+
+    config = read_bootstrap_config(config_file_path)
+    return getattr(config, "local_root", None) if config is not None else None
+
+
 def resolve_storage_root(
     *,
     cli_root: Optional[str],

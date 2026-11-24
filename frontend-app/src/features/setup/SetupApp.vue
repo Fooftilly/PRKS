@@ -378,32 +378,42 @@ defineExpose({ step })
         <div class="prks-form-actions">
           <PrksButton variant="primary" type="submit">Continue</PrksButton>
         </div>
-        <details v-if="storage === 'choosable'" id="prks-setup-folder" class="prks-setup__folder">
-          <summary>Use a different folder for the Library's files</summary>
-          <p class="prks-setup__note">
-            Optional. PRKS keeps the Library's files in its default data folder unless you choose another one now.
-            Use an empty or new folder on the computer that runs PRKS. After you choose, restart PRKS, then finish
-            setup. Once setup is done, the folder can no longer be changed here.
-          </p>
-          <PrksField label="Folder" for-id="prks-setup-folder-path" :error="folderError">
-            <template #default="{ labelledBy, describedBy }">
-              <input
-                id="prks-setup-folder-path"
-                v-model="folder"
-                :aria-labelledby="labelledBy"
-                :aria-describedby="describedBy"
-                class="prks-input"
-                type="text"
-                name="folder"
-                autocomplete="off"
-                spellcheck="false"
-                autocapitalize="none"
-                :aria-invalid="folderError ? 'true' : 'false'"
-              />
-            </template>
-          </PrksField>
-          <div class="prks-form-actions">
-            <PrksButton :busy="choosing" busy-label="Checking the folder…" @click="useFolder">Use this folder</PrksButton>
+        <details v-if="storage === 'choosable'" id="prks-setup-folder" class="work-upload-meta__details prks-setup__folder">
+          <summary class="work-upload-meta__summary">
+            <span class="work-upload-meta__summary-chevron" aria-hidden="true"></span>
+            <span class="work-upload-meta__summary-text">
+              <span class="work-upload-meta__summary-title-row">
+                <span class="work-upload-meta__summary-title">Use a different folder for the Library's files</span>
+                <span class="work-upload-meta__summary-optional">Optional</span>
+              </span>
+            </span>
+          </summary>
+          <div class="work-upload-meta__details-body prks-setup__folder-body">
+            <p class="prks-setup__note">
+              PRKS keeps the Library's files in its default data folder unless you choose another one now.
+              Use an empty or new folder on the computer that runs PRKS. After you choose, restart PRKS, then finish
+              setup. Once setup is done, the folder can no longer be changed here.
+            </p>
+            <PrksField label="Folder" for-id="prks-setup-folder-path" :error="folderError">
+              <template #default="{ labelledBy, describedBy }">
+                <input
+                  id="prks-setup-folder-path"
+                  v-model="folder"
+                  :aria-labelledby="labelledBy"
+                  :aria-describedby="describedBy"
+                  class="prks-input"
+                  type="text"
+                  name="folder"
+                  autocomplete="off"
+                  spellcheck="false"
+                  autocapitalize="none"
+                  :aria-invalid="folderError ? 'true' : 'false'"
+                />
+              </template>
+            </PrksField>
+            <div class="prks-form-actions">
+              <PrksButton :busy="choosing" busy-label="Checking the folder…" @click="useFolder">Use this folder</PrksButton>
+            </div>
           </div>
         </details>
       </form>

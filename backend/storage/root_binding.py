@@ -1318,10 +1318,9 @@ def _check_selection_unchanged(config: Any, config_file_path: Optional[str]) -> 
     source = getattr(config, "root_source", None)
     if source not in _SELECTION_SOURCES or not config_file_path:
         return
-    from backend.storage.bootstrap_config import read_bootstrap_config
+    from backend.storage.resolver import recorded_local_root
 
-    current = read_bootstrap_config(config_file_path)
-    selected = current.local_root if current is not None else None
+    selected = recorded_local_root(config_file_path)
     if source != SOURCE_CONFIG_FILE and selected is None:
         return  # still no selection: the default still applies
     if selected is None or os.path.normpath(selected) != os.path.normpath(config.root):

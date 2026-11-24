@@ -11617,17 +11617,11 @@ button.prks-research-row {
     border-radius: var(--radius-sm);
 }
 
-.prks-setup__folder {
+/* The folder choice reuses the Create File Optional-disclosure grammar
+   (.work-upload-meta__details / __summary, DESIGN.md "Optional"). */
+.prks-setup__folder-body {
     display: grid;
     gap: var(--space-sm);
-    padding-top: var(--space-sm);
-    border-top: 1px solid var(--border);
-}
-
-.prks-setup__folder > summary {
-    cursor: pointer;
-    font-size: var(--text-sm);
-    color: var(--text-secondary);
 }
 
 .prks-setup__lead code {
