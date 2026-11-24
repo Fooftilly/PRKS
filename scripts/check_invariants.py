@@ -359,6 +359,16 @@ PYRIGHT_TYPED_SLICE_STRICT = (
     "backend/sync/families.py",
     "backend/sync/handlers/__init__.py",
     "backend/tag_color.py",
+    "backend/server.py",
+    "backend/web/routing.py",
+    "backend/api/pdfs.py",
+    "backend/api/storage.py",
+    "backend/api/deployment.py",
+    "backend/api/arguments.py",
+    "backend/api/concepts.py",
+    "backend/api/folders.py",
+    "backend/api/work_roles.py",
+    "backend/api/annotations.py",
 )
 # "basic" is no longer accepted: the slice was raised to "standard" in #69
 # slice 6, and a lower mode would silently drop the checks that added.
@@ -734,6 +744,14 @@ _TRACKED_HELPER_NAMES = (
 # and raw managed-PDF removal are already INV-STORAGE-001/002 and
 # INV-DURABILITY-001/002, which have no server.py exemption.
 HTTP_ADAPTER_MODULE = "backend/server.py"
+# The adapter is ``backend/server.py`` plus the HTTP layer (``backend/web``)
+# and the route families (``backend/api``, #1424).
+HTTP_ADAPTER_PACKAGES = ("backend/web/", "backend/api/")
+
+
+def is_http_adapter_module(relpath: str) -> bool:
+    """Whether ``relpath`` is part of the HTTP adapter (INV-ADAPTER-001/002)."""
+    return relpath == HTTP_ADAPTER_MODULE or relpath.startswith(HTTP_ADAPTER_PACKAGES)
 # Builtins whose identity survives a local alias (``o = open``).
 _ALIASED_BUILTINS = frozenset({"open"})
 _OPEN_CALLS = frozenset({"builtins.open", "io.open"})
@@ -3006,7 +3024,7 @@ class _InvariantVisitor(ast.NodeVisitor):
             # Covers ``p.unlink()`` / ``p.rename(dst)`` and a saved bound method.
             self._check_removal_of(node, f"pathlib.Path.{node.attr}()", node.value)
         if (
-            self.relpath == HTTP_ADAPTER_MODULE
+            is_http_adapter_module(self.relpath)
             and node.attr in _PATH_WRITE_METHODS
             and not _is_path_class_expr(node.value, self.scopes)
             and _PATH in _expr_facts(node.value, self.scopes)
@@ -3313,7 +3331,7 @@ class _InvariantVisitor(ast.NodeVisitor):
         if _is_partial_call(node, self.scopes) and node.args:
             # ``partial(helper, *bound, **bound_kw)`` is checked as the call it
             # prepares; arguments supplied at invocation are checked there.
-            if self.relpath == HTTP_ADAPTER_MODULE:
+            if is_http_adapter_module(self.relpath):
                 self._record_prebound_facts(node)
             prepared = self._flatten_partial(
                 node.args[0], node.args[1:], list(node.keywords), node
@@ -3341,7 +3359,7 @@ class _InvariantVisitor(ast.NodeVisitor):
         exactly as they do for the INV-STORAGE rules. Invoking a stored
         partial is checked as the combined call, reporting only what the
         invocation adds to what its construction already reported."""
-        if self.relpath != HTTP_ADAPTER_MODULE:
+        if not is_http_adapter_module(self.relpath):
             return
         self._check_passed_process_callables(node)
         findings = self._adapter_call_findings(node)
@@ -3559,7 +3577,7 @@ class _InvariantVisitor(ast.NodeVisitor):
     def _check_adapter_process_import(self, node: ast.Import | ast.ImportFrom) -> None:
         """``import subprocess`` / ``from subprocess import run`` in the adapter,
         which also covers passing a subprocess callable along uncalled."""
-        if self.relpath != HTTP_ADAPTER_MODULE:
+        if not is_http_adapter_module(self.relpath):
             return
         if isinstance(node, ast.Import):
             modules = [alias.name for alias in node.names]
