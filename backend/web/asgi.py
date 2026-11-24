@@ -1,22 +1,23 @@
-"""Serve PRKS under Uvicorn: ``PRKSHandler`` dispatch over ASGI (#1329).
+"""Serve PRKS under Uvicorn: the route table over plain ASGI (#1329, #1424).
 
-Uvicorn owns the
-sockets, HTTP parsing, keep-alive and slow clients on its event loop. Each
-request runs on a reused daemon thread, bounded by ``PRKS_HTTP_THREADS``, where
-an :class:`_AsgiHandler` (a ``PRKSHandler`` built from the ASGI scope) runs
-the ``do_*`` dispatch, admission, controllers and static files:
+Uvicorn owns the sockets, HTTP parsing, keep-alive and slow clients on its
+event loop. Each request runs on a reused daemon thread, bounded by
+``PRKS_HTTP_THREADS``, where the scope becomes a :class:`Request`,
+:func:`backend.web.dispatch.dispatch` answers it (admission, the route
+table, static files) and the :class:`Response` is sent:
 
-- ``rfile`` pulls the ASGI request body chunk by chunk. A read waits at most
-  the connection's timeout (``settimeout``, which ``TimedBody`` sets for
-  uploads) or :data:`DEFAULT_BODY_IDLE_SECONDS`, then raises ``TimeoutError``.
-- ``wfile`` takes the handler's raw HTTP/1 response bytes, turns the status
-  line and headers into ``http.response.start`` and streams the rest as body
-  chunks. ``Server`` is dropped (#1306); Uvicorn adds ``Date``.
-- A client that is gone surfaces as ``BrokenPipeError``, as it did on a
-  socket. Uvicorn's ``send`` returns silently after a disconnect, so a
-  :class:`_Receiver` (the only caller of ``receive``) watches for
-  ``http.disconnect`` and the writer refuses to send once it has come. A
-  response-only stream (backup progress) therefore ends on its next write.
+- ``Request.body`` pulls the ASGI request body chunk by chunk. A read waits
+  at most the timeout the route set (``settimeout``, which ``TimedBody`` sets
+  for uploads) or :data:`DEFAULT_BODY_IDLE_SECONDS`, then raises
+  ``TimeoutError``.
+- The response head goes out with the first body chunk; a streamed body is
+  sent as it is written. ``Server`` is never sent (#1306); Uvicorn adds
+  ``Date``.
+- A client that is gone surfaces as ``BrokenPipeError``. Uvicorn's ``send``
+  returns silently after a disconnect, so a :class:`_Receiver` (the only
+  caller of ``receive``) watches for ``http.disconnect`` and the sender
+  refuses to send once it has come. A response-only stream (backup
+  progress) therefore ends on its next write.
 - Uvicorn's TRACE logging (connection lines and the ASGI message logger,
   which prints paths and query strings) is kept off whatever
   ``PRKS_LOG_LEVEL`` is, because lowering the level must never unlock raw
@@ -31,7 +32,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import http.client
 import logging
 import queue
 import socket
@@ -43,7 +43,9 @@ from typing import Any, Awaitable, Callable, Iterator, Optional
 import uvicorn
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
-from backend import server as server_module
+from backend.web.app import App
+from backend.web.dispatch import HSTS_VALUE, SECURITY_HEADERS, begin, dispatch, finalize, finish
+from backend.web.http import Headers, Request, Response, error_response
 from backend.log_safety import safe_error_type, safe_log_id
 
 LOGGER = logging.getLogger(__name__)
@@ -122,24 +124,11 @@ class _Bridge:
             raise
 
 
-class _Connection:
-    """The socket stand-in: only the read timeout the upload routes set."""
-
-    def __init__(self) -> None:
-        self._timeout: Optional[float] = None
-
-    def settimeout(self, value: Optional[float]) -> None:
-        self._timeout = value
-
-    def gettimeout(self) -> Optional[float]:
-        return self._timeout
-
-
 class _Receiver:
     """The one consumer of ASGI ``receive`` for a request, on the event loop.
 
     Body messages pass through a one-slot queue, so Uvicorn's flow control
-    still pauses a client the handler is not reading. After the body it keeps
+    still pauses a client the route is not reading. After the body it keeps
     waiting, and ``gone`` is set once the client disconnects (or the request
     task ends, as on a forced shutdown).
 
@@ -150,10 +139,10 @@ class _Receiver:
     Past that bound it waits as above; such a request then ends at its first
     body read once it runs.
 
-    Once the response starts, body the handler left unread is dropped rather
+    Once the response starts, body the route left unread is dropped rather
     than queued (:meth:`discard_body`). Otherwise a full queue would stop the
     receiver from ever seeing ``http.disconnect``: a GET carrying a body that
-    its handler never reads would keep streaming to a client that has gone.
+    its route never reads would keep streaming to a client that has gone.
     """
 
     def __init__(self, receive: Receive) -> None:
@@ -212,28 +201,45 @@ class _Receiver:
         return True
 
     async def discard_body(self) -> None:
-        """The response has started: drop request body the handler did not read."""
+        """The response has started: drop request body the route did not read."""
         self._discard.set()
 
 
-class _RequestBody:
-    """The request body as the file object ``rfile`` the handler reads."""
+class _Body:
+    """The request body (``Request.body``), pulled from the receiver chunk by chunk.
 
-    def __init__(self, bridge: _Bridge, receiver: _Receiver, connection: _Connection) -> None:
+    A read waits at most the set timeout (``settimeout``, which an upload
+    route sets) or :data:`DEFAULT_BODY_IDLE_SECONDS`, then raises
+    ``TimeoutError``. A client that has gone ends the body early.
+    """
+
+    def __init__(self, bridge: _Bridge, receiver: _Receiver, declared_length: Optional[int]) -> None:
         self._bridge = bridge
         self._receiver = receiver
-        self._connection = connection
+        self._declared = declared_length
         self._buffer = bytearray()
         self._eof = False
+        self._taken = 0
+        self._timeout: Optional[float] = None
+
+    def settimeout(self, value: Optional[float]) -> None:
+        self._timeout = value
+
+    def gettimeout(self) -> Optional[float]:
+        return self._timeout
+
+    @property
+    def consumed(self) -> bool:
+        if self._buffer:
+            return False
+        return self._eof or (self._declared is not None and self._taken >= self._declared)
 
     def _fill(self) -> bool:
         """Append one ASGI body message; False once the body has ended."""
         if self._eof:
             return False
-        timeout = self._connection.gettimeout()
-        message = self._bridge.call(
-            self._receiver.messages.get, DEFAULT_BODY_IDLE_SECONDS if timeout is None else timeout
-        )
+        timeout = DEFAULT_BODY_IDLE_SECONDS if self._timeout is None else self._timeout
+        message = self._bridge.call(self._receiver.messages.get, timeout)
         if message.get("type") != "http.request":
             self._eof = True  # http.disconnect: the client is gone
             return False
@@ -245,9 +251,10 @@ class _RequestBody:
     def _take(self, size: int) -> bytes:
         chunk = bytes(self._buffer[:size])
         del self._buffer[:size]
+        self._taken += len(chunk)
         return chunk
 
-    def read(self, size: Optional[int] = -1) -> bytes:
+    def read(self, size: int = -1) -> bytes:
         if size is None or size < 0:
             while self._fill():
                 pass
@@ -261,103 +268,50 @@ class _RequestBody:
             pass
         return self._take(len(self._buffer) if size is None or size < 0 else size)
 
-    def readline(self, size: int = -1) -> bytes:
-        while b"\n" not in self._buffer and self._fill():
-            pass
-        end = self._buffer.find(b"\n")
-        length = len(self._buffer) if end < 0 else end + 1
-        if size is not None and size >= 0:
-            length = min(length, size)
-        return self._take(length)
 
+class _Sender:
+    """Sends a :class:`Response` as ASGI messages from the request thread.
 
-class _ResponseWriter:
-    """``wfile``: the handler's raw HTTP/1 response, sent as ASGI messages."""
+    The head goes out with the first body chunk, so a bytes answer costs one
+    crossing to the event loop (``docs/http-server.md``). A stream's chunks
+    are sent as they are written; once the client is gone a write raises
+    ``BrokenPipeError`` (Uvicorn's ``send`` would drop it silently).
+    """
 
     def __init__(self, bridge: _Bridge, send: Send, receiver: _Receiver) -> None:
         self._bridge = bridge
         self._send_message = send
         self._receiver = receiver
-        self._gone = receiver.gone
-        self._head = bytearray()
-        self._pending_start: Optional[Message] = None
-        self._held: Optional[bytes] = None
-        self.started = False
+        self._start: Optional[Message] = None
 
-    def write(self, data: bytes | bytearray | memoryview) -> int:
-        chunk = bytes(data)
-        if self.started:
-            if chunk:
-                self._body(chunk)
-            return len(chunk)
-        self._head += chunk
-        end = self._head.find(b"\r\n\r\n")
-        if end >= 0:
-            head = bytes(self._head[:end])
-            rest = bytes(self._head[end + 4:])
-            self._head.clear()
-            self._start(head)
-            if rest:
-                self._body(rest)
-        return len(chunk)
+    def respond(self, response: Response, *, head_only: bool) -> None:
+        headers = [
+            (name.lower().encode("latin-1"), str(value).encode("latin-1"))
+            for name, value in response.headers
+            if name.lower().encode("latin-1") not in _DROPPED_RESPONSE_HEADERS
+        ]
+        self._start = {"type": "http.response.start", "status": int(response.status), "headers": headers}
+        if head_only or response.stream is None:
+            body = b"" if head_only else response.body
+            self._deliver({"type": "http.response.body", "body": body, "more_body": False})
+            return
+        response.stream(self._write)
+        self._deliver({"type": "http.response.body", "body": b"", "more_body": False})
 
-    def flush(self) -> None:
-        """Send what is held now (a stream flushes each line)."""
-        if self._pending_start is not None or self._held is not None:
-            self._send(self._take_held(more=True))
+    def _write(self, data: bytes) -> None:
+        if data:
+            self._deliver({"type": "http.response.body", "body": bytes(data), "more_body": True})
 
-    def finish(self) -> None:
-        """End the body. Without a response, Uvicorn answers 500 itself."""
-        if self.started:
-            held = self._take_held(more=False)
-            self._send(held or {"type": "http.response.body", "body": b"", "more_body": False})
-
-    def _start(self, head: bytes) -> None:
-        lines = head.split(b"\r\n")
-        status = int(lines[0].split(b" ", 2)[1])
-        headers: list[tuple[bytes, bytes]] = []
-        for line in lines[1:]:
-            name, _, value = line.partition(b":")
-            key = name.strip().lower()
-            if key and key not in _DROPPED_RESPONSE_HEADERS:
-                headers.append((key, value.strip()))
-        # Held until the first body chunk, flush() or the end, and sent with
-        # it: each crossing to the event loop costs a round trip, and most
-        # responses are a head and one body write (docs/http-server.md).
-        self._pending_start = {"type": "http.response.start", "status": status, "headers": headers}
-        self.started = True
-
-    def _body(self, data: bytes) -> None:
-        # The newest chunk is held back until the next write, flush() or the
-        # end, so a head and a one-write body leave in one crossing with the
-        # end of the body. Earlier chunks go out as each new one arrives.
-        previous = self._take_held(more=True)
-        self._held = data
-        if previous is not None:
-            self._send(previous)
-
-    def _take_held(self, *, more: bool) -> Optional[Message]:
-        held, self._held = self._held, None
-        if held is None:
-            return None
-        return {"type": "http.response.body", "body": held, "more_body": more}
-
-    def _send(self, message: Optional[Message] = None) -> None:
-        if self._gone.is_set():  # Uvicorn would drop the bytes without an error
+    def _deliver(self, message: Message) -> None:
+        if self._receiver.gone.is_set():  # Uvicorn would drop the bytes without an error
             raise BrokenPipeError("client disconnected")
-        messages: list[Message] = []
-        start = self._pending_start
-        if start is not None:
-            self._pending_start = None
-            messages.append(start)
-        if message is not None:
-            messages.append(message)
+        start, self._start = self._start, None
 
         async def deliver() -> None:
             if start is not None:
                 await self._receiver.discard_body()
-            for each in messages:
-                await self._send_message(each)
+                await self._send_message(start)
+            await self._send_message(message)
 
         try:
             self._bridge.call(deliver)
@@ -365,75 +319,45 @@ class _ResponseWriter:
             raise BrokenPipeError("client disconnected") from exc
 
 
-def _headers(scope: Scope) -> http.client.HTTPMessage:
-    message = http.client.HTTPMessage()
-    for name, value in scope.get("headers", []):
-        message[name.decode("latin-1")] = value.decode("latin-1")
-    return message
+def _declared_length(headers: Headers) -> Optional[int]:
+    values = headers.get_all("Content-Length")
+    if len(values) != 1 or not values[0].strip().isdigit():
+        return None
+    return int(values[0].strip())
 
 
-def _target(scope: Scope) -> str:
+def _request(scope: Scope, app: App, bridge: _Bridge, receiver: _Receiver) -> Request:
+    headers = Headers(
+        (name.decode("latin-1"), value.decode("latin-1")) for name, value in scope.get("headers", [])
+    )
     raw = scope.get("raw_path") or scope.get("path", "/").encode("utf-8")
-    target = raw.decode("latin-1")
-    query = scope.get("query_string", b"")
-    return f"{target}?{query.decode('latin-1')}" if query else target
-
-
-class _AsgiHandler(server_module.PRKSHandler):
-    """A ``PRKSHandler`` for one ASGI request: same dispatch, no socket."""
-
-    def __init__(
-        self,
-        scope: Scope,
-        server: "UvicornServing",
-        rfile: _RequestBody,
-        wfile: _ResponseWriter,
-        connection: _Connection,
-    ) -> None:
-        super().__init__()
-        self._prks_request_id = uuid.uuid4().hex[:12]
-        self.server = server
-        client = scope.get("client") or ("", 0)
-        self.client_address = (str(client[0]), int(client[1]))
-        self.command = str(scope.get("method", "GET")).upper()
-        self.path = _target(scope)
+    client = scope.get("client") or ("", 0)
+    return Request(
+        method=str(scope.get("method", "GET")).upper(),
+        path=raw.decode("latin-1"),
+        query_string=scope.get("query_string", b"").decode("latin-1"),
+        headers=headers,
+        app=app,
+        request_id=uuid.uuid4().hex[:12],
         # "https" when Uvicorn served this request over TLS (#1339).
-        self._prks_scheme = "https" if scope.get("scheme") == "https" else "http"
-        self.request_version = f"HTTP/{scope.get('http_version', '1.1')}"
-        self.requestline = f"{self.command} {self.path} {self.request_version}"
-        self.raw_requestline = self.requestline.encode("latin-1", "replace") + b"\r\n"
-        self.close_connection = True
-        self.headers = _headers(scope)
-        self.rfile = rfile
-        self.wfile = wfile
-        self.connection = connection
-        self.request = connection
-        self._prks_unread_body = False
+        scheme="https" if scope.get("scheme") == "https" else "http",
+        peer=(str(client[0]), int(client[1])),
+        body=_Body(bridge, receiver, _declared_length(headers)),
+    )
 
-    def run(self) -> None:
-        """Check the request head, then dispatch to ``do_<METHOD>``."""
-        try:
-            head_bytes = len(self.raw_requestline) + 2 + sum(
-                len(name) + len(value) + 4 for name, value in self.headers.items()
-            )
-            if len(self.headers) > MAX_HEADERS or head_bytes > MAX_REQUEST_HEAD_BYTES or any(
-                len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in self.headers.items()
-            ):
-                self.send_error(431, "Request header fields too large")
-                return
-            if len(self.raw_requestline) > MAX_LINE_BYTES:
-                self.send_error(414, "Request-URI Too Long")
-                return
-            if not self._prks_after_parse():
-                return
-            method = getattr(self, "do_" + self.command, None)
-            if method is None:
-                self.send_error(501, "Unsupported method")
-                return
-            method()
-        finally:
-            self._prks_finish_request()
 
+def _head_refusal(request: Request, http_version: str) -> Optional[Response]:
+    """431/414 for a request head past PRKS's limits (h11 parses up to twice them)."""
+    request_line = len(f"{request.method} {request.target} HTTP/{http_version}".encode("latin-1", "replace")) + 2
+    fields = request.headers.items()
+    head_bytes = request_line + 2 + sum(len(name) + len(value) + 4 for name, value in fields)
+    if len(fields) > MAX_HEADERS or head_bytes > MAX_REQUEST_HEAD_BYTES or any(
+        len(name) + len(value) + 4 > MAX_LINE_BYTES for name, value in fields
+    ):
+        return error_response(431, "Request header fields too large")
+    if request_line > MAX_LINE_BYTES:
+        return error_response(414, "Request-URI Too Long")
+    return None
 
 class _Workers:
     """Reused daemon threads that run PRKS request work.
@@ -581,20 +505,26 @@ class PrksAsgiApp:
         send: Send,
     ) -> None:
         bridge = _Bridge(loop)
-        connection = _Connection()
-        writer = _ResponseWriter(bridge, send, receiver)
-        handler: Optional[_AsgiHandler] = None
+        request: Optional[Request] = None
+        response: Optional[Response] = None
         try:
-            handler = _AsgiHandler(scope, self._server, _RequestBody(bridge, receiver, connection), writer, connection)
-            handler.run()
-            writer.finish()
+            request = _request(scope, self._server.prks_app, bridge, receiver)
+            begin(request)
+            try:
+                response = _head_refusal(request, str(scope.get("http_version", "1.1"))) or dispatch(request)
+                finalize(request, response)
+                _Sender(bridge, send, receiver).respond(response, head_only=request.method == "HEAD")
+            finally:
+                if response is not None and response.cleanup is not None:
+                    response.cleanup()
+                finish(request)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception as exc:  # logged metadata-only; the connection closes
             LOGGER.error(
                 "http_request_failed error_type=%s request_id=%s",
                 safe_error_type(exc),
-                safe_log_id(handler._prks_request_id if handler is not None else ""),
+                safe_log_id(request.request_id if request is not None else ""),
             )
         finally:
             with contextlib.suppress(RuntimeError):  # the loop has closed
@@ -605,7 +535,7 @@ async def _send_busy(send: Send, *, https: bool) -> None:
     """503 for a request over the wait-list bound, without starting a thread.
 
     It carries the security headers, and HSTS over PRKS's own TLS, like every
-    ``PRKSHandler`` answer.
+    other answer.
     """
     LOGGER.info("request_rejected reason=server_busy")
     headers = [
@@ -615,12 +545,12 @@ async def _send_busy(send: Send, *, https: bool) -> None:
         (b"retry-after", b"1"),
         *(
             (name.lower().encode("ascii"), value.encode("ascii"))
-            for name, value in server_module.SECURITY_HEADERS
+            for name, value in SECURITY_HEADERS
         ),
         (b"connection", b"close"),
     ]
     if https:
-        headers.append((b"strict-transport-security", server_module.HSTS_VALUE.encode("ascii")))
+        headers.append((b"strict-transport-security", HSTS_VALUE.encode("ascii")))
     await send({"type": "http.response.start", "status": 503, "headers": headers})
     await send({"type": "http.response.body", "body": _BUSY_BODY, "more_body": False})
 
@@ -695,28 +625,24 @@ class _Server(uvicorn.Server):
 
 
 class UvicornServing:
-    """``backend.jobs.embedded.Serving`` over Uvicorn, with the ``prks_*`` attributes.
+    """``backend.jobs.embedded.Serving`` over Uvicorn, serving one :class:`App`.
 
     The listening socket is bound here, so a bind failure surfaces before
-    serving, as ``TCPServer`` did, and ``server_address`` is known at once.
+    serving, and ``server_address`` is known at once. ``prks_app`` is what
+    the routes serve; the composition root may finish it (identity, jobs,
+    readiness) before :meth:`serve_forever`.
     """
-
-    prks_bind_host: str
-    prks_trusted_hosts: frozenset[str]
-    prks_auth: Any
-    prks_jobs: Any
-    prks_readiness: Any
-    # The setup phase of a first run (backend.api.setup, #612); None otherwise.
-    prks_setup: Any = None
 
     def __init__(
         self,
         address: tuple[str, int],
+        prks_app: App,
         *,
         threads: int,
         tls_cert_file: Optional[str] = None,
         tls_key_file: Optional[str] = None,
     ) -> None:
+        self.prks_app = prks_app
         self._socket = socket.create_server(address, family=socket.AF_INET, backlog=128)
         self.server_address: tuple[str, int] = self._socket.getsockname()[:2]
         self._threads = threads
