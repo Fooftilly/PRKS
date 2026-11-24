@@ -1,9 +1,9 @@
 """Tags, their aliases, delete and merge on PostgreSQL (L-O-1 #633).
 
-SQLite's rules (``backend/tag_sync.py``, ``PRKSDatabase``'s tag methods),
+SQLite's rules (``backend/domain/organization/tag_rules.py``, ``PRKSDatabase``'s tag methods),
 with names compared by identity key (``prks.identity_key``, §8.1) instead of
 SQLite's ASCII-only ``LOWER``. The name and payload rules are imported from
-``tag_sync``.
+``tag_rules``.
 
 A Tag's name and every Tag's aliases are one namespace, held by
 ``tag_keys`` (one row per name or alias, ``UNIQUE (library_id, key)``), as
@@ -15,7 +15,7 @@ one name therefore make one Tag, an alias and a name can never collide, and
 a merge's new alias (the source's name) reuses the key the source's delete
 frees in the same transaction.
 
-Tag identity is persistent (``tag_sync``): only :func:`delete_tag` and
+Tag identity is persistent (``tag_rules``): only :func:`delete_tag` and
 :func:`merge` destroy or transform a Tag, and both keep its lifecycle row,
 move or remove its links through :func:`links.set_state` (so every link's
 scope advances) and report the Works and Folders whose rendered tags change.
@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, LiteralString, Optional
 
-from backend import tag_sync as rules
+from backend.domain.organization import tag_rules as rules
 from backend import tag_color
 from backend.tag_color import normalized_tag_color
 from backend.domain.identity.library_scope import LibraryScope

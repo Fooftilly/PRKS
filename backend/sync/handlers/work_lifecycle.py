@@ -1,6 +1,6 @@
 """``CREATE_WORK`` and ``DELETE_WORK`` on PostgreSQL (L-W-1 #628).
 
-The family's rules (``backend/work_lifecycle_sync.py``), imported:
+The family's rules (``backend/domain/works/lifecycle_rules.py``), imported:
 construction is a video only, its payload is validated and canonicalized by
 ``canonical_create_payload``, and its source by ``_canonical_new_source``,
 the boundary ``add_work`` and ``SET_WORK_SOURCE`` share. A create of an id
@@ -28,7 +28,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, LiteralString, Optional
 
-from backend import work_lifecycle_sync as rules
+from backend.domain.works import lifecycle_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope

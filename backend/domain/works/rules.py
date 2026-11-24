@@ -15,7 +15,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from backend import work_metadata_sync, work_source_sync
+from backend.domain.works import metadata_rules
+from backend.domain.works import source_rules
 from backend.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
 from backend.performance import clock_ns, record_counter, record_span
 
@@ -103,7 +104,7 @@ def parse_bulk_work_request(data: Any) -> BulkWorkRequest:
     if action == "set_status":
         raw_status = data.get("status")
         if not isinstance(raw_status, str) or \
-                not work_metadata_sync.is_valid_field_value("status", raw_status):
+                not metadata_rules.is_valid_field_value("status", raw_status):
             raise BulkWorkError("Invalid status.")
         return BulkWorkRequest(action, work_ids, status=raw_status)
     if action == "move_folder":
@@ -277,7 +278,7 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id, file_p
         # inventing one would be a claim about a file it does not have.
         return (kind or None), source_url, provider, provider_id
 
-    canonical = work_source_sync.canonical_source({"kind": "video", "url": url})
+    canonical = source_rules.canonical_source({"kind": "video", "url": url})
     if canonical is None:
         raise ValueError(
             "a video Work needs a supported video URL: %s is not one"
@@ -295,7 +296,7 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id, file_p
 
 def normalize_doc_type(value: Any) -> str:
     """Map user/API input to a whitelisted BibLaTeX entry type; unknown → misc."""
-    return work_metadata_sync.normalize_doc_type(value)
+    return metadata_rules.normalize_doc_type(value)
 
 
 def _decode_linked_people(rows: Optional[List[dict]]) -> None:

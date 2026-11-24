@@ -1,6 +1,6 @@
 """Work metadata fields on PostgreSQL: per-field revisions (L-W-1 #628).
 
-The rules are ``backend/work_metadata_sync.py``'s, imported rather than
+The rules are ``backend/domain/works/metadata_rules.py``'s, imported rather than
 copied, so the two backends cannot drift on what a valid value is, what its
 canonical spelling is, or how big a conflict result may be: one revision
 scope per field (``work-field / ["W-…","field"]``), only a change advances
@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Mapping, Optional
 
-from backend import work_metadata_sync as rules
+from backend.domain.works import metadata_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions

@@ -9,12 +9,12 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   revision would demand a resolution for a collision that never happened. Scope
   is `work-field / ["<work id>", "<field>"]` in the existing
   `sync_entity_revisions` table -- no schema change.
-- `backend/work_metadata_sync.SYNCED_FIELDS` is the authoritative registry of
+- `backend/domain/works/metadata_rules.SYNCED_FIELDS` is the authoritative registry of
   which fields synchronize -- consult it rather than any count written in prose.
   It holds `status` (2H), `author_text` (2I), `year`, `published_date` (2G),
   `abstract`, `publisher`, `location`, `edition`, `journal`, `volume`, `issue`,
   `pages`, `isbn` and `doi`.
-  `backend/work_metadata_sync.SYNCED_FIELDS` is the authority and the client
+  `backend/domain/works/metadata_rules.SYNCED_FIELDS` is the authority and the client
   list is pinned against it by `tests/test_frontend_work_metadata_sync.py`.
   Never accept a column name from a client.
 - **`abstract` is the large one.** `MAX_ABSTRACT_UTF8_BYTES` is 1 MiB, enforced
@@ -251,7 +251,7 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
 - **Identity is `provider` + `provider_id`, never the URL spelling.**
   `watch?v=A`, `youtu.be/A` and `embed/A` are ONE source: moving between them
   is no revision, no conflict and no write.
-- **ONE parser**, in `work_source_sync`. Work creation imports it from there.
+- **ONE parser**, in `source_rules`. Work creation imports it from there.
   Two parsers would eventually disagree, and the disagreement would surface as
   a Work whose stored URL and stored id name different videos. A cross-language
   test drives 14 URL spellings through both implementations.
@@ -297,11 +297,11 @@ This leaf contains current Work metadata/source/open/tag durable-operation rules
   clock cannot pin a Work to the top of Recent. An OLD timestamp is legitimate
   and is never rejected -- the max-register makes it a harmless no-op.
 - Values are stored as `YYYY-MM-DD HH:MM:SS.mmm` UTC
-  (`work_open_sync.format_moment`). Second-resolution rows written before this
+  (`open_rules.format_moment`). Second-resolution rows written before this
   milestone stay valid and keep sorting correctly, because `12:00:00` is a
   prefix of `12:00:00.250`. No destructive migration for precision.
 - `POST /api/works/:id/opened` and the sync handler share
-  `work_open_sync.set_opened_at()`. One column, one meaning.
+  `open_rules.set_opened_at()`. One column, one meaning.
 - Only never-sent open events coalesce, per Work, keeping the latest instant. A
   SENT event is left alone: it may already be ledgered, and it does not need
   cancelling, because applying two open events in either order converges.
@@ -328,8 +328,8 @@ remain connection-required. The Work-Tag implementation contract is in
   `sync-runtime.js` alone owns semantic transport, one in-flight operation and
   bounded retry. Never queue arbitrary URLs/methods/request bodies.
 - `POST /api/sync/operations` dispatches every registered durable operation
-  (Work Tags among many others; see `backend/sync_protocol.py`).
-  `backend/work_tag_sync.py` shares connection-aware
+  (Work Tags among many others; see `backend/sync/envelope.py`).
+  `backend/domain/organization/work_tag_rules.py` shares connection-aware
   canonical relationship helpers with direct add/remove, bulk, merge and delete.
   Domain writes, revision advancement and ledger insertion commit together.
 - Schema 14 sync_operations, sync_entity_revisions and sync_tag_lifecycle are

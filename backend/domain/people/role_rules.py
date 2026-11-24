@@ -1,8 +1,9 @@
 """Work-Person ROLE relationships: revisions and the
 ADD_WORK_PERSON_ROLE / REMOVE_WORK_PERSON_ROLE handler.
 
-The generic envelope, request hash, ledger and dispatch live in
-`sync_protocol`. Everything here is what a Work-Person role MEANS.
+The generic envelope, request hash and operation registry live in
+`backend.sync.envelope`; the ledger and dispatch live in
+`backend.sync.protocol`. Everything here is what a Work-Person role MEANS.
 
 Why an element conflict unit rather than an ordered aggregate
 -------------------------------------------------------------

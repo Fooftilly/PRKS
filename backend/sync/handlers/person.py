@@ -1,7 +1,7 @@
 """``CREATE_PERSON``, ``DELETE_PERSON`` and ``SET_PERSON_METADATA_FIELD`` on PostgreSQL (L-P-1 #632).
 
-Validated by the families' rules (``backend/person_sync.py``,
-``backend/person_metadata_sync.py``) and decided by
+Validated by the families' rules (``backend/domain/people/person_rules.py``,
+``backend/domain/people/person_metadata_rules.py``) and decided by
 :mod:`backend.domain.people.persons`, the commands behind the facade.
 
 Creation is construction: the id is client-minted, a create of an id that
@@ -25,8 +25,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import person_metadata_sync as field_rules
-from backend import person_sync as rules
+from backend.domain.people import person_metadata_rules as field_rules
+from backend.domain.people import person_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope

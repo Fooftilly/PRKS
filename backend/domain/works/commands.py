@@ -25,7 +25,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import LiteralString, Optional
 
-from backend import folder_sync, playlist_sync, work_metadata_sync, work_note_sync, work_source_sync
+from backend.domain.organization import folder_rules
+from backend.domain.organization import playlist_rules
+from backend.domain.works import metadata_rules
+from backend.domain.works import note_rules
+from backend.domain.works import source_rules
 from backend.domain.annotations import store as annotation_store
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.objects import lifecycle
@@ -240,7 +244,7 @@ RETURNING to_char(last_opened_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.MS')
 
 def mark_opened(scope: LibraryScope, work_id: str,
                 moment: datetime) -> tuple[bool, bool, Optional[str]]:
-    """``work_open_sync.set_opened_at``: a max-register at millisecond precision.
+    """``open_rules.set_opened_at``: a max-register at millisecond precision.
 
     Returns ``(work_exists, changed, effective_value)``, the value in
     SQLite's text form. An event at or before the recorded one changes
@@ -321,13 +325,13 @@ def work_scopes(work_id: str) -> list[tuple[str, str]]:
     does for its pairs.
     """
     fields = [(metadata.SCOPE_TYPE, metadata.scope_id(work_id, field))
-              for field in sorted(work_metadata_sync.SYNCED_FIELDS)]
+              for field in sorted(metadata_rules.SYNCED_FIELDS)]
     return [*fields,
-            (work_source_sync.SCOPE_TYPE, work_source_sync.scope_key(work_id)),
-            (work_note_sync.RESEARCH_SCOPE_TYPE, work_id),
-            (work_note_sync.PRIVATE_SCOPE_TYPE, work_id),
-            (folder_sync.WORK_SCOPE_TYPE, work_id),
-            (playlist_sync.WORK_SCOPE_TYPE, work_id)]
+            (source_rules.SCOPE_TYPE, source_rules.scope_key(work_id)),
+            (note_rules.RESEARCH_SCOPE_TYPE, work_id),
+            (note_rules.PRIVATE_SCOPE_TYPE, work_id),
+            (folder_rules.WORK_SCOPE_TYPE, work_id),
+            (playlist_rules.WORK_SCOPE_TYPE, work_id)]
 
 
 def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) -> Optional[DeletedWork]:

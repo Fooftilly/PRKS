@@ -73,7 +73,7 @@ _CHILD_COUNT_SQL: LiteralString = """
 SELECT count(*) AS n FROM prks.person_groups
 WHERE library_id = %(library_id)s AND parent_id = %(group_id)s
 """
-# ``person_sync.catalog_row_on_conn`` lists a new Person's groups by id.
+# ``person_rules.catalog_row_on_conn`` lists a new Person's groups by id.
 _GROUP_CHIPS_BY_ID_SQL: LiteralString = """
 SELECT g.id, g.name FROM prks.person_groups g
 JOIN prks.person_group_members m ON m.library_id = g.library_id AND m.group_id = g.id
@@ -141,7 +141,7 @@ def person_detail(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any
 
 
 def person_catalog_row(scope: LibraryScope, person_id: str) -> Optional[dict[str, Any]]:
-    """``person_sync.catalog_row_on_conn``: what ``CREATE_PERSON`` acknowledges with.
+    """``person_rules.catalog_row_on_conn``: what ``CREATE_PERSON`` acknowledges with.
 
     The profile row with ``assigned_roles``, ``works`` (always empty: the
     client reads them separately) and ``groups`` by id.

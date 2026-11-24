@@ -44,7 +44,7 @@
         'chicago-notes-bibliography', 'modern-language-association',
         'harvard-cite-them-right', 'ieee', 'nlm-citation-sequence']);
     const IMPORTED_STYLE_ID = /^custom-[0-9a-f]{32}$/;
-    /* Mirrors `work_metadata_sync.WORK_STATUSES`. Status is the first
+    /* Mirrors `metadata_rules.WORK_STATUSES`. Status is the first
      * synchronized field validated by an ALLOWLIST rather than a length: a
      * value outside it is not "too long", it is not a status at all. */
     const WORK_STATUSES = Object.freeze(
@@ -87,7 +87,7 @@
         citation_style: 'Citation style',
     });
     /* Cached projections other than the Work that carry a synchronized field.
-     * Mirrors `work_metadata_sync.FIELD_PROJECTIONS`; the parity is pinned by
+     * Mirrors `metadata_rules.FIELD_PROJECTIONS`; the parity is pinned by
      * `tests/test_frontend_work_metadata_sync.py`. */
     const BROWSE_LISTS = Object.freeze(['works-browse', 'recent', 'recently-added']);
     const FIELD_PROJECTIONS = Object.freeze({
@@ -127,7 +127,7 @@
     const SUMMARY_FIELDS = Object.freeze(['title', 'status', 'doc_type', 'thumb_page',
         'author_text', 'year', 'published_date', 'publisher', 'source_url']);
 
-    /* Mirrors `backend/work_metadata_sync.BYTE_LIMITS`: fields whose bound is a
+    /* Mirrors `backend/domain/works/metadata_rules.BYTE_LIMITS`: fields whose bound is a
      * storage limit rather than a display one, measured in UTF-8 BYTES because
      * that is the unit storage and transport actually use.
      *
@@ -242,7 +242,7 @@
             toCanonical: draft => canonical(draft).trim(),
         },
         /* A 1-based page number, or nothing. Mirrors
-         * `backend/work_metadata_sync._ThumbPageCodec`, including its refusal
+         * `backend/domain/works/metadata_rules._ThumbPageCodec`, including its refusal
          * to accept "+3", fullwidth digits or "1_0": a page number nobody
          * typed on purpose is not a page number, and two devices holding
          * different spellings of the same page would disagree about having

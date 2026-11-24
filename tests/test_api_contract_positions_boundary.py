@@ -297,7 +297,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             )
 
     def test_sync_state_fields_require_name_and_description_only(self):
-        """Sync-state fields is a fixed map matching position_sync.FIELDS."""
+        """Sync-state fields is a fixed map matching position_rules.FIELDS."""
         ok = {
             "position_id": "P-TEST",
             "fields": {

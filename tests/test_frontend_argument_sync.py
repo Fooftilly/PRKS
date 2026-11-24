@@ -3,7 +3,8 @@ import pathlib
 import subprocess
 import unittest
 
-from backend import argument_sync, sync_protocol
+from backend.domain.research import argument_rules
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
@@ -30,7 +31,7 @@ class ArgumentSyncFrontendTests(unittest.TestCase):
             "CREATE_ARGUMENT", "SET_ARGUMENT_FIELD", "SET_ARGUMENT_SOURCES",
             "SET_ARGUMENT_TARGETS", "DELETE_ARGUMENT",
         }
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (JS / "sync-runtime.js").read_text()
         diagnostics = (JS / "sync-diagnostics.js").read_text()
         for family in families:
@@ -100,8 +101,8 @@ class ArgumentSyncFrontendTests(unittest.TestCase):
         self.assertIn("sources: sources, targets: targets", create)
         self.assertNotIn("SET_ARGUMENT_SOURCES", create)
         self.assertNotIn("SET_ARGUMENT_TARGETS", create)
-        self.assertEqual(argument_sync.SOURCES_SCOPE_TYPE, "argument-sources")
-        self.assertEqual(argument_sync.TARGETS_SCOPE_TYPE, "argument-targets")
+        self.assertEqual(argument_rules.SOURCES_SCOPE_TYPE, "argument-sources")
+        self.assertEqual(argument_rules.TARGETS_SCOPE_TYPE, "argument-targets")
         backend = (ROOT / "backend/domain/research/arguments.py").read_text()
         self.assertIn("argument_target_positions", backend)
         self.assertIn("argument_target_arguments", backend)

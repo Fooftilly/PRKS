@@ -14,8 +14,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend import sync_protocol
-from backend.concept_sync import MAX_PARENTS, scope_key
+from backend.sync import envelope
+from backend.domain.research.concept_rules import MAX_PARENTS, scope_key
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.research import concepts
 from backend.domain.research.rules import CONCEPT_NAME_MAX, ResearchError
@@ -53,7 +53,7 @@ class ConceptSyncTestCase(SyncTestCase, ConceptTestCase):  # pyright: ignore[rep
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
 

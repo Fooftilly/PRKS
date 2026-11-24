@@ -1,6 +1,6 @@
 """``ADD/REMOVE_WORK_TAG`` and ``ADD/REMOVE_FOLDER_TAG`` on PostgreSQL (L-O-1 #633).
 
-Validated by ``backend/work_tag_sync.py``'s and ``folder_tag_sync.py``'s
+Validated by ``backend/domain/organization/work_tag_rules.py``'s and ``folder_tag_rules.py``'s
 rules and decided by :func:`backend.domain.organization.links.apply_operation`,
 result for result: a missing owner or Tag is ``ENTITY_NOT_FOUND``, a deleted
 Tag ``TAG_DELETED``, a merged one ``TAG_MERGED`` with its target (never
@@ -20,7 +20,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from backend import folder_tag_sync, work_tag_sync
+from backend.domain.organization import folder_tag_rules
+from backend.domain.organization import work_tag_rules
 from backend.db.database import Isolation
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links
@@ -38,8 +39,8 @@ def _applier(link: links.Link) -> Callable[[LibraryScope, dict[str, Any], dateti
     return apply
 
 
-ADD_WORK_HANDLER = FamilyHandler(work_tag_sync.validate, _applier(links.WORK), isolation=Isolation.SERIALIZABLE)
-REMOVE_WORK_HANDLER = FamilyHandler(work_tag_sync.validate, _applier(links.WORK))
-ADD_FOLDER_HANDLER = FamilyHandler(folder_tag_sync.validate, _applier(links.FOLDER),
+ADD_WORK_HANDLER = FamilyHandler(work_tag_rules.validate, _applier(links.WORK), isolation=Isolation.SERIALIZABLE)
+REMOVE_WORK_HANDLER = FamilyHandler(work_tag_rules.validate, _applier(links.WORK))
+ADD_FOLDER_HANDLER = FamilyHandler(folder_tag_rules.validate, _applier(links.FOLDER),
                                    isolation=Isolation.SERIALIZABLE)
-REMOVE_FOLDER_HANDLER = FamilyHandler(folder_tag_sync.validate, _applier(links.FOLDER))
+REMOVE_FOLDER_HANDLER = FamilyHandler(folder_tag_rules.validate, _applier(links.FOLDER))

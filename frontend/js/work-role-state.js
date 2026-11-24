@@ -2,7 +2,7 @@
  * Work-Person ROLE relationships on the client: the pending overlay, the
  * effective link list, and the family's sync handler.
  *
- * Mirrors `backend/work_role_sync.py`. The conflict unit is one element --
+ * Mirrors `backend/domain/people/role_rules.py`. The conflict unit is one element --
  * `(work, person, role)` -- and its canonical state is `null` (absent) or a
  * credit-name string (present; `''` means no override). Presence alone is not
  * the state: `credit_name` is the name printed on THIS work, and it reaches
@@ -16,7 +16,7 @@
 (function (root) {
     'use strict';
 
-    /* Mirrors `backend/work_role_sync.ROLE_TYPES`. Pinned by
+    /* Mirrors `backend/domain/people/role_rules.ROLE_TYPES`. Pinned by
      * tests/test_frontend_work_role_sync.py. */
     const ROLE_TYPES = Object.freeze(['Author', 'Editor', 'Reviewer', 'Mentioned',
         'Translator', 'Introduction', 'Foreword', 'Afterword']);

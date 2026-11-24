@@ -1,7 +1,7 @@
 """``CREATE_ARGUMENT``, ``SET_ARGUMENT_FIELD``, ``SET_ARGUMENT_SOURCES``, ``SET_ARGUMENT_TARGETS``
 and ``DELETE_ARGUMENT`` on PostgreSQL (L-R-1 #634).
 
-Validated by ``backend/argument_sync.py``'s rules and decided by
+Validated by ``backend/domain/research/argument_rules.py``'s rules and decided by
 :mod:`backend.domain.research.arguments`, result for result, with one
 refusal SQLite never makes: a citation whose Version the legacy list cannot
 name is ``ARGUMENT_SOURCE_VERSION_REQUIRED`` (``docs/work-identity-model.md``
@@ -32,7 +32,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import argument_sync as rules
+from backend.domain.research import argument_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
@@ -45,7 +45,7 @@ _VERSIONED_KEYS = frozenset({"work_id", "manifestation_id", "pages"})
 
 
 def _check_versioned_sources(sources: list[Any]) -> None:
-    """``argument_sync._check_sources_shape`` for a Version-aware list.
+    """``argument_rules._check_sources_shape`` for a Version-aware list.
 
     Each entry carries all three keys, ``manifestation_id`` a Version id or
     ``null``; whether the Work and the Version exist, and belong together,

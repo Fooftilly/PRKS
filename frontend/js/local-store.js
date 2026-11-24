@@ -151,7 +151,7 @@
      * -- otherwise any future operation would inherit a large payload merely
      * by existing after this milestone.
      *
-     * Mirrors `backend/work_metadata_sync.BYTE_LIMITS`. The durable store is
+     * Mirrors `backend/domain/works/metadata_rules.BYTE_LIMITS`. The durable store is
      * the last place a value can be refused before it becomes durable user
      * data, so it has to know the same numbers the server and the editor use
      * -- a value the editor accepted and the store rejected would be an edit
@@ -163,17 +163,17 @@
         source_url: 64 * 1024,
     });
     const MAX_ABSTRACT_VALUE_BYTES = WORK_FIELD_VALUE_BYTES.abstract;
-    /* Mirrors `backend/work_source_sync.MAX_SOURCE_URL_UTF8_BYTES`. Deliberately
+    /* Mirrors `backend/domain/works/source_rules.MAX_SOURCE_URL_UTF8_BYTES`. Deliberately
      * a separate constant from WORK_FIELD_VALUE_BYTES.source_url: that one
      * bounds PROVENANCE on a non-video Work, this one bounds the aggregate's
      * URL. They are equal today and are free to diverge. */
     const WORK_SOURCE_URL_BYTES = 64 * 1024;
-    /* Mirrors `backend/work_note_sync` body caps. Research Notes are the
+    /* Mirrors `backend/domain/works/note_rules` body caps. Research Notes are the
      * large whole-document aggregate; Private Notes stay a reminder. Bounded
      * on the VALUE, not its JSON encoding, for the same reason abstracts are. */
     const WORK_RESEARCH_NOTE_BYTES = 32 * 1024 * 1024;
     const WORK_PRIVATE_NOTE_BYTES = 64 * 1024;
-    /* Mirrors `backend/playlist_sync.MAX_ITEMS`. An order travels as ONE
+    /* Mirrors `backend/domain/organization/playlist_rules.MAX_ITEMS`. An order travels as ONE
      * payload -- that is what makes it an aggregate -- so the number of videos
      * it can name is bounded by what an envelope may carry. */
     const PLAYLIST_MAX_ITEMS = 1000;
@@ -329,7 +329,7 @@
     const ARGUMENT_FIELDS = Object.freeze(['name', 'kind', 'main_text']);
     const ARGUMENT_KINDS = Object.freeze(['argument', 'stance']);
 
-    /* Mirrors `backend/argument_sync.MAX_SOURCES` / `MAX_TARGETS`. Each list
+    /* Mirrors `backend/domain/research/argument_rules.MAX_SOURCES` / `MAX_TARGETS`. Each list
      * travels as ONE payload -- that is what makes it an aggregate -- so what
      * it can name is bounded by what an envelope may carry. */
     const ARGUMENT_MAX_SOURCES = 200;
@@ -354,7 +354,7 @@
      * one aggregate under `SET_CONCEPT_IDENTITY` rather than fields. */
     const CONCEPT_FIELDS = Object.freeze(['description']);
 
-    /* Mirrors `backend/concept_sync.MAX_ALIASES` / `MAX_PARENTS`. Both travel
+    /* Mirrors `backend/domain/research/concept_rules.MAX_ALIASES` / `MAX_PARENTS`. Both travel
      * as ONE payload -- that is what makes each an aggregate -- so what they
      * can name is bounded by what an envelope may carry. */
     const CONCEPT_MAX_ALIASES = 64;

@@ -4,7 +4,8 @@ import re
 import subprocess
 import unittest
 
-from backend import playlist_sync, sync_protocol
+from backend.domain.organization import playlist_rules
+from backend.sync import envelope
 from tests.narrowing import must_search
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
     def setUp(self):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'playlist-state.js').read_text()
-        self.backend = (ROOT / 'backend' / 'playlist_sync.py').read_text()
+        self.backend = (ROOT / 'backend' / 'domain' / 'organization' / 'playlist_rules.py').read_text()
         self.domain = (ROOT / 'backend' / 'domain' / 'organization' / 'playlists.py').read_text()
 
     def domain_function(self, name):
@@ -46,17 +47,17 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
 
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const PLAYLIST_FIELDS =')
-        self.assertEqual(sorted(client), sorted(playlist_sync.FIELDS))
+        self.assertEqual(sorted(client), sorted(playlist_rules.FIELDS))
         labels = self.state[self.state.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in playlist_sync.FIELDS:
+        for field in playlist_rules.FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
     def test_every_family_is_registered_on_both_sides(self):
         families = {'CREATE_PLAYLIST', 'SET_PLAYLIST_FIELD', 'REORDER_PLAYLIST_ITEMS',
                     'DELETE_PLAYLIST', 'SET_WORK_PLAYLIST'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -78,7 +79,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         Modelling it from the playlist's end would have made moving one video
         between two playlists a change neither playlist's revision
         described."""
-        self.assertEqual(playlist_sync.WORK_SCOPE_TYPE, 'work-playlist')
+        self.assertEqual(playlist_rules.WORK_SCOPE_TYPE, 'work-playlist')
         at = self.store.index('function setWorkPlaylist(')
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('base_revision: observed.revision', body)
@@ -98,7 +99,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
     def test_the_order_is_an_aggregate_not_racing_positions(self):
         """Two devices that each dragged one video produced two whole orders.
         Merging them index by index would invent a third neither chose."""
-        self.assertEqual(playlist_sync.ORDER_SCOPE_TYPE, 'playlist-order')
+        self.assertEqual(playlist_rules.ORDER_SCOPE_TYPE, 'playlist-order')
         self.assertNotIn('order_index', self.store)
         self.assertNotIn('order_index', self.state)
         at = self.store.index('function reorderPlaylistItems(')
@@ -114,7 +115,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
         carries."""
         at = self.store.index('const PLAYLIST_MAX_ITEMS =')
         value = int(must_search(r'= (\d+);', self.store[at: at + 60]).group(1))
-        self.assertEqual(value, playlist_sync.MAX_ITEMS)
+        self.assertEqual(value, playlist_rules.MAX_ITEMS)
 
     def test_a_video_title_keeps_using_the_work_metadata_family(self):
         """Renaming a video from a playlist page changes a Work, not playlist

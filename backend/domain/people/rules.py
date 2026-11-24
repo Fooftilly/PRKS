@@ -5,7 +5,7 @@ Pure: no store. Moved from ``PRKSDatabase`` in ``backend/db_manager.py``.
 
 from __future__ import annotations
 
-from backend import work_role_sync
+from backend.domain.people import role_rules
 
 
 def eligible_initial_roles(roles) -> list:
@@ -19,7 +19,7 @@ def eligible_initial_roles(roles) -> list:
     for idx, r in enumerate(roles if isinstance(roles, list) else []):
         if not isinstance(r, dict) or not r.get('person_id') or not r.get('role_type'):
             continue
-        if r['role_type'] not in work_role_sync.ROLE_TYPE_SET:
+        if r['role_type'] not in role_rules.ROLE_TYPE_SET:
             continue
         credit = r.get('credit_name', '')
         if credit is not None and not isinstance(credit, str):

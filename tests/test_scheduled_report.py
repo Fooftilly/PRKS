@@ -144,7 +144,7 @@ class FailureIssueTests(unittest.TestCase):
 
 def _result(survived: int, target: str = "sync-envelope") -> MutationResult:
     stats = {"total": 10, "killed": 10 - survived, "survived": survived, "no_tests": 0, "timeout": 0}
-    return MutationResult(target, stats, (("backend.sync_protocol.x_f", survived),) if survived else ())
+    return MutationResult(target, stats, (("backend.sync.envelope.x_f", survived),) if survived else ())
 
 
 class MutationReportTests(unittest.TestCase):
@@ -174,7 +174,7 @@ class MutationReportTests(unittest.TestCase):
         bodies = gh.bodies(number)
         self.assertEqual(len(bodies), 3)
         self.assertIn("survivors went from 1 to 3", bodies[2])
-        self.assertIn("| `backend.sync_protocol.x_f` | 3 |", bodies[0])
+        self.assertIn("| `backend.sync.envelope.x_f` | 3 |", bodies[0])
         self.assertTrue(bodies[1].startswith("<!-- mutation-report:text-identity survived=1 -->"))
 
     def test_a_failed_notification_is_retried_by_the_next_run(self):
@@ -239,7 +239,7 @@ class MutationReportTests(unittest.TestCase):
     def test_the_runner_writes_what_the_reporter_reads(self):
         from scripts.ci import mutation_testing
 
-        names = ["backend.sync_protocol.x_f__mutmut_1", "backend.sync_protocol.x_f__mutmut_2"]
+        names = ["backend.sync.envelope.x_f__mutmut_1", "backend.sync.envelope.x_f__mutmut_2"]
         stats = {"total": 5, "killed": 3, "survived": 2, "no_tests": 0, "timeout": 0}
         with tempfile.TemporaryDirectory() as folder:
             output = Path(folder) / "out"
@@ -249,7 +249,7 @@ class MutationReportTests(unittest.TestCase):
         self.assertEqual(key, "result-sync-envelope")
         found, missing = report.results_from_outputs(json.dumps({key: value}), ["sync-envelope"])
         self.assertEqual(missing, [])
-        self.assertEqual(found[0], MutationResult("sync-envelope", stats, (("backend.sync_protocol.x_f", 2),)))
+        self.assertEqual(found[0], MutationResult("sync-envelope", stats, (("backend.sync.envelope.x_f", 2),)))
 
     def test_the_dry_run_fails_when_a_target_handed_over_nothing(self):
         from scripts.ci.mutation_testing import TARGETS

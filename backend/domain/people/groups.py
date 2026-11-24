@@ -1,6 +1,6 @@
 """Person Groups and their members on PostgreSQL (L-P-1 #632).
 
-The rules are ``backend/person_group_sync.py``'s, imported rather than
+The rules are ``backend/domain/people/group_rules.py``'s, imported rather than
 copied: the field vocabulary and bounds, the canonical spelling, the rule
 codes (``GroupRuleError``) and the decision tables. One scope per field
 (``person-group-field / ["PG-…","field"]``) and one per membership pair
@@ -32,11 +32,11 @@ import json
 from typing import Any, LiteralString, Optional
 
 import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import person_group_sync as rules
-from backend import work_metadata_sync as meta
+from backend.domain.people import group_rules as rules
+from backend.domain.works import metadata_rules as meta
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
-from backend.person_group_sync import GroupRuleError
+from backend.domain.people.group_rules import GroupRuleError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 MEMBER_SCOPE_TYPE = rules.MEMBER_SCOPE_TYPE

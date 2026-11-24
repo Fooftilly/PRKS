@@ -12,7 +12,7 @@ Some backend invariants are written in `frontend/AGENTS.md` and the docs it rout
 
 ### Offline / sync / local-first
 
-Before changing `*_sync.py`, `sync_protocol.py`, durable-operation handlers, conflict/revision semantics, acknowledgement/ledger behavior, or other offline/local-first backend surfaces:
+Before changing the family rule modules (`backend/domain/*/*_rules.py`, `backend/domain/annotations/rules.py`), `backend/sync/`, durable-operation handlers, conflict/revision semantics, acknowledgement/ledger behavior, or other offline/local-first backend surfaces:
 
 1. read `docs/agent-rules/offline-pwa.md` as the rule router;
 2. use `docs/agent-context/sync-map.md` to load `offline-foundations.md` plus only the relevant domain leaf files and semantic sections;

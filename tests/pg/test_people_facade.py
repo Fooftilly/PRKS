@@ -21,11 +21,11 @@ from unittest import mock
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
 from backend.domain.identity.library_scope import LibraryScope, library_command
-from backend import person_group_sync as group_rules
-from backend import person_metadata_sync as person_rules
+from backend.domain.people import group_rules as group_rules
+from backend.domain.people import person_metadata_rules as person_rules
 from backend.domain.people import groups, persons, publishers, queries
 from tests import acting_context as facade_context
-from backend.person_group_sync import GroupRuleError
+from backend.domain.people.group_rules import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from tests.narrowing import require
 

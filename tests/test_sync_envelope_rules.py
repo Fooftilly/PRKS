@@ -1,4 +1,4 @@
-"""Exact rules of the shared sync envelope (``backend.sync_protocol``), no database.
+"""Exact rules of the shared sync envelope (``backend.sync.envelope``), no database.
 
 The property tests (``test_sync_envelope_properties.py``) prove every input is
 refused with a known code or stored safely. These pin the exact answer: which
@@ -17,7 +17,7 @@ import unittest
 from collections.abc import Iterator
 from typing import Any
 
-from backend import sync_protocol as rules
+from backend.sync import envelope as rules
 
 
 @contextlib.contextmanager

@@ -33,7 +33,7 @@ from typing import Any
 
 from hypothesis import example, given, strategies as st
 
-from backend import sync_protocol as rules
+from backend.sync import envelope as rules
 from backend.sync import protocol
 from backend.sync.families import FamilyHandler
 from tests.hypothesis_profiles import FUZZ

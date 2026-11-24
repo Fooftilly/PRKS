@@ -14,7 +14,7 @@ import pkgutil
 import uuid
 from typing import Any, Optional
 
-from backend import sync_protocol as rules
+from backend.sync import envelope as rules
 from backend.sync import handlers, protocol
 from backend.sync.handlers import work_open
 from tests.pg.test_works_sync import SyncTestCase

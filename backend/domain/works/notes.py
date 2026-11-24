@@ -1,6 +1,6 @@
 """Work notes on PostgreSQL: two whole-document conflict units (L-W-1 #628).
 
-``backend/work_note_sync.py``'s rules, on ``prks.work_notes``: the Research
+``backend/domain/works/note_rules.py``'s rules, on ``prks.work_notes``: the Research
 Note and the Private Note are one row each (absent means empty), with the
 revision scopes ``work-research-note`` and ``work-private-note`` keyed by
 the bare Work id, as on SQLite. A body is validated by the same function
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
-from backend import work_note_sync as rules
+from backend.domain.works import note_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions

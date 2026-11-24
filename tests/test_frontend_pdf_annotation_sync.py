@@ -3,7 +3,7 @@ import pathlib
 import subprocess
 import unittest
 
-from backend import sync_protocol
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend" / "js"
@@ -126,7 +126,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         self.assertIn("pdf-annotation-state.js", index)
         for family in families:
             with self.subTest(family=family):
-                self.assertIn(family, sync_protocol.supported_operations())
+                self.assertIn(family, envelope.supported_operations())
                 self.assertIn("'%s'," % family, store)
                 self.assertIn("%s: root.prksPdfAnnotationSyncHandler" % family, runtime)
                 self.assertIn(family, diagnostics)

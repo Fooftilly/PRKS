@@ -399,7 +399,8 @@ def adopt_byte_only_user_markup_on_conn(
     adopt bumps only the canonical generation (leaving materialization lag),
     never jointly advances ``materialized_pdf_annotation_revision``.
     """
-    from backend import pdf_annotation_sync, pdf_materialization
+    from backend import pdf_materialization
+    from backend.domain.annotations import rules
 
     is_user = is_user_markup or default_is_user_markup
     is_link = is_non_user or default_is_non_user
@@ -443,7 +444,7 @@ def adopt_byte_only_user_markup_on_conn(
             skipped_existing += 1
             continue
         # Tombstone / prior mutation: never resurrect from viewer bytes.
-        if pdf_annotation_sync.get_revision(conn, work_id, ann_id) > 0:
+        if rules.get_revision(conn, work_id, ann_id) > 0:
             skipped_known_absent += 1
             continue
         owner = conn.execute(

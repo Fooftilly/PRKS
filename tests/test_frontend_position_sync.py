@@ -4,7 +4,8 @@ import re
 import subprocess
 import unittest
 
-from backend import position_sync, sync_protocol
+from backend.domain.research import position_rules
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -20,7 +21,7 @@ class PositionSyncFrontendTests(unittest.TestCase):
     def setUp(self):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'position-state.js').read_text()
-        self.backend = (ROOT / 'backend' / 'position_sync.py').read_text()
+        self.backend = (ROOT / 'backend' / 'domain' / 'research' / 'position_rules.py').read_text()
         self.domain = (ROOT / 'backend' / 'domain' / 'research' / 'positions.py').read_text()
 
     def test_runtime_selftests(self):
@@ -32,16 +33,16 @@ class PositionSyncFrontendTests(unittest.TestCase):
 
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const POSITION_FIELDS =')
-        self.assertEqual(sorted(client), sorted(position_sync.FIELDS))
+        self.assertEqual(sorted(client), sorted(position_rules.FIELDS))
         labels = self.state[self.state.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in position_sync.FIELDS:
+        for field in position_rules.FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
     def test_every_family_is_registered_on_both_sides(self):
         families = {'CREATE_POSITION', 'SET_POSITION_FIELD', 'DELETE_POSITION'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -61,8 +62,8 @@ class PositionSyncFrontendTests(unittest.TestCase):
         """The reading of the schema this whole domain rests on: nothing links
         the two, so an unrelated description edit must not conflict with a
         rename."""
-        self.assertEqual(position_sync.FIELD_SCOPE_TYPE, 'position-field')
-        self.assertEqual(sorted(position_sync.FIELDS), ['description', 'name'])
+        self.assertEqual(position_rules.FIELD_SCOPE_TYPE, 'position-field')
+        self.assertEqual(sorted(position_rules.FIELDS), ['description', 'name'])
         # The scope key names the FIELD, so each carries its own revision.
         at = self.backend.index('def scope_key(')
         self.assertIn('[position_id, field]', self.backend[at: at + 300])

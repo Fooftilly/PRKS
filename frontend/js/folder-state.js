@@ -456,7 +456,7 @@
      */
 
     const PRIVATE_NOTES_FIELD = 'private_notes';
-    /* The server's limit for Folder text fields (backend/folder_sync.py). */
+    /* The server's limit for Folder text fields (backend/domain/organization/folder_rules.py). */
     const MAX_FOLDER_TEXT_BYTES = 4000;
 
     function utf8Bytes(text) {

@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from backend import work_source_sync
+from backend.domain.works import source_rules
 from backend.etags import etag_for_representation
 from backend.log_safety import safe_error_type, safe_log_id
 
@@ -111,14 +111,14 @@ def handle_state(handler: Any, db: Any, path: str) -> bool:
         # source value, so a URL here would double what this endpoint sends
         # and what IndexedDB stores for values the client already holds.
         data = _commands().source_state(*_actor(handler, db), w_id)
-        if data == work_source_sync.INVALID_SOURCE_STATE:
+        if data == source_rules.INVALID_SOURCE_STATE:
             # The product reads this row as a video, but its identity cannot
             # be stated. Said plainly rather than answered with a revision the
             # mutation would then refuse to act on.
             handler.send_json(409, {
                 "error": "This file's video source cannot be read. Its link is not a "
                          "supported video URL.",
-                "code": work_source_sync.INVALID_SOURCE_STATE})
+                "code": source_rules.INVALID_SOURCE_STATE})
             return True
         _send_state(handler, "work-source-state", data)
         return True

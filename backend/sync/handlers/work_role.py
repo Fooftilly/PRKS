@@ -1,6 +1,6 @@
 """``ADD/REMOVE_WORK_PERSON_ROLE`` and ``SET_WORK_PERSON_ROLE_CREDIT`` on PostgreSQL (L-P-1 #632).
 
-Validated by ``backend/work_role_sync.py``'s rule and decided by
+Validated by ``backend/domain/people/role_rules.py``'s rule and decided by
 :func:`backend.domain.people.roles.apply_role_operation`, the same decision
 table with the same results. The operations name no Manifestation, so they
 change Work-scoped roles, as on SQLite.
@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import work_role_sync as rules
+from backend.domain.people import role_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons, roles

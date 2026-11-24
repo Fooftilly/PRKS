@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, TypeVar
 
-from backend import person_group_sync as rules
+from backend.domain.people import group_rules as rules
 from backend.db.database import Database, Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import Capability
@@ -83,7 +83,7 @@ def create(db: Database, ctx: RequestContext, name: Optional[str], parent_id: Op
 
 
 def update(db: Database, ctx: RequestContext, group_id: str, fields: dict[str, Any]) -> None:
-    """The fields in ``person_group_sync.FIELDS``; a ``parent_name`` is resolved or created."""
+    """The fields in ``group_rules.FIELDS``; a ``parent_name`` is resolved or created."""
     parent_new_id = generate(ID_PREFIX)
 
     def run(scope: LibraryScope) -> None:

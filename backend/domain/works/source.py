@@ -1,6 +1,6 @@
 """A Work's source identity on PostgreSQL: one aggregate conflict unit (L-W-1 #628).
 
-``backend/work_source_sync.py``'s rules, imported rather than copied: the
+``backend/domain/works/source_rules.py``'s rules, imported rather than copied: the
 payload carries intent (``{"kind": "video", "url": …}``), ``provider`` and
 ``provider_id`` are derived by the one canonical parser, identity is
 provider plus id (three spellings of one video are one source), and the
@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
-from backend import work_metadata_sync as meta
-from backend import work_source_sync as rules
+from backend.domain.works import metadata_rules as meta
+from backend.domain.works import source_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import metadata, revisions
 
@@ -44,7 +44,7 @@ _TOUCH_WORK: LiteralString = (
 
 
 def current_source(row: dict[str, Any]) -> dict[str, Any] | str:
-    """``work_source_sync.current_source`` for a :func:`metadata.target` row."""
+    """``source_rules.current_source`` for a :func:`metadata.target` row."""
     kind = row["asset_kind"]
     if kind == "external_stream":
         source = {
@@ -65,7 +65,7 @@ def current_source(row: dict[str, Any]) -> dict[str, Any] | str:
 
 
 def stored_source(row: dict[str, Any]) -> dict[str, Any]:
-    """``work_source_sync.stored_source``: what an acknowledgement reports."""
+    """``source_rules.stored_source``: what an acknowledgement reports."""
     stream = row["asset_kind"] == "external_stream"
     return {
         "source_kind": "video" if stream else "pdf" if row["asset_kind"] == "managed_file" else "",
@@ -135,7 +135,7 @@ def apply_source_operation(scope: LibraryScope, work_id: str, payload_source: ob
 
 
 def source_state(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any] | str]:
-    """``work_source_sync.get_source_state``: the revision only, or the refusal."""
+    """``source_rules.get_source_state``: the revision only, or the refusal."""
     row = _target(scope, work_id, for_update=False)
     if row is None:
         return None

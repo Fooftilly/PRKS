@@ -1,6 +1,6 @@
 /**
  * Work progress status vocabulary. Mirrors the DB check and backend
- * work_metadata_sync.WORK_STATUSES; pinned by tests/test_contract_parity.py.
+ * metadata_rules.WORK_STATUSES; pinned by tests/test_contract_parity.py.
  *
  * Domain owner: the route parser imports it to validate `#/progress`, and
  * Work and Progress code import it directly, not through routing.

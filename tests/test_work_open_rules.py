@@ -1,6 +1,6 @@
 """The open-event rules both the sync family and the direct open use (kept by PG-C2 #641).
 
-``backend/work_open_sync.py`` decides the instant a reported open is
+``backend/domain/works/open_rules.py`` decides the instant a reported open is
 recorded at: a fast client clock is clamped to the arrival, and a legacy
 second-resolution value compares as ``.000``. Pure functions, no database.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from backend import work_open_sync as opened
+from backend.domain.works import open_rules as opened
 
 
 class OpenRuleTests(unittest.TestCase):

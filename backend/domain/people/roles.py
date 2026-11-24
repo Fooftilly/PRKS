@@ -1,8 +1,8 @@
 """Work-Person roles on PostgreSQL (L-P-1 #632, PR 3).
 
-A role links a Person to a Work as one of ``work_role_sync.ROLE_TYPES``,
+A role links a Person to a Work as one of ``role_rules.ROLE_TYPES``,
 optionally with a credit name ("the name on this file"). The rules are
-``backend/work_role_sync.py``'s, imported rather than copied: the role
+``backend/domain/people/role_rules.py``'s, imported rather than copied: the role
 vocabulary, the 500-byte credit contract, desired-state semantics (adding a
 present link or removing an absent one is convergence), credit promotion
 into the Person's aliases, and the ``ADD/REMOVE/SET_WORK_PERSON_ROLE``
@@ -51,7 +51,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, LiteralString, Optional
 
 import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import work_role_sync as rules
+from backend.domain.people import role_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import persons
 from backend.domain.search import refresh as search_refresh
@@ -202,7 +202,7 @@ def _scope_prefix(owner_id: str) -> str:
 
 
 def state(scope: LibraryScope, role: Role) -> Optional[str]:
-    """``work_role_sync.current_state``: None when absent, else the credit ("" for none)."""
+    """``role_rules.current_state``: None when absent, else the credit ("" for none)."""
     row = scope.execute(_ROLE_SQL, role.params()).fetchone()
     return None if row is None else rules.canonical_credit_name(row["credit_name"])
 
@@ -270,7 +270,7 @@ def work_roles(scope: LibraryScope, work_id: str) -> list[dict[str, Any]]:
 
 
 def roles_state(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any]]:
-    """``work_role_sync.get_roles_state``: the Work-scoped role revisions, tombstones included."""
+    """The Work-scoped role revisions, tombstones included."""
     if scope.execute(_WORK_EXISTS_SQL, {"work_id": work_id}).fetchone() is None:
         return None
     prefix = _scope_prefix(work_id)
@@ -340,7 +340,7 @@ def _same_name(scope: LibraryScope, a: str, b: str) -> bool:
 def promoted_aliases(scope: LibraryScope, person_id: str, credit_name: str) -> Optional[str]:
     """The Person's aliases with ``credit_name`` added, or None when that changes nothing.
 
-    ``work_role_sync._append_person_alias``'s rule, with names compared by
+    ``role_rules._append_person_alias``'s rule, with names compared by
     identity key as Person aliases are here: a credit that is not one
     lossless alias, or that already is the Person's name or one of its
     aliases, is not promoted. The caller holds the Person row lock.
@@ -401,7 +401,7 @@ def _desired(present: bool, credit_name: str) -> Optional[str]:
 
 
 def set_role(scope: LibraryScope, role: Role, present: bool, credit_name: str = "") -> bool:
-    """``work_role_sync.set_role_state``: make the role present (with the credit) or absent.
+    """``role_rules.set_role_state``: make the role present (with the credit) or absent.
 
     A mutation of an existing Work: a change advances the role's revision
     scope and touches the Work; a link appends after the Work's roles and
@@ -430,7 +430,7 @@ def apply_role_operation(scope: LibraryScope, role: Role, operation: str, credit
                          base_revision: int) -> tuple[int, dict[str, Any]]:
     """``ADD/REMOVE/SET_WORK_PERSON_ROLE``: SQLite's decision table, result for result.
 
-    The envelope has passed ``work_role_sync.validate``. The caller runs an
+    The envelope has passed ``role_rules.validate``. The caller runs an
     add SERIALIZABLE.
     """
     result: dict[str, Any] = {"work_id": role.work_id, "person_id": role.person_id,

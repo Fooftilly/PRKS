@@ -1003,17 +1003,17 @@ class AffectedMappingTests(unittest.TestCase):
 
     def test_domain_sync_files_map_to_feature_groups(self):
         cases = (
-            ("backend/concept_sync.py", "concepts", ("concepts", "graph", "notes")),
-            ("backend/folder_sync.py", "folders", ("folders", "browse")),
-            ("backend/person_sync.py", "people", ("people", "person-groups")),
-            ("backend/argument_sync.py", "arguments", ("arguments", "graph")),
-            ("backend/position_sync.py", "positions", ("positions", "graph")),
-            ("backend/playlist_sync.py", "playlists", ("playlists",)),
-            ("backend/work_note_sync.py", "notes", ("notes",)),
+            ("backend/domain/research/concept_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/organization/folder_rules.py", "folders", ("folders", "browse")),
+            ("backend/domain/people/person_rules.py", "people", ("people", "person-groups")),
+            ("backend/domain/research/argument_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/research/position_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/organization/playlist_rules.py", "playlists", ("playlists",)),
+            ("backend/domain/works/note_rules.py", "notes", ("notes",)),
             ("backend/pdf_annotations.py", "pdf-annotations", ("pdf-annotations",)),
-            ("backend/pdf_annotation_sync.py", "pdf-annotations", ("pdf-annotations",)),
-            ("backend/work_lifecycle_sync.py", "work-lifecycle", ("offline", "folders", "sync")),
-            ("backend/work_tag_sync.py", "sync-families", ("sync", "offline")),
+            ("backend/domain/annotations/rules.py", "pdf-annotations", ("pdf-annotations",)),
+            ("backend/domain/works/lifecycle_rules.py", "work-lifecycle", ("offline", "folders", "sync")),
+            ("backend/domain/organization/work_tag_rules.py", "sync-families", ("sync", "offline")),
         )
         for path, rule_name, expected in cases:
             with self.subTest(path=path):
@@ -1852,8 +1852,8 @@ class LastFailedPersistenceTests(unittest.TestCase):
 class PathMatchTests(unittest.TestCase):
     def test_glob_double_star(self):
         self.assertTrue(policy._path_matches("frontend/css/style.css", "frontend/css/**"))
-        self.assertTrue(policy._path_matches("backend/work_tag_sync.py", "backend/work_tag_sync.py"))
-        self.assertFalse(policy._path_matches("backend/server.py", "backend/work_tag_sync.py"))
+        self.assertTrue(policy._path_matches("backend/domain/organization/work_tag_rules.py", "backend/domain/organization/work_tag_rules.py"))
+        self.assertFalse(policy._path_matches("backend/server.py", "backend/domain/organization/work_tag_rules.py"))
 
 
 def _git_ok(stdout: str = "") -> subprocess.CompletedProcess:

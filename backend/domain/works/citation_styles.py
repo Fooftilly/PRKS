@@ -9,7 +9,7 @@ stores which style to use:
   (``backend.domain.settings.app_settings``), :data:`DEFAULT_CITATION_STYLE`
   until changed;
 - a Work's override, the Work's ``citation_style`` field
-  (``work_metadata_sync``), where the empty string means the Library's default.
+  (``metadata_rules``), where the empty string means the Library's default.
 
 ``frontend-app/src/features/citations/styles.ts`` lists the same ids with
 their labels and files; ``tests/test_csl_format.py`` keeps the two in step.

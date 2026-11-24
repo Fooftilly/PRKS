@@ -18,10 +18,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from unittest import mock
 
-from backend import person_metadata_sync as person_rules
-from backend import sync_protocol
-from backend import work_metadata_sync as results
-from backend import work_role_sync
+from backend.domain.people import person_metadata_rules as person_rules
+from backend.sync import envelope
+from backend.domain.works import metadata_rules as results
+from backend.domain.people import role_rules
 from backend.db.database import Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Refusal
@@ -114,7 +114,7 @@ class PeopleSyncTestCase(SyncTestCase, PeopleFacadeTestCase):  # pyright: ignore
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
     def every_operation(self, person_id: str, group_id: str, work_id: str) -> list[dict[str, Any]]:
@@ -683,7 +683,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
                 data = self.role("ADD_WORK_PERSON_ROLE", self.work, self.jane, 0, credit="") | {"payload": payload}
                 self.assertEqual(self.send(data), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.link(True, None), (400, {"code": "INVALID_BASE_REVISION"}))
-        too_long = "x" * (work_role_sync.MAX_CREDIT_NAME_BYTES + 1)
+        too_long = "x" * (role_rules.MAX_CREDIT_NAME_BYTES + 1)
         self.assertEqual(self.link(True, credit=too_long), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual((self.linked(), self.ledger()), (set(), []))
         for call in (lambda: self.library.add_role(self.jane, self.work, "Producer"),
@@ -696,10 +696,10 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.library.add_role(self.jane, self.work, "Author")
         with self.assertRaises(ValueError):
             self.library.update_role_credit_name(self.work, self.jane, "Author", 0, too_long)
-        self.library.add_role(self.ed, self.work, "Editor", credit_name="x" * work_role_sync.MAX_CREDIT_NAME_BYTES)
+        self.library.add_role(self.ed, self.work, "Editor", credit_name="x" * role_rules.MAX_CREDIT_NAME_BYTES)
         self.assertEqual((self.revision(), len(self.library.get_work_roles(self.work))), (1, 2))
         ann = self.library.add_person("Ann", "Lee")
-        for good in work_role_sync.ROLE_TYPES:
+        for good in role_rules.ROLE_TYPES:
             with self.subTest(role=good):
                 self.assertEqual(self.link(True, person=ann, role=good)[0], 200)
 
@@ -750,7 +750,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertNotIn("aliases_revision", self.link(True, credit="Mark Twain")[1])  # already known
         self.assertEqual(self.aliases_revision(), 1)
         self.assertEqual(self.credit("S. L. Clemens", 1)[1]["aliases_revision"], 2)
-        self.assertEqual(work_role_sync.parse_person_aliases(require(self.library.get_person(self.jane))["aliases"]),
+        self.assertEqual(role_rules.parse_person_aliases(require(self.library.get_person(self.jane))["aliases"]),
                          ["Samuel Clemens", "Mark Twain", "S. L. Clemens"])
         # A comma-bearing credit stays on the role on every path.
         status, result = self.link(True, person=self.ed, credit="Smith, John")

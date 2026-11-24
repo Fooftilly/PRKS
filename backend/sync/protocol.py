@@ -1,7 +1,7 @@
 """The semantic-operation ledger on PostgreSQL (``docs/postgresql-architecture.md`` §7.3).
 
 What every operation family shares, moved from the retired SQLite
-``backend/sync_protocol.py`` without changing its meaning
+``backend/sync/envelope.py`` without changing its meaning
 (``docs/local-first-sync.md``): the envelope is normalized by the same
 function, so the request hash of an operation is the same bytes it was; a malformed envelope or payload is refused
 before the ledger and never burns an ``op_id``; an exception is never
@@ -56,7 +56,7 @@ from typing import Any, LiteralString, Optional
 
 from psycopg.types.json import Jsonb
 
-from backend import sync_protocol as rules
+from backend.sync import envelope as rules
 from backend.db.database import Database
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
@@ -123,7 +123,7 @@ def process_operation(database: Database, ctx: RequestContext, data: object,
                       env: Environment) -> Result:
     """Execute one semantic operation exactly once, ever, for ``ctx``.
 
-    Returns ``(http_status, result)`` as ``sync_protocol.process_operation``
+    Returns ``(http_status, result)`` as ``envelope.process_operation``
     does. Raises :class:`AccessRefused` (nothing written) when the actor may
     not edit the Library, the epoch changed or the device is not the user's.
     """

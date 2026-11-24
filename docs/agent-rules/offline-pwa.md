@@ -32,7 +32,7 @@ For shared protocol/coordinator changes whose behavior can affect every durable 
 
 ## Cross-domain cases
 
-- `sync_protocol.py`, the durable-operation coordinator, acknowledgement/ledger semantics, or generic conflict/revision machinery: foundations + browse/protocol + every family leaf whose operations can be affected.
+- `backend/sync/envelope.py`, the durable-operation coordinator, acknowledgement/ledger semantics, or generic conflict/revision machinery: foundations + browse/protocol + every family leaf whose operations can be affected.
 - `local-store.js` or generic offline reconciliation: foundations + browse/protocol, then affected family leaves.
 - service-worker/cache eligibility/connectivity state: foundations first; add entity/browse leaves only for the projections touched.
 - a new durable family: foundations + browse/protocol + the nearest existing family leaf, then the "Adding a family" section in `docs/local-first-sync.md`.

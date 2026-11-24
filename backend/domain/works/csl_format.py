@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from backend.domain.works.rules import normalize_doc_type
 
-#: BibLaTeX entry type (``work_metadata_sync.DOC_TYPES``) -> CSL item type.
+#: BibLaTeX entry type (``metadata_rules.DOC_TYPES``) -> CSL item type.
 CSL_TYPES: dict[str, str] = {
     "article": "article-journal",
     "book": "book",

@@ -9,7 +9,7 @@
  * plays video A", and would ask the user to resolve one decision three times.
  *
  * So this module owns the canonical identity parser (mirroring
- * backend/work_source_sync.py), the pending source map rebuilt from the
+ * backend/domain/works/source_rules.py), the pending source map rebuilt from the
  * durable queue, the effective source overlay -- which produces ALL FOUR
  * columns together -- and the family's sync handler.
  */
@@ -18,11 +18,11 @@
 
     /* Explicit recognized hosts, never substring-matched: that would accept
      * "notyoutube.com" and "youtube.com.example.org". Shared contract with
-     * `backend/work_source_sync.YOUTUBE_HOSTS` and video-embed.ts. */
+     * `backend/domain/works/source_rules.YOUTUBE_HOSTS` and video-embed.ts. */
     const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be']);
 
     /* The canonical provider-id contract. Mirrors
-     * `backend/work_source_sync.MAX_PROVIDER_ID_CHARS` and its alphabet.
+     * `backend/domain/works/source_rules.MAX_PROVIDER_ID_CHARS` and its alphabet.
      *
      * `provider_id` is an IDENTIFIER, and this is what makes it one. Two
      * promises depend on it being bounded, and they are only simultaneously
@@ -73,7 +73,7 @@
         return '';
     }
 
-    /* Mirrors `backend/work_source_sync.MAX_SOURCE_URL_UTF8_BYTES`. A URL is one
+    /* Mirrors `backend/domain/works/source_rules.MAX_SOURCE_URL_UTF8_BYTES`. A URL is one
      * line of text; the bound exists so the value has a contract rather than
      * inheriting whichever storage layer refuses first. */
     const MAX_SOURCE_URL_UTF8_BYTES = 64 * 1024;

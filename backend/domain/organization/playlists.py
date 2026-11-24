@@ -1,6 +1,6 @@
 """Playlists, their fields, which Playlist a Work is in, and their order, on PostgreSQL (L-O-1 #633).
 
-The rules are ``backend/playlist_sync.py``'s, imported rather than copied:
+The rules are ``backend/domain/organization/playlist_rules.py``'s, imported rather than copied:
 the field vocabulary and bounds, the canonical spelling (``canonical_wire``,
 ``DEFAULT_TITLE``), the rule codes (``PlaylistRuleError``), the order rule
 (``resolve_order``) and the scopes: one per field
@@ -54,12 +54,12 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
-from backend import playlist_sync as rules
-from backend import work_metadata_sync as meta
+from backend.domain.organization import playlist_rules as rules
+from backend.domain.works import metadata_rules as meta
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links
 from backend.domain.works import revisions
-from backend.playlist_sync import PlaylistRuleError
+from backend.domain.organization.playlist_rules import PlaylistRuleError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 ORDER_SCOPE_TYPE = rules.ORDER_SCOPE_TYPE
@@ -459,7 +459,7 @@ def apply_order_operation(scope: LibraryScope, playlist_id: str, desired: list[s
     present = order(scope, playlist_id)
     resolved = rules.resolve_order(present, desired)
     if base_revision > revision:
-        # Counts, never the two orders (playlist_sync).
+        # Counts, never the two orders (playlist_rules).
         result.update(code="FUTURE_REVISION", current_revision=revision,
                       current_count=len(present), requested_count=len(resolved))
         return 400, result

@@ -28,7 +28,7 @@ Nothing in this module imports the database layer; the handler is handed the
 import json
 
 from backend.person_image import PersonImageUrlError, normalize_person_image_url
-from backend.person_sync import FIELDS as PERSON_FIELDS
+from backend.domain.people.person_rules import FIELDS as PERSON_FIELDS
 
 # The editable profile columns, in the creation family's order. `id`,
 # `created_at` and `updated_at` are not user-editable and are absent by

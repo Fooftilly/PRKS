@@ -332,7 +332,7 @@ def parse_update(fields: Any) -> Update:
     Unknown keys are ignored. Raises ``ValueError`` for an invalid status or
     a NUL in a value (PostgreSQL text cannot hold it).
     """
-    from backend.work_metadata_sync import normalize_doc_type
+    from backend.domain.works.metadata_rules import normalize_doc_type
 
     if not isinstance(fields, dict):
         raise ValueError("JSON object body required.")
@@ -377,7 +377,7 @@ def _existing(scope: LibraryScope, query: LiteralString, ids: Iterable[str]) -> 
 
 def _wanted_roles(scope: LibraryScope, roles: list[Any]) -> list[tuple[str, str, int]]:
     """The roles to stage, in payload order: (person, role_type, payload index)."""
-    from backend.work_role_sync import PEOPLE_ROLE_TYPE_SET
+    from backend.domain.people.role_rules import PEOPLE_ROLE_TYPE_SET
 
     candidates = [(index, str(role.get("person_id") or "").strip(), str(role.get("role_type") or "").strip())
                   for index, role in enumerate(roles) if isinstance(role, dict)]
