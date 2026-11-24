@@ -493,6 +493,12 @@ AFFECTED_RULES = (
             "backend/api/positions.py",
             "backend/api/research_notes.py",
         ),
+        # The read-only graph projection and the markup parser keep their
+        # focused rules (``graph``, ``concepts``) as they had at the top level.
+        "exclude_paths": (
+            "backend/domain/research/research_graph.py",
+            "backend/domain/research/research_markup.py",
+        ),
         "features": ("concepts", "positions", "arguments", "graph", "notes"),
         "ci_mode": "full",
         "note": "domain/research owns Concepts/Positions/Arguments (CI: full)",
