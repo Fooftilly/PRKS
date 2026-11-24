@@ -1,4 +1,4 @@
-"""Playlists, their fields, membership and order on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Playlists, their fields, membership and order on PostgreSQL (L-O-1 #633).
 
 :class:`AnswerTests` spells out the JSON each command answers. The rest
 cover refusals of what PostgreSQL text

@@ -2,29 +2,17 @@
 
 These call ``backend.api.saved_views`` with a fake handler — no threaded
 HTTP server — so the controller boundary stays testable without
-``server.py`` lifecycle. They run on PostgreSQL (``tests/backend_parity.py``),
-the handler's request context being the actor the test is bound to.
+``server.py`` lifecycle. The handler's request context is the actor the
+test is bound to.
 """
 
 from __future__ import annotations
 
-import os
-import shutil
-import sys
-import tempfile
 import unittest
-
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _PROJECT_DIR)
-
-from run_tests import apply_isolated_test_env
-
-apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import saved_views as saved_views_api
 from tests.acting_context import current_context
-from backend.storage.config import StorageConfig
-from tests.backend_parity import BackendParityTestCase, parametrize_backends
+from tests.pg.test_saved_views import SavedViewTestCase
 
 
 class _FakeHandler:
@@ -47,18 +35,10 @@ class _FakeHandler:
         )
 
 
-@parametrize_backends
-class TestSavedViewsApiController(BackendParityTestCase):
+class TestSavedViewsApiController(SavedViewTestCase):
     def setUp(self):
-        self._tmpdir = tempfile.mkdtemp(prefix="prks-api-saved-views-")
-        self.storage = StorageConfig.for_testing(self._tmpdir)
-        os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.db = self.open_library(self.storage)
+        super().setUp()
         self.handler = _FakeHandler()
-
-    def tearDown(self):
-        if getattr(self, "_tmpdir", None):
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
 
     def test_path_helpers(self):
         self.assertTrue(saved_views_api.handles("/api/saved-views"))
@@ -79,7 +59,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.assertTrue(
             saved_views_api.handle_post(
                 self.handler,
-                self.db,
+                self.library,
                 "/api/saved-views",
                 {"name": "Industry", "search": search},
             )
@@ -90,7 +70,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
 
         self.handler.calls.clear()
         self.assertTrue(
-            saved_views_api.handle_get(self.handler, self.db, "/api/saved-views")
+            saved_views_api.handle_get(self.handler, self.library, "/api/saved-views")
         )
         self.assertEqual(self.handler.calls[-1]["status"], 200)
         self.assertTrue(any(v["id"] == vid for v in self.handler.calls[-1]["body"]))
@@ -98,7 +78,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.handler.calls.clear()
         self.assertTrue(
             saved_views_api.handle_get(
-                self.handler, self.db, f"/api/saved-views/{vid}"
+                self.handler, self.library, f"/api/saved-views/{vid}"
             )
         )
         self.assertEqual(self.handler.calls[-1]["status"], 200)
@@ -108,7 +88,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.assertTrue(
             saved_views_api.handle_patch(
                 self.handler,
-                self.db,
+                self.library,
                 f"/api/saved-views/{vid}",
                 {"name": "Renamed"},
             )
@@ -119,7 +99,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.handler.calls.clear()
         self.assertTrue(
             saved_views_api.handle_delete(
-                self.handler, self.db, f"/api/saved-views/{vid}"
+                self.handler, self.library, f"/api/saved-views/{vid}"
             )
         )
         self.assertEqual(self.handler.calls[-1]["status"], 200)
@@ -128,7 +108,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.handler.calls.clear()
         self.assertTrue(
             saved_views_api.handle_get(
-                self.handler, self.db, f"/api/saved-views/{vid}"
+                self.handler, self.library, f"/api/saved-views/{vid}"
             )
         )
         self.assertEqual(self.handler.calls[-1]["status"], 404)
@@ -136,7 +116,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
     def test_validation_errors_mapped(self):
         self.assertTrue(
             saved_views_api.handle_post(
-                self.handler, self.db, "/api/saved-views", ["not", "object"]
+                self.handler, self.library, "/api/saved-views", ["not", "object"]
             )
         )
         self.assertEqual(self.handler.calls[-1]["status"], 400)
@@ -148,7 +128,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.assertTrue(
             saved_views_api.handle_post(
                 self.handler,
-                self.db,
+                self.library,
                 "/api/saved-views",
                 {"name": "", "search": {"mode": "all", "q": "x"}},
             )
@@ -159,7 +139,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.assertTrue(
             saved_views_api.handle_patch(
                 self.handler,
-                self.db,
+                self.library,
                 "/api/saved-views/SV-missing",
                 {"name": "Nope"},
             )
@@ -170,7 +150,7 @@ class TestSavedViewsApiController(BackendParityTestCase):
         self.assertTrue(
             saved_views_api.handle_patch(
                 self.handler,
-                self.db,
+                self.library,
                 "/api/saved-views/SV-missing",
                 {},
             )
@@ -180,18 +160,18 @@ class TestSavedViewsApiController(BackendParityTestCase):
 
     def test_foreign_paths_not_claimed(self):
         self.assertFalse(
-            saved_views_api.handle_get(self.handler, self.db, "/api/tags")
+            saved_views_api.handle_get(self.handler, self.library, "/api/tags")
         )
         self.assertFalse(
-            saved_views_api.handle_post(self.handler, self.db, "/api/tags", {})
+            saved_views_api.handle_post(self.handler, self.library, "/api/tags", {})
         )
         self.assertFalse(
             saved_views_api.handle_patch(
-                self.handler, self.db, "/api/tags/T-1", {"name": "x"}
+                self.handler, self.library, "/api/tags/T-1", {"name": "x"}
             )
         )
         self.assertFalse(
-            saved_views_api.handle_delete(self.handler, self.db, "/api/tags/T-1")
+            saved_views_api.handle_delete(self.handler, self.library, "/api/tags/T-1")
         )
         self.assertEqual(self.handler.calls, [])
 

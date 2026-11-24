@@ -1,4 +1,4 @@
-"""Persons, Person Groups and publishers on PostgreSQL: what parity cannot show (L-P-1 #632).
+"""Persons, Person Groups and publishers on PostgreSQL (L-P-1 #632).
 
 :class:`AnswerTests` spells out the JSON each command answers. The rest
 cover the bound actor and Library

@@ -100,18 +100,9 @@ _TEST_GATE_PG_AGG_DOCS_BODY = (
     "echo \"All PostgreSQL helper shards passed.\""
 )
 # PostgreSQL is a production runtime dependency from #630 onward.
-# The backend parity job (#625): the same pinned install and exactly
-# ``scripts/test-postgres --parity``. Both steps or neither.
-_TEST_GATE_PARITY_INSTALL_STEP = "Install pinned runtime and PostgreSQL dependencies for parity"
-_TEST_GATE_PARITY_RUN_STEP = "Run the backend parity tests on PostgreSQL"
 # (install step, run step, the run step's exact argv)
 _TEST_GATE_PG_PAIRS = (
     (_TEST_GATE_PG_INSTALL_STEP, _TEST_GATE_PG_RUN_STEP, ("scripts/test-postgres",)),
-    (
-        _TEST_GATE_PARITY_INSTALL_STEP,
-        _TEST_GATE_PARITY_RUN_STEP,
-        ("scripts/test-postgres", "--parity"),
-    ),
 )
 
 _TEST_GATE_DOCS_RUNS = {
@@ -444,13 +435,6 @@ def unique_test_gate_pg_steps(workflow: str) -> tuple[tuple[str, str], tuple[str
     return unique_test_gate_pg_pair(workflow, *_TEST_GATE_PG_PAIRS[0])
 
 
-def unique_test_gate_parity_steps(
-    workflow: str,
-) -> tuple[tuple[str, str], tuple[str, str]] | None:
-    """The backend parity job's pair (#625): exactly ``scripts/test-postgres --parity``."""
-    return unique_test_gate_pg_pair(workflow, *_TEST_GATE_PG_PAIRS[1])
-
-
 def assert_test_gate_no_pip_inject_env(workflow: str) -> None:
     """Refuse job/step ``PIP_REQUIREMENT`` / ``PIP_EDITABLE`` / similar env keys.
 
@@ -536,9 +520,8 @@ def assert_test_gate_single_run_step_allowed(
 
 
 def assert_test_gate_run_steps_allowlisted(workflow: str) -> None:
-    """Invert policy: only Install + run_tests (plus the PostgreSQL helper and
-    backend parity jobs' install + ``scripts/test-postgres`` pairs) may have
-    ``run:`` bodies.
+    """Invert policy: only Install + run_tests (plus the PostgreSQL helper
+    job's install + ``scripts/test-postgres`` pair) may have ``run:`` bodies.
 
     ``uses:``-only steps are unrestricted. Any additional ``run:`` step is
     refused — including quoted inline installs and backslash-continued
@@ -1723,14 +1706,11 @@ class RepoGateLiveTests(unittest.TestCase):
         assert_test_gate_run_steps_allowlisted(workflow)
         unit_style, unit_body = unique_test_gate_install_step(workflow)
         profiles = [("unit", unit_style, unit_body, expected_unit)]
-        for label, pg_steps in (
-            ("PostgreSQL helper tests", unique_test_gate_pg_steps(workflow)),
-            ("backend parity legs", unique_test_gate_parity_steps(workflow)),
-        ):
-            if pg_steps is None:
-                self.fail(f"test-gate.yml must run the {label}")
-            pg_style, pg_body = pg_steps[0]
-            profiles.append(("postgres", pg_style, pg_body, expected_pg))
+        pg_steps = unique_test_gate_pg_steps(workflow)
+        if pg_steps is None:
+            self.fail("test-gate.yml must run the PostgreSQL helper tests")
+        pg_style, pg_body = pg_steps[0]
+        profiles.append(("postgres", pg_style, pg_body, expected_pg))
 
         for profile, style, body, expected in profiles:
             with self.subTest(profile=profile):
@@ -1922,46 +1902,6 @@ class RepoGateLiveTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, r"disallowed run step:"):
             assert_test_gate_run_steps_allowlisted(self._minimal_allowlisted_workflow(extra))
-
-    def _parity_steps(self, run: str = "scripts/test-postgres --parity") -> str:
-        return (
-            "  backend-parity:\n"
-            "    steps:\n"
-            "      - name: Install pinned runtime and PostgreSQL dependencies for parity\n"
-            "        run: >-\n"
-            "          python -m pip install --isolated --disable-pip-version-check "
-            '"--only-binary=:all:"\n'
-            '          "psycopg==3.3.6"\n'
-            "      - name: Run the backend parity tests on PostgreSQL\n"
-            f"        run: {run}\n"
-        )
-
-    def test_test_gate_accepts_the_parity_pair_beside_the_postgres_pair(self):
-        assert_test_gate_run_steps_allowlisted(
-            self._minimal_allowlisted_workflow(self._pg_steps() + self._parity_steps())
-        )
-
-    def test_test_gate_parity_run_step_is_exactly_the_parity_script(self):
-        for run in (
-            "scripts/test-postgres",
-            "scripts/test-postgres --parity && pip install requests",
-            "scripts/test-postgres --parity --json x",
-        ):
-            with self.subTest(run=run):
-                with self.assertRaisesRegex(
-                    ValueError, r"exactly `scripts/test-postgres --parity`"
-                ):
-                    assert_test_gate_run_steps_allowlisted(
-                        self._minimal_allowlisted_workflow(self._parity_steps(run))
-                    )
-
-    def test_test_gate_parity_steps_come_as_one_pair(self):
-        lone_run = (
-            "      - name: Run the backend parity tests on PostgreSQL\n"
-            "        run: scripts/test-postgres --parity\n"
-        )
-        with self.assertRaisesRegex(ValueError, r"PostgreSQL job needs exactly one"):
-            assert_test_gate_run_steps_allowlisted(self._minimal_allowlisted_workflow(lone_run))
 
     def test_test_gate_rejects_duplicate_install_step_name(self):
         """A second same-named Install step must fail (cannot bypass by name)."""

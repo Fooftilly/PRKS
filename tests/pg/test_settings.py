@@ -1,4 +1,4 @@
-"""The application settings on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""The application settings on PostgreSQL (L-O-1 #633).
 
 :class:`ReadAndPatchTests` and :class:`RouteAnswerTests` spell out the
 answers and refusals. The rest cover settings stored per Library,

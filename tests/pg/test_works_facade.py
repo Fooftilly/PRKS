@@ -1,9 +1,8 @@
-"""Work create and reads on PostgreSQL: what parity cannot show (L-W-1 #628).
+"""Work create and reads on PostgreSQL (L-W-1 #628).
 
-``tests/test_works_core_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: the bound actor and its checks,
-Library isolation, the rows create writes, timestamp precision and order,
-and concurrent creates.
+:class:`AnswerTests` spells out what the reads answer. The other tests cover
+the bound actor and its checks, Library isolation, the rows create writes,
+timestamp precision and order, and concurrent creates.
 """
 
 from __future__ import annotations
@@ -405,7 +404,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         return str(self.sql("SELECT current_database() AS n")[0]["n"])
 
 
-_PDF_BYTES = b"%PDF-1.4\n% parity fixture\n%%EOF\n"
+_PDF_BYTES = b"%PDF-1.4\n% answer fixture\n%%EOF\n"
 _MISSING = "W-" + "0" * 32
 
 
@@ -425,7 +424,7 @@ class WorksAnswerTestCase(AnswerAssertions, WorksFacadeTestCase):
 
 
 class AnswerTests(WorksAnswerTestCase):
-    """The answers of the Work reads, spelled out (formerly SQLite parity recordings)."""
+    """The answers of the Work reads, spelled out."""
 
     def test_a_work_without_a_source(self) -> None:
         work_id = self.add("plain", title="Plain", status="In Progress", abstract="An abstract",

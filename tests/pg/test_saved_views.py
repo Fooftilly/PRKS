@@ -1,4 +1,4 @@
-"""Saved Views on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Saved Views on PostgreSQL (L-O-1 #633).
 
 :class:`CrudTests` and :class:`RouteAnswerTests` spell out the answers and
 refusals. The rest cover names compared by

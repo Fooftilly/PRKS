@@ -51,14 +51,6 @@ class PDFTextExtraction:
     truncated: bool
 
 
-@dataclass(frozen=True)
-class TextIndexSyncResult:
-    action: str
-    status: str | None = None
-    truncated: bool = False
-    extracted: bool = False
-
-
 def extractor_available() -> bool:
     try:
         import pymupdf as fitz  # noqa: F401

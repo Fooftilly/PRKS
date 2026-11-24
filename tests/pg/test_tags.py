@@ -1,4 +1,4 @@
-"""Tags, aliases, delete, merge and Work/Folder tags on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Tags, aliases, delete, merge and Work/Folder tags on PostgreSQL (L-O-1 #633).
 
 :class:`AnswerTests` spells out the JSON each command answers. The rest
 cover identity keys (Unicode names

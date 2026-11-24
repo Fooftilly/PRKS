@@ -42,8 +42,7 @@ and every add to its peer tables: a Tag, an alias, a Work or Folder tag)
 keep the same locks: a lock that waited on a row the other transaction
 changed fails with ``40001`` there, and the retry reads the committed state.
 
-**Differences from SQLite**, each deliberate (the recorded parity tests
-avoid them). The commands that routes call are ``tag_commands``,
+**Differences from SQLite**, each deliberate. The commands that routes call are ``tag_commands``,
 ``folder_commands`` and ``playlist_commands`` (PG-C3 #642; the facade's
 ``OrganizationMixin`` is gone):
 

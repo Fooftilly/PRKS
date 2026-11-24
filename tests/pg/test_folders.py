@@ -1,4 +1,4 @@
-"""Folders, their hierarchy and fields, and Work filing on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Folders, their hierarchy and fields, and Work filing on PostgreSQL (L-O-1 #633).
 
 :class:`AnswerTests` spells out the JSON each command answers. The rest
 cover titles compared by identity key
