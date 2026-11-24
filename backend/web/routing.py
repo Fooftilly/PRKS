@@ -64,6 +64,9 @@ def _compile(pattern: str) -> tuple[_Segment, ...]:
     return tuple(segments)
 
 
+Shape = tuple[tuple[str, ...], ...]
+
+
 @dataclass(frozen=True)
 class Route:
     """One route. ``body`` defaults to ``JSON`` for POST/PUT/PATCH, else ``NONE``."""
@@ -108,9 +111,14 @@ class Route:
                 params[segment.name] = part
         return params if len(parts) == len(segments) else None
 
-    def shape(self) -> tuple[Optional[str], ...]:
-        """The pattern with parameter names left out: routes of one shape share a path."""
-        return tuple(s.literal if s.literal is not None else ("*" if s.rest else "") for s in self.segments)
+    def shape(self) -> Shape:
+        """The pattern with parameter names left out: routes of one shape share a path.
+
+        Each segment is tagged, so a literal ``*`` or an empty literal never
+        shares a key with a parameter.
+        """
+        return tuple(("literal", s.literal) if s.literal is not None else (("rest",) if s.rest else ("param",))
+                     for s in self.segments)
 
     def rank(self) -> tuple[int, ...]:
         """Sort key: literal segments before parameters, a rest parameter last."""
@@ -139,7 +147,7 @@ class RouteTable:
 
     def __init__(self, routes: Iterable[Route]) -> None:
         self.routes: tuple[Route, ...] = tuple(sorted(routes, key=Route.rank))
-        seen: set[tuple[str, tuple[Optional[str], ...]]] = set()
+        seen: set[tuple[str, Shape]] = set()
         for one in self.routes:
             key = (one.method, one.shape())
             if key in seen:
@@ -152,7 +160,7 @@ class RouteTable:
         # of /api/works/{work_id}, and its Allow names only its own methods.
         parts = path.split("/")[1:]
         allowed: list[str] = []
-        owner: Optional[tuple[Optional[str], ...]] = None
+        owner: Optional[Shape] = None
         for one in self.routes:
             params = one.match(parts)
             if params is None:

@@ -58,6 +58,14 @@ class RouteTableTests(unittest.TestCase):
         self.assertEqual(self.table.resolve("PATCH", "/api/works/recent"), NoRoute(("GET",)))
         self.assertEqual(self.table.resolve("GET", "/api/works/bulk"), NoRoute(("POST",)))
 
+    def test_a_literal_star_is_not_a_rest_parameter(self) -> None:
+        table = RouteTable((route("GET", "/api/files/*", _answer), route("POST", "/api/files/{name:path}", _answer)))
+        self.assertNotEqual(table.routes[0].shape(), table.routes[1].shape())
+        self.assertEqual(table.resolve("POST", "/api/files/*"), NoRoute(("GET",)))
+        found = table.resolve("POST", "/api/files/a/b")
+        assert isinstance(found, Match)
+        self.assertEqual(found.params, {"name": "a/b"})
+
     def test_an_empty_segment_is_no_parameter(self) -> None:
         self.assertEqual(self.table.resolve("GET", "/api/works/"), NoRoute())
 
