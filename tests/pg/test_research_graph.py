@@ -5,8 +5,8 @@ whose ``research.reindex_work`` has not run shows its previous note (and
 ``research_refs`` reports ``pending``); rows a pending reindex has not
 removed yet (a deleted Work, a Concept deleted after its note stopped
 naming it) are left out by the joins; each Library reads its own rows; a
-large network keeps the snapshot's order. ``tests/test_research_graph_parity.py``
-compares the answers with SQLite's.
+large network keeps the snapshot's order. :class:`AnswerTests` spells out
+the graph, the counts, the backlinks and the refs of one network.
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ from backend.domain.identity.library_scope import LibraryScope
 from tests.research_index_adapter import PostgresResearchIndex
 from tests import acting_context as facade_context
 from backend.domain.research.research_graph import graph_node_id
+from backend.domain.research.research_graph import GraphTooLargeError
+from tests.pg.answers import AnswerAssertions
 from tests.pg.test_research_index import ResearchIndexTestCase
 
 
@@ -332,3 +334,142 @@ class ProjectionTests(GraphReadTestCase):
             self.assertNotIn(sentinel, str(caught.exception.extra))
         self.assertEqual(caught.exception.code, "graph_too_large")
         self.assertGreaterEqual(caught.exception.extra["node_count"], 2)
+
+
+def _node(node_type: str, label: str, name: str, **more: Any) -> dict[str, Any]:
+    route = {"argument": "arguments", "concept": "concepts", "position": "positions", "work": "works",
+             "person": "people"}[node_type]
+    return {"id": f"{node_type}:{label}", "label": name, "record_id": label, "route": f"#/{route}/{label}",
+            "type": node_type, **more}
+
+
+def _edge(edge_type: str, source: str, target: str, **more: Any) -> dict[str, Any]:
+    return {"id": f"{edge_type}:{source}>{target}", "source": source, "target": target, "type": edge_type, **more}
+
+
+class AnswerTests(AnswerAssertions, GraphReadTestCase):
+    """The graph, counts, backlinks and refs of one network, spelled out."""
+
+    def network(self) -> dict[str, str]:
+        """Concepts, Positions, Arguments, cited and noted Works, an Author."""
+        name = self.labels.name
+        theory = name(self.concept("Theory"), "<C Theory>")
+        ethics = name(self.concept("Ethics"), "<C Ethics>")
+        self.library.replace_concept_aliases(ethics, ["Morals"])
+        self.library.replace_concept_parents(ethics, [theory])
+        name(self.concept("Unmentioned"), "<C Unmentioned>")
+        thesis = name(self.library.create_position("Thesis", "")["id"], "<P Thesis>")
+        source = name(self.library.add_work("Source", doc_type="book"), "<W Source>")
+        commentary = name(self.library.add_work("Commentary"), "<W Commentary>")
+        claim = name(self.library.create_argument(
+            name="Claim", kind="argument", sources=[{"work_id": source, "pages": "1-2"}],
+            targets=[{"type": "position", "id": thesis, "verdict_id": "supports"}])["id"], "<A Claim>")
+        reply = name(self.library.create_argument(
+            name="Reply", kind="stance", targets=[{"type": "argument", "id": claim, "verdict_id": "opposes"}])["id"],
+            "<A Reply>")
+        adorno = name(self.library.add_person("Theodor", "Adorno"), "<PE Adorno>")
+        self.library.add_role(adorno, source, "Author")
+        self.research_note(source, "On [[concept:Theory]], [[concept:morals]] and [[concept:ETHICS]]; "
+                                   f"see [[argument:{claim}|the claim]]. `[[concept:Code]]` is no reference.")
+        self.research_note(commentary, f"Again [[concept:Ethics]], against [[argument:{reply}]]"
+                                       f" and [[argument:{claim}]] and [[argument:A-gone]].")
+        self.run_jobs()
+        return {"Theory": theory, "Ethics": ethics, "Source": source, "Commentary": commentary, "Claim": claim,
+                "Reply": reply}
+
+    def labelled_graph(self, include_people: bool = False) -> dict[str, Any]:
+        graph = self.labels.show(self.graph(include_people))
+        graph["edges"] = sorted(graph["edges"], key=lambda edge: edge["id"])
+        return graph
+
+    def test_the_graph_with_and_without_people(self) -> None:
+        self.network()
+        nodes = [_node("argument", "<A Claim>", "Claim", kind="argument"),
+                 _node("argument", "<A Reply>", "Reply", kind="stance"),
+                 _node("concept", "<C Ethics>", "Ethics"), _node("concept", "<C Theory>", "Theory"),
+                 _node("concept", "<C Unmentioned>", "Unmentioned"), _node("position", "<P Thesis>", "Thesis"),
+                 _node("work", "<W Commentary>", "Commentary"), _node("work", "<W Source>", "Source")]
+        source, commentary = "work:<W Source>", "work:<W Commentary>"
+        claim, reply = "argument:<A Claim>", "argument:<A Reply>"
+        edges = sorted([
+            _edge("mentions_argument", commentary, claim, count=1), _edge("mentions_argument", commentary, reply, count=1),
+            _edge("mentions_argument", source, claim, count=1),
+            _edge("mentions_concept", commentary, "concept:<C Ethics>", count=1),
+            _edge("mentions_concept", source, "concept:<C Theory>", count=1),
+            _edge("mentions_concept", source, "concept:<C Ethics>", count=2),
+            _edge("argument_argument", reply, claim, verdict_id="opposes", verdict_label="Opposes"),
+            _edge("argument_position", claim, "position:<P Thesis>", verdict_id="supports", verdict_label="Supports"),
+            _edge("argument_source", claim, source, pages="1-2"),
+            _edge("concept_parent", "concept:<C Ethics>", "concept:<C Theory>")], key=lambda edge: edge["id"])
+        graph = self.labelled_graph()
+        self.answer(graph, {"nodes": nodes, "edges": edges, "meta": {
+            "derived_note_edges_available": True, "edge_count": 10, "node_count": 8, "people_included": False}})
+        people = self.labelled_graph(include_people=True)
+        self.answer(people["meta"], {"edge_count": 11, "node_count": 9, "people_included": True})
+        self.assertIn(_node("person", "<PE Adorno>", "Theodor Adorno"), people["nodes"])
+        self.assertIn(_edge("work_author", "person:<PE Adorno>", source), people["edges"])
+
+    def test_counts_backlinks_and_research_refs(self) -> None:
+        ids = self.network()
+        show = self.labels.show
+        self.assertEqual(show(self.index.concept_mention_counts()), {"<C Theory>": 1, "<C Ethics>": 3})
+        self.assertEqual(self.index.mention_count_for_concept(ids["Ethics"]), 3)
+        self.assertEqual(self.index.mention_count_for_argument(ids["Claim"]), 2)
+        # Only live Arguments are counted: ``A-gone`` names none.
+        self.assertEqual(show(self.index.argument_mention_counts()), {"<A Claim>": 2, "<A Reply>": 1})
+
+        def backlinks(rows: list[dict[str, Any]]) -> Any:
+            return sorted(show(rows), key=lambda row: row["title"])
+
+        source_note = ("On [[concept:Theory]], [[concept:morals]] and [[concept:ETHICS]]; see "
+                       "[[argument:<A Claim>|the claim]]. `[[concept:Code]]` is no reference.")
+        self.answer(backlinks(self.index.concept_backlinks(ids["Ethics"], None)), [
+            {"title": "Commentary", "work_id": "<W Commentary>", "occurrences": [{"start": 6, "end": 24}]},
+            {"title": "Source", "work_id": "<W Source>", "occurrences": [
+                {"start": 23, "end": 41, "snippet": "On [[concept:Theory]], [[concept:morals]] and"
+                                                     " [[concept:ETHICS]]; see [[argument:<A Claim>|the c…"},
+                {"start": 46, "end": 64}]}])
+        commentary_note = ("Again [[concept:Ethics]], against [[argument:<A Reply>]] and [[argument:<A Claim>]]"
+                           " and [[argument:A-gone]].")
+        self.answer(backlinks(self.index.argument_backlinks(ids["Claim"], None)), [
+            {"title": "Commentary", "occurrences": [{"start": 86, "end": 133, "snippet": "…" + commentary_note[6:]}]},
+            {"title": "Source", "occurrences": [{"start": 70, "end": 127, "snippet": source_note}]}])
+        self.answer(backlinks(self.index.argument_backlinks(ids["Reply"], None)), [
+            {"title": "Commentary", "work_id": "<W Commentary>",
+             "occurrences": [{"start": 34, "end": 81, "snippet": commentary_note}]}])
+        ethics = {"aliases": ["Morals"], "id": "<C Ethics>", "name": "Ethics"}
+        self.assertEqual(show(self.index.work_research_refs(ids["Source"], None)), {
+            "arguments": [{"id": "<A Claim>", "name": "Claim"}], "pending": False,
+            "concepts": [{"aliases": [], "id": "<C Theory>", "name": "Theory"}, ethics]})
+        self.assertEqual(show(self.index.work_research_refs(ids["Commentary"], None)), {
+            "arguments": [{"id": "<A Reply>", "name": "Reply"}, {"id": "<A Claim>", "name": "Claim"}],
+            "concepts": [ethics], "pending": False})
+
+    def test_a_deleted_work_and_a_dropped_reference_leave_the_reads(self) -> None:
+        ids = self.network()
+        self.library.delete_work_record(ids["Commentary"])
+        self.run_jobs()
+        self.assertEqual(self.labels.show(self.index.concept_mention_counts()), {"<C Theory>": 1, "<C Ethics>": 2})
+        self.assertEqual(len(self.index.concept_backlinks(ids["Ethics"], None)), 1)
+        self.assertEqual(self.index.argument_backlinks(ids["Reply"], None), [])
+        self.assertNotIn("Commentary", [node["label"] for node in self.graph()["nodes"]])
+        # A note that stops naming a Concept lets it go; it then leaves the graph too.
+        self.research_note(ids["Source"], "Only [[concept:Ethics]].")
+        self.run_jobs()
+        self.library.delete_concept(ids["Theory"])
+        self.assertEqual(self.labels.show(self.index.concept_mention_counts()), {"<C Ethics>": 1})
+        self.assertNotIn("Theory", [node["label"] for node in self.graph()["nodes"]])
+
+    def test_an_empty_library_has_an_empty_graph(self) -> None:
+        self.assertEqual(self.graph(), {"nodes": [], "edges": [], "meta": {
+            "node_count": 0, "edge_count": 0, "derived_note_edges_available": True, "people_included": False}})
+        self.assertEqual(self.index.concept_mention_counts(), {})
+
+    def test_a_graph_past_the_bounds_is_refused(self) -> None:
+        self.network()
+        with mock.patch.object(research_graph, "MAX_GRAPH_NODES", 3):
+            with self.assertRaises(GraphTooLargeError) as caught:
+                self.graph()
+        self.assertEqual((caught.exception.code, caught.exception.http_status, caught.exception.extra),
+                         ("graph_too_large", 413, {"node_count": 8, "edge_count": 10}))
+
