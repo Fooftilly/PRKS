@@ -1507,26 +1507,35 @@ def sw_js_diff_is_dependency_revision_only(diff_text: str | None) -> bool:
     """True when a unified diff of ``frontend/sw.js`` changes only the stamp.
 
     Missing or unreadable diffs fail closed. The build writes exactly
-    ``const DEPENDENCY_REVISION = '<12 hex>';``.
+    ``const DEPENDENCY_REVISION = '<12 hex>';`` in place, so the removed and
+    added line must be adjacent in one hunk; a moved declaration does not count.
     """
     if not diff_text or not str(diff_text).strip():
         return False
-    removed = []
-    added = []
+    changes = []
     for line in str(diff_text).splitlines():
         if line.startswith(
-            ("diff ", "index ", "@@", "\\", "new file", "deleted file", "old mode", "new mode")
+            ("diff ", "index ", "\\", "new file", "deleted file", "old mode", "new mode")
         ):
             continue
         if line.startswith("--- ") or line.startswith("+++ "):
             continue
-        if line.startswith("-"):
-            removed.append(line[1:].strip())
+        if line.startswith("@@"):
+            changes.append("@@")
+        elif line.startswith("-"):
+            changes.append(("-", line[1:].strip()))
         elif line.startswith("+"):
-            added.append(line[1:].strip())
-    if len(removed) != 1 or len(added) != 1:
+            changes.append(("+", line[1:].strip()))
+        else:
+            changes.append(" ")
+    edits = [i for i, entry in enumerate(changes) if isinstance(entry, tuple)]
+    if len(edits) != 2 or edits[1] != edits[0] + 1:
         return False
-    return bool(_SW_REVISION_LINE.match(removed[0]) and _SW_REVISION_LINE.match(added[0]))
+    (old_sign, old), (new_sign, new) = changes[edits[0]], changes[edits[1]]
+    return bool(
+        old_sign == "-" and new_sign == "+"
+        and _SW_REVISION_LINE.match(old) and _SW_REVISION_LINE.match(new)
+    )
 
 
 _VUE_PRODUCTION_SOURCE_SUFFIXES = (".vue", ".tsx", ".ts", ".jsx", ".js", ".mjs")
@@ -1595,10 +1604,11 @@ def frontend_browser_change_requires_full_ci(changed_paths) -> bool:
 # Packaged classic distribution gate (e2e-classic-distribution-gate.yml).
 # It re-runs browser tests on the bundled production frontend, which differs
 # from the source tree in its classic-script bundles and in what the service
-# worker precaches. Routine pull requests run the tests that exercise those:
-# smoke plus every offline/durability module. A change to the packaging, the
-# service worker, the shell page or the gate itself runs every test, and so do
-# master (nightly master CI) and manual runs.
+# worker precaches. Routine pull requests run only the packaged smoke job (the
+# Docker build and service-worker upgrade jobs always run): the Full E2E gate
+# already runs every test on the source tree. A change to the packaging, the
+# service worker, the shell page or the gate itself runs every test on the
+# packaged frontend, and so do master (nightly master CI) and manual runs.
 PACKAGED_FULL_PATHS = (
     "frontend/sw.js",
     "frontend/index.html",
@@ -1616,58 +1626,36 @@ PACKAGED_FULL_PATHS = (
     "tests/e2e/policy.py",
 )
 PACKAGED_FULL_SHARDS = 8
-PACKAGED_ROUTINE_SHARDS = 4
-# Modules whose tests depend on what the packaged service worker and local
-# stores hold, beside every ``*_offline`` and ``*_durable`` module.
-PACKAGED_ROUTINE_MODULES = (
-    "tests.e2e.test_browser_scope",
-    "tests.e2e.test_editor_recovery_store",
-    "tests.e2e.test_library_epoch",
-    "tests.e2e.test_local_store_durability",
-)
 
 
-def _is_packaged_routine_test(test_id: str) -> bool:
-    module = test_id.split(".")[:3]
-    if len(module) < 3 or module[:2] != ["tests", "e2e"]:
-        return False
-    name = ".".join(module)
-    return (
-        module[2].endswith(("_offline", "_durable"))
-        or module[2] == "test_offline"
-        or name in PACKAGED_ROUTINE_MODULES
-    )
+def plan_packaged_e2e(changed_paths, *, force_full: bool = False, path_diffs=None) -> dict:
+    """Full or smoke packaged run for one pull request (never skip: the path filter decides that).
 
-
-def select_packaged_routine(all_ids):
-    """Smoke, the offline feature and every offline/durable module, in suite order.
-
-    A module that fails to import shows up as a ``unittest.loader._FailedTest``
-    entry, which no filter would keep; refuse the selection instead, so a broken
-    module fails the shard as it does on a full run.
+    Smoke has no shard matrix: the workflow runs its ``packaged-smoke`` job.
+    A ``frontend/sw.js`` diff that is only the generated ``DEPENDENCY_REVISION``
+    stamp, beside a rebuilt Vue bundle that explains it, is not a packaging
+    change (as in ``plan_ci_e2e``); a missing diff fails closed to full.
     """
-    broken = [tid for tid in all_ids if not str(tid).startswith("tests.e2e.")]
-    if broken:
-        raise ValueError("E2E discovery failed: %s" % ", ".join(broken[:8]))
-    chosen = set(select_smoke(all_ids)) | set(select_features(all_ids, ["offline"]))
-    chosen |= {tid for tid in all_ids if _is_packaged_routine_test(tid)}
-    return [tid for tid in all_ids if tid in chosen]
-
-
-def plan_packaged_e2e(changed_paths, *, force_full: bool = False) -> dict:
-    """Full or routine packaged run for one pull request (never skip: the path filter decides that)."""
-    risky = [p for p in (_posix(path) for path in changed_paths)
-             if any(_path_matches(p, pattern) for pattern in PACKAGED_FULL_PATHS)]
+    paths = [_posix(path) for path in changed_paths]
+    bundle_rebuilt = any(_is_generated_vue_bundle(p) for p in paths)
+    diffs = path_diffs or {}
+    risky = [
+        p for p in paths
+        if any(_path_matches(p, pattern) for pattern in PACKAGED_FULL_PATHS)
+        and not (
+            p == "frontend/sw.js"
+            and bundle_rebuilt
+            and sw_js_diff_is_dependency_revision_only(diffs.get(p))
+        )
+    ]
     if force_full or risky:
         reason = "full packaged run requested" if force_full else "packaging paths changed: " + ", ".join(risky[:8])
-        mode, shards = "full", PACKAGED_FULL_SHARDS
-    else:
-        reason = "routine packaged run: smoke and offline modules"
-        mode, shards = "routine", PACKAGED_ROUTINE_SHARDS
+        include = [{"shard": i, "total": PACKAGED_FULL_SHARDS} for i in range(1, PACKAGED_FULL_SHARDS + 1)]
+        return {"mode": "full", "reason": reason, "matrix": {"include": include}}
     return {
-        "mode": mode,
-        "reason": reason,
-        "matrix": {"include": [{"shard": i, "total": shards} for i in range(1, shards + 1)]},
+        "mode": "smoke",
+        "reason": "packaged smoke only: no packaging paths changed",
+        "matrix": {"include": []},
     }
 
 

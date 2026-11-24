@@ -1,8 +1,8 @@
 """Dormant, fail-closed candidate policy for packaged PR E2E (#740).
 
 This module is advisory ONLY. No GitHub Actions job imports it or consumes its
-output. The gate itself picks full or the routine set (smoke plus the offline
-and local-store modules) through ``tests/e2e/run.py --packaged-plan``. Reuse the source E2E path/feature mapping,
+output. The gate itself picks full or smoke through
+``tests/e2e/run.py --packaged-plan``. Reuse the source E2E path/feature mapping,
 and apply a much narrower allowlist before considering smoke + affected tests.
 
 Manual read-only invocation (from the repository root):

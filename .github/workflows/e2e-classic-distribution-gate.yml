@@ -2,7 +2,8 @@ name: E2E Classic Production Distribution Gate
 
 # Non-required packaged production-distribution validation for #736 and #740.
 # This separate workflow does not change the required Full E2E gate or its
-# check names; pull requests run a routine set (see packaged-plan).
+# check names; pull requests run the packaged smoke unless they change
+# packaging (see packaged-plan).
 on:
   pull_request:
     paths:
@@ -152,10 +153,9 @@ jobs:
     # A pull request that changes packaging, the service worker, the shell
     # page, this gate or the E2E runner runs every test on the packaged
     # frontend (8 shards). Any other pull request that matches the paths
-    # above runs the routine set (4 shards): smoke plus every offline, durable
-    # and local-store module, the tests that depend on the bundles and what the
-    # service worker precaches. Manual runs, which include the nightly master
-    # CI, always run every test.
+    # above runs only the packaged smoke job; the required Full E2E gate
+    # already runs every test on the source tree. Manual runs, which include
+    # the nightly master CI, always run every test.
     if: github.event_name != 'workflow_dispatch' || inputs.packaged_mode != 'smoke'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -203,7 +203,7 @@ jobs:
           plan = json.loads(os.environ["PLAN_JSON"])
           mode = plan.get("mode")
           include = (plan.get("matrix") or {}).get("include") or []
-          if mode not in ("full", "routine") or not include:
+          if mode not in ("full", "smoke") or (mode == "full") != bool(include):
               raise SystemExit("malformed packaged plan: %r" % (plan,))
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
               handle.write("mode=%s\n" % mode)
@@ -213,9 +213,11 @@ jobs:
 
   packaged-frontend:
     name: Packaged classic bundles (${{ matrix.shard }}/${{ matrix.total }})
-    # Explicit manual smoke omits these shards; manual compare runs BOTH modes
-    # against one SHA. The plan job picks the routine or the full set.
+    # Only a full plan runs these shards (a smoke plan has no matrix, so the
+    # job is skipped before it is expanded). Manual compare runs BOTH the
+    # shards and the smoke job against one SHA.
     needs: packaged-plan
+    if: needs.packaged-plan.outputs.mode == 'full'
     runs-on: ubuntu-latest
     # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
     # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
@@ -289,17 +291,12 @@ jobs:
         env:
           PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}
           PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}
-          PRKS_E2E_PACKAGED_MODE: ${{ needs.packaged-plan.outputs.mode }}
           PRKS_E2E_ROUTE_FASTPATH: "0"
         shell: bash
         run: |
           set -euo pipefail
-          selection=()
-          if [[ "${PRKS_E2E_PACKAGED_MODE}" == "routine" ]]; then
-            selection=(--packaged-routine)
-          fi
           python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}" \
-            --no-pointer-capture "${selection[@]}"
+            --no-pointer-capture
 
       # Exact test ID → elapsed seconds for a complete manual bundled run.
       # Keep this manual-only; ordinary PRs continue without extra artifacts.
@@ -329,13 +326,17 @@ jobs:
           retention-days: 7
 
   packaged-smoke:
-    name: Packaged classic smoke (manual pilot)
-    # Compare runs the full eight shards and smoke in this SAME workflow run;
-    # only an explicit workflow_dispatch can activate the smoke job.
-    # A cost/coverage measurement, NOT a substitute for the PR or release gate.
+    name: Packaged classic smoke
+    # A pull request whose plan is smoke runs this job instead of the shards.
+    # Manual smoke runs it alone (no plan); manual compare runs it beside the
+    # full eight shards in this SAME workflow run. The nightly master CI
+    # dispatches full, so every test still runs packaged once per night.
+    needs: packaged-plan
     if: >-
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')
+      !cancelled() &&
+      ((github.event_name == 'pull_request' && needs.packaged-plan.outputs.mode == 'smoke') ||
+      (github.event_name == 'workflow_dispatch' &&
+      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')))
     runs-on: ubuntu-latest
     # Every E2E server runs PRKS_AUTH=loopback-owner on its own disposable
     # database of this PostgreSQL 18 server (tests/e2e/postgres_identity.py).
@@ -409,8 +410,8 @@ jobs:
           # Curated smoke IDs must all exist; the runner fails closed otherwise.
           python tests/e2e/run.py --jobs 1 --smoke --no-pointer-capture
           # Include high-risk packaged PDF/offline and Graph/record navigation
-          # boundaries in addition to the nine curated smoke cases. This
-          # is still a manual experiment, NOT a full-suite substitute.
+          # boundaries in addition to the nine curated smoke cases. Packaging
+          # changes and the nightly master run still run every test.
           python tests/e2e/run.py --jobs 1 --no-pointer-capture \
             tests.e2e.test_app.MainSecondaryDividerTests.test_divider_drag_causes_no_additional_route_or_pdf_requests \
             tests.e2e.test_app.PdfPersistenceTests.test_annotation_copy_link_reports_clipboard_success_and_failure \
@@ -424,7 +425,7 @@ jobs:
         shell: bash
         run: |
           {
-            printf 'Manual packaged-smoke pilot only; full PR eight-shard package coverage is unchanged.\n'
+            printf 'Packaged smoke; packaging-path PRs and the nightly master run cover every test on 8 shards.\n'
             printf 'If packaged_mode=compare, eight full packaged shards also run on this exact workflow SHA; shared Docker and SW jobs execute once.\n'
             printf 'Commit: %s; packaged smoke: 9 curated + 5 explicit browser tests; SW upgrade/rollback and Docker checks are separate jobs.\n' "$PRKS_E2E_BASE_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
