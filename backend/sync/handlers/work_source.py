@@ -1,6 +1,6 @@
 """``SET_WORK_SOURCE`` on PostgreSQL (L-W-1 #628).
 
-Validated by ``backend/work_source_sync.py``'s rule and decided by
+Validated by ``backend/domain/works/source_rules.py``'s rule and decided by
 :func:`backend.domain.works.source.apply_source_operation`.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import work_source_sync as rules
+from backend.domain.works import source_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import source
 from backend.sync.families import Environment, FamilyHandler, Result

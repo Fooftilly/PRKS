@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable, Optional, TypeVar
 
-from backend import work_role_sync
+from backend.domain.people import role_rules
 from backend.db.database import Database, Isolation
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
@@ -71,13 +71,13 @@ def insert_initial(db: Database, ctx: RequestContext, work_id: str, initial_role
 def add(db: Database, ctx: RequestContext, person_id: str, work_id: str, role_type: str,
         credit_name: str = "") -> None:
     """A role on an existing Work, appended, with its revision."""
-    work_role_sync.validate_role_type(role_type)
+    role_rules.validate_role_type(role_type)
 
     def run(scope: LibraryScope) -> None:
         role = roles.Role(work_id, person_id, role_type)
         # The mode set_role takes again: a share lock is never upgraded.
         roles.lock_targets(scope, role,
-                           writes_person=work_role_sync.credit_promotable_as_alias(credit_name))
+                           writes_person=role_rules.credit_promotable_as_alias(credit_name))
         if roles.has_role(scope, work_id, person_id, role_type):
             raise ValueError(f"This person is already linked to this file as {role_type}.")
         roles.set_role(scope, role, True, credit_name)
@@ -92,7 +92,7 @@ def update_credit(db: Database, ctx: RequestContext, work_id: str, person_id: st
 
     def run(scope: LibraryScope) -> bool:
         try:
-            roles.lock_targets(scope, role, writes_person=work_role_sync.credit_promotable_as_alias(
+            roles.lock_targets(scope, role, writes_person=role_rules.credit_promotable_as_alias(
                 credit_name))
         except roles.RoleTargetMissing:
             return False

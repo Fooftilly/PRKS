@@ -1,6 +1,6 @@
 """Folders, their hierarchy and fields, and which Folder a Work is in, on PostgreSQL (L-O-1 #633).
 
-The rules are ``backend/folder_sync.py``'s, imported rather than copied:
+The rules are ``backend/domain/organization/folder_rules.py``'s, imported rather than copied:
 the field vocabulary and bounds, the canonical spelling (``canonical_wire``,
 ``DEFAULT_TITLE``), the rule codes (``FolderRuleError``) and the scopes, one
 per field (``folder-field / ["F-…","field"]``) and one per Work
@@ -51,12 +51,12 @@ from __future__ import annotations
 
 from typing import Any, LiteralString, Optional
 
-from backend import folder_sync as rules
-from backend import work_metadata_sync as meta
+from backend.domain.organization import folder_rules as rules
+from backend.domain.works import metadata_rules as meta
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links
 from backend.domain.works import revisions
-from backend.folder_sync import FolderRuleError
+from backend.domain.organization.folder_rules import FolderRuleError
 
 FIELD_SCOPE_TYPE = rules.FIELD_SCOPE_TYPE
 WORK_SCOPE_TYPE = rules.WORK_SCOPE_TYPE
@@ -468,7 +468,7 @@ def apply_field_operation(scope: LibraryScope, folder_id: str, field: str, value
     except FolderRuleError as error:
         result.update(code=error.code, current_revision=revision)
         return rule_status(error.code), result
-    # Private notes are not echoed into the ledger (folder_sync).
+    # Private notes are not echoed into the ledger (folder_rules).
     result.update(code="ACKNOWLEDGED", server_revision=after, changed=changed, value_omitted=True)
     if field == "title" and changed:
         # A cached Work detail embeds `folder_title`: the answer names the

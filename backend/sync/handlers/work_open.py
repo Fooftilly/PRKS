@@ -1,6 +1,6 @@
 """``MARK_WORK_OPENED`` on PostgreSQL: the open max-register (L-W-1 #628).
 
-The family's rules (``backend/work_open_sync.py``): an empty payload
+The family's rules (``backend/domain/works/open_rules.py``): an empty payload
 and a null base, the event time clamped to arrival when it is too far in
 the future, and an acknowledgement carrying the Work's compact Recent row.
 The write is :func:`backend.domain.works.commands.mark_opened`, which the
@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend import work_open_sync as rules
+from backend.domain.works import open_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import commands, projection, queries
 from backend.sync.families import Environment, FamilyHandler, Result

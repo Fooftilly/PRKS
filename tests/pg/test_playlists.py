@@ -18,7 +18,7 @@ from backend.domain.organization import playlists
 from backend.domain.works import commands
 from backend.entity_ids import generate
 from tests import acting_context as facade_context
-from backend.playlist_sync import PlaylistRuleError, scope_key
+from backend.domain.organization.playlist_rules import PlaylistRuleError, scope_key
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 

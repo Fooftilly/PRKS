@@ -9,7 +9,7 @@
 -- that includes `library_id`, as in 100_works.sql.
 --
 -- Revision scopes and deletes (§5.2, the §13.2 revision-ownership gate).
--- The scopes are SQLite's (backend/concept_sync.py, position_sync.py,
+-- The scopes are SQLite's (backend/domain/research/concept_rules.py, position_sync.py,
 -- argument_sync.py), so a client's stored bases mean the same on both
 -- backends:
 --

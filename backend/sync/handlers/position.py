@@ -1,6 +1,6 @@
 """``CREATE_POSITION``, ``SET_POSITION_FIELD`` and ``DELETE_POSITION`` on PostgreSQL (L-R-1 #634).
 
-Validated by ``backend/position_sync.py``'s rules and decided by
+Validated by ``backend/domain/research/position_rules.py``'s rules and decided by
 :mod:`backend.domain.research.positions`, result for result.
 
 Creation is construction: the id is client-minted, and a create of an id
@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import position_sync as rules
+from backend.domain.research import position_rules as rules
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.research import positions

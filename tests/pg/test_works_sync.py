@@ -19,7 +19,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from unittest import mock
 
-from backend import sync_protocol, work_metadata_sync, work_note_sync, work_open_sync, work_source_sync
+from backend.sync import envelope
+from backend.domain.works import metadata_rules
+from backend.domain.works import note_rules
+from backend.domain.works import open_rules
+from backend.domain.works import source_rules
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.identity.request_context import RequestContext
@@ -204,10 +208,10 @@ class LedgerTests(SyncTestCase):
                                "result": {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": True}})
         stored = self.sql("SELECT device_id::text AS device, operation_type, entity_type, entity_id,"
                           " encode(request_sha256, 'hex') AS digest FROM prks.sync_operations")
-        normalized = sync_protocol.normalize_envelope(data)
+        normalized = envelope.normalize_envelope(data)
         self.assertEqual(stored, [{"device": self.device, "operation_type": "DELETE_WORK",
                                    "entity_type": "work", "entity_id": work_id,
-                                   "digest": sync_protocol.request_hash(normalized)}])
+                                   "digest": envelope.request_hash(normalized)}])
 
 
 class ConcurrentOperationTests(SyncTestCase):
@@ -399,14 +403,14 @@ class RecreatedWorkTests(SyncTestCase):
     def test_a_stale_base_0_edit_of_any_field_conflicts_with_the_recreated_work(self) -> None:
         work_id = self.deleted_and_recreated()
         before = self.library.get_work(work_id)
-        for field in sorted(work_metadata_sync.SYNCED_FIELDS):
+        for field in sorted(metadata_rules.SYNCED_FIELDS):
             with self.subTest(field=field):
                 status, result = self.field(work_id, field, _STALE_VALUES.get(field, "Stale"), 0)
                 self.assertEqual((status, result["code"], result["current_revision"]),
                                  (409, "REVISION_CONFLICT", 1))
         self.assertEqual(self.library.get_work(work_id), before)
         # A base observed after the recreation is current and applies.
-        for field in sorted(work_metadata_sync.SYNCED_FIELDS):
+        for field in sorted(metadata_rules.SYNCED_FIELDS):
             with self.subTest(field=field):
                 status, result = self.field(work_id, field, _STALE_VALUES.get(field, "Stale"), 1)
                 self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
@@ -673,7 +677,7 @@ class OpenSyncTests(SyncTestCase):
         result = self.send(self.opened(far))[1]
         self.assertTrue(result["changed"])
         self.assertLess(result["effective_opened_at"],
-                        work_open_sync.format_moment(datetime.now(timezone.utc) + timedelta(minutes=1)))
+                        open_rules.format_moment(datetime.now(timezone.utc) + timedelta(minutes=1)))
         other = self.library.add_work("Precise")
         for millis in (0, 250, 900):
             moment = datetime(2026, 9, 11, 12, 0, 0, millis * 1000, tzinfo=timezone.utc)
@@ -707,7 +711,7 @@ class OpenSyncTests(SyncTestCase):
     def test_the_direct_open_shares_the_register_and_a_read_stays_pure(self) -> None:
         self.assertTrue(self.library.mark_work_opened(self.work))
         self.assertRegex(self.opened_at() or "", r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
-        tomorrow = work_open_sync.format_moment(datetime.now(timezone.utc) + timedelta(days=1))
+        tomorrow = open_rules.format_moment(datetime.now(timezone.utc) + timedelta(days=1))
         self.sql("UPDATE prks.works SET last_opened_at = %s::timestamptz WHERE id = %s", (tomorrow + "+00", self.work))
         self.assertTrue(self.library.mark_work_opened(self.work))
         self.assertEqual(self.opened_at(), tomorrow)
@@ -782,7 +786,7 @@ class NoteSyncTests(SyncTestCase):
             self.library.save_work_notes(self.work, control)
         self.assertEqual(caught.exception.code, "invalid_text")
         self.assertEqual(self.send(self.note_op("research", control)), (400, {"code": "INVALID_ENVELOPE"}))
-        over_private = "p" * (work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES + 1)
+        over_private = "p" * (note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES + 1)
         self.assertEqual(self.send(self.note_op("private", over_private))[0], 400)
         with self.assertRaises(ValueError):
             self.library.update_work_metadata(self.work, {"private_notes": over_private})
@@ -796,7 +800,7 @@ class NoteSyncTests(SyncTestCase):
         large = "r" * (64 * 1024 + 1)
         self.assertEqual(self.send(self.note_op("research", large))[0], 200)
         self.assertEqual(len(require(self.library.get_work(self.work))["text_content"]), 64 * 1024 + 1)
-        at_limit = "q" * work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES
+        at_limit = "q" * note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES
         self.assertEqual(self.send(self.note_op("private", at_limit))[0], 200)
         missing = generate("W")
         for kind in ("research", "private"):
@@ -835,7 +839,7 @@ class SourceSyncTests(SyncTestCase):
         extra["payload"]["extra"] = 1
         self.assertEqual(self.send(extra), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.send(self.source_op(_WATCH % "BBB", None)), (400, {"code": "INVALID_BASE_REVISION"}))
-        for bad in ("B" * (work_source_sync.MAX_PROVIDER_ID_CHARS + 1), "ab%22cd", "a%20b", "a.b"):
+        for bad in ("B" * (source_rules.MAX_PROVIDER_ID_CHARS + 1), "ab%22cd", "a%20b", "a.b"):
             with self.subTest(bad=bad[:20]):
                 self.assertEqual(self.send(self.source_op(_WATCH % bad))[1]["code"], "INVALID_ENVELOPE")
         self.assertEqual((self.ledger(), self.columns()["provider_id"], self.revision()), ([], "AAA", 0))
@@ -862,7 +866,7 @@ class SourceSyncTests(SyncTestCase):
         # The source is its own scope: no metadata field moved.
         fields = require(self.library.get_work_metadata_state(self.work))["fields"]
         self.assertEqual({entry["revision"] for entry in fields.values()}, {0})
-        self.assertEqual(self.send(self.source_op(_WATCH % ("B" * work_source_sync.MAX_PROVIDER_ID_CHARS), 1))[0],
+        self.assertEqual(self.send(self.source_op(_WATCH % ("B" * source_rules.MAX_PROVIDER_ID_CHARS), 1))[0],
                          200)
 
     def test_a_conflict_reports_the_identity_exactly_within_the_durable_bound(self) -> None:
@@ -903,7 +907,7 @@ class SourceSyncTests(SyncTestCase):
                         "provider_id": "AAA"},
                        {"source_kind": "video", "source_url": _WATCH % "BBB", "provider": "vimeo"},
                        {"source_kind": "video", "source_url": _WATCH % "CCC",
-                        "provider_id": "B" * (work_source_sync.MAX_PROVIDER_ID_CHARS + 1)},
+                        "provider_id": "B" * (source_rules.MAX_PROVIDER_ID_CHARS + 1)},
                        {"source_kind": "video", "source_url": _WATCH % "a.b"},
                        {"source_kind": "video", "source_url": _WATCH % "CCC", "provider_id": "a b"},
                        {"source_kind": "video"},

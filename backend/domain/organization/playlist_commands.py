@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, TypeVar
 
-from backend import playlist_sync
+from backend.domain.organization import playlist_rules
 from backend.db.database import Database, Isolation
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
@@ -90,14 +90,14 @@ def create(db: Database, ctx: RequestContext, title: Any, description: Any = "",
 
 def update(db: Database, ctx: RequestContext, playlist_id: str, fields: dict[str, Any]) -> None:
     """Edit a Playlist's fields through the revision-aware boundary; other keys are ignored."""
-    updates = {k: v for k, v in fields.items() if k in playlist_sync.FIELD_SET}
+    updates = {k: v for k, v in fields.items() if k in playlist_rules.FIELD_SET}
     if not updates:
         return
 
     def run(scope: LibraryScope) -> None:
         if not playlists.lock(scope, playlist_id):
             raise ValueError("Playlist not found.")
-        for field in playlist_sync.FIELDS:
+        for field in playlist_rules.FIELDS:
             if field in updates:
                 value = updates[field]
                 playlists.set_field(scope, playlist_id, field, "" if value in (None, False) else str(value))
@@ -123,7 +123,7 @@ def add_item(db: Database, ctx: RequestContext, playlist_id: Optional[str], work
             raise ValueError("Playlist or work not found.")
         try:
             playlists.set_work_playlist(scope, wid, pid)
-        except playlist_sync.PlaylistRuleError as error:
+        except playlist_rules.PlaylistRuleError as error:
             raise ValueError("Playlist or work not found.") from error
         if position is None:
             return
@@ -154,7 +154,7 @@ def reorder(db: Database, ctx: RequestContext, playlist_id: str, work_ids: list[
     def run(scope: LibraryScope) -> None:
         try:
             playlists.set_order(scope, playlist_id, list(work_ids))
-        except playlist_sync.PlaylistRuleError as error:
+        except playlist_rules.PlaylistRuleError as error:
             raise ValueError("Playlist not found.") from error
 
     _command(db, ctx, run)

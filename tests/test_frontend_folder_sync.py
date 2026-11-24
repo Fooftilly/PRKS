@@ -4,7 +4,8 @@ import re
 import subprocess
 import unittest
 
-from backend import folder_sync, sync_protocol
+from backend.domain.organization import folder_rules
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -38,8 +39,8 @@ class FolderSyncFrontendTests(unittest.TestCase):
         self.assertIn('folder private-note save checks passed', proc.stdout)
 
     def test_private_notes_limit_and_canonical_form_match_the_server(self):
-        self.assertIn('const MAX_FOLDER_TEXT_BYTES = %d;' % folder_sync.MAX_TEXT_BYTES, self.state)
-        backend = (ROOT / 'backend' / 'folder_sync.py').read_text()
+        self.assertIn('const MAX_FOLDER_TEXT_BYTES = %d;' % folder_rules.MAX_TEXT_BYTES, self.state)
+        backend = (ROOT / 'backend' / 'domain' / 'organization' / 'folder_rules.py').read_text()
         self.assertIn('text = ("" if value is None else str(value)).strip()', backend)
         runtime = (FRONTEND / 'offline-runtime.js').read_text()
         at = runtime.index('async function reconcileFolderField(')
@@ -88,30 +89,30 @@ class FolderSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = json.loads(proc.stdout)
         server_space = [cp for cp in range(0x110000)
-                        if not 0xd800 <= cp <= 0xdfff and folder_sync.canonical_wire('private_notes', chr(cp) + 'x' + chr(cp)) == 'x']
+                        if not 0xd800 <= cp <= 0xdfff and folder_rules.canonical_wire('private_notes', chr(cp) + 'x' + chr(cp)) == 'x']
         self.assertEqual(out['stripped'], server_space)
         for text, client in zip(samples, out['samples']):
             with self.subTest(text=text[:12], length=len(text)):
-                self.assertEqual(client['canonical'], folder_sync.canonical_wire('private_notes', text))
+                self.assertEqual(client['canonical'], folder_rules.canonical_wire('private_notes', text))
                 try:
-                    folder_sync.validate_field_value('private_notes', text)
+                    folder_rules.validate_field_value('private_notes', text)
                     refused = False
-                except folder_sync.FolderRuleError:
+                except folder_rules.FolderRuleError:
                     refused = True
                 self.assertEqual(client['tooLong'], refused)
 
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const FOLDER_FIELDS =')
-        self.assertEqual(sorted(client), sorted(folder_sync.FIELDS))
+        self.assertEqual(sorted(client), sorted(folder_rules.FIELDS))
         labels = self.state[self.state.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in folder_sync.FIELDS:
+        for field in folder_rules.FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
     def test_every_family_is_registered_on_both_sides(self):
         families = {'CREATE_FOLDER', 'SET_FOLDER_FIELD', 'DELETE_FOLDER', 'SET_WORK_FOLDER'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -126,14 +127,14 @@ class FolderSyncFrontendTests(unittest.TestCase):
         self.assertIn("generateEntityId('F', uuid)", body)
         self.assertIn('base_revision: null', body)
         self.assertIn('is_distributed(op["entity_id"], "F")',
-                      (ROOT / 'backend' / 'folder_sync.py').read_text())
+                      (ROOT / 'backend' / 'domain' / 'organization' / 'folder_rules.py').read_text())
 
     def test_moving_a_folder_is_a_field_not_a_structure(self):
         """The hierarchy is a parent pointer on ONE row, so a move changes one
         value. Modelling it as an aggregate would make an unrelated rename
         conflict with it."""
-        self.assertIn('parent_id', folder_sync.FIELDS)
-        self.assertEqual(folder_sync.FIELD_SCOPE_TYPE, 'folder-field')
+        self.assertIn('parent_id', folder_rules.FIELDS)
+        self.assertEqual(folder_rules.FIELD_SCOPE_TYPE, 'folder-field')
         backend = (ROOT / 'backend' / 'domain' / 'organization' / 'folders.py').read_text()
         at = backend.index('\ndef set_field(')
         body = backend[at: backend.index('\ndef ', at + 5)]
@@ -145,7 +146,7 @@ class FolderSyncFrontendTests(unittest.TestCase):
     def test_a_works_folder_is_a_scalar_on_the_work(self):
         """A Work is in at most one folder, so filing, moving and clearing are
         one operation with different values -- not membership of a set."""
-        self.assertEqual(folder_sync.WORK_SCOPE_TYPE, 'work-folder')
+        self.assertEqual(folder_rules.WORK_SCOPE_TYPE, 'work-folder')
         at = self.store.index('function setWorkFolder(')
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('base_revision: observed.revision', body)

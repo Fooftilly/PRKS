@@ -3,7 +3,7 @@ import os
 import unittest
 from datetime import datetime
 
-from backend import work_open_sync
+from backend.domain.works import open_rules
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
@@ -96,10 +96,10 @@ class OfflineWorkOpenTests(unittest.TestCase):
             params=(work_id,))
         value = rows[0]['last_opened_at']
         # SQLite stores the canonical text; PostgreSQL a timestamptz.
-        return value if isinstance(value, str) or value is None else work_open_sync.format_moment(value)
+        return value if isinstance(value, str) or value is None else open_rules.format_moment(value)
 
     def canonical(self, iso):
-        return work_open_sync.format_moment(datetime.fromisoformat(iso.replace('Z', '+00:00')))
+        return open_rules.format_moment(datetime.fromisoformat(iso.replace('Z', '+00:00')))
 
     # ---- offline activity ---------------------------------------------------
 

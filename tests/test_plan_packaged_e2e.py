@@ -149,7 +149,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             "frontend-app/src/components/SharedModal.vue",
             "frontend-app/src/features/progress/NewRoute.vue",
             "backend/server.py",
-            "backend/person_sync.py",
+            "backend/domain/people/person_rules.py",
             "Dockerfile",
             "scripts/build_classic_distribution.py",
             "tests/e2e/policy.py",

@@ -4,7 +4,7 @@ import re
 import subprocess
 import unittest
 
-from backend import person_group_sync
+from backend.domain.people import group_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -33,19 +33,19 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         the same edit would be savable through one path and impossible through
         the other."""
         client = js_string_list(self.store, 'const PERSON_GROUP_FIELDS =')
-        self.assertEqual(sorted(client), sorted(person_group_sync.FIELDS))
+        self.assertEqual(sorted(client), sorted(group_rules.FIELDS))
         labels = self.state[self.state.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in person_group_sync.FIELDS:
+        for field in group_rules.FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
     def test_every_family_is_registered_on_both_sides(self):
-        from backend import sync_protocol
+        from backend.sync import envelope
         families = {'CREATE_PERSON_GROUP', 'SET_PERSON_GROUP_FIELD',
                     'ADD_PERSON_GROUP_MEMBER', 'REMOVE_PERSON_GROUP_MEMBER',
                     'DELETE_PERSON_GROUP'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -86,7 +86,7 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         self.assertIn("generateEntityId('PG', uuid)", body)
         self.assertIn('base_revision: null', body)
         self.assertIn('is_distributed(op["entity_id"], "PG")',
-                      (ROOT / 'backend' / 'person_group_sync.py').read_text())
+                      (ROOT / 'backend' / 'domain' / 'people' / 'group_rules.py').read_text())
 
     def test_deletion_addresses_an_identity_and_carries_no_revision(self):
         """Absence is idempotent -- there is no second state for two devices to
@@ -95,7 +95,7 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         at = self.store.index('function deletePersonGroup(')
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('base_revision: null', body)
-        backend = (ROOT / 'backend' / 'person_group_sync.py').read_text()
+        backend = (ROOT / 'backend' / 'domain' / 'people' / 'group_rules.py').read_text()
         at = backend.index('def validate_delete(')
         end = backend.find('\ndef ', at + 5)
         self.assertIn('if op["base_revision"] is not None',
@@ -130,7 +130,7 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
         body = self.store[at: self.store.index('\n        /* A group already', at)]
         self.assertIn('r.payload.person_id === personId', body)
         self.assertIn('base_revision: observed.revision', body)
-        self.assertEqual(person_group_sync.MEMBER_SCOPE_TYPE, 'person-group-member')
+        self.assertEqual(group_rules.MEMBER_SCOPE_TYPE, 'person-group-member')
 
     def test_a_terminal_result_stays_inside_the_stores_vocabulary(self):
         """The durable result is a CLOSED vocabulary the store validates. A

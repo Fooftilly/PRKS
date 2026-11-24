@@ -1,7 +1,7 @@
 """Annotation commands on PostgreSQL with SQLite's rules (L-A-1 #635).
 
 The decision tables, codes and result shapes are those of
-``backend/pdf_annotation_sync.py`` (the ``CREATE``/``SET``/``DELETE_PDF_ANNOTATION``
+``backend/domain/annotations/rules.py`` (the ``CREATE``/``SET``/``DELETE_PDF_ANNOTATION``
 families), ``PRKSDatabase.sync_work_annotations`` (the legacy full-list
 replace) and ``backend/pdf_annotation_adopt.py`` (byte-only markup
 adoption); payloads are validated and compared by the same functions. Each
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Optional
 
-from backend import pdf_annotation_sync as rules
+from backend.domain.annotations import rules as rules
 from backend.domain.annotations import store
 from backend.domain.annotations.store import Target
 from backend.domain.identity.library_scope import LibraryScope
@@ -48,7 +48,7 @@ def _locked(scope: LibraryScope, work_id: str, result: dict[str, Any]) -> Target
     return target
 
 
-# -- sync families (pdf_annotation_sync) ------------------------------------------
+# -- sync families (annotations.rules) ------------------------------------------
 
 
 def apply_create(scope: LibraryScope, work_id: str, payload: dict[str, Any]) -> Result:

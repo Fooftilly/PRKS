@@ -4,7 +4,8 @@ import re
 import subprocess
 import unittest
 
-from backend import concept_sync, sync_protocol
+from backend.domain.research import concept_rules
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -20,7 +21,7 @@ class ConceptSyncFrontendTests(unittest.TestCase):
     def setUp(self):
         self.store = (FRONTEND / 'local-store.js').read_text()
         self.state = (FRONTEND / 'concept-state.js').read_text()
-        self.backend = (ROOT / 'backend' / 'concept_sync.py').read_text()
+        self.backend = (ROOT / 'backend' / 'domain' / 'research' / 'concept_rules.py').read_text()
         self.domain = (ROOT / 'backend' / 'domain' / 'research' / 'concepts.py').read_text()
 
     def domain_function(self, name):
@@ -75,17 +76,17 @@ class ConceptSyncFrontendTests(unittest.TestCase):
 
     def test_the_two_sides_synchronize_the_same_fields(self):
         client = js_string_list(self.store, 'const CONCEPT_FIELDS =')
-        self.assertEqual(sorted(client), sorted(concept_sync.FIELDS))
+        self.assertEqual(sorted(client), sorted(concept_rules.FIELDS))
         labels = self.state[self.state.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in concept_sync.FIELDS:
+        for field in concept_rules.FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
     def test_every_family_is_registered_on_both_sides(self):
         families = {'CREATE_CONCEPT', 'SET_CONCEPT_FIELD', 'SET_CONCEPT_IDENTITY',
                     'SET_CONCEPT_PARENTS', 'DELETE_CONCEPT'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -113,8 +114,8 @@ class ConceptSyncFrontendTests(unittest.TestCase):
         """Renaming keeps the old name reachable as an alias, so a rename writes
         into the set an alias edit changes. Splitting them would let each
         silently overwrite the other's half."""
-        self.assertEqual(concept_sync.IDENTITY_SCOPE_TYPE, 'concept-identity')
-        self.assertNotIn('name', concept_sync.FIELDS)
+        self.assertEqual(concept_rules.IDENTITY_SCOPE_TYPE, 'concept-identity')
+        self.assertNotIn('name', concept_rules.FIELDS)
         # One operation carries both.
         at = self.store.index('function setConceptIdentity(')
         body = self.store[at: self.store.index('\n        /**', at)]
@@ -139,7 +140,7 @@ class ConceptSyncFrontendTests(unittest.TestCase):
     def test_parents_are_one_aggregate_converged_on_the_set(self):
         """A SET: two devices that chose the same parents made the same
         decision, whatever order they wrote them in."""
-        self.assertEqual(concept_sync.PARENTS_SCOPE_TYPE, 'concept-parents')
+        self.assertEqual(concept_rules.PARENTS_SCOPE_TYPE, 'concept-parents')
         at = self.store.index('function setConceptParents(')
         body = self.store[at: self.store.index('\n        /**', at)]
         self.assertIn('const sameSet = list =>', body)

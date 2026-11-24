@@ -17,7 +17,7 @@ import uuid
 from typing import Any, Callable, Iterator, Optional, TypeVar
 from unittest import mock
 
-from backend import sync_protocol
+from backend.sync import envelope
 from backend.db.database import Isolation
 from backend.db.errors import DatabaseError
 from backend.domain.identity.authorization import AccessRefused, Capability, Refusal
@@ -652,7 +652,7 @@ class OwnershipTests(MergeTestCase):
 
 class NotAvailableTests(MergeTestCase):
     def test_nothing_can_invoke_a_merge_yet(self) -> None:
-        self.assertNotIn("MERGE_WORKS", sync_protocol.supported_operations())
+        self.assertNotIn("MERGE_WORKS", envelope.supported_operations())
         self.assertNotIn("MERGE_WORKS", protocol.supported_operations())
         self.assertFalse(hasattr(PostgresLibrary, "merge_works"))
         callers = []

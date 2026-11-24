@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from backend.domain.works.rules import normalize_doc_type
 from backend.entity_ids import is_distributed
-from backend import work_metadata_sync
-from backend import work_role_sync
-from backend import work_source_sync
+from backend.domain.works import metadata_rules
+from backend.domain.people import role_rules
+from backend.domain.works import source_rules
 
 
 # Construction payload: exact keys. Source is INTENT form {kind, url}; provider
@@ -71,7 +71,7 @@ def canonical_create_payload(payload):
     out = {}
     for name in _STRING_FIELDS:
         out[name] = _string_field(payload[name])
-    source = work_source_sync.canonical_source(payload["source"])
+    source = source_rules.canonical_source(payload["source"])
     if source is None:
         raise ValueError("INVALID_ENVELOPE")
     out["source"] = {
@@ -81,7 +81,7 @@ def canonical_create_payload(payload):
     # Persist-ready identity columns for insert (derived, not client-asserted).
     out["_identity"] = source
     status = out["status"].strip() or "Not Started"
-    if status not in work_metadata_sync.WORK_STATUS_SET:
+    if status not in metadata_rules.WORK_STATUS_SET:
         raise ValueError("INVALID_ENVELOPE")
     out["status"] = status
     out["doc_type"] = normalize_doc_type(out["doc_type"] or "online")
@@ -110,8 +110,8 @@ def canonical_create_payload(payload):
         if not isinstance(role_type, str) or not isinstance(credit, str):
             raise ValueError("INVALID_ENVELOPE")
         try:
-            work_role_sync.validate_role_type(role_type)
-            work_role_sync.validate_credit_name(credit)
+            role_rules.validate_role_type(role_type)
+            role_rules.validate_credit_name(credit)
         except ValueError:
             raise ValueError("INVALID_ENVELOPE") from None
         key = (person_id.strip(), role_type)

@@ -15,11 +15,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend import sync_protocol
+from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.organization import folders
 from backend.entity_ids import generate
-from backend.folder_sync import scope_key
+from backend.domain.organization.folder_rules import scope_key
 from tests import acting_context as facade_context
 from backend.sync.families import Environment, FamilyHandler
 from backend.sync.handlers import folder as folder_handlers
@@ -66,7 +66,7 @@ class FolderSyncTestCase(SyncTestCase, FolderTestCase):  # pyright: ignore[repor
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
 

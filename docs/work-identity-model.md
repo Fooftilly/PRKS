@@ -216,7 +216,7 @@ enough (D8).
 | `manifestation_identifiers(manifestation_id, scheme, value, normalized)` | DOI, ISBN, arXiv ID (versioned and versionless), PMID, and similar. `works.doi`/`isbn` backfill into these later. This is the entity duplicate detection keys on. |
 | `roles` gaining a nullable `manifestation_id` | Edition-scoped credit (§7). The owner is enforced by a composite FK (§4.1). |
 | `argument_sources` rebuilt with `PRIMARY KEY (argument_id, order_index)`, a nullable `manifestation_id`, and citation identity `UNIQUE (argument_id, work_id, COALESCE(manifestation_id, ''), pages)` | One Argument can cite the Work in general **and** several Versions of it, each with its own pinpoint (§8.5). |
-| `sync_work_lifecycle(work_id, state, target_work_id)` | Merge record, named and modeled like `sync_tag_lifecycle`. It is distinct from the existing `work_lifecycle_sync` module (`CREATE_WORK`/`DELETE_WORK`). The table it redirects **reads** and refuses **every pending operation** naming the merged Work with `WORK_MERGED` (§10.4, §14.2). |
+| `sync_work_lifecycle(work_id, state, target_work_id)` | Merge record, named and modeled like `sync_tag_lifecycle`. It is distinct from the existing `lifecycle_rules` module (`CREATE_WORK`/`DELETE_WORK`). The table it redirects **reads** and refuses **every pending operation** naming the merged Work with `WORK_MERGED` (§10.4, §14.2). |
 | `duplicate_decisions` | Durable record of "not a duplicate" answers, so a declined suggestion does not return (§10.5). |
 | Metadata provenance | A per-field record of detected, retrieved or user-edited origin on Manifestation fields (#42). This design only reserves the ownership: provenance belongs to the Manifestation field it describes, never to the Work. |
 
@@ -771,7 +771,7 @@ by #41 (D9). This design adds no cite-key column.
 | Call site | What it does |
 | --- | --- |
 | `research_network._replace_sources_on_conn` | Replaces an Argument's **whole list**: validates, then DELETEs all rows and INSERTs them again with `order_index = position`. It refuses a repeated `work_id` ("Duplicate source Work"). |
-| `argument_sync` (`current_sources`, `set_sources_on_conn`) | The durable unit is `argument-sources/<argument>`, the **whole ordered list**. The wire shape is `[{work_id, pages}]`, ordered by `order_index, work_id`. |
+| `argument_rules` (`current_sources`, `set_sources_on_conn`) | The durable unit is `argument-sources/<argument>`, the **whole ordered list**. The wire shape is `[{work_id, pages}]`, ordered by `order_index, work_id`. |
 | `research_network._argument_sources` | Reads the list for Argument detail, joining Work title and Authors. |
 | `research_graph` | Reads `(argument_id, work_id, pages)` to build Argument→Work edges. |
 | migration v11→v12 | Created legacy rows with `order_index = 0`, so several rows of one Argument can share an `order_index`. |
@@ -1399,7 +1399,7 @@ The versions below are illustrative. Each is one migration in one PR (see
         - an `argument_sources` row whose Argument still exists: advance
           `argument-sources/<A>` (§8.5);
         - a `roles` row whose **Work still exists** (for example only its
-          Person is missing): `work_role_sync.get_roles_state()` builds
+          Person is missing): `role_rules.get_roles_state()` builds
           `present` from `roles` without joining `persons`, so that row was
           reported as `present: true`. Insert or advance the
           `work-person-role/[W, P, role]` revision, leaving a tombstone. After
@@ -1454,7 +1454,7 @@ The versions below are illustrative. Each is one migration in one PR (see
    edition-scoped (Editor, Translator, Introduction, Foreword, Afterword) to
    `manifestation-person-role/[origin_MF(W), P, r]`. This includes
    **tombstones**, meaning scopes with a revision but no live row, which
-   `work_role_sync.get_roles_state()` deliberately keeps. Without them, an
+   `role_rules.get_roles_state()` deliberately keeps. Without them, an
    offline add based on revision 0 could resurrect a deleted role.
 5. **Later: retire legacy columns.** This is decided later (D10). Until then the
    columns stay as the maintained projection.

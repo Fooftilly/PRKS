@@ -15,7 +15,7 @@ Read:
 - `offline-browse-protocol.md`: "Offline browse catalogs" and its dependency matrix for Work-field projection fan-out;
 - `docs/local-first-sync.md`: "Work metadata fields", "Metadata: overlay, atomic save and per-field conflicts", and the field-specific sections that follow.
 
-Code: `backend/work_metadata_sync.py`, `frontend/js/sync-runtime.js`, related work-metadata tests.
+Code: `backend/domain/works/metadata_rules.py`, `frontend/js/sync-runtime.js`, related work-metadata tests.
 
 ## Work source identity
 Read:
@@ -23,7 +23,7 @@ Read:
 - `offline-work-sync.md`: "Source identity is an AGGREGATE";
 - `docs/local-first-sync.md`: source identity/aggregate sections and `author_text` rules.
 
-Code: `backend/work_source_sync.py`, related frontend/selftests/E2E.
+Code: `backend/domain/works/source_rules.py`, related frontend/selftests/E2E.
 
 ## Work opens
 Read:
@@ -32,7 +32,7 @@ Read:
 - `offline-browse-protocol.md`: foreground-open semantics, Recent eligibility, and acknowledgement reconciliation;
 - `docs/local-first-sync.md`: "Work open events".
 
-Code: `backend/work_open_sync.py`.
+Code: `backend/domain/works/open_rules.py`.
 
 ## Work tags
 Read:
@@ -41,10 +41,10 @@ Read:
 - `offline-folder-tag-coherence.md` when a tag change affects Folder/Work cached projections, identity-preserving relationship invalidation, or delete/merge reconciliation;
 - `docs/local-first-sync.md`: "Local coalescing and overlay (Work Tags)".
 
-Code: `backend/work_tag_sync.py`.
+Code: `backend/domain/organization/work_tag_rules.py`.
 
 ## Work lifecycle
-For `CREATE_WORK` / `DELETE_WORK` and `backend/work_lifecycle_sync.py`, read:
+For `CREATE_WORK` / `DELETE_WORK` and `backend/domain/works/lifecycle_rules.py`, read:
 - `offline-foundations.md`;
 - `offline-browse-protocol.md` for browse/Recent/Recently Added projection effects;
 - `offline-folder-tag-coherence.md` for Folder/Home membership/count coherence;
@@ -53,7 +53,7 @@ For `CREATE_WORK` / `DELETE_WORK` and `backend/work_lifecycle_sync.py`, read:
 - the Work lifecycle sections in `docs/local-first-sync.md`.
 
 ## Work-Person roles
-For `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CREDIT`, and `backend/work_role_sync.py`, read:
+For `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CREDIT`, and `backend/domain/people/role_rules.py`, read:
 - `offline-foundations.md`;
 - `offline-entity-coherence.md` for People, Person Group, and Argument dependencies;
 - `offline-entity-surfaces.md` for Research Graph core/People projection invalidation rules affected by Author-role changes;
@@ -62,7 +62,7 @@ For `ADD_WORK_PERSON_ROLE`, `REMOVE_WORK_PERSON_ROLE`, `SET_WORK_PERSON_ROLE_CRE
 - the Work-role sections in `docs/local-first-sync.md`.
 
 ## Tag vocabulary
-For `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG`, and `backend/tag_sync.py`, read:
+For `CREATE_TAG`, `DELETE_TAG`, `MERGE_TAG`, and `backend/domain/organization/tag_rules.py`, read:
 - `offline-foundations.md`;
 - `offline-work-sync.md` for tag identity/lifecycle and durable-operation rules;
 - `offline-folder-tag-coherence.md` for Work/Folder tag invalidation and delete/merge reconciliation;
@@ -76,7 +76,7 @@ Read:
 - `offline-entity-coherence.md`: People and Person Group coherence domains;
 - `docs/local-first-sync.md`: "Offline Person editing", "Offline Person creation", "Person Groups".
 
-Code: `backend/person_sync.py`, `backend/person_metadata_sync.py`, `backend/person_group_sync.py`.
+Code: `backend/domain/people/person_rules.py`, `backend/domain/people/person_metadata_rules.py`, `backend/domain/people/group_rules.py`.
 
 ## Folders and folder tags
 Read:
@@ -84,7 +84,7 @@ Read:
 - `offline-folder-tag-coherence.md`;
 - `docs/local-first-sync.md`: "Folders (3F)".
 
-Code: `backend/folder_sync.py`, `backend/folder_tag_sync.py`.
+Code: `backend/domain/organization/folder_rules.py`, `backend/domain/organization/folder_tag_rules.py`.
 
 ## Playlists
 Read:
@@ -92,13 +92,13 @@ Read:
 - `offline-entity-coherence.md`;
 - `docs/local-first-sync.md`: "Playlists (3G)".
 
-Code: `backend/playlist_sync.py`.
+Code: `backend/domain/organization/playlist_rules.py`.
 
 ## Research entities
 Read `offline-foundations.md` + `offline-entity-surfaces.md` + `offline-entity-coherence.md`, then the relevant `docs/local-first-sync.md` section:
-- Concepts: "Concepts (3H)" and `backend/concept_sync.py`.
-- Positions: "Positions (3I)" and `backend/position_sync.py`.
-- Arguments/Stances: "Arguments and Stances (3J)" and `backend/argument_sync.py`.
+- Concepts: "Concepts (3H)" and `backend/domain/research/concept_rules.py`.
+- Positions: "Positions (3I)" and `backend/domain/research/position_rules.py`.
+- Arguments/Stances: "Arguments and Stances (3J)" and `backend/domain/research/argument_rules.py`.
 - Research graph offline behavior: `backend/research_graph.py` plus the research-graph offline tests.
 
 ## Work notes
@@ -120,7 +120,7 @@ Read:
 - `offline-entity-coherence.md`;
 - `docs/local-first-sync.md`: "PDF annotations (V2 local-first boundary)".
 
-Code: `backend/pdf_annotation_sync.py`, related frontend/selftests/E2E.
+Code: `backend/domain/annotations/rules.py`, related frontend/selftests/E2E.
 
 ## Browse / Recent projections
 Read:
@@ -129,7 +129,7 @@ Read:
 - relevant browse/recent sections in `docs/local-first-sync.md` when semantic synchronization behavior is involved.
 
 ## Core durable-operation protocol
-For `sync_protocol.py`, generic durable-operation coordinator/acknowledgement/ledger/conflict machinery, or changes that affect multiple operation families:
+For `backend/sync/envelope.py`, generic durable-operation coordinator/acknowledgement/ledger/conflict machinery, or changes that affect multiple operation families:
 - always read `offline-foundations.md` and `offline-browse-protocol.md`;
 - add every family leaf whose operations can be affected;
 - expand `docs/local-first-sync.md` only to the shared protocol sections and affected families.

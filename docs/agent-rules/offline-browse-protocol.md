@@ -119,10 +119,10 @@ registration, never another branch in a growing conditional.
 
 | Layer | Owns |
 | --- | --- |
-| `backend/sync_protocol.py` | Envelope normalization, request hashing, the `sync_operations` ledger, OP_ID_REUSE, exact replay, `BEGIN IMMEDIATE`, dispatch |
-| `backend/work_tag_sync.py` | Work-Tag relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
-| `backend/work_open_sync.py` | `last_opened_at` max-register, clock-skew policy, MARK_WORK_OPENED handler |
-| `backend/work_metadata_sync.py` | Synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
+| `backend/sync/envelope.py` | Envelope normalization, request hashing, the `sync_operations` ledger, OP_ID_REUSE, exact replay, `BEGIN IMMEDIATE`, dispatch |
+| `backend/domain/organization/work_tag_rules.py` | Work-Tag relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
+| `backend/domain/works/open_rules.py` | `last_opened_at` max-register, clock-skew policy, MARK_WORK_OPENED handler |
+| `backend/domain/works/metadata_rules.py` | Synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, Web Locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay + `prksWorkTagSyncHandler` |
 | `frontend/js/work-open-state.js` | Recent overlay/merge + `prksWorkOpenSyncHandler` |

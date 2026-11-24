@@ -19,7 +19,7 @@ import json
 import os
 import unittest
 
-from backend import work_source_sync
+from backend.domain.works import source_rules
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
@@ -216,7 +216,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         """
         from backend.domain.works import source
 
-        desired = work_source_sync.canonical_source({'kind': 'video', 'url': url})
+        desired = source_rules.canonical_source({'kind': 'video', 'url': url})
         assert desired is not None
         self.db_for(server).command(
             lambda scope: source.set_source(

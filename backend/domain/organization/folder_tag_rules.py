@@ -1,7 +1,7 @@
 """Folder-Tag domain: relationship revisions and the ADD_FOLDER_TAG /
 REMOVE_FOLDER_TAG handler.
 
-Mirrors `work_tag_sync` with conflict unit `(folder, tag)`. The Tag lifecycle
+Mirrors `work_tag_rules` with conflict unit `(folder, tag)`. The Tag lifecycle
 table is shared. Canonical writes share the caller's transaction so one
 `set_state()` boundary serves the sync handler, the direct endpoints, Tag merge
 and Tag delete.

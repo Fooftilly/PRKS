@@ -1,7 +1,7 @@
 /**
  * SET_PERSON_METADATA_FIELD: pending profile edits, and their effective state.
  *
- * The conflict unit is one FIELD, matching `backend/person_metadata_sync.py`:
+ * The conflict unit is one FIELD, matching `backend/domain/people/person_metadata_rules.py`:
  * a biography and a birth date are separate decisions, so a busy scope blocks
  * only its own field and the rest of the form stays editable.
  *

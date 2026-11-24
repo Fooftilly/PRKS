@@ -18,7 +18,7 @@ mutations still require the server.
 
 **Server storage.** The server applies every family on PostgreSQL
 (`backend/sync/`: the ledger in `protocol.py`, one handler per family in
-`handlers/`) with the per-family rules in `backend/*_sync.py`.
+`handlers/`) with the per-family rules in `backend/domain/<area>/*_rules.py`.
 `docs/postgresql-architecture.md` §7 is authoritative for how state is stored;
 a `*_on_conn` helper named below is the rule the PostgreSQL handler keeps.
 
@@ -50,13 +50,13 @@ operations both use.
 
 | Layer | Owns |
 | --- | --- |
-| `backend/sync_protocol.py` | Envelope normalization, request hashing, ledger, OP_ID_REUSE, exact replay, one transaction, dispatch |
-| `backend/work_tag_sync.py` | Relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
-| `backend/work_open_sync.py` | `last_opened_at` max-register, skew policy, MARK_WORK_OPENED handler |
-| `backend/work_metadata_sync.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
-| `backend/work_source_sync.py` | Source-identity aggregate, YouTube parser, SET_WORK_SOURCE handler |
-| `backend/work_role_sync.py` | Role-element revisions, credit validation, ADD/REMOVE/CREDIT handler |
-| `backend/person_sync.py` | CREATE_PERSON handler, shared Person-field contract |
+| `backend/sync/envelope.py` | Envelope normalization, request hashing, ledger, OP_ID_REUSE, exact replay, one transaction, dispatch |
+| `backend/domain/organization/work_tag_rules.py` | Relationship revisions, Tag lifecycle, tag-options, ADD/REMOVE handler |
+| `backend/domain/works/open_rules.py` | `last_opened_at` max-register, skew policy, MARK_WORK_OPENED handler |
+| `backend/domain/works/metadata_rules.py` | The synchronized field registry, per-field revisions, SET_WORK_METADATA_FIELD handler |
+| `backend/domain/works/source_rules.py` | Source-identity aggregate, YouTube parser, SET_WORK_SOURCE handler |
+| `backend/domain/people/role_rules.py` | Role-element revisions, credit validation, ADD/REMOVE/CREDIT handler |
+| `backend/domain/people/person_rules.py` | CREATE_PERSON handler, shared Person-field contract |
 | `backend/entity_ids.py` | Collision-resistant `{prefix}-` + 32 hex ids; legacy 8-hex still valid |
 | `frontend/js/sync-runtime.js` | Transport, claiming, backoff, locks, replay, status transitions, retirement |
 | `frontend/js/work-tag-state.js` | Work-Tag overlay and sync handler |
@@ -451,11 +451,11 @@ effective value is clamped to the server's receive time rather than discarded,
 so a fast clock cannot pin a Work to the top of Recent.
 
 Values are stored as `YYYY-MM-DD HH:MM:SS.mmm` in UTC
-(`work_open_sync.format_moment`), which sorts lexicographically in
+(`open_rules.format_moment`), which sorts lexicographically in
 chronological order. Recent's `id ASC` tie-break is unchanged.
 
 `POST /api/works/:id/opened` remains available for other canonical callers and
-shares `work_open_sync.set_opened_at()` with the sync handler -- server-now is
+shares `open_rules.set_opened_at()` with the sync handler -- server-now is
 simply that caller's event time. One column, one meaning. The browser has
 exactly one open-event path, because two would let online and offline opens
 diverge.
@@ -504,7 +504,7 @@ A render PRKS decided to do -- the reconnect refresh -- is not an open either.
 
 ## Work metadata fields
 
-`backend/work_metadata_sync.SYNCED_FIELDS` is the authoritative registry of
+`backend/domain/works/metadata_rules.SYNCED_FIELDS` is the authoritative registry of
 which Work fields synchronize; the client list is pinned against it by a test.
 Today it holds `status`, `author_text`, `year`, `published_date`, `abstract`,
 `publisher`, `location`, `edition`, `journal`, `volume`, `issue`, `pages` and
@@ -737,7 +737,7 @@ is not the same as being unused** -- that projection selects `works.publisher`
 because Home -> Recently Added filters LOCALLY over it. `abstract` is DERIVED
 into `works-browse:index.abstract_excerpt`, which Progress renders, and 2F
 exists because of that. `FIELD_PROJECTIONS` in
-`backend/work_metadata_sync.py` and `work-metadata-state.js` names both
+`backend/domain/works/metadata_rules.py` and `work-metadata-state.js` names both
 dependencies on both sides, and the parity is pinned by a test -- an earlier
 version of this table claimed publisher reached nothing else, which was wrong.
 
@@ -1496,7 +1496,7 @@ legacy comma-delimited encoding: a credit such as `Smith, John` is preserved
 exactly on the role and is **not** written into aliases (every reader would
 split it into two false aliases). A simple credit that is already represented
 is a no-op. When a promotable credit does append an alias, the write goes
-through `person_metadata_sync.set_field_on_conn` so the Person
+through `person_metadata_rules.set_field_on_conn` so the Person
 `[person_id, "aliases"]` revision advances with the value — never a direct
 `UPDATE persons SET aliases=…` that would leave offline alias edits believing
 themselves current. Role revision and Person-aliases revision remain separate
@@ -1769,7 +1769,7 @@ a durable operation may carry; inventing one here would make a value savable
 through one path and refused through another.
 
 `update_person_metadata` and `update_person_profile` now write through
-`person_metadata_sync.set_field_on_conn` -- the same boundary the handler uses.
+`person_metadata_rules.set_field_on_conn` -- the same boundary the handler uses.
 Revisions record CANONICAL history, not sync-endpoint history: an online PATCH
 that bypassed them would leave an offline device holding the old value with no
 way to discover it was overtaken, and it would overwrite the newer value
@@ -1911,7 +1911,7 @@ the group by doing nothing at all.
 `add_person_group`, `update_person_group`, `delete_person_group`,
 `add_person_to_group`, `remove_person_from_group`, `set_person_group_memberships`
 and the group half of `update_person_profile` all write through
-`person_group_sync`. Revisions record CANONICAL history, not sync-endpoint
+`group_rules`. Revisions record CANONICAL history, not sync-endpoint
 history. Two consequences worth stating:
 
 * replacing a membership set DIFFS it rather than deleting and reinserting, so
@@ -2354,7 +2354,7 @@ definition edit touches the Graph not at all.
 
 The ordinary `POST /api/concepts`, the durable `CREATE_CONCEPT` and
 research-note auto-creation all construct through
-`concept_sync.insert_concept_on_conn()`, so there is exactly one answer to what
+`concept_rules.insert_concept_on_conn()`, so there is exactly one answer to what
 a legal Concept is. Note auto-creation reuses the database primitive, never the
 operation handler: resolve-then-construct stays a higher-level workflow inside
 the caller's note-save transaction.

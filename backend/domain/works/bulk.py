@@ -49,7 +49,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import LiteralString, Optional
 
-from backend import work_metadata_sync as rules
+from backend.domain.works import metadata_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import folders, links
 from backend.domain.works import metadata

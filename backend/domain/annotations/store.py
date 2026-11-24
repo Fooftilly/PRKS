@@ -217,7 +217,7 @@ def check_storable(normalized: dict[str, Any]) -> None:
 
     NUL or a lone surrogate in any text (``text`` and ``jsonb`` refuse NUL;
     psycopg cannot encode a surrogate, a 500 before), an id over 200
-    characters (the sync families' bound, ``pdf_annotation_sync``), and a page
+    characters (the sync families' bound, ``annotations.rules``), and a page
     index beyond ``integer``.
     """
     page = normalized["page_index"]

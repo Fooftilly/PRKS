@@ -1,6 +1,6 @@
 """``SET_WORK_METADATA_FIELD`` on PostgreSQL (L-W-1 #628).
 
-Validated by ``backend/work_metadata_sync.py``'s rule and decided by
+Validated by ``backend/domain/works/metadata_rules.py``'s rule and decided by
 :func:`backend.domain.works.metadata.apply_field_operation`, the same
 decision table with the same results.
 """
@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import work_metadata_sync as rules
+from backend.domain.works import metadata_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import metadata
 from backend.sync.families import Environment, FamilyHandler, Result

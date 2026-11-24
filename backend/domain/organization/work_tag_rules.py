@@ -2,7 +2,7 @@
 ADD_WORK_TAG / REMOVE_WORK_TAG handler.
 
 The generic envelope, request hash, ledger and dispatch live in
-`sync_protocol`. Everything here is specific to what a Work-Tag relationship
+`envelope`. Everything here is specific to what a Work-Tag relationship
 means. All canonical writes share the caller's transaction, so one `set_state()`
 boundary serves the sync handler, the direct endpoints, bulk edits, Tag merge
 and Tag delete -- a relationship change and its revision always advance

@@ -89,7 +89,7 @@ def _fit_conflict(
     JSON string values when they fit, else bounded previews + byte sizes.
     Presence uses ``current_state`` / ``requested_state`` booleans.
     """
-    from backend import work_metadata_sync as meta
+    from backend.domain.works import metadata_rules as meta
 
     cur_s = _view_json(current)
     des_s = _view_json(desired)

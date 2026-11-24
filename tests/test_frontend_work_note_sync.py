@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import unittest
 
-from backend import work_note_sync
+from backend.domain.works import note_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -34,20 +34,20 @@ class WorkNoteSyncFrontendTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         import json
         client = json.loads(proc.stdout)
-        self.assertEqual(client['storeResearch'], work_note_sync.MAX_RESEARCH_NOTE_UTF8_BYTES)
-        self.assertEqual(client['storePrivate'], work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES)
-        self.assertEqual(client['stateResearch'], work_note_sync.MAX_RESEARCH_NOTE_UTF8_BYTES)
-        self.assertEqual(client['statePrivate'], work_note_sync.MAX_PRIVATE_NOTE_UTF8_BYTES)
+        self.assertEqual(client['storeResearch'], note_rules.MAX_RESEARCH_NOTE_UTF8_BYTES)
+        self.assertEqual(client['storePrivate'], note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES)
+        self.assertEqual(client['stateResearch'], note_rules.MAX_RESEARCH_NOTE_UTF8_BYTES)
+        self.assertEqual(client['statePrivate'], note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES)
 
     def test_the_family_is_registered_everywhere_it_must_be(self):
-        from backend import sync_protocol
+        from backend.sync import envelope
         families = ('SET_WORK_RESEARCH_NOTE', 'SET_WORK_PRIVATE_NOTE')
         store = (FRONTEND / 'local-store.js').read_text()
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
             with self.subTest(family=family):
-                self.assertIn(family, sync_protocol.supported_operations())
+                self.assertIn(family, envelope.supported_operations())
                 self.assertIn("'%s'," % family, store)
                 self.assertIn('%s: root.prksNoteSyncHandler' % family, runtime)
                 self.assertIn(family, diagnostics)

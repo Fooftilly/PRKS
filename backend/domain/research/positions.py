@@ -1,6 +1,6 @@
 """Positions on PostgreSQL (L-R-1 #634).
 
-The rules are SQLite's (``backend/position_sync.py``,
+The rules are SQLite's (``backend/domain/research/position_rules.py``,
 ``backend/research_network.py``), imported rather than copied: the name and
 description rules (``canonical_wire``), the scope (``position-field /
 ["P-…","field"]``, one per field, since a Position's two fields are
@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import Any, LiteralString, Optional
 
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import position_sync as rules
+from backend.domain.research import position_rules as rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
 from backend.domain.research.rules import ResearchError
@@ -206,7 +206,7 @@ def set_field(scope: LibraryScope, position_id: str, field: str, value: Any) -> 
 def apply_field_operation(scope: LibraryScope, position_id: str, field: str, value: str,
                           base_revision: int) -> tuple[int, dict[str, Any]]:
     """``SET_POSITION_FIELD``'s ``apply_field``: SQLite's decision table, result for result."""
-    from backend import work_metadata_sync as meta
+    from backend.domain.works import metadata_rules as meta
 
     desired = rules.canonical_wire(field, value)
     result: dict[str, Any] = {"position_id": position_id, "field": field}

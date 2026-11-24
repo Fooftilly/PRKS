@@ -5,7 +5,7 @@
  * effective Work (`provider`, `provider_id`, `source_url`); this module only
  * decides what may be placed in an iframe or an external link.
  *
- * Hosts and the provider-id alphabet match `backend/work_source_sync.py` and
+ * Hosts and the provider-id alphabet match `backend/domain/works/source_rules.py` and
  * `frontend/js/work-source-state.js`. A present `provider_id` short-circuits
  * the URL: an identifier that is not well-formed does not fall through to a
  * different video, and it is never copied into an iframe src.
@@ -18,7 +18,7 @@ export const YOUTUBE_HOSTS: readonly string[] = [
   'youtu.be',
 ]
 
-/** Matches `work_source_sync.MAX_PROVIDER_ID_CHARS` and its alphabet. */
+/** Matches `source_rules.MAX_PROVIDER_ID_CHARS` and its alphabet. */
 export const MAX_PROVIDER_ID_CHARS = 512
 
 const PROVIDER_ID_RE = /^[A-Za-z0-9_-]{1,512}$/

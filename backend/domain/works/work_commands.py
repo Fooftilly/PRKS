@@ -446,13 +446,13 @@ def update_metadata(db: Database, ctx: RequestContext, work_id: str, fields: dic
     (``thumb_page``, ``source_mime``) on a Work with no file or stream is
     refused. Unknown fields are ignored, as on SQLite.
     """
-    from backend import work_metadata_sync as rules
-    from backend import work_source_sync
+    from backend.domain.works import metadata_rules as rules
+    from backend.domain.works import source_rules
     from backend.domain.works.rules import normalize_doc_type
     from backend.library import NotPortedError
 
     updates = {k: v for k, v in fields.items() if k in METADATA_FIELDS}
-    identity_writes = sorted(set(updates) & work_source_sync.SOURCE_AGGREGATE_COLUMNS)
+    identity_writes = sorted(set(updates) & source_rules.SOURCE_AGGREGATE_COLUMNS)
     if identity_writes:
         raise ValueError(
             "%s cannot be set directly: a Work's source identity changes as one "
@@ -485,7 +485,7 @@ def update_metadata(db: Database, ctx: RequestContext, work_id: str, fields: dic
 def _patch_work(scope: LibraryScope, work_id: str, synced: dict[str, str],
                 notes_in: dict[str, Any], plain: dict[str, Any]) -> None:
     """One PATCH, in one transaction, in SQLite's order: guards, plain, notes, fields."""
-    from backend import work_metadata_sync as rules
+    from backend.domain.works import metadata_rules as rules
     from backend.domain.research.rules import ResearchError
     from backend.domain.works import metadata, notes
 

@@ -1,4 +1,5 @@
-from backend import work_note_sync, work_source_sync
+from backend.domain.works import note_rules
+from backend.domain.works import source_rules
 import json
 import gzip
 import os
@@ -656,11 +657,11 @@ def _prks_thumbnail_bytes_from_pixmap(pix) -> tuple[bytes, str]:
 # domain module. A second one here would eventually disagree with it, and the
 # disagreement would surface as a Work whose stored URL and stored provider_id
 # name different videos.
-_YOUTUBE_HOSTS = work_source_sync.YOUTUBE_HOSTS
-_youtube_host = work_source_sync.youtube_host
-_is_youtube_host = work_source_sync.is_youtube_host
-_youtube_video_id = work_source_sync.youtube_video_id
-_validate_youtube_url = work_source_sync.validate_youtube_url
+_YOUTUBE_HOSTS = source_rules.YOUTUBE_HOSTS
+_youtube_host = source_rules.youtube_host
+_is_youtube_host = source_rules.is_youtube_host
+_youtube_video_id = source_rules.youtube_video_id
+_validate_youtube_url = source_rules.validate_youtube_url
 
 
 def _fetch_youtube_oembed(url: str) -> dict | None:
@@ -2122,7 +2123,7 @@ class PRKSHandler(HttpHandlerBase):
             Environment(pdfs_dir=_require_bound(pdfs_dir, "pdfs_dir")))
         acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
         operation = data.get("operation") if isinstance(data, dict) else None
-        if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
+        if acknowledged and operation == note_rules.RESEARCH_OPERATION:
             # The note and its ledger row are committed; a failed derived read
             # leaves the refs out (the client reads them later) and never turns
             # a saved note into an error.

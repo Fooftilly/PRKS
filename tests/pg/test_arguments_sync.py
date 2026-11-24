@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend import sync_protocol
+from backend.sync import envelope
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.works import commands, lifecycle, merge
@@ -22,7 +22,7 @@ from backend.entity_ids import generate
 from backend.sync import protocol
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import argument as argument_handlers
-from backend import argument_sync
+from backend.domain.research import argument_rules
 from tests.pg.test_arguments import ResearchTestCase, pinned, source, target
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
@@ -57,7 +57,7 @@ class ResearchSyncTestCase(SyncTestCase, ResearchTestCase):  # pyright: ignore[r
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
 
@@ -436,7 +436,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
             [pinned(work, only, "\x07")],
             [pinned(work, only, "2"), pinned(work, only, "2")],          # an exact repeat
             [pinned(work, None)] * 2,
-            [pinned(work, None, str(n)) for n in range(argument_sync.MAX_SOURCES + 1)],
+            [pinned(work, None, str(n)) for n in range(argument_rules.MAX_SOURCES + 1)],
         ]
         for sources in bad:
             with self.subTest(sources=str(sources)[:60]):

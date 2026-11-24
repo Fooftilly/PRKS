@@ -1,6 +1,6 @@
 """Arguments and Stances, their targets and cited sources on PostgreSQL (L-R-1 #634).
 
-The rules are SQLite's (``backend/argument_sync.py``,
+The rules are SQLite's (``backend/domain/research/argument_rules.py``,
 ``backend/research_network.py``), imported rather than copied: the field
 rules (``canonical_wire``), the refusals of a citation or target list (code,
 message and status, in SQLite's order), the scopes (``argument-field /
@@ -72,7 +72,7 @@ from dataclasses import dataclass
 from typing import Any, LiteralString, Optional, Sequence
 
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import argument_sync as rules
+from backend.domain.research import argument_rules as rules
 from backend.domain.research import rules as research_rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import revisions
@@ -681,7 +681,7 @@ def set_field(scope: LibraryScope, argument_id: str, field: str, value: Any) -> 
 def apply_field_operation(scope: LibraryScope, argument_id: str, field: str, value: str,
                           base_revision: int) -> tuple[int, dict[str, Any]]:
     """``SET_ARGUMENT_FIELD``'s ``apply_field``: SQLite's decision table, result for result."""
-    from backend import work_metadata_sync as meta
+    from backend.domain.works import metadata_rules as meta
 
     desired = rules.canonical_wire(field, value)
     result: dict[str, Any] = {"argument_id": argument_id, "field": field}

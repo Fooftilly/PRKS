@@ -15,14 +15,16 @@ import unittest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from backend import folder_tag_sync, work_role_sync, work_tag_sync
+from backend.domain.organization import folder_tag_rules
+from backend.domain.people import role_rules
+from backend.domain.organization import work_tag_rules
 
 
 class ScopeKeyProperties(unittest.TestCase):
     @settings(max_examples=50, deadline=None, database=None)
     @given(left=st.text(max_size=32), right=st.text(max_size=32), other=st.text(max_size=32))
     def test_relation_scope_keys_are_structural_and_round_trip(self, left: str, right: str, other: str) -> None:
-        for scope_key in (work_tag_sync.scope_key, folder_tag_sync.scope_key):
+        for scope_key in (work_tag_rules.scope_key, folder_tag_rules.scope_key):
             self.assertEqual(json.loads(scope_key(left, right)), [left, right])
             if right != other:
                 self.assertNotEqual(scope_key(left, right), scope_key(left, other))
@@ -33,12 +35,12 @@ class ScopeKeyProperties(unittest.TestCase):
     @given(work=st.text(max_size=32), person=st.text(max_size=32), other=st.text(max_size=32))
     def test_role_scope_keys_are_structural_and_round_trip(self, work: str, person: str, other: str) -> None:
         for role_type in ("Author", "Editor"):
-            self.assertEqual(json.loads(work_role_sync.scope_key(work, person, role_type)), [work, person, role_type])
-        self.assertNotEqual(work_role_sync.scope_key(work, person, "Author"),
-                            work_role_sync.scope_key(work, person, "Editor"))
+            self.assertEqual(json.loads(role_rules.scope_key(work, person, role_type)), [work, person, role_type])
+        self.assertNotEqual(role_rules.scope_key(work, person, "Author"),
+                            role_rules.scope_key(work, person, "Editor"))
         if person != other:
-            self.assertNotEqual(work_role_sync.scope_key(work, person, "Author"),
-                                work_role_sync.scope_key(work, other, "Author"))
+            self.assertNotEqual(role_rules.scope_key(work, person, "Author"),
+                                role_rules.scope_key(work, other, "Author"))
 
 
 if __name__ == "__main__":

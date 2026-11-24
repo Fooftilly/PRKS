@@ -24,7 +24,7 @@ from run_tests import apply_isolated_test_env
 apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
-from backend.work_metadata_sync import DOC_TYPES
+from backend.domain.works.metadata_rules import DOC_TYPES
 from tests.backend_parity import parametrize_backends
 from tests.bibtex_entry import assert_one_bibtex_entry
 from tests.people_parity_helpers import PeopleParityTestCase, PeopleSide
