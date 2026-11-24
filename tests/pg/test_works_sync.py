@@ -1,7 +1,7 @@
 """The PostgreSQL operation ledger and the Works handlers (L-W-1 #628).
 
-``tests/test_works_sync_parity.py`` proves each Works operation answers as
-on SQLite. These tests cover what only PostgreSQL has (§7.3, §7.6): one
+:class:`AnswerTests` spells out what each Works operation answers. The
+other tests cover the ledger and its races (§7.3, §7.6): one
 ``op_id`` sent concurrently, the ledger looked up before the epoch, a
 ledger row of another account or Library, the device check, a claim rolled
 back with its exception, concurrent writers through the protocol, and
@@ -36,6 +36,7 @@ from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import work_lifecycle, work_metadata
+from tests.pg.test_works_facade import WorksAnswerTestCase
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
 
@@ -955,3 +956,203 @@ class SourceSyncTests(SyncTestCase):
                          ("AAA", "Clip", 0))
         self.library.update_work_metadata(self.work, {"title": "Renamed", "year": "2021"})
         self.assertEqual(require(self.library.get_work(self.work))["title"], "Renamed")
+
+
+_MISSING_WORK = "W-" + "E" * 32
+_ACK = {"code": "ACKNOWLEDGED"}
+
+
+class AnswerTests(SyncTestCase, WorksAnswerTestCase):
+    """What each Works operation answers, spelled out as decision tables."""
+
+    def op(self, operation: str, work_id: str, payload: dict[str, Any], base: Optional[int] = None,
+           **changes: Any) -> Any:
+        return self.labels.show(self.send(self.envelope(operation, work_id, payload, base, **changes)))
+
+    def table(self, operation: str, rows: list[tuple[str, dict[str, Any], Optional[int], Any]]) -> None:
+        for work_id, payload, base, expected in rows:
+            with self.subTest(payload=payload, base=base):
+                self.answer(self.send(self.envelope(operation, work_id, payload, base)), expected)
+
+    def test_open_events(self) -> None:
+        work_id = self.add("work", title="Work", source_url=_VIDEO)
+        opened = {"code": "ACKNOWLEDGED", "effective_opened_at": "<ms>", "work_id": "<W work>",
+                  "recent_item": {"id": "<W work>", "title": "Work", "last_opened_at": "<ms>",
+                                  "primary_asset_id": "<AS work>", "source_kind": "video"}}
+        self.answer(self.op("MARK_WORK_OPENED", work_id, {}, occurred_at="2026-09-11T10:00:00.123Z"),
+                    (200, {**opened, "changed": True}))
+        # The same instant, in another zone.
+        self.answer(self.op("MARK_WORK_OPENED", work_id, {}, occurred_at="2026-09-11T12:00:00.123+02:00"),
+                    (200, {**opened, "changed": False}))
+        self.answer(self.op("MARK_WORK_OPENED", work_id, {}, occurred_at="2030-01-01T00:00:00Z"),
+                    (200, {**opened, "changed": True}))  # a future time is clamped to now
+        self.answer(self.op("MARK_WORK_OPENED", _MISSING_WORK, {}),
+                    (404, {"code": "ENTITY_NOT_FOUND", "work_id": "<unknown id>"}))
+        self.answer(self.op("MARK_WORK_OPENED", work_id, {"unexpected": True}), (400, {"code": "INVALID_ENVELOPE"}))
+        self.answer(self.op("MARK_WORK_OPENED", work_id, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.answer(self.library.get_recent_browse(), [{"id": "<W work>", "last_opened_at": "<ms>"}])
+
+    def test_metadata_fields(self) -> None:
+        work_id = self.add("work", title="Work")
+        video = self.add("video", title="Video", source_url=_VIDEO)
+
+        def ack(field: str, revision: int, changed: bool = True, **value: Any) -> Any:
+            return (200, {**_ACK, "changed": changed, "field": field, "server_revision": revision,
+                          "work_id": "<W work>", **(value or {"value_omitted": True})})
+
+        title_clash = {"current_bytes": 7, "current_preview": "Renamed", "current_revision": 1, "field": "title",
+                       "requested_bytes": 5, "work_id": "<W work>"}
+        self.table("SET_WORK_METADATA_FIELD", [
+            (work_id, {"field": "title", "value": "Renamed"}, 0, ack("title", 1)),
+            (work_id, {"field": "title", "value": "Renamed"}, 1, ack("title", 1, False)),  # no change
+            (work_id, {"field": "title", "value": "Renamed"}, 0, ack("title", 1, False)),  # stale, convergent
+            (work_id, {"field": "title", "value": "Other"}, 0, (409, {"code": "REVISION_CONFLICT", **title_clash})),
+            (work_id, {"field": "title", "value": "Other"}, 5, (400, {"code": "FUTURE_REVISION", **title_clash})),
+            (work_id, {"field": "status", "value": "Paused"}, 0, ack("status", 1, value="Paused")),
+            (work_id, {"field": "status", "value": "Someday"}, 1, (400, {"code": "INVALID_ENVELOPE"})),
+            (work_id, {"field": "doc_type", "value": "book"}, 0, ack("doc_type", 1, value="book")),
+            (work_id, {"field": "year", "value": "1999"}, 0, ack("year", 1, value="1999")),
+            (work_id, {"field": "abstract", "value": "x" * 900}, 0, ack("abstract", 1)),
+            # A conflict on a long value previews its first 400 characters.
+            (work_id, {"field": "abstract", "value": "y" * 900}, 0, (409, {
+                "code": "REVISION_CONFLICT", "current_bytes": 900, "current_preview": "x" * 400,
+                "current_revision": 1, "field": "abstract", "requested_bytes": 900, "work_id": "<W work>"})),
+            (work_id, {"field": "nonsense", "value": "x"}, 0, (400, {"code": "INVALID_ENVELOPE"})),
+            (work_id, {"field": "title", "value": "x"}, None, (400, {"code": "INVALID_BASE_REVISION"})),
+            (video, {"field": "source_url", "value": "https://e.org"}, 0,
+             (409, {"code": "WRONG_OPERATION_FOR_SOURCE", "field": "source_url", "work_id": "<W video>"})),
+            (video, {"field": "thumb_url", "value": "https://img/t.jpg"}, 0, (400, {"code": "INVALID_ENVELOPE"})),
+            (_MISSING_WORK, {"field": "title", "value": "Ghost"}, 0,
+             (404, {"code": "ENTITY_NOT_FOUND", "field": "title", "work_id": "<unknown id>"})),
+        ])
+        self.answer(self.library.get_work(work_id), {"title": "Renamed", "status": "Paused", "doc_type": "book",
+                                                     "year": "1999", "abstract": "x" * 900})
+        self.answer(self.library.get_work(video), {"source_url": _VIDEO, "thumb_url": None})
+
+    def test_notes(self) -> None:
+        work_id = self.add("work", title="Work", private_notes="first")
+        for operation, kind in (("SET_WORK_RESEARCH_NOTE", "work-research-note"),
+                                ("SET_WORK_PRIVATE_NOTE", "work-private-note")):
+            def ack(revision: int, changed: bool = True, kind: str = kind) -> Any:
+                return (200, {**_ACK, "changed": changed, "note_kind": kind, "server_revision": revision,
+                              "value_omitted": True, "work_id": "<W work>"})
+
+            def clash(code: str, status: int, revision: int, requested: int, kind: str = kind) -> Any:
+                return (status, {"code": code, "current_bytes": 3, "current_revision": revision, "note_kind": kind,
+                                 "requested_bytes": requested, "work_id": "<W work>"})
+
+            self.table(operation, [
+                (work_id, {"text": "one"}, 0, ack(1)),
+                (work_id, {"text": "one"}, 0, ack(1, False)),
+                (work_id, {"text": "two"}, 0, clash("REVISION_CONFLICT", 409, 1, 3)),
+                (work_id, {"text": "two"}, 1, ack(2)),
+                (work_id, {"text": "three"}, 9, clash("FUTURE_REVISION", 400, 2, 5)),
+                (work_id, {"text": ""}, 2, ack(3)),
+            ])
+        self.answer(self.op("SET_WORK_PRIVATE_NOTE", _MISSING_WORK, {"text": "x"}, 0), (404, {
+            "code": "ENTITY_NOT_FOUND", "note_kind": "work-private-note", "work_id": "<unknown id>"}))
+        self.answer(self.op("SET_WORK_RESEARCH_NOTE", work_id, {"text": "bell\x07"}, 3),
+                    (400, {"code": "INVALID_ENVELOPE"}))
+        self.answer(self.op("SET_WORK_RESEARCH_NOTE", work_id, {"text": "x"}), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.answer(self.library.get_work(work_id), {"text_content": "", "private_notes": None})
+        self.answer(self.library.get_work_notes_state(work_id),
+                    {"private_note_revision": 3, "research_note_revision": 3, "work_id": "<W work>"})
+
+    def test_sources(self) -> None:
+        video = self.add("video", title="Video", source_url=_VIDEO, thumb_url="https://img/old.jpg")
+        plain = self.add("plain", title="Plain")
+        pdf = self.add_pdf("pdf", "a.pdf", title="Pdf")
+        old = {"provider": "youtube", "provider_id": "dQw4w9WgXcQ", "source_kind": "video", "source_url": _VIDEO,
+               "thumb_url": "https://img/old.jpg", "urldate": None, "work_id": "<W video>"}
+        new = {"provider": "youtube", "provider_id": "9bZkp7q19f0", "source_kind": "video",
+               "source_url": _OTHER_VIDEO, "thumb_url": None, "work_id": "<W video>"}
+        clash = {"current_bytes": 43, "current_preview": _OTHER_VIDEO, "current_provider": "youtube",
+                 "current_provider_id": "9bZkp7q19f0", "current_revision": 1, "requested_bytes": 43,
+                 "work_id": "<W video>"}
+
+        def source(url: str) -> dict[str, Any]:
+            return {"source": {"kind": "video", "url": url}}
+
+        self.table("SET_WORK_SOURCE", [
+            # The same video, spelled differently.
+            (video, source("https://youtu.be/dQw4w9WgXcQ"), 0,
+             (200, {**_ACK, "changed": False, "server_revision": 0, **old})),
+            (video, source(_OTHER_VIDEO), 0, (200, {**_ACK, "changed": True, "server_revision": 1, **new})),
+            (video, source(_VIDEO), 0, (409, {"code": "SOURCE_REVISION_CONFLICT", **clash})),
+            (video, source(_OTHER_VIDEO + "&t=4"), 0,  # stale, the same video
+             (200, {**_ACK, "changed": False, "server_revision": 1, **new})),
+            (video, source(_VIDEO), 7, (400, {"code": "FUTURE_REVISION", **clash})),
+            (plain, source(_VIDEO), 0, (409, {"code": "UNSUPPORTED_SOURCE_TRANSITION", "work_id": "<W plain>"})),
+            (pdf, source(_VIDEO), 0, (409, {"code": "UNSUPPORTED_SOURCE_TRANSITION", "work_id": "<W pdf>"})),
+            (_MISSING_WORK, source(_VIDEO), 0, (404, {"code": "ENTITY_NOT_FOUND", "work_id": "<unknown id>"})),
+            (video, source("https://e.org"), 1, (400, {"code": "INVALID_ENVELOPE"})),
+            (video, source(_VIDEO), None, (400, {"code": "INVALID_BASE_REVISION"})),
+        ])
+        # A replaced video is accessed today.
+        self.assertRegex(require(self.library.get_work(video))["urldate"], r"^\d{4}-\d\d-\d\d$")
+        self.answer(self.library.get_work(video), {"source_url": _OTHER_VIDEO, "provider_id": "9bZkp7q19f0",
+                                                   "thumb_url": None})
+        self.answer(self.library.get_work(plain), {"source_kind": None, "source_url": None})
+        self.answer(self.library.get_work(pdf), {"source_kind": "pdf", "file_path": "/api/pdfs/a.pdf"})
+
+    def test_deletes(self) -> None:
+        plain = self.add("plain", title="Plain")
+        pdf = self.add_pdf("pdf", "d.pdf", title="Pdf")
+        op_id = str(uuid.uuid4())
+        self.answer(self.op("DELETE_WORK", pdf, {}, op_id=op_id), (200, {
+            **_ACK, "changed": True, "file_path": "/api/pdfs/d.pdf", "work_id": "<W pdf>"}))
+        # The replay is what the ledger kept: no path.
+        replay = self.op("DELETE_WORK", pdf, {}, op_id=op_id)
+        self.assertEqual(replay, (200, {**_ACK, "changed": True, "work_id": "<W pdf>"}))
+        self.assertEqual(self.op("DELETE_WORK", plain, {}), (200, {**_ACK, "changed": True, "work_id": "<W plain>"}))
+        # Absence converges.
+        self.assertEqual(self.op("DELETE_WORK", plain, {}), (200, {**_ACK, "changed": False, "work_id": "<W plain>"}))
+        self.assertEqual(self.op("DELETE_WORK", plain, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", plain, {"field": "title", "value": "Late"}, 0),
+                         (404, {"code": "ENTITY_NOT_FOUND", "field": "title", "work_id": "<W plain>"}))
+        self.assertEqual(self.library.get_all_works(), [])
+
+    def test_the_ledger(self) -> None:
+        work_id = self.add("work", title="Work")
+        op_id = str(uuid.uuid4())
+        payload = {"field": "title", "value": "Once"}
+        applied = (200, {**_ACK, "changed": True, "field": "title", "server_revision": 1, "value_omitted": True,
+                         "work_id": "<W work>"})
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, payload, 0, op_id=op_id), applied)
+        # A retry replays the stored answer, even though the base is now stale.
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, payload, 0, op_id=op_id), applied)
+        # Another spelling of the same envelope is the same request.
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, payload, 0, op_id=op_id.upper(),
+                                 occurred_at="2026-09-11T12:00:00+02:00"), applied)
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title", "value": "Twice"}, 0,
+                                 op_id=op_id), (409, {"code": "OP_ID_REUSE"}))
+        # A refused envelope burns nothing: the op_id stays usable.
+        fresh = str(uuid.uuid4())
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title"}, 1, op_id=fresh),
+                         (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title", "value": "Fixed"}, 1,
+                                 op_id=fresh), (200, {**applied[1], "server_revision": 2}))
+        self.assertEqual(self.op("NOT_AN_OPERATION", work_id, {}, 0), (400, {"code": "INVALID_ENVELOPE"}))
+        self.answer(self.library.get_work(work_id), {"title": "Fixed"})
+
+    def test_dependencies(self) -> None:
+        work_id = self.add("work", title="Work")
+        first, second = str(uuid.uuid4()), str(uuid.uuid4())
+        year = {"field": "year", "value": "2001"}
+        unsatisfied = (400, {"code": "UNSATISFIED_DEPENDENCY"})
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, year, 0, op_id=second, depends_on=[first]),
+                         unsatisfied)
+        self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title", "value": "First"}, 0, op_id=first)
+        # The early attempt was not ledgered, so its retry now applies.
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, year, 0, op_id=second, depends_on=[first]),
+                         (200, {**_ACK, "changed": True, "field": "year", "server_revision": 1, "value": "2001",
+                                "work_id": "<W work>"}))
+        # A dependency that was refused is not satisfied.
+        refused = str(uuid.uuid4())
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title", "value": "Clash"}, 0,
+                                 op_id=refused)[1]["code"], "REVISION_CONFLICT")
+        issue = {"field": "issue", "value": "3"}
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, issue, 0, depends_on=[refused]), unsatisfied)
+        self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, issue, 0,
+                                 depends_on=[str(uuid.uuid4()).upper(), str(uuid.uuid4())]), unsatisfied)
+        self.answer(self.library.get_work(work_id), {"title": "First", "year": "2001", "issue": ""})
