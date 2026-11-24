@@ -20,21 +20,22 @@ passed **837/837 tests**, including offline reload. These observations do
 The dedicated **E2E Classic Production Distribution Gate** runs all eight shards
 against the actual generated files in this PR, not the diagnostic candidate.
 
-### Packaged E2E CI cost pilot (manual only)
+### Packaged E2E runs
 
-The non-required **E2E Classic Production Distribution Gate** retains its full
-eight-shard packaged-browser matrix on every matching pull request. Docker
-bundle/rollback image checks and the real Chromium service-worker
-upgrade/offline-boot/downgrade test remain separate jobs.
+The non-required **E2E Classic Production Distribution Gate** always runs the
+Docker bundle/rollback image checks and the real Chromium service-worker
+upgrade/offline-boot/downgrade test as separate jobs. Its browser tests depend
+on the change (`plan_packaged_e2e` in `tests/e2e/policy.py`):
 
-For an **opt-in measurement**, open Actions → E2E Classic Production
-Distribution Gate → Run workflow and select `packaged_mode=smoke`. The
-manual-only job stages the same deterministic production frontend, runs the
-nine curated real-Chromium smoke cases (shell, Work, offline cache and durable
-store), and additionally tests divider reload prevention and a PDF annotation
-interaction. The Docker and SW transition jobs still run. The default/manual
-`packaged_mode=full` and **every PR** run all eight packaged shards;
-there is no automatic coverage reduction.
+- a pull request that changes a packaging path runs all eight packaged shards;
+- any other matching pull request runs only the smoke job, which stages the
+  same deterministic production frontend, runs the nine curated real-Chromium
+  smoke cases (shell, Work, offline cache and durable store), and additionally
+  tests divider reload prevention, PDF annotation and offline PDF reopening,
+  and offline Graph navigation;
+- manual `packaged_mode=full` (which the nightly master CI dispatches) runs all
+  eight shards, `smoke` runs the smoke job alone, and `compare` runs both on
+  one commit.
 
 Baseline from [PR #742](https://github.com/Fooftilly/PRKS/pull/742)
 (October 17, 2026): [six checkout shards](https://github.com/Fooftilly/PRKS/actions/runs/39054070761)
