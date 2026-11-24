@@ -1,7 +1,7 @@
 """The Tag sync handlers on PostgreSQL (L-O-1 #633).
 
-``tests/test_tags_parity.py`` proves each Tag operation answers as on
-SQLite. These tests cover what only PostgreSQL has: races decided by row
+The decision tables and :class:`AnswerTests` spell out what each Tag
+operation answers. The rest cover races decided by row
 locks, SERIALIZABLE retries and the ``tag_keys`` index, each held open until
 the other side waits (§7.1); one ``op_id`` replayed, reused or sent
 concurrently; a stale operation after a delete or a merge, and after its
@@ -450,3 +450,61 @@ class RecreatedWorkTagTests(TagSyncTestCase):
         self.assertEqual(self.send(self.link("ADD_WORK_TAG", work_id, tag, 1)), (409, {
             "code": "REVISION_CONFLICT", "work_id": work_id, "tag_id": tag, "current_revision": 2,
             "current_state": False, "requested_state": True}))
+
+
+class AnswerTests(TagSyncTestCase):
+    """The answers the decision tables above leave out, spelled out."""
+
+    def test_refused_creates(self) -> None:
+        ethics = self.create_tag("Ethics")
+        for data in (self.create("Ethics", "T-1"), self.create("  "),
+                     self.envelope("CREATE_TAG", generate("T"), {"name": "Base", "color": "#6d6cf7"}, 0)):
+            with self.subTest(data=data["payload"], entity_id=data["entity_id"]):
+                expected = "INVALID_BASE_REVISION" if data["base_revision"] == 0 else "INVALID_ENVELOPE"
+                self.assertEqual(self.send(data), (400, {"code": expected}))
+        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [ethics])
+
+    def test_link_answers(self) -> None:
+        work, folder, tag = self.library.add_work("W"), self.folder(), self.create_tag("Ethics")
+        missing = generate("T")
+        for operation, owner, key in (("WORK", work, "work_id"), ("FOLDER", folder, "folder_id")):
+            add, remove = "ADD_%s_TAG" % operation, "REMOVE_%s_TAG" % operation
+            with self.subTest(operation=operation):
+                self.assertEqual(self.send(self.link(add, owner, tag, 0)), (200, {
+                    "code": "ACKNOWLEDGED", "changed": True, "present": True, "server_revision": 1, key: owner,
+                    "tag_id": tag, "tag": {"id": tag, "name": "Ethics", "color": "#6d6cf7"}}))
+                self.assertEqual(self.send(self.link(remove, owner, tag, 5)), (400, {
+                    "code": "FUTURE_REVISION", key: owner, "tag_id": tag, "current_revision": 1,
+                    "current_state": True, "requested_state": False}))
+                status, removed = self.send(self.link(remove, owner, tag, 1))
+                self.assertEqual((status, removed["present"], removed["server_revision"]), (200, False, 2))
+                self.assertEqual(self.send(self.link(add, owner, missing, 0)),
+                                 (404, {"code": "ENTITY_NOT_FOUND", key: owner, "tag_id": missing}))
+                self.assertEqual(self.send(self.envelope(add, owner, {"tag_id": tag}, None)),
+                                 (400, {"code": "INVALID_BASE_REVISION"}))
+                self.assertEqual(self.send(self.link(add, owner, " x", 0)), (400, {"code": "INVALID_ENVELOPE"}))
+
+    def test_delete_and_merge_answers(self) -> None:
+        work, folder = self.library.add_work("W"), self.folder()
+        source, target, gone = self.create_tag("A"), self.create_tag("B"), self.create_tag("C")
+        self.send(self.link("ADD_WORK_TAG", work, source, 0))
+        self.send(self.link("ADD_WORK_TAG", work, gone, 0))
+        self.send(self.link("ADD_FOLDER_TAG", folder, source, 0))
+        self.assertEqual(self.send(self.envelope("DELETE_TAG", gone, {})), (200, {
+            "code": "ACKNOWLEDGED", "changed": True, "tag_id": gone, "affected_work_ids": [work],
+            "affected_folder_ids": [], "affected_tag_options_work_ids": [work],
+            "affected_tag_options_folder_ids": []}))
+        self.assertEqual(self.send(self.envelope("DELETE_TAG", gone, {})), (200, {
+            "code": "ACKNOWLEDGED", "changed": False, "tag_id": gone, "affected_work_ids": [],
+            "affected_folder_ids": [], "affected_tag_options_work_ids": [],
+            "affected_tag_options_folder_ids": []}))
+        self.assertEqual(self.send(self.link("ADD_WORK_TAG", work, gone, 2)),
+                         (409, {"code": "TAG_DELETED", "tag_id": gone, "work_id": work}))
+        self.assertEqual(self.send(self.merge(source, source)), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.merge(source, target)), (200, {
+            "code": "ACKNOWLEDGED", "changed": True, "tag_id": source, "canonical_tag_id": target,
+            "canonical_name": "B", "affected_work_ids": [work], "affected_folder_ids": [folder],
+            "affected_tag_options_work_ids": [work], "affected_tag_options_folder_ids": [folder]}))
+        self.assertEqual(self.send(self.link("REMOVE_WORK_TAG", work, source, 1)),
+                         (409, {"code": "TAG_MERGED", "tag_id": source, "target_tag_id": target, "work_id": work}))
+        self.assertEqual(self.send(self.envelope("DELETE_TAG", target, {"x": 1})), (400, {"code": "INVALID_ENVELOPE"}))

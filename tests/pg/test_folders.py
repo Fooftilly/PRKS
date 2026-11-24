@@ -1,7 +1,7 @@
 """Folders, their hierarchy and fields, and Work filing on PostgreSQL: what parity cannot show (L-O-1 #633).
 
-``tests/test_folders_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: titles compared by identity key
+:class:`AnswerTests` spells out the JSON each command answers. The rest
+cover titles compared by identity key
 per parent (root folders in one scope), refusals of what PostgreSQL text
 cannot hold, tombstones a delete leaves, the Work delete taking the Work
 out of its Folder, Library isolation, and concurrent writers (each race
@@ -18,13 +18,15 @@ from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.identity.library_scope import LibraryScope
-from backend.domain.organization import folders, links, tags
+from backend.domain.organization import folder_commands, folders, links, tags
 from backend.domain.works import commands
 from backend.domain.entity_ids import generate
 from backend.domain.organization.folder_rules import FolderRuleError, scope_key
 from tests import acting_context as facade_context
 from tests.pg.test_tags import OrganizationTestCase
+from backend.web.etags import etag_for_representation
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
 
 
 class FolderTestCase(OrganizationTestCase):
@@ -587,3 +589,165 @@ class RaceTests(FolderTestCase):
         # The removal advanced the link's scope once, the Folder's tombstone once.
         self.assertEqual(self.revisions("folder-tag")[links.FOLDER.scope_id(folder_id, tag_id)],
                          2 if folder_first else 3)
+
+
+_MISSING_FOLDER = "F-" + "0" * 32
+_MISSING_WORK = "W-" + "0" * 32
+
+
+class AnswerTests(AnswerAssertions, FolderTestCase):
+    """The JSON each Folder command and read answers, spelled out."""
+
+    def named(self, title: str, parent_id: Optional[str] = None, description: str = "") -> str:
+        folder_id = folder_commands.create(self.db, self.actor.context, title, description, parent_id)
+        return self.labels.name(folder_id, f"<F {title}>")
+
+    def named_work(self, title: str) -> str:
+        return self.labels.name(self.library.add_work(title), f"<W {title}>")
+
+    def detail(self, folder_id: str) -> Optional[dict[str, Any]]:
+        return folder_commands.detail(self.db, self.actor.context, folder_id, self.storage.pdfs_dir)
+
+    def catalog(self) -> list[dict[str, Any]]:
+        return folder_commands.catalog(self.db, self.actor.context)
+
+    @staticmethod
+    def row(label: str, title: str, parent: Optional[str] = None, **fields: Any) -> dict[str, Any]:
+        return {"child_count": 0, "created_at": "<s>", "description": "", "id": label, "parent_id": parent,
+                "private_notes": "", "title": title, "updated_at": "<s>", "work_count": 0, **fields}
+
+    def test_create_read_and_list(self) -> None:
+        db, ctx = self.db, self.actor.context
+        root = self.named("Root", description="About")
+        child = self.named("Child", root)
+        other = self.named("Other")
+        for title, parent, message in (("root", None, _TAKEN), ("CHILD", root, _TAKEN),
+                                       ("Lost", _MISSING_FOLDER, "Parent folder not found.")):
+            with self.subTest(title=title):
+                self.refused(lambda: folder_commands.create(db, ctx, title, "", parent), message)
+        catalog = self.catalog()
+        self.answer(catalog, [self.row("<F Child>", "Child", "<F Root>"), self.row("<F Other>", "Other"),
+                              self.row("<F Root>", "Root", child_count=1, description="About")])
+        self.assertRegex(etag_for_representation("folders", catalog), r'^W/"prks-folders-3-[0-9a-f]+"$')
+        # The same title under another parent.
+        self.labels.name(folder_commands.create(db, ctx, "Child", "", other), "<F Other/Child>")
+        self.answer(self.detail(other), {
+            "children": [{"child_count": 0, "description": "", "id": "<F Other/Child>", "parent_id": "<F Other>",
+                          "title": "Child", "work_count": 0}],
+            "created_at": "<s>", "description": "", "id": "<F Other>", "parent": None, "parent_id": None,
+            "private_notes": "", "tags": [], "title": "Other", "updated_at": "<s>", "works": []})
+        self.answer(self.detail(child), {
+            "children": [], "id": "<F Child>", "parent": {"id": "<F Root>", "title": "Root"},
+            "parent_id": "<F Root>", "title": "Child", "works": []})
+        self.assertIsNone(self.detail(_MISSING_FOLDER))
+        self.answer(folder_commands.sync_state(db, ctx, child), {
+            "fields": {"description": {"revision": 0}, "parent_id": {"revision": 0},
+                       "private_notes": {"revision": 0}, "title": {"revision": 0}},
+            "folder_id": "<F Child>"})
+        self.assertIsNone(folder_commands.sync_state(db, ctx, _MISSING_FOLDER))
+        self.assertEqual([folder_commands.exists(db, ctx, folder_id) for folder_id in (root, _MISSING_FOLDER, "  ")],
+                         [True, False, False])
+
+    def test_fields_hierarchy_and_their_revisions(self) -> None:
+        db, ctx = self.db, self.actor.context
+        a = self.named("A")
+        b = self.named("B", a)
+        twin = self.named("b")
+        self.assertIsNone(folder_commands.update(db, ctx, b, {"title": "Renamed", "description": " About ",
+                                                             "private_notes": "Mine"}))
+        self.assertIsNone(folder_commands.update(db, ctx, b, {"title": "Renamed", "ignored": "x"}))
+        for folder_id, fields, message in (
+                (a, {"parent_id": a}, "A folder cannot be its own parent."),
+                (twin, {"title": "a"}, _TAKEN),
+                (twin, {"title": "renamed", "parent_id": a}, _TAKEN),
+                (a, {"parent_id": b}, "Cannot set parent to a subfolder (cycle)."),
+                (_MISSING_FOLDER, {"title": "X"}, "Folder not found.")):
+            with self.subTest(fields=fields):
+                self.refused(lambda: folder_commands.update(db, ctx, folder_id, fields), message)
+        # Rename first, then move: the pair is judged against the new title.
+        folder_commands.update(db, ctx, twin, {"title": "C", "parent_id": a})
+        revisions = {folder_id: {field: value["revision"]
+                                 for field, value in require(folder_commands.sync_state(db, ctx, folder_id))["fields"].items()}
+                     for folder_id in (a, b, twin)}
+        self.assertEqual(revisions, {
+            a: {"description": 0, "parent_id": 0, "private_notes": 0, "title": 0},
+            b: {"description": 1, "parent_id": 0, "private_notes": 1, "title": 1},
+            twin: {"description": 0, "parent_id": 1, "private_notes": 0, "title": 1}})
+        self.answer(require(self.detail(a))["children"], [
+            {"child_count": 0, "description": "", "id": "<F b>", "parent_id": "<F A>", "title": "C", "work_count": 0},
+            {"child_count": 0, "description": "About", "id": "<F B>", "parent_id": "<F A>", "title": "Renamed",
+             "work_count": 0}])
+        self.answer(self.catalog(), [self.row("<F A>", "A", child_count=2), self.row("<F b>", "C", "<F A>"),
+                                     self.row("<F B>", "Renamed", "<F A>", description="About",
+                                              private_notes="Mine")])
+
+    def test_work_filing_and_the_work_projection(self) -> None:
+        db, ctx = self.db, self.actor.context
+        a, b = self.named("A"), self.named("B")
+        work = self.named_work("Paper")
+        self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "", "revision": 0, "work_id": "<W Paper>"})
+        for call, message in ((lambda: folder_commands.file_work(db, ctx, _MISSING_FOLDER, work),
+                               "The selected folder no longer exists."),
+                              (lambda: folder_commands.move_work(db, ctx, work, _MISSING_FOLDER), "Folder not found."),
+                              (lambda: folder_commands.file_work(db, ctx, " ", work), "folder_id is required"),
+                              (lambda: folder_commands.move_work(db, ctx, " ", a), "work_id is required")):
+            self.refused(call, message)
+        folder_commands.move_work(db, ctx, work, a)
+        folder_commands.move_work(db, ctx, work, a)  # no change, no revision
+        self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "<F A>", "revision": 1, "work_id": "<W Paper>"})
+        self.refused(lambda: folder_commands.file_work(db, ctx, b, work), "This file is already in another folder.")
+        self.assertIsNone(folder_commands.file_work(db, ctx, a, work))
+        self.answer(require(self.library.get_work(work)), {"folder_id": "<F A>", "folder_title": "A"})
+        self.answer([row["folder_id"] for row in self.library.get_all_works()], ["<F A>"])
+        self.answer([row["folder_id"] for row in self.library.get_recently_added_browse()], ["<F A>"])
+        works = require(self.detail(a))["works"]
+        self.answer([row["id"] for row in works], ["<W Paper>"])
+        self.assertNotIn("folder_id", works[0])
+        self.answer(folder_commands.member_work_ids(db, ctx, a), ["<W Paper>"])
+        folder_commands.move_work(db, ctx, work, b)
+        self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "<F B>", "revision": 2, "work_id": "<W Paper>"})
+        self.answer([(row["id"], row["work_count"]) for row in self.catalog()], [("<F A>", 0), ("<F B>", 1)])
+        folder_commands.move_work(db, ctx, work, None)
+        self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "", "revision": 3, "work_id": "<W Paper>"})
+        self.assertIsNone(folder_commands.work_state(db, ctx, _MISSING_WORK))
+        self.answer(require(self.library.get_work(work)), {"folder_id": None, "folder_title": None})
+
+    def test_uncategorized_and_related_folders(self) -> None:
+        db, ctx = self.db, self.actor.context
+        uncategorized = self.labels.name(folder_commands.ensure_uncategorized(db, ctx), "<F Uncategorized>")
+        self.assertEqual(folder_commands.ensure_uncategorized(db, ctx), uncategorized)
+        self.assertEqual(self.catalog(), [])  # hidden while empty
+        talks = self.named("Talks")
+        first, second = self.named_work("First"), self.named_work("Second")
+        person = self.library.add_person("", "Lee")
+        for work in (first, second):
+            self.library.add_role(person, work, "Author")
+        folder_commands.move_work(db, ctx, first, uncategorized)
+        folder_commands.move_work(db, ctx, second, talks)
+        self.answer(self.catalog(), [self.row("<F Talks>", "Talks", work_count=1),
+                                     self.row("<F Uncategorized>", "Uncategorized", work_count=1)])
+        related = {"created_at": "<s>", "description": "", "parent_id": None, "private_notes": "", "updated_at": "<s>"}
+        # A Work's related Folders hold its authors' other Works.
+        self.answer(folder_commands.related(db, ctx, first), [{**related, "id": "<F Talks>", "title": "Talks"}])
+        self.answer(folder_commands.related(db, ctx, second),
+                    [{**related, "id": "<F Uncategorized>", "title": "Uncategorized"}])
+
+    def test_delete(self) -> None:
+        db, ctx = self.db, self.actor.context
+        parent = self.named("Parent")
+        self.named("Child", parent)
+        busy = self.named("Busy")
+        work = self.named_work("W")
+        folder_commands.move_work(db, ctx, work, busy)
+        for folder_id, message in (
+                (parent, "Cannot delete folder: Folder has subfolders. Please move or delete them first."),
+                (busy, "Cannot delete folder: Folder is not empty. Please remove all files first."),
+                (_MISSING_FOLDER, "Folder not found."), (" ", "Folder not found.")):
+            with self.subTest(folder=folder_id):
+                self.refused(lambda: folder_commands.delete(db, ctx, folder_id), message)
+        folder_commands.move_work(db, ctx, work, "")
+        self.library.add_tag_to_folder(busy, self.tag("Ethics"))
+        self.assertIsNone(folder_commands.delete(db, ctx, busy))
+        self.assertIsNone(self.detail(busy))
+        self.answer([row["id"] for row in self.catalog()], ["<F Child>", "<F Parent>"])
+        self.assertEqual([row["name"] for row in self.library.get_all_tags()], ["Ethics"])

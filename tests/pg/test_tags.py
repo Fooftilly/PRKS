@@ -1,7 +1,7 @@
 """Tags, aliases, delete, merge and Work/Folder tags on PostgreSQL: what parity cannot show (L-O-1 #633).
 
-``tests/test_tags_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: identity keys (Unicode names
+:class:`AnswerTests` spells out the JSON each command answers. The rest
+cover identity keys (Unicode names
 that are one name, or two), the shared ``tag_keys`` namespace, refusals of
 what PostgreSQL text cannot hold, the lifecycle and its flattening,
 tombstones, integrity after every destructive command, Library isolation,
@@ -17,12 +17,14 @@ from typing import Any
 
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.identity.library_scope import LibraryScope, library_query
-from backend.domain.organization import lifecycle, links, tags
+from backend.domain.organization import lifecycle, links, tag_commands, tags
 from backend.domain.works import commands
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
+from backend.web.etags import etag_for_representation
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
 
 
 class OrganizationTestCase(PeopleFacadeTestCase):
@@ -507,3 +509,123 @@ class ConcurrencyTests(OrganizationTestCase):
         self.assertEqual(contender["affected_tag_options_work_ids"], [work])
         self.assertEqual(self.revisions("work-tag"), {scope_id: 2})
         self.assertEqual(self.count("work_tags"), 0)
+
+
+class AnswerTests(AnswerAssertions, OrganizationTestCase):
+    """The JSON each Tag command and read answers, spelled out."""
+
+    def create(self, name: str, color: str = "#6d6cf7") -> dict[str, Any]:
+        return tag_commands.create(self.db, self.actor.context, name, color)
+
+    def named_tag(self, name: str) -> str:
+        return self.labels.name(self.create(name)["id"], f"<T {name}>")
+
+    def named_work(self, title: str) -> str:
+        return self.labels.name(self.library.add_work(title), f"<W {title}>")
+
+    def named_folder(self, title: str) -> str:
+        return self.labels.name(self.folder(title), f"<F {title}>")
+
+    def test_names_aliases_and_the_catalog(self) -> None:
+        db, ctx = self.db, self.actor.context
+        ethics, logic = self.named_tag("Ethics"), self.named_tag("Logic")
+        self.answer(self.create("ETHICS", "#123456"),
+                    {"color": "#123456", "existed": True, "id": "<T Ethics>", "name": "Ethics"})
+        self.assertIsNone(tag_commands.add_alias(db, ctx, ethics, "Morals"))
+        self.assertIsNone(tag_commands.add_alias(db, ctx, ethics, "morals"))
+        for tag, alias, message in ((ethics, "ethics", "alias matches canonical tag name"),
+                                    (ethics, "LOGIC", "alias conflicts with another tag name"),
+                                    (logic, "MORALS", "alias already used"),
+                                    (ethics, "  ", "alias is empty"),
+                                    ("T-" + "0" * 32, "x", "tag not found")):
+            with self.subTest(alias=alias):
+                self.refused(lambda: tag_commands.add_alias(db, ctx, tag, alias), message)
+        # An alias resolves to its Tag, in a create too.
+        self.answer(self.create("Morals"), {"color": "#6d6cf7", "existed": True, "id": "<T Ethics>",
+                                            "name": "Ethics"})
+        self.answer(self.library.resolve_tag_id_by_label("MORALS"), "<T Ethics>")
+        self.assertIsNone(self.library.resolve_tag_id_by_label("nothing"))
+        catalog = tag_commands.all_tags(db, ctx)
+        self.answer(catalog, [
+            {"aliases": ["Morals"], "color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"},
+            {"aliases": [], "color": "#6d6cf7", "created_at": "<s>", "id": "<T Logic>", "name": "Logic"}])
+        before = etag_for_representation("tags", catalog)
+        self.assertRegex(before, r'^W/"prks-tags-2-[0-9a-f]+"$')
+        self.assertIs(tag_commands.delete_alias(db, ctx, ethics, "MORALS"), True)
+        self.assertIs(tag_commands.delete_alias(db, ctx, ethics, "Morals"), False)
+        catalog = tag_commands.all_tags(db, ctx)
+        self.answer([row["aliases"] for row in catalog], [[], []])
+        self.assertNotEqual(etag_for_representation("tags", catalog), before)
+        self.refused(lambda: self.create("  "), "tag name is empty")
+
+    def test_work_and_folder_tags_and_their_options(self) -> None:
+        db, ctx = self.db, self.actor.context
+        work, folder = self.named_work("W"), self.named_folder("F")
+        ethics, logic = self.named_tag("Ethics"), self.named_tag("Logic")
+        for link, unlink, owner in ((tag_commands.tag_work, tag_commands.untag_work, work),
+                                    (tag_commands.tag_folder, tag_commands.untag_folder, folder)):
+            self.assertIsNone(link(db, ctx, owner, ethics))
+            self.assertIsNone(link(db, ctx, owner, logic))
+            self.assertIsNone(unlink(db, ctx, owner, logic))
+        # Removing an absent link is a no-op.
+        self.assertIsNone(tag_commands.untag_work(db, ctx, work, logic))
+        assigned = [{"relation_revision": 1, "tag_id": "<T Ethics>"}]
+        self.answer(tag_commands.work_options(db, ctx, work),
+                    {"assigned": assigned, "known_absent": {"<T Logic>": 2}, "work_id": "<W W>"})
+        self.answer(tag_commands.folder_options(db, ctx, folder),
+                    {"assigned": assigned, "folder_id": "<F F>", "known_absent": {"<T Logic>": 2}})
+        row = {"color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"}
+        self.answer(self.library.get_work_tags(work), [row])
+        self.answer(self.library.get_folder_tags(folder), [row])
+        self.answer(require(self.library.get_work(work))["tags"], [row])
+        self.answer(tag_commands.in_use(db, ctx), [{**row, "aliases": [], "folder_count": 1, "work_count": 1}])
+        self.assertIsNone(tag_commands.work_options(db, ctx, "W-" + "0" * 32))
+
+    def test_delete(self) -> None:
+        db, ctx = self.db, self.actor.context
+        work, folder, unlinked = self.named_work("W"), self.named_folder("F"), self.named_work("U")
+        ethics = self.named_tag("Ethics")
+        tag_commands.add_alias(db, ctx, ethics, "Morals")
+        tag_commands.tag_work(db, ctx, work, ethics)
+        tag_commands.tag_folder(db, ctx, folder, ethics)
+        tag_commands.tag_work(db, ctx, unlinked, ethics)
+        tag_commands.untag_work(db, ctx, unlinked, ethics)
+        # A Work whose link was removed still has its options refreshed.
+        self.answer(tag_commands.delete(db, ctx, ethics), {
+            "affected_folder_ids": ["<F F>"], "affected_tag_options_folder_ids": ["<F F>"],
+            "affected_tag_options_work_ids": ["<W U>", "<W W>"], "affected_work_ids": ["<W W>"],
+            "status": "deleted"})
+        self.answer(tag_commands.work_options(db, ctx, work), {"assigned": [], "known_absent": {}, "work_id": "<W W>"})
+        self.answer(tag_commands.work_options(db, ctx, unlinked),
+                    {"assigned": [], "known_absent": {}, "work_id": "<W U>"})
+        self.answer(tag_commands.folder_options(db, ctx, folder),
+                    {"assigned": [], "folder_id": "<F F>", "known_absent": {}})
+        self.assertEqual(tag_commands.all_tags(db, ctx), [])
+        self.assertIsNone(self.library.resolve_tag_id_by_label("Morals"))
+        self.refused(lambda: tag_commands.delete(db, ctx, ethics), "tag not found")
+        self.refused(lambda: tag_commands.delete(db, ctx, ""), "tag_id is required")
+
+    def test_merge(self) -> None:
+        db, ctx = self.db, self.actor.context
+        source, target = self.named_tag("Moral philosophy"), self.named_tag("Ethics")
+        tag_commands.add_alias(db, ctx, source, "Morals")
+        only, shared, folder = self.named_work("Only"), self.named_work("Shared"), self.named_folder("F")
+        for work in (only, shared):
+            tag_commands.tag_work(db, ctx, work, source)
+        tag_commands.tag_work(db, ctx, shared, target)
+        tag_commands.tag_folder(db, ctx, folder, source)
+        self.answer(tag_commands.merge(db, ctx, source, target), {
+            "affected_folder_ids": ["<F F>"], "affected_tag_options_folder_ids": ["<F F>"],
+            "affected_tag_options_work_ids": ["<W Only>", "<W Shared>"],
+            "affected_work_ids": ["<W Only>", "<W Shared>"],
+            "canonical_name": "Ethics", "canonical_tag_id": "<T Ethics>"})
+        assigned = [{"relation_revision": 1, "tag_id": "<T Ethics>"}]
+        for work, label in ((only, "<W Only>"), (shared, "<W Shared>")):
+            self.answer(tag_commands.work_options(db, ctx, work),
+                        {"assigned": assigned, "known_absent": {}, "work_id": label})
+        self.answer(tag_commands.folder_options(db, ctx, folder),
+                    {"assigned": assigned, "folder_id": "<F F>", "known_absent": {}})
+        row = {"aliases": ["Moral philosophy", "Morals"], "color": "#6d6cf7", "created_at": "<s>",
+               "id": "<T Ethics>", "name": "Ethics"}
+        self.answer(tag_commands.all_tags(db, ctx), [row])
+        self.answer(tag_commands.in_use(db, ctx), [{**row, "folder_count": 1, "work_count": 2}])
