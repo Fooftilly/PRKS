@@ -143,12 +143,13 @@
         const tags = work.tags.filter(t => t.id !== ack.tag_id);
         if (ack.present) tags.push(ack.tag);
         ctx.setEntity('work', { ...work, tags });
-        if (state.options) {
-            state.options.assigned = state.options.assigned.filter(t => t.tag_id !== ack.tag_id);
-            delete state.options.known_absent[ack.tag_id];
-            if (ack.present) state.options.assigned.push({ tag_id: ack.tag_id, relation_revision: ack.server_revision });
-            else if (ack.server_revision) state.options.known_absent[ack.tag_id] = ack.server_revision;
-        }
+        if (state.options) setOptionsBase(state.options, ack.tag_id, ack.present, ack.server_revision);
+    }
+    function setOptionsBase(options, tagId, present, revision) {
+        options.assigned = options.assigned.filter(t => t.tag_id !== tagId);
+        delete options.known_absent[tagId];
+        if (present) options.assigned.push({ tag_id: tagId, relation_revision: revision });
+        else if (revision) options.known_absent[tagId] = revision;
     }
     /** Entity-only tag acknowledgement for a parked owner. No options, no paint. */
     function applyWorkTagEntityAck(ctx, ack) {
@@ -361,8 +362,13 @@
             if ((state.readVersion || 0) !== version) continue;
             /* Supersede any prepare() still reading the older projection. */
             state.readVersion = version + 1;
-            state.options = read.value;
-            return root.prksWorkTagBase(state.options, tagId);
+            const base = root.prksWorkTagBase(read.value, tagId);
+            /* Only this Tag's base: the Work entity is brought up to date for
+             * this Tag alone, and another Tag's base must never run ahead of
+             * the chip it is measured against. */
+            if (state.options) setOptionsBase(state.options, tagId, base.present, base.revision);
+            else state.options = read.value;
+            return base;
         }
         if (outcome === 'settled') return null;
         return state.options ? root.prksWorkTagBase(state.options, tagId) : null;

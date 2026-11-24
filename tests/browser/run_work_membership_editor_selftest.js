@@ -669,7 +669,10 @@ async function tagSettledInAnotherTab(path) {
     let optionReads = 0;
     global.prksReadWorkTagOptions = async function (workId) {
         optionReads += 1;
-        return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }], known_absent: {} } };
+        /* t2 also changed in the other tab, through a row this panel never
+         * saw: its base must not run ahead of the t2 chip still shown. */
+        return { value: { work_id: workId, assigned: [{ tag_id: 't1', relation_revision: 2 }],
+            known_absent: { t2: 4 } } };
     };
     panel().innerHTML = '<div id="work-tags-list"></div>';
     const before = syncListeners.length;
@@ -677,10 +680,14 @@ async function tagSettledInAnotherTab(path) {
     const state = main.getResource('workTagEditor');
     await until(function () { return state.paintVersion >= 1; }, 'first paint');
     await new Promise(function (resolve) { setTimeout(resolve, 0); });
-    state.options = { work_id: 'work-a', assigned: [], known_absent: {} };
+    state.options = { work_id: 'work-a', assigned: [{ tag_id: 't2', relation_revision: 3 }], known_absent: {} };
     state.catalog = [{ id: 't1', name: 'Alpha' }];
     state.catalogGeneration = 7;
     state.preparing = null;
+    function t2Unchanged() {
+        const b = optionsBase(state.options, 't2');
+        return b.present === true && b.revision === 3;
+    }
     /* What the panel last painted: the ADD on the wire. It is gone now. */
     state.operations = [{ op_id: 'op-add', entity_type: 'work', entity_id: 'work-a',
         operation: 'ADD_WORK_TAG', payload: { tag_id: 't1' }, status: 'syncing', attempt_count: 1,
@@ -696,6 +703,7 @@ async function tagSettledInAnotherTab(path) {
             retry[2] === false && retry[3] === true && retry[4] === 2, JSON.stringify(retry));
         assert('the Work takes the other tab\'s ACK', hasAlpha());
         assert('the retried remove leaves no error', !state.error, String(state.error));
+        assert('the re-read moves only this Tag\'s base', t2Unchanged(), JSON.stringify(state.options));
     } else {
         await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
         await until(function () { return optionReads === 1 && state.operations.length === 0; }, 'adopting paint');
@@ -704,6 +712,7 @@ async function tagSettledInAnotherTab(path) {
         await Promise.all(syncListeners.slice(before).map(function (fn) { return Promise.resolve(fn({})); }));
         await new Promise(function (resolve) { setTimeout(resolve, 0); });
         assert('an adopted change is read only once', optionReads === 1, 'reads=' + optionReads);
+        assert('adopting moves only this Tag\'s base', t2Unchanged(), JSON.stringify(state.options));
     }
     outboxRows.length = 0;
     coalesceResults.length = 0;
