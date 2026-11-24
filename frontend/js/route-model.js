@@ -4,7 +4,7 @@ var prksRouteModel = (function(exports) {
 	/**
 	* The People/Processing bibliographic role subset. Intentionally excludes
 	* Mentioned, which stays a Work-role-only type. Mirrors backend
-	* work_role_sync.PEOPLE_ROLE_TYPES; pinned by tests/test_contract_parity.py.
+	* role_rules.PEOPLE_ROLE_TYPES; pinned by tests/test_contract_parity.py.
 	*
 	* Domain owner: the route parser imports it to mark known `#/people/role/…`
 	* roles; People and Processing code import it directly, not through routing.
@@ -24,7 +24,7 @@ var prksRouteModel = (function(exports) {
 	// src/domain/work-status.ts
 	/**
 	* Work progress status vocabulary. Mirrors the DB check and backend
-	* work_metadata_sync.WORK_STATUSES; pinned by tests/test_contract_parity.py.
+	* metadata_rules.WORK_STATUSES; pinned by tests/test_contract_parity.py.
 	*
 	* Domain owner: the route parser imports it to validate `#/progress`, and
 	* Work and Progress code import it directly, not through routing.

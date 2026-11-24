@@ -189,7 +189,7 @@
       "runtime_files": [
         {
           "path": "/js/route-model.js",
-          "sha256": "f278f5c64ac0f595e2b19087ce9003756f26fe40fa2f5edcec6b28da0a7802eb"
+          "sha256": "f90a12ca303138d295ddc2fe01cebd1be791e76a2eb4fda345f414ec075bc0c7"
         }
       ],
       "source_category": "frontend-app:route-model",

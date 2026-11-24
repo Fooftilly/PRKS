@@ -34,7 +34,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
-from backend import work_source_sync
+from backend.domain.works import source_rules
 from backend.api.common import objects, pdfs_dir, revalidated, text_field
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
@@ -93,14 +93,14 @@ def source_state(req: Request) -> Response:
     # source value, so a URL here would double what this endpoint sends
     # and what IndexedDB stores for values the client already holds.
     data = work_commands.source_state(*req.actor, req.params["work_id"])
-    if data == work_source_sync.INVALID_SOURCE_STATE:
+    if data == source_rules.INVALID_SOURCE_STATE:
         # The product reads this row as a video, but its identity cannot
         # be stated. Said plainly rather than answered with a revision the
         # mutation would then refuse to act on.
         return json_response(req, 409, {
             "error": "This file's video source cannot be read. Its link is not a "
                      "supported video URL.",
-            "code": work_source_sync.INVALID_SOURCE_STATE})
+            "code": source_rules.INVALID_SOURCE_STATE})
     return revalidated(req, "work-source-state", data)
 
 
@@ -163,7 +163,7 @@ def fetch_youtube_oembed(url: str) -> Optional[dict[str, Any]]:
     if not url or not str(url).strip():
         return None
     try:
-        video_id = work_source_sync.validate_youtube_url(str(url).strip())
+        video_id = source_rules.validate_youtube_url(str(url).strip())
         if not video_id:
             return None
         canonical_url = "https://www.youtube.com/watch?v=" + quote(video_id, safe="")
@@ -233,7 +233,7 @@ def create(req: Request) -> Response:
     # Video sources are currently supported for YouTube only. Validate
     # authoritatively before any mutation so a malformed/non-YouTube URL can
     # never create a broken Video Work.
-    if source_kind == "video" and not work_source_sync.validate_youtube_url(source_url):
+    if source_kind == "video" and not source_rules.validate_youtube_url(source_url):
         return json_response(req, 400, {"error": "Invalid YouTube URL"})
 
     # A named destination that does not exist is refused before any bytes
@@ -292,10 +292,10 @@ def create(req: Request) -> Response:
                 host = (urlparse(source_url).netloc or "").lower()
             except ValueError:
                 host = ""
-            if work_source_sync.is_youtube_host(host):
+            if source_rules.is_youtube_host(host):
                 provider = "youtube"
         if provider == "youtube" and not provider_id:
-            provider_id = work_source_sync.youtube_video_id(source_url) or ""
+            provider_id = source_rules.youtube_video_id(source_url) or ""
         meta = fetch_youtube_oembed(source_url) if provider == "youtube" else None
         if meta:
             if not thumb_url and meta.get("thumbnail_url"):

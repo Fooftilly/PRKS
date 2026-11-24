@@ -21,7 +21,7 @@ same rules:
 - ``text_content`` and ``private_notes``: the Work's notes (``""`` and
   ``None`` when there is none).
 - Timestamps in SQLite's text form, UTC: ``YYYY-MM-DD HH:MM:SS``, and
-  millisecond precision for ``last_opened_at`` (``work_open_sync``).
+  millisecond precision for ``last_opened_at`` (``open_rules``).
 
 - People fields (``roles``, ``primary_author``, ``primary_editor``,
   ``linked_authors``, ``linked_people``): ``credits(primary M)``, the roles

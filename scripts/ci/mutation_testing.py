@@ -75,7 +75,7 @@ TARGETS: dict[str, Target] = {
         tests=("tests/test_text_identity.py",),
     ),
     "sync-envelope": Target(
-        mutate=("backend/sync_protocol.py",),
+        mutate=("backend/sync/envelope.py",),
         tests=("tests/test_sync_envelope_rules.py", "tests/test_sync_envelope_properties.py"),
     ),
     "entity-ids": Target(

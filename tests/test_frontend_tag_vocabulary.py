@@ -3,7 +3,7 @@ import pathlib
 import subprocess
 import unittest
 
-from backend import sync_protocol
+from backend.sync import envelope
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -23,7 +23,7 @@ class TagVocabularyFrontendTests(unittest.TestCase):
 
     def test_all_vocabulary_families_are_registered_everywhere(self):
         families = {'CREATE_TAG', 'DELETE_TAG', 'MERGE_TAG'}
-        self.assertTrue(families <= set(sync_protocol.supported_operations()))
+        self.assertTrue(families <= set(envelope.supported_operations()))
         runtime = (FRONTEND / 'sync-runtime.js').read_text()
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
@@ -47,7 +47,7 @@ class TagVocabularyFrontendTests(unittest.TestCase):
         self.assertIn("generateEntityId('T', uuid)", body)
         self.assertIn('base_revision: null', body)
         self.assertIn('is_distributed(op["entity_id"], "T")',
-                      (ROOT / 'backend' / 'tag_sync.py').read_text())
+                      (ROOT / 'backend' / 'domain' / 'organization' / 'tag_rules.py').read_text())
 
     def test_a_name_collision_is_refused_and_never_redirected(self):
         """Operations already queued behind the creation name the id this

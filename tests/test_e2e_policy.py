@@ -218,44 +218,6 @@ class SmokeSelectionTests(unittest.TestCase):
 
 
 class PackagedGatePlanTests(unittest.TestCase):
-    def _ids(self):
-        return list(policy.SMOKE_TEST_IDS) + [
-            "tests.e2e.test_app.LibraryTests.test_unrelated",
-            "tests.e2e.test_folders_offline.FoldersOfflineTests.test_cached",
-            "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
-            "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
-            "tests.e2e.test_library_epoch.EpochTests.test_reset",
-            "tests.e2e.test_folders_durable.DurableFolderTests.test_create",
-        ]
-
-    def test_routine_set_is_smoke_plus_offline_and_durability_modules_in_order(self):
-        ids = self._ids()
-        selected = policy.select_packaged_routine(ids)
-        self.assertNotIn("tests.e2e.test_app.LibraryTests.test_unrelated", selected)
-        for tid in (
-            "tests.e2e.test_folders_offline.FoldersOfflineTests.test_cached",
-            "tests.e2e.test_offline.OfflineFoundationTests.test_reload",
-            "tests.e2e.test_local_store_durability.DurabilityTests.test_quota",
-            "tests.e2e.test_library_epoch.EpochTests.test_reset",
-            "tests.e2e.test_folders_durable.DurableFolderTests.test_create",
-        ):
-            self.assertIn(tid, selected)
-        for tid in policy.SMOKE_TEST_IDS:
-            self.assertIn(tid, selected)
-        self.assertEqual(selected, [tid for tid in ids if tid in set(selected)])
-
-    def test_routine_set_refuses_a_module_that_failed_to_import(self):
-        ids = self._ids() + ["unittest.loader._FailedTest.tests.e2e.test_library_epoch"]
-        with self.assertRaises(ValueError) as ctx:
-            policy.select_packaged_routine(ids)
-        self.assertIn("_FailedTest", str(ctx.exception))
-
-    def test_routine_modules_exist(self):
-        root = Path(_PROJECT_DIR)
-        for module in policy.PACKAGED_ROUTINE_MODULES:
-            with self.subTest(module=module):
-                self.assertTrue((root / (module.replace(".", "/") + ".py")).is_file())
-
     def test_packaging_paths_exist_and_force_the_full_run(self):
         root = Path(_PROJECT_DIR)
         for path in policy.PACKAGED_FULL_PATHS:
@@ -269,14 +231,58 @@ class PackagedGatePlanTests(unittest.TestCase):
                     [{"shard": i, "total": policy.PACKAGED_FULL_SHARDS} for i in range(1, 9)],
                 )
 
-    def test_other_changes_run_the_routine_set_and_force_wins(self):
-        plan = policy.plan_packaged_e2e(["frontend/js/app.js", "backend/api/works.py"])
-        self.assertEqual(plan["mode"], "routine")
-        self.assertEqual(
-            plan["matrix"]["include"],
-            [{"shard": i, "total": policy.PACKAGED_ROUTINE_SHARDS} for i in range(1, 5)],
+    @staticmethod
+    def _sw_diff(*lines):
+        return "\n".join(
+            ["diff --git a/frontend/sw.js b/frontend/sw.js", "--- a/frontend/sw.js",
+             "+++ b/frontend/sw.js", "@@ -1,3 +1,3 @@", *lines]
         )
-        forced = policy.plan_packaged_e2e([], force_full=True)
+
+    def test_generated_service_worker_stamp_with_a_rebuilt_bundle_stays_smoke(self):
+        # PR #1420 shape: Vue source, rebuilt bundle and manifest, and only the
+        # generated revision line in sw.js.
+        paths = [
+            "frontend-app/src/setup/SetupApp.vue",
+            "frontend/vue/prks-vue-app.js",
+            "frontend/vendor/DEPENDENCY-MANIFEST.json",
+            "frontend/sw.js",
+        ]
+        stamp = self._sw_diff(
+            "-const DEPENDENCY_REVISION = '0123456789ab';",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+        )
+        plan = policy.plan_packaged_e2e(paths, path_diffs={"frontend/sw.js": stamp})
+        self.assertEqual(plan["mode"], "smoke")
+        # A real service worker edit, a missing diff or a stamp with no rebuilt
+        # bundle behind it stays on the full packaged run.
+        logic = self._sw_diff(
+            "-const DEPENDENCY_REVISION = '0123456789ab';",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+            "+self.addEventListener('fetch', () => {});",
+        )
+        moved = "\n".join([
+            "diff --git a/frontend/sw.js b/frontend/sw.js", "--- a/frontend/sw.js",
+            "+++ b/frontend/sw.js", "@@ -1,3 +1,2 @@",
+            "-const DEPENDENCY_REVISION = '0123456789ab';", " const A = 1;",
+            "@@ -20,2 +19,3 @@", " const SHELL_CACHE = `shell-${DEPENDENCY_REVISION}`;",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+        ])
+        for label, changed, diffs in (
+            ("logic edit", paths, {"frontend/sw.js": logic}),
+            ("moved declaration", paths, {"frontend/sw.js": moved}),
+            ("missing diff", paths, None),
+            ("no bundle", ["frontend/sw.js"], {"frontend/sw.js": stamp}),
+        ):
+            with self.subTest(label):
+                plan = policy.plan_packaged_e2e(changed, path_diffs=diffs)
+                self.assertEqual(plan["mode"], "full")
+                self.assertIn("frontend/sw.js", plan["reason"])
+
+    def test_other_changes_run_only_the_smoke_job_and_force_wins(self):
+        plan = policy.plan_packaged_e2e(["frontend/js/app.js", "backend/api/works.py"])
+        self.assertEqual(plan["mode"], "smoke")
+        self.assertEqual(plan["matrix"]["include"], [])
+        forced = policy.plan_packaged_e2e(["frontend/js/app.js"], force_full=True)
         self.assertEqual(forced["mode"], "full")
         self.assertEqual(len(forced["matrix"]["include"]), policy.PACKAGED_FULL_SHARDS)
 
@@ -997,17 +1003,17 @@ class AffectedMappingTests(unittest.TestCase):
 
     def test_domain_sync_files_map_to_feature_groups(self):
         cases = (
-            ("backend/concept_sync.py", "concepts", ("concepts", "graph", "notes")),
-            ("backend/folder_sync.py", "folders", ("folders", "browse")),
-            ("backend/person_sync.py", "people", ("people", "person-groups")),
-            ("backend/argument_sync.py", "arguments", ("arguments", "graph")),
-            ("backend/position_sync.py", "positions", ("positions", "graph")),
-            ("backend/playlist_sync.py", "playlists", ("playlists",)),
-            ("backend/work_note_sync.py", "notes", ("notes",)),
+            ("backend/domain/research/concept_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/organization/folder_rules.py", "folders", ("folders", "browse")),
+            ("backend/domain/people/person_rules.py", "people", ("people", "person-groups")),
+            ("backend/domain/research/argument_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/research/position_rules.py", "research-network-core", ("concepts", "positions", "arguments", "graph", "notes")),
+            ("backend/domain/organization/playlist_rules.py", "playlists", ("playlists",)),
+            ("backend/domain/works/note_rules.py", "notes", ("notes",)),
             ("backend/pdf_annotations.py", "pdf-annotations", ("pdf-annotations",)),
-            ("backend/pdf_annotation_sync.py", "pdf-annotations", ("pdf-annotations",)),
-            ("backend/work_lifecycle_sync.py", "work-lifecycle", ("offline", "folders", "sync")),
-            ("backend/work_tag_sync.py", "sync-families", ("sync", "offline")),
+            ("backend/domain/annotations/rules.py", "pdf-annotations", ("pdf-annotations",)),
+            ("backend/domain/works/lifecycle_rules.py", "work-lifecycle", ("offline", "folders", "sync")),
+            ("backend/domain/organization/work_tag_rules.py", "sync-families", ("sync", "offline")),
         )
         for path, rule_name, expected in cases:
             with self.subTest(path=path):
@@ -1846,8 +1852,8 @@ class LastFailedPersistenceTests(unittest.TestCase):
 class PathMatchTests(unittest.TestCase):
     def test_glob_double_star(self):
         self.assertTrue(policy._path_matches("frontend/css/style.css", "frontend/css/**"))
-        self.assertTrue(policy._path_matches("backend/work_tag_sync.py", "backend/work_tag_sync.py"))
-        self.assertFalse(policy._path_matches("backend/server.py", "backend/work_tag_sync.py"))
+        self.assertTrue(policy._path_matches("backend/domain/organization/work_tag_rules.py", "backend/domain/organization/work_tag_rules.py"))
+        self.assertFalse(policy._path_matches("backend/server.py", "backend/domain/organization/work_tag_rules.py"))
 
 
 def _git_ok(stdout: str = "") -> subprocess.CompletedProcess:

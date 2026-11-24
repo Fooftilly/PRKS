@@ -14,11 +14,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from backend import sync_protocol
+from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.entity_ids import generate
 from tests import acting_context as facade_context
-from backend.playlist_sync import scope_key
+from backend.domain.organization.playlist_rules import scope_key
 from backend.sync.families import Environment, FamilyHandler
 from backend.sync.handlers import playlist as playlist_handlers
 from backend.sync.handlers import work_lifecycle
@@ -73,7 +73,7 @@ class PlaylistSyncTestCase(SyncTestCase, PlaylistTestCase):  # pyright: ignore[r
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
 

@@ -4,7 +4,8 @@ import re
 import subprocess
 import unittest
 
-from backend import person_metadata_sync, person_sync
+from backend.domain.people import person_metadata_rules
+from backend.domain.people import person_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -30,8 +31,8 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         the other."""
         client = js_string_list(
             (FRONTEND / 'person-metadata-state.js').read_text(), 'const FIELDS =')
-        self.assertEqual(sorted(client), sorted(person_metadata_sync.SYNCED_FIELDS))
-        self.assertEqual(sorted(client), sorted(person_sync.FIELDS),
+        self.assertEqual(sorted(client), sorted(person_metadata_rules.SYNCED_FIELDS))
+        self.assertEqual(sorted(client), sorted(person_rules.FIELDS),
                          'and it is the creation family\'s vocabulary, not a second one')
         editor = js_string_list(
             (FRONTEND / 'components' / 'people.js').read_text(),
@@ -46,7 +47,7 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         source = (FRONTEND / 'person-metadata-state.js').read_text()
         labels = source[source.index('const LABELS = Object.freeze({'):]
         labels = labels[: labels.index('});')]
-        for field in person_metadata_sync.SYNCED_FIELDS:
+        for field in person_metadata_rules.SYNCED_FIELDS:
             with self.subTest(field=field):
                 self.assertRegex(labels, r'\b%s:' % field)
 
@@ -185,7 +186,7 @@ class PersonMetadataSyncFrontendTests(unittest.TestCase):
         given every membership on a Person one shared conflict, and would have
         made a single busy biography block a group change.
         """
-        self.assertNotIn('group_ids', person_metadata_sync.SYNCED_FIELDS)
+        self.assertNotIn('group_ids', person_metadata_rules.SYNCED_FIELDS)
         people = (FRONTEND / 'components' / 'people.js').read_text()
         at = people.index('async function prksSavePersonGroupMemberships(')
         body = people[at: people.index('\n}', at)]

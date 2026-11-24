@@ -499,7 +499,7 @@ class FrontendWorkCreateTests(unittest.TestCase):
         # Hostname matching must be an explicit set, not substring matching.
         self.assertIn("is_youtube_host", works)
         self.assertNotIn("'youtube.com' in host", works)
-        rules = _read(os.path.join(_PROJECT_DIR, "backend", "work_source_sync.py"))
+        rules = _read(os.path.join(_PROJECT_DIR, "backend", "domain", "works", "source_rules.py"))
         self.assertIn("YOUTUBE_HOSTS = frozenset(", rules)
 
     def test_css_sticky_create_footer(self):

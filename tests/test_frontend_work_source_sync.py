@@ -4,7 +4,7 @@ import re
 import subprocess
 import unittest
 
-from backend import work_source_sync
+from backend.domain.works import source_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -28,8 +28,8 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         means. If they disagree, one accepts an identity the other refuses --
         and a Work's stored URL and stored id could name different videos."""
         import json
-        from backend import work_source_sync
-        from backend.work_source_sync import (
+        from backend.domain.works import source_rules
+        from backend.domain.works.source_rules import (
             MAX_PROVIDER_ID_CHARS, MAX_SOURCE_URL_UTF8_BYTES)
         urls = [
             'https://www.youtube.com/watch?v=ABC', 'https://youtu.be/ABC',
@@ -106,7 +106,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         self.assertEqual(len(client), len(urls))
         for url, seen in zip(urls, client):
             with self.subTest(url=url[:80], bytes=len(url.encode('utf-8'))):
-                source = work_source_sync.canonical_source({'kind': 'video', 'url': url})
+                source = source_rules.canonical_source({'kind': 'video', 'url': url})
                 server = source['provider_id'] if source else None
                 self.assertEqual(seen, server, url[:120])
 
@@ -118,7 +118,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         the other cannot name.
         """
         import json
-        from backend.work_source_sync import (
+        from backend.domain.works.source_rules import (
             MAX_PROVIDER_ID_CHARS, MAX_SOURCE_URL_UTF8_BYTES)
 
         js = """
@@ -139,7 +139,7 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
         self.assertEqual(client['maxUrl'], MAX_SOURCE_URL_UTF8_BYTES)
         self.assertEqual(
             client['accepts'],
-            [work_source_sync.is_provider_id(v) for v in
+            [source_rules.is_provider_id(v) for v in
              ['dQw4w9WgXcQ', 'a-b_C9', 'B' * 512, '', 'a b', 'a"b',
               'a.b', 'a/b', 'a%01b', 'B' * 513]])
         self.assertEqual(client['accepts'][:3], [True, True, True])
@@ -198,8 +198,8 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
                     'creation and the runtime must agree about this row')
 
     def test_the_source_family_is_registered_everywhere_it_must_be(self):
-        from backend import sync_protocol
-        self.assertIn('SET_WORK_SOURCE', sync_protocol.supported_operations())
+        from backend.sync import envelope
+        self.assertIn('SET_WORK_SOURCE', envelope.supported_operations())
         store = (FRONTEND / 'local-store.js').read_text()
         self.assertIn("'SET_WORK_SOURCE',", store, 'the durable store must accept it')
         runtime = (FRONTEND / 'sync-runtime.js').read_text()

@@ -1,7 +1,7 @@
 """Work-Tag and Folder-Tag relationships on PostgreSQL (L-O-1 #633).
 
-The rules are SQLite's (``backend/work_tag_sync.py``,
-``backend/folder_tag_sync.py``), imported rather than copied: one revision
+The rules are SQLite's (``backend/domain/organization/work_tag_rules.py``,
+``backend/domain/organization/folder_tag_rules.py``), imported rather than copied: one revision
 scope per relationship (``work-tag / ["W-…","T-…"]``, ``folder-tag /
 ["F-…","T-…"]``), only a change advances it, the scope outlives the link,
 and the decision table compares an operation's base with the current
@@ -21,7 +21,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional
 
-from backend import folder_tag_sync, work_tag_sync
+from backend.domain.organization import folder_tag_rules
+from backend.domain.organization import work_tag_rules
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import lifecycle
 from backend.domain.works import revisions
@@ -53,7 +54,7 @@ class Link:
 WORK = Link(
     scope_type="work-tag",
     owner_key="work_id",
-    scope_key=work_tag_sync.scope_key,
+    scope_key=work_tag_rules.scope_key,
     owner_exists_sql="""
 SELECT 1 FROM prks.works WHERE library_id = %(library_id)s AND id = %(owner_id)s
 """,
@@ -104,7 +105,7 @@ ORDER BY t.id COLLATE "C"
 FOLDER = Link(
     scope_type="folder-tag",
     owner_key="folder_id",
-    scope_key=folder_tag_sync.scope_key,
+    scope_key=folder_tag_rules.scope_key,
     owner_exists_sql="""
 SELECT 1 FROM prks.folders WHERE library_id = %(library_id)s AND id = %(owner_id)s
 """,
@@ -162,7 +163,7 @@ _TAG_ROW_SQL: LiteralString = """
 SELECT id, name, color FROM prks.tags WHERE library_id = %(library_id)s AND id = %(tag_id)s
 """
 # Every scope of this family naming the Tag, linked or not: a device's cached
-# tag options for those owners list the Tag (``tag_sync``'s affected lists).
+# tag options for those owners list the Tag (``tag_rules``'s affected lists).
 _SCOPED_OWNERS_SQL: LiteralString = """
 SELECT (scope_id::jsonb) ->> 0 AS owner_id FROM prks.entity_revisions
 WHERE library_id = %(library_id)s AND scope_type = %(scope_type)s

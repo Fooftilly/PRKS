@@ -9,7 +9,7 @@ from pathlib import Path
 from backend.dependency_gate import CSL_VENDOR_FILES
 from backend.domain.works.citation_styles import CITATION_STYLES, DEFAULT_CITATION_STYLE
 from backend.domain.works.csl_format import CSL_TYPES, format_csl
-from backend.work_metadata_sync import DOC_TYPES
+from backend.domain.works.metadata_rules import DOC_TYPES
 
 _ROOT = Path(__file__).resolve().parents[1]
 

@@ -8,7 +8,7 @@ from unittest import mock
 
 import json
 
-from backend import work_note_sync
+from backend.domain.works import note_rules
 from backend.api import sync as sync_api
 from backend.web.app import App
 from backend.web.http import Headers, Request
@@ -36,11 +36,11 @@ class PostgresSyncRouteTests(unittest.TestCase):
 
     def test_a_note_ack_carries_its_refs(self) -> None:
         refs = {"concepts": [], "arguments": [], "pending": True}
-        status, body = self.answer(work_note_sync.RESEARCH_OPERATION, mock.Mock(return_value=refs))
+        status, body = self.answer(note_rules.RESEARCH_OPERATION, mock.Mock(return_value=refs))
         self.assertEqual((status, body["research_refs"]), (200, refs))
 
     def test_a_failed_refs_read_never_fails_a_committed_note(self) -> None:
-        status, body = self.answer(work_note_sync.RESEARCH_OPERATION, mock.Mock(side_effect=RuntimeError("down")))
+        status, body = self.answer(note_rules.RESEARCH_OPERATION, mock.Mock(side_effect=RuntimeError("down")))
         self.assertEqual((status, body["code"]), (200, "ACKNOWLEDGED"))
         self.assertNotIn("research_refs", body)
 

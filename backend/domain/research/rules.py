@@ -113,7 +113,7 @@ def _pages(raw) -> str:
 
 
 def research_note_refusal(text_content) -> ResearchError:
-    """The ``invalid_text`` refusal of a body ``work_note_sync.validate_text`` refused.
+    """The ``invalid_text`` refusal of a body ``note_rules.validate_text`` refused.
 
     Shared with the PostgreSQL facade's ``save_work_notes``, so both
     backends refuse a note with the same message.

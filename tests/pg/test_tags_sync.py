@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from unittest import mock
 
-from backend import sync_protocol
+from backend.sync import envelope
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.organization import links, tags
@@ -57,7 +57,7 @@ class TagSyncTestCase(SyncTestCase, OrganizationTestCase):  # pyright: ignore[re
 
     def applying(self, handler: FamilyHandler, data: dict[str, Any]) -> Any:
         """A holder that applies ``data`` with ``handler`` in the race's open transaction."""
-        op = sync_protocol.normalize_envelope(data)
+        op = envelope.normalize_envelope(data)
         return lambda scope: handler.apply(scope, op, datetime.now(timezone.utc), self.env)
 
 

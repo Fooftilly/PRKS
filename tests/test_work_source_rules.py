@@ -1,6 +1,6 @@
 """The video source rules the PostgreSQL source family uses (kept by PG-C2 #641).
 
-``backend/work_source_sync.py`` holds the one parser that turns a source
+``backend/domain/works/source_rules.py`` holds the one parser that turns a source
 intent into an identity, its bound, and the conflict shape. These are pure
 functions; ``tests/pg/test_works_sync.py`` exercises them through the
 PostgreSQL boundary.
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import unittest
 
-from backend import work_metadata_sync as meta
-from backend import work_source_sync as src
+from backend.domain.works import metadata_rules as meta
+from backend.domain.works import source_rules as src
 
 WATCH = "https://www.youtube.com/watch?v=%s"
 

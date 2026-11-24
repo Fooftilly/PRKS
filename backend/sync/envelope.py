@@ -4,7 +4,7 @@
 envelope here, hashes it here, and dispatches to the family handlers in
 ``backend.sync.handlers``, which may only implement an operation listed here.
 Domain rules (which payloads are legal, what a revision means) live in the
-per-family rule modules (``backend/*_sync.py``).
+per-family rule modules (``backend/domain/<area>/*_rules.py``).
 """
 import hashlib
 import json
@@ -134,13 +134,13 @@ register("ADD_FOLDER_TAG", entity_type="folder")
 register("REMOVE_FOLDER_TAG", entity_type="folder")
 register("MARK_WORK_OPENED")
 register("SET_WORK_METADATA_FIELD")
-# Source identity is an AGGREGATE, not a field: see work_source_sync's module
+# Source identity is an AGGREGATE, not a field: see source_rules's module
 # docstring for why three field-scoped operations would be the wrong unit.
 register("SET_WORK_SOURCE")
 register("CREATE_WORK")
 register("DELETE_WORK")
 # Work-Person roles are ELEMENTS, not an ordered aggregate: see
-# work_role_sync's module docstring for the schema evidence behind that.
+# role_rules's module docstring for the schema evidence behind that.
 register("ADD_WORK_PERSON_ROLE")
 register("REMOVE_WORK_PERSON_ROLE")
 # Editing the credit override on an existing link shares the relationship's
@@ -152,7 +152,7 @@ register("CREATE_PERSON", entity_type="person")
 # endpoint's -- a Person credited on a file is refused, never cascaded.
 register("DELETE_PERSON", entity_type="person")
 # Editing a Person is FIELD-scoped, not profile-scoped: see
-# person_metadata_sync's module docstring for the schema evidence behind that.
+# person_metadata_rules's module docstring for the schema evidence behind that.
 register("SET_PERSON_METADATA_FIELD", entity_type="person")
 # Person Groups: four shapes over one entity. Construction mints the id, the
 # three editable columns are independent FIELDS, membership is an element of a
@@ -216,7 +216,7 @@ register("DELETE_ARGUMENT", entity_type="argument")
 register("SET_WORK_RESEARCH_NOTE")
 register("SET_WORK_PRIVATE_NOTE")
 # PDF annotations: one revisioned aggregate per annotation under a Work.
-# PDF bytes are never in these operations — see pdf_annotation_sync.
+# PDF bytes are never in these operations — see annotations.rules.
 register("CREATE_PDF_ANNOTATION")
 register("SET_PDF_ANNOTATION")
 register("DELETE_PDF_ANNOTATION")

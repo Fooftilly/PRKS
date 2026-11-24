@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional, TypeVar
 
-from backend import folder_sync
+from backend.domain.organization import folder_rules
 from backend.db.database import Database, Isolation
 from backend.db.errors import ConstraintViolationError
 from backend.domain.identity.authorization import Capability
@@ -138,7 +138,7 @@ def ensure_uncategorized(db: Database, ctx: RequestContext) -> str:
 
 def update(db: Database, ctx: RequestContext, folder_id: str, fields: dict[str, Any]) -> None:
     """Edit a Folder's fields through the revision-aware writer (rename before move)."""
-    updates = {k: v for k, v in fields.items() if k in folder_sync.FIELD_SET}
+    updates = {k: v for k, v in fields.items() if k in folder_rules.FIELD_SET}
     if not updates:
         return
 

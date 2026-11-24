@@ -2,7 +2,7 @@
 
 ``sync_tag_lifecycle`` outlives the Tag: every later answer about a Tag id
 (active, merged into another Tag, deleted, or never known) is read from it,
-with SQLite's resolution (``work_tag_sync.resolve_lifecycle``): a merged id
+with SQLite's resolution (``work_tag_rules.resolve_lifecycle``): a merged id
 follows its targets to the active Tag at the end, a deleted one anywhere on
 the way is ``DELETED``, an id without a row, or whose active row has no Tag,
 is ``UNKNOWN``, and a cycle is a server failure, never a ledgered answer.

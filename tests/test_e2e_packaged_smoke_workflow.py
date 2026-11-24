@@ -1,4 +1,4 @@
-"""Guard the manual packaged-smoke cost pilot without weakening PR coverage.
+"""Guard the packaged gate: smoke on routine PRs, every test on packaging PRs.
 
 No Chromium or YAML dependency: this protects the workflow's critical
 routing and offline/production-distribution invariants at code review time.
@@ -25,7 +25,7 @@ def job_source(workflow: str, job: str) -> str:
 
 
 class PackagedSmokeWorkflowTests(unittest.TestCase):
-    def test_pull_requests_run_the_planned_packaged_shards(self):
+    def test_pull_requests_run_the_planned_packaged_jobs(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         plan = job_source(workflow, "packaged-plan")
         full = job_source(workflow, "packaged-frontend")
@@ -42,8 +42,12 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
         self.assertIn('--packaged-plan --base "origin/${BASE_REF}"', plan)
         # A failed base fetch runs every test rather than no plan at all.
         self.assertIn('plan="$(PRKS_E2E_CI_FORCE_FULL=1 python tests/e2e/run.py --packaged-plan)"', plan)
-        self.assertIn('if mode not in ("full", "routine") or not include:', plan)
+        self.assertIn(
+            'if mode not in ("full", "smoke") or (mode == "full") != bool(include):', plan
+        )
         self.assertIn("needs: packaged-plan", full)
+        # A smoke plan has no matrix: the shard job must be skipped, never expanded.
+        self.assertRegex(full, r"(?m)^    if: needs\.packaged-plan\.outputs\.mode == 'full'$")
         self.assertIn("matrix: ${{ fromJSON(needs.packaged-plan.outputs.matrix) }}", full)
         self.assertIn("PRKS_E2E_SHARD_INDEX: ${{ matrix.shard }}", full)
         self.assertIn("PRKS_E2E_SHARD_TOTAL: ${{ matrix.total }}", full)
@@ -51,8 +55,15 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
             'python tests/e2e/run.py --jobs 1 --shard "${PRKS_E2E_SHARD_INDEX}/${PRKS_E2E_SHARD_TOTAL}"',
             full,
         )
-        self.assertIn('if [[ "${PRKS_E2E_PACKAGED_MODE}" == "routine" ]]; then', full)
-        self.assertIn("selection=(--packaged-routine)", full)
+        self.assertNotIn("--packaged-routine", workflow)
+        smoke = job_source(workflow, "packaged-smoke")
+        self.assertIn("needs: packaged-plan", smoke)
+        self.assertIn(
+            "(github.event_name == 'pull_request' && needs.packaged-plan.outputs.mode == 'smoke')",
+            smoke,
+        )
+        # A manual smoke run skips the plan job; the smoke job must still run.
+        self.assertIn("!cancelled() &&", smoke)
 
         # Both real Docker packaging/rollback and browser SW transitions
         # remain standalone jobs on PRs and both manual modes.
@@ -69,19 +80,18 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
         )
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", workflow)
 
-    def test_smoke_is_explicit_manual_only_and_stages_real_distribution(self):
+    def test_smoke_runs_on_smoke_plans_and_manual_modes_and_stages_real_distribution(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("packaged_mode:", workflow)
         smoke = job_source(workflow, "packaged-smoke")
         full = job_source(workflow, "packaged-frontend")
         self.assertIn(
-            "if: >-\n"
-            "      github.event_name == 'workflow_dispatch' &&\n"
-            "      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')",
+            "      (github.event_name == 'workflow_dispatch' &&\n"
+            "      (inputs.packaged_mode == 'smoke' || inputs.packaged_mode == 'compare')))",
             smoke,
         )
-        # The one-run compare pilot must execute smoke alongside the full
-        # matrix, while automatic PRs and manual default retain full only.
+        # The one-run compare must execute smoke alongside the full matrix,
+        # while manual full (the nightly master CI) runs the shards only.
         # Bind the full/smoke/compare options to the packaged_mode input,
         # rather than matching unrelated YAML content elsewhere.
         self.assertIn(
@@ -169,7 +179,7 @@ class PackagedSmokeWorkflowTests(unittest.TestCase):
 
         for path, classes in expected_cases.items():
             # Validate real unittest methods, not just matching strings in a
-            # comment. The full suite is unchanged; smoke is a manual pilot.
+            # comment.
             source = ast.parse((ROOT / path).read_text(encoding="utf-8"))
             actual = {
                 node.name: {

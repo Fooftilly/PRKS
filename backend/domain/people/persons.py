@@ -1,8 +1,8 @@
 """Persons and their aliases on PostgreSQL (L-P-1 #632).
 
 The rules are SQLite's, imported rather than copied: the profile vocabulary
-and its creation contract (``backend/person_sync.py``) and the per-field
-revisions with their decision table (``backend/person_metadata_sync.py``):
+and its creation contract (``backend/domain/people/person_rules.py``) and the per-field
+revisions with their decision table (``backend/domain/people/person_metadata_rules.py``):
 one scope per field (``person-field / ["P-…","field"]``), only a change
 advances it, a stale base conflicts only when the values differ.
 
@@ -27,15 +27,15 @@ from collections.abc import Mapping
 from typing import Any, LiteralString, Optional
 
 import backend.domain.people.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import person_metadata_sync as rules
-from backend import work_metadata_sync as meta
+from backend.domain.people import person_metadata_rules as rules
+from backend.domain.works import metadata_rules as meta
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups
 from backend.domain.search import refresh as search_refresh
 from backend.domain.works import revisions
 from backend.person_image import PersonImageUrlError
-from backend.person_sync import FIELDS
-from backend.work_role_sync import parse_person_aliases
+from backend.domain.people.person_rules import FIELDS
+from backend.domain.people.role_rules import parse_person_aliases
 
 SCOPE_TYPE = rules.SCOPE_TYPE
 
@@ -135,7 +135,7 @@ def scope_id(person_id: str, field: str) -> str:
 def canonical_field(field: str, value: Any) -> str:
     """The value ``field`` stores for ``value``, or ``ValueError`` with SQLite's message.
 
-    ``person_metadata_sync``'s rule (any string; an ``image_url`` the
+    ``person_metadata_rules``'s rule (any string; an ``image_url`` the
     portrait normalizer accepts, normalized), plus what PostgreSQL text
     cannot hold: NUL. ``aliases`` is canonicalized further by the database
     (:func:`canonical_aliases`).

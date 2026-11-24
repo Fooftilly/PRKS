@@ -229,9 +229,10 @@ jobs:
         if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.json
 
-      # Genuine standard type checking for the #69 typed slice (scopes pinned in
+      # Genuine standard type checking for the #69 typed slice: all of backend/,
+      # prks_app.py, scripts/ and tests/ (#1429; scopes pinned in
       # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
-      - name: Run Pyright typed slice (backend/storage + backend utility modules; standard)
+      - name: Run Pyright typed slice (backend, prks_app.py, scripts, tests; standard)
         if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
 

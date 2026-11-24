@@ -149,7 +149,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
             "frontend-app/src/components/SharedModal.vue",
             "frontend-app/src/features/progress/NewRoute.vue",
             "backend/server.py",
-            "backend/person_sync.py",
+            "backend/domain/people/person_rules.py",
             "Dockerfile",
             "scripts/build_classic_distribution.py",
             "tests/e2e/policy.py",
@@ -312,7 +312,7 @@ class PackagedSelectionPolicyTests(unittest.TestCase):
         self.assertEqual(len(EXTRA_PACKAGED_SMOKE_IDS), 5)
 
     def test_workflow_does_not_consume_this_dormant_planner(self):
-        # The gate's routine/full choice comes from tests/e2e/run.py
+        # The gate's smoke/full choice comes from tests/e2e/run.py
         # --packaged-plan (policy.plan_packaged_e2e, pinned by
         # tests/test_e2e_packaged_smoke_workflow.py); this smoke+affected
         # candidate stays advisory and must not drive any job.

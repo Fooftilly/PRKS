@@ -1,7 +1,7 @@
 """``CREATE_CONCEPT``, ``SET_CONCEPT_FIELD``, ``SET_CONCEPT_IDENTITY``, ``SET_CONCEPT_PARENTS``
 and ``DELETE_CONCEPT`` on PostgreSQL (L-R-1 #634).
 
-Validated by ``backend/concept_sync.py``'s rules and decided by
+Validated by ``backend/domain/research/concept_rules.py``'s rules and decided by
 :mod:`backend.domain.research.concepts`, result for result.
 
 Creation is construction: the id is client-minted, a create of an id that
@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import concept_sync as rules
+from backend.domain.research import concept_rules as rules
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.research import concepts

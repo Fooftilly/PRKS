@@ -1,6 +1,6 @@
 """The Tag VOCABULARY: CREATE_TAG, DELETE_TAG, and MERGE_TAG.
 
-The Work-Tag *relationship* has been durable since Phase 2 (`work_tag_sync`).
+The Work-Tag *relationship* has been durable since Phase 2 (`work_tag_rules`).
 This module is the other half: the Tags themselves.
 
 Three shapes, and only three. PRKS has no rename and no colour editor -- `POST

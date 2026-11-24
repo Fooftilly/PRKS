@@ -1,7 +1,7 @@
 /**
  * PDF annotation durable state: pending overlay, effective list, sync handler.
  *
- * Mirrors `backend/pdf_annotation_sync.py`. One annotation = one revisioned
+ * Mirrors `backend/domain/annotations/rules.py`. One annotation = one revisioned
  * aggregate under a Work. PDF bytes are never part of this protocol.
  */
 (function (root) {

@@ -14,8 +14,8 @@ from pathlib import Path
 
 from backend.domain.works import work_commands
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
-from backend.work_metadata_sync import WORK_STATUSES
-from backend.work_role_sync import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
+from backend.domain.works.metadata_rules import WORK_STATUSES
+from backend.domain.people.role_rules import PEOPLE_ROLE_TYPES, PEOPLE_ROLE_TYPE_SET, ROLE_TYPES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -594,7 +594,7 @@ class ContractParityTests(unittest.TestCase):
         # Processing's staging validates against the named registry itself, not
         # a hard-coded set equal in content (backend/domain/processing/items.py).
         items = read("backend/domain/processing/items.py")
-        self.assertIn("from backend.work_role_sync import PEOPLE_ROLE_TYPE_SET", items)
+        self.assertIn("from backend.domain.people.role_rules import PEOPLE_ROLE_TYPE_SET", items)
         self.assertIn("if role_type not in PEOPLE_ROLE_TYPE_SET:", items)
         self.assertTrue(PEOPLE_ROLE_TYPE_SET >= set(PEOPLE_ROLE_TYPES))
 

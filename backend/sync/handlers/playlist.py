@@ -1,6 +1,6 @@
 """``CREATE_PLAYLIST``, ``SET_PLAYLIST_FIELD``, ``SET_WORK_PLAYLIST``, ``REORDER_PLAYLIST_ITEMS`` and ``DELETE_PLAYLIST`` on PostgreSQL (L-O-1 #633).
 
-Validated by ``backend/playlist_sync.py``'s rules and decided by
+Validated by ``backend/domain/organization/playlist_rules.py``'s rules and decided by
 :mod:`backend.domain.organization.playlists`, result for result.
 
 Creation is construction: the id is client-minted, and a create of an id
@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import playlist_sync as rules
+from backend.domain.organization import playlist_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope

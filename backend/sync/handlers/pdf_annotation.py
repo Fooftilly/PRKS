@@ -1,6 +1,6 @@
 """``CREATE``/``SET``/``DELETE_PDF_ANNOTATION`` on PostgreSQL (L-A-1 #635).
 
-Validated by ``backend/pdf_annotation_sync.py``'s rules, plus what
+Validated by ``backend/domain/annotations/rules.py``'s rules, plus what
 PostgreSQL cannot store (:func:`backend.domain.annotations.store.check_storable`),
 and decided by :mod:`backend.domain.annotations.operations`. READ COMMITTED
 with the Asset row lock (``docs/postgresql-architecture.md`` §7.1, §7.4):
@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from backend import pdf_annotation_sync as rules
+from backend.domain.annotations import rules as rules
 from backend.domain.annotations import operations, store
 from backend.domain.identity.library_scope import LibraryScope
 from backend.pdf_annotations import WorkAnnotationError, normalize_annotation

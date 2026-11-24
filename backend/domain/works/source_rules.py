@@ -234,7 +234,7 @@ def disagreement(current, desired):
     grantable promises -- an unbounded id made them contradict, and a conflict
     the client cannot store is one the user can never resolve.
     """
-    from backend import work_metadata_sync as meta
+    from backend.domain.works import metadata_rules as meta
     return {
         "current_provider": current["provider"],
         "current_provider_id": current["provider_id"],

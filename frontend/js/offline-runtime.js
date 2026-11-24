@@ -1561,7 +1561,7 @@
             if (!root.prksIsSupportedFolderField ||
                 !root.prksIsSupportedFolderField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
-            /* All Folder text fields use backend/folder_sync.py canonical_wire:
+            /* All Folder text fields use backend/domain/organization/folder_rules.py canonical_wire:
              * Python str.strip() semantics, and the empty title placeholder.
              * Applying this on ACK keeps cached list and detail rows consistent
              * with the server (including the Reminders recovery base). */

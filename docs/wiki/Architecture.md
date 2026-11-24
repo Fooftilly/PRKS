@@ -46,7 +46,7 @@ Important backend areas include:
 - `backend/library.py` — the PostgreSQL Library handle (database and storage) the routes hold; they call `backend/domain/` commands directly.
 - `backend/domain/` — Library commands and queries by area (Works, People, Organization, Research, Search, objects, maintenance, identity).
 - `backend/db/` and `backend/db/schema/` — the connection pool, transaction helpers, and the schema files the `migrate` runner applies.
-- `backend/sync/` and `backend/*_sync.py` — durable operation protocol, handlers, and the per-family rules.
+- `backend/sync/` — durable operation protocol, envelope and handlers; the per-family rules are `backend/domain/<area>/*_rules.py`.
 - `backend/domain/maintenance/` — verified backup (format 2) and restore.
 - `backend/jobs/` — the PostgreSQL job queue and worker (text extraction, derived rebuilds, object cleanup, backups).
 - `backend/pdf_*.py` — PDF annotation, adoption, materialization, and related services.

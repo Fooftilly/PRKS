@@ -250,9 +250,9 @@ class AgentGuidanceTests(unittest.TestCase):
             "## Work lifecycle",
             "## Work-Person roles",
             "## Tag vocabulary",
-            "backend/work_lifecycle_sync.py",
-            "backend/work_role_sync.py",
-            "backend/tag_sync.py",
+            "backend/domain/works/lifecycle_rules.py",
+            "backend/domain/people/role_rules.py",
+            "backend/domain/organization/tag_rules.py",
             "Research Graph Work-delete invalidation",
             "Research Graph core/People projection invalidation",
         ):

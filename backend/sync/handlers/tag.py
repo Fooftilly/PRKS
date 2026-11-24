@@ -1,6 +1,6 @@
 """``CREATE_TAG``, ``DELETE_TAG`` and ``MERGE_TAG`` on PostgreSQL (L-O-1 #633).
 
-Validated by ``backend/tag_sync.py``'s rules and decided by
+Validated by ``backend/domain/organization/tag_rules.py``'s rules and decided by
 :mod:`backend.domain.organization.tags`, result for result.
 
 Creation is construction: the id is client-minted, a create of an id that
@@ -32,7 +32,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import tag_sync as rules
+from backend.domain.organization import tag_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope

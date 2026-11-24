@@ -143,7 +143,7 @@ class RoleApiTests(ServerApiTestCase):
         self.assertEqual(self.scopes(work_id)[0]["revision"], 3)
 
     def test_an_oversized_credit_name_is_refused_on_add_and_on_edit(self) -> None:
-        from backend.work_role_sync import MAX_CREDIT_NAME_BYTES
+        from backend.domain.people.role_rules import MAX_CREDIT_NAME_BYTES
 
         person_id, work_id = self.person("Long", "Name"), self.create_work("Bound")["id"]
         too_long = "x" * (MAX_CREDIT_NAME_BYTES + 1)

@@ -1,6 +1,6 @@
 """The Work metadata field rules the PostgreSQL handlers use (kept by PG-C2 #641).
 
-``backend/work_metadata_sync.py`` holds the field registry, the size and
+``backend/domain/works/metadata_rules.py`` holds the field registry, the size and
 allowlist contract, the ``thumb_page`` codec, the conflict-result bound the
 browser shares, and the scope key. These are pure; ``tests/pg/
 test_works_metadata_sync.py`` exercises them through the PostgreSQL boundary.
@@ -23,7 +23,7 @@ import pathlib
 import re
 import unittest
 
-from backend import work_metadata_sync as meta
+from backend.domain.works import metadata_rules as meta
 from backend.domain.works import metadata as pg_metadata
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]

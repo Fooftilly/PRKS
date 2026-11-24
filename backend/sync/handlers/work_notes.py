@@ -1,6 +1,6 @@
 """``SET_WORK_RESEARCH_NOTE`` and ``SET_WORK_PRIVATE_NOTE`` on PostgreSQL (L-W-1 #628).
 
-Validated by ``backend/work_note_sync.py``'s rule and decided by
+Validated by ``backend/domain/works/note_rules.py``'s rule and decided by
 :func:`backend.domain.works.notes.apply_note_operation`. A Research Note's
 markup side effects (Concepts, mentions) are the Research lane's (L-R-1).
 SERIALIZABLE: a note can add a ``work_notes`` row, which a Work merge reads
@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import work_note_sync as rules
+from backend.domain.works import note_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.works import notes

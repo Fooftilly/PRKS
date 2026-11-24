@@ -19,7 +19,7 @@ import json
 from typing import Any, Optional
 from unittest import mock
 
-from backend import work_metadata_sync as rules
+from backend.domain.works import metadata_rules as rules
 from backend.domain.works import metadata, revisions
 from backend.domain.works.rules import BulkWorkError
 from tests.pg.test_works_sync import SyncTestCase

@@ -1,6 +1,6 @@
 """Concepts, their aliases and hierarchy on PostgreSQL (L-R-1 #634).
 
-The rules are SQLite's (``backend/concept_sync.py``, ``backend/research_network.py``),
+The rules are SQLite's (``backend/domain/research/concept_rules.py``, ``backend/research_network.py``),
 imported rather than copied: the name and definition rules
 (``_concept_name``, ``_optional_markdown``, ``ResearchError`` and its codes
 and messages), the scopes (``concept-field / ["C-…","description"]``,
@@ -45,7 +45,7 @@ from __future__ import annotations
 from typing import Any, LiteralString, Optional, Sequence
 
 import backend.domain.research.constraints  # noqa: F401  (registers the lane's constraints)
-from backend import concept_sync as rules
+from backend.domain.research import concept_rules as rules
 from backend.domain.research import rules as research_rules
 from backend.research_markup import canonical_concept_name
 from backend.domain.identity.library_scope import LibraryScope
@@ -448,7 +448,7 @@ def set_field(scope: LibraryScope, concept_id: str, field: str, value: Any) -> t
 def apply_field_operation(scope: LibraryScope, concept_id: str, field: str, desired: str,
                           base_revision: int) -> tuple[int, dict[str, Any]]:
     """``SET_CONCEPT_FIELD``'s ``apply_field``: SQLite's decision table, result for result."""
-    from backend import work_metadata_sync as meta
+    from backend.domain.works import metadata_rules as meta
 
     result: dict[str, Any] = {"concept_id": concept_id, "field": field}
     if lock(scope, concept_id) is None:

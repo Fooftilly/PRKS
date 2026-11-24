@@ -64,7 +64,7 @@ The structured research entities are among the domains covered by durable local-
 
 Relevant code is primarily in:
 
-- `backend/concept_sync.py`, `position_sync.py`, `argument_sync.py`;
+- `backend/domain/research/concept_rules.py`, `backend/domain/research/position_rules.py`, `backend/domain/research/argument_rules.py`;
 - `backend/research_graph.py`, `research_network.py`, `research_index.py`;
 - `frontend/js/concept-state.js`, `position-state.js`, `argument-state.js`;
 - `frontend-app/src/features/concepts/` (Vue Concepts index/detail), `frontend-app/src/features/positions/` (Vue Positions index/detail), `frontend-app/src/features/arguments/` (Vue Arguments & Stances index/detail), `frontend/js/components/concepts.js` (shared research-index helpers + create flow), `arguments.js` (`prksCreateArgumentFromWork` only), `research-graph.js`.

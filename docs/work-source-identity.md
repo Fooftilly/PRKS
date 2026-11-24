@@ -2,7 +2,7 @@
 
 Written as design and audit for 2K, and **implemented in 2O** along the lines
 it recommends: §9's Model B with Model C's boundary is what
-`backend/work_source_sync.py` and `frontend/js/work-source-state.js` now
+`backend/domain/works/source_rules.py` and `frontend/js/work-source-state.js` now
 do. The audit sections below are preserved as the evidence for that choice and
 still describe the data as it was measured. No rows were migrated and viewer
 precedence is unchanged; §10 records what the implementation had to propagate.

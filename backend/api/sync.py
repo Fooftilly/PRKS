@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 
-from backend import work_note_sync
+from backend.domain.works import note_rules
 from backend.log_safety import safe_error_type, safe_log_id
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
@@ -29,7 +29,7 @@ def post_operation(req: Request) -> Response:
     status, result = process_operation(database, ctx, data, Environment(pdfs_dir=req.app.pdfs_dir))
     acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
     operation = data.get("operation")
-    if acknowledged and operation == work_note_sync.RESEARCH_OPERATION:
+    if acknowledged and operation == note_rules.RESEARCH_OPERATION:
         # The note and its ledger row are committed; a failed derived read
         # leaves the refs out (the client reads them later) and never turns
         # a saved note into an error.

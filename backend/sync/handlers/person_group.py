@@ -2,7 +2,7 @@
 
 ``CREATE_PERSON_GROUP``, ``SET_PERSON_GROUP_FIELD``,
 ``ADD/REMOVE_PERSON_GROUP_MEMBER`` and ``DELETE_PERSON_GROUP``, validated by
-``backend/person_group_sync.py``'s rules and decided by
+``backend/domain/people/group_rules.py``'s rules and decided by
 :mod:`backend.domain.people.groups`, result for result.
 
 Names are unique per Library by identity key, and the unique index decides
@@ -23,12 +23,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from backend import person_group_sync as rules
+from backend.domain.people import group_rules as rules
 from backend.db.database import Isolation
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import LibraryScope
 from backend.domain.people import groups, queries
-from backend.person_group_sync import GroupRuleError
+from backend.domain.people.group_rules import GroupRuleError
 from backend.sync.families import Environment, FamilyHandler, Result
 
 _NAME_KEY = "person_groups_library_id_name_key_key"

@@ -54,10 +54,10 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_client_and_server_agree_on_the_synchronized_field_set(self):
         """Two registries that drift would mean the editor offering a field the
         server refuses, or silently online-only saving one it would accept."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         self.assertEqual(sorted(client_registries()['fields']),
-                         sorted(work_metadata_sync.SYNCED_FIELDS))
-        self.assertEqual(sorted(work_metadata_sync.SYNCED_FIELDS), sorted(SYNCED))
+                         sorted(metadata_rules.SYNCED_FIELDS))
+        self.assertEqual(sorted(metadata_rules.SYNCED_FIELDS), sorted(SYNCED))
 
     def test_client_and_server_agree_on_the_citation_styles(self):
         from backend.domain.works.citation_styles import CITATION_STYLES
@@ -65,9 +65,9 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
 
     def test_client_and_server_accept_the_same_citation_style_values(self):
         """An imported style's id passes by shape on both sides (#41)."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         values = ['', 'apa', 'custom-' + 'a' * 32, 'custom-x', 'harvard1', 'custom-' + 'A' * 32]
-        expected = [v if work_metadata_sync.is_valid_field_value('citation_style', v) else None for v in values]
+        expected = [v if metadata_rules.is_valid_field_value('citation_style', v) else None for v in values]
         self.assertEqual(client_registries()['styleValues'], expected)
         self.assertEqual(expected, ['', 'apa', 'custom-' + 'a' * 32, None, None, None])
 
@@ -126,8 +126,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         may still mention a field it renders.
         """
         import re
-        from backend import work_metadata_sync
-        synced = set(work_metadata_sync.SYNCED_FIELDS)
+        from backend.domain.works import metadata_rules
+        synced = set(metadata_rules.SYNCED_FIELDS)
         # Creating a NEW Work legitimately sends these; only mutation of an
         # existing one is forbidden, and creation is a POST.
         offenders = []
@@ -148,9 +148,9 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_high_fan_out_fields_are_not_synchronized(self):
         """These need their pending values to propagate through several cached
         read models, which is a separate milestone -- not a quiet addition."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         for field in DEFERRED:
-            self.assertNotIn(field, work_metadata_sync.SYNCED_FIELDS, field)
+            self.assertNotIn(field, metadata_rules.SYNCED_FIELDS, field)
 
     def test_the_coordinator_owns_no_family_specific_meaning(self):
         source = (FRONTEND / 'sync-runtime.js').read_text()
@@ -198,9 +198,9 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         """A field the server thinks is Work-detail-only, but the client
         overlays into a list -- or the reverse -- is a silent coherence bug:
         one side reconciles a cached projection the other never updates."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         client = client_registries()
-        server = work_metadata_sync.FIELD_PROJECTIONS
+        server = metadata_rules.FIELD_PROJECTIONS
         self.assertEqual(sorted(client['projections']), sorted(server))
         for field, domains in server.items():
             self.assertEqual(list(client['projections'][field]), list(domains), field)
@@ -226,12 +226,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         acknowledgements skipped `recent:index` in silence and that list kept
         serving a value the server no longer held. A declared projection with
         no addressable cache is a wiring error, not something to step over."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         runtime = (FRONTEND / 'offline-runtime.js').read_text()
         block = runtime[runtime.index('const FIELD_PROJECTION_LISTS = {'):]
         block = block[: block.index('};')]
         declared = set()
-        for domains in work_metadata_sync.FIELD_PROJECTIONS.values():
+        for domains in metadata_rules.FIELD_PROJECTIONS.values():
             declared.update(domains)
         for domain in sorted(declared):
             self.assertIn("'%s':" % domain, block,
@@ -465,8 +465,8 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         If they disagree, one of them accepts a value the other refuses --
         which is the split contract the whole architecture removes."""
         import json
-        from backend import work_metadata_sync
-        server = work_metadata_sync.codec_for('thumb_page')
+        from backend.domain.works import metadata_rules
+        server = metadata_rules.codec_for('thumb_page')
         cases = ['', '1', '3', '003', ' 3 ', '  ', '0', '-1', '1.5', 'abc',
                  '3abc', '+3', '\uff13', '1_0', '1e3', '٣']
         js = """
@@ -500,11 +500,11 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         plays stays the same. Identity is an aggregate; only PROVENANCE is
         field-scoped, and the server refuses a field-scoped write to a video
         Work's URL."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         for field in ('provider', 'provider_id', 'source_kind'):
-            self.assertNotIn(field, work_metadata_sync.SYNCED_FIELDS, field)
+            self.assertNotIn(field, metadata_rules.SYNCED_FIELDS, field)
             self.assertNotIn(field, client_registries()['fields'], field)
-        self.assertEqual(work_metadata_sync.FIELD_KIND_GUARDS, {'source_url': 'video'})
+        self.assertEqual(metadata_rules.FIELD_KIND_GUARDS, {'source_url': 'video'})
 
     def test_recently_added_search_filters_the_effective_rows(self):
         """Rendering the overlay but filtering the acknowledged array is a real
@@ -579,19 +579,19 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         editor and rejected by the durable store -- is the split contract that
         moving a field to local-first removes. Three registries hold these
         numbers (server, client, durable store) and all three must agree."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         client = client_registries()
-        server = dict(work_metadata_sync.BYTE_LIMITS)
+        server = dict(metadata_rules.BYTE_LIMITS)
         self.assertEqual(server, {'abstract': 1024 * 1024, 'author_text': 64 * 1024,
                                   'title': 64 * 1024, 'source_url': 64 * 1024})
         self.assertEqual(client['byteLimits'], server, 'client registry drifted')
         self.assertEqual(client['storeLimits'], server, 'durable store registry drifted')
         # The byte-limited SET is derived from the registry, never listed twice.
         self.assertEqual(sorted(client['byteLimited']), sorted(server))
-        self.assertEqual(sorted(work_metadata_sync.BYTE_LIMITED_FIELDS), sorted(server))
+        self.assertEqual(sorted(metadata_rules.BYTE_LIMITED_FIELDS), sorted(server))
         # And each one is the field's entry in the size registry too.
         for field, limit in server.items():
-            self.assertEqual(work_metadata_sync.SYNCED_FIELDS[field], limit, field)
+            self.assertEqual(metadata_rules.SYNCED_FIELDS[field], limit, field)
 
     def test_the_editor_refuses_an_oversize_value_before_enqueueing(self):
         editor = (FRONTEND / 'work-metadata-editor.js').read_text()
@@ -603,12 +603,12 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
     def test_a_conflict_result_never_carries_a_byte_limited_value(self):
         """The durable row bounds a structured result to 2 KB; a conflict the
         browser cannot store is a conflict the user never sees."""
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         self.assertEqual(
-            sorted(work_metadata_sync.disagreement('abstract', 'a' * 5000, 'b' * 5000)),
+            sorted(metadata_rules.disagreement('abstract', 'a' * 5000, 'b' * 5000)),
             ['current_bytes', 'current_preview', 'requested_bytes'])
         self.assertEqual(
-            sorted(work_metadata_sync.disagreement('doi', '10.1/a', '10.1/b')),
+            sorted(metadata_rules.disagreement('doi', '10.1/a', '10.1/b')),
             ['current_value', 'requested_value'])
 
     def test_embedded_summary_overlay_is_centralized(self):
@@ -636,14 +636,14 @@ class WorkMetadataSyncFrontendTests(unittest.TestCase):
         self.assertIn('prksEffectiveWorkSummaries', composed, 'then metadata')
 
     def test_summary_field_registries_agree(self):
-        from backend import work_metadata_sync
+        from backend.domain.works import metadata_rules
         self.assertEqual(sorted(client_registries()['summary']),
-                         sorted(work_metadata_sync.SUMMARY_FIELDS))
-        self.assertEqual(sorted(work_metadata_sync.SUMMARY_FIELDS),
+                         sorted(metadata_rules.SUMMARY_FIELDS))
+        self.assertEqual(sorted(metadata_rules.SUMMARY_FIELDS),
                          ['author_text', 'doc_type', 'published_date', 'publisher',
                           'source_url', 'status', 'thumb_page', 'title', 'year'])
-        for field in work_metadata_sync.SUMMARY_FIELDS:
-            self.assertIn(field, work_metadata_sync.SYNCED_FIELDS, field)
+        for field in metadata_rules.SUMMARY_FIELDS:
+            self.assertIn(field, metadata_rules.SYNCED_FIELDS, field)
 
     def test_published_date_conversion_lives_in_the_field_codec(self):
         """The durable store stores what it is handed and must never learn what

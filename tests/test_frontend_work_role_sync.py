@@ -4,7 +4,7 @@ import re
 import subprocess
 import unittest
 
-from backend import work_role_sync
+from backend.domain.people import role_rules
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / 'frontend' / 'js'
@@ -24,16 +24,16 @@ class WorkRoleSyncFrontendTests(unittest.TestCase):
         source = (FRONTEND / 'work-role-state.js').read_text()
         listed = source[source.index('const ROLE_TYPES = Object.freeze(['):]
         client = re.findall(r"'([A-Za-z]+)'", listed[: listed.index(']')])
-        self.assertEqual(tuple(client), work_role_sync.ROLE_TYPES)
+        self.assertEqual(tuple(client), role_rules.ROLE_TYPES)
 
     def test_the_credit_bound_matches_on_both_sides(self):
         source = (FRONTEND / 'work-role-state.js').read_text()
         match = re.search(r'MAX_CREDIT_NAME_BYTES = (\d+)', source)
         assert match is not None
-        self.assertEqual(int(match.group(1)), work_role_sync.MAX_CREDIT_NAME_BYTES)
+        self.assertEqual(int(match.group(1)), role_rules.MAX_CREDIT_NAME_BYTES)
 
     def test_the_family_is_registered_everywhere_it_must_be(self):
-        from backend import sync_protocol
+        from backend.sync import envelope
         families = ('ADD_WORK_PERSON_ROLE', 'REMOVE_WORK_PERSON_ROLE',
                     'SET_WORK_PERSON_ROLE_CREDIT')
         store = (FRONTEND / 'local-store.js').read_text()
@@ -41,7 +41,7 @@ class WorkRoleSyncFrontendTests(unittest.TestCase):
         diagnostics = (FRONTEND / 'sync-diagnostics.js').read_text()
         for family in families:
             with self.subTest(family=family):
-                self.assertIn(family, sync_protocol.supported_operations())
+                self.assertIn(family, envelope.supported_operations())
                 self.assertIn("'%s'," % family, store, 'the durable store must accept it')
                 self.assertIn('%s: root.prksWorkRoleSyncHandler' % family, runtime)
                 self.assertIn(family, diagnostics,

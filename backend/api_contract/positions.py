@@ -2,7 +2,7 @@
 
 Shape and JSON types only. Name emptiness, control characters, length limits,
 POSITION_IN_USE, and revision rules stay in ``research_network`` /
-``position_sync``.
+``position_rules``.
 
 Wrong-type ``name`` / ``description`` map to the established domain codes
 (``invalid_name`` / ``invalid_text``) so the typed boundary does not change
