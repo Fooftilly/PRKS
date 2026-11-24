@@ -790,7 +790,7 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
         return self.labels.name(self.library.add_person_group_with_parent_options(name, **fields), f"<PG {name}>")
 
     def refused_with(self, message: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-        self.refused(lambda: call(*args, **kwargs), message)
+        self.assert_refused(lambda: call(*args, **kwargs), message)
 
     def test_a_person_and_its_states(self) -> None:
         arendt = self.person("Arendt", **_PROFILE)

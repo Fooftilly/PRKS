@@ -624,7 +624,7 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
         for title, parent, message in (("root", None, _TAKEN), ("CHILD", root, _TAKEN),
                                        ("Lost", _MISSING_FOLDER, "Parent folder not found.")):
             with self.subTest(title=title):
-                self.refused(lambda: folder_commands.create(db, ctx, title, "", parent), message)
+                self.assert_refused(lambda: folder_commands.create(db, ctx, title, "", parent), message)
         catalog = self.catalog()
         self.answer(catalog, [self.row("<F Child>", "Child", "<F Root>"), self.row("<F Other>", "Other"),
                               self.row("<F Root>", "Root", child_count=1, description="About")])
@@ -663,7 +663,7 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
                 (a, {"parent_id": b}, "Cannot set parent to a subfolder (cycle)."),
                 (_MISSING_FOLDER, {"title": "X"}, "Folder not found.")):
             with self.subTest(fields=fields):
-                self.refused(lambda: folder_commands.update(db, ctx, folder_id, fields), message)
+                self.assert_refused(lambda: folder_commands.update(db, ctx, folder_id, fields), message)
         # Rename first, then move: the pair is judged against the new title.
         folder_commands.update(db, ctx, twin, {"title": "C", "parent_id": a})
         revisions = {folder_id: {field: value["revision"]
@@ -691,11 +691,11 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
                               (lambda: folder_commands.move_work(db, ctx, work, _MISSING_FOLDER), "Folder not found."),
                               (lambda: folder_commands.file_work(db, ctx, " ", work), "folder_id is required"),
                               (lambda: folder_commands.move_work(db, ctx, " ", a), "work_id is required")):
-            self.refused(call, message)
+            self.assert_refused(call, message)
         folder_commands.move_work(db, ctx, work, a)
         folder_commands.move_work(db, ctx, work, a)  # no change, no revision
         self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "<F A>", "revision": 1, "work_id": "<W Paper>"})
-        self.refused(lambda: folder_commands.file_work(db, ctx, b, work), "This file is already in another folder.")
+        self.assert_refused(lambda: folder_commands.file_work(db, ctx, b, work), "This file is already in another folder.")
         self.assertIsNone(folder_commands.file_work(db, ctx, a, work))
         self.answer(require(self.library.get_work(work)), {"folder_id": "<F A>", "folder_title": "A"})
         self.answer([row["folder_id"] for row in self.library.get_all_works()], ["<F A>"])
@@ -744,7 +744,7 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
                 (busy, "Cannot delete folder: Folder is not empty. Please remove all files first."),
                 (_MISSING_FOLDER, "Folder not found."), (" ", "Folder not found.")):
             with self.subTest(folder=folder_id):
-                self.refused(lambda: folder_commands.delete(db, ctx, folder_id), message)
+                self.assert_refused(lambda: folder_commands.delete(db, ctx, folder_id), message)
         folder_commands.move_work(db, ctx, work, "")
         self.library.add_tag_to_folder(busy, self.tag("Ethics"))
         self.assertIsNone(folder_commands.delete(db, ctx, busy))

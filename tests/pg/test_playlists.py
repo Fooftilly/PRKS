@@ -514,9 +514,9 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
                        {"title": " Renamed "}, {}):
             self.assertIsNone(playlist_commands.update(db, ctx, course, fields))
         playlist_commands.update(db, ctx, bare, {"description": None, "original_url": False})
-        self.refused(lambda: playlist_commands.update(db, ctx, _MISSING_PLAYLIST, {"title": "X"}), "Playlist not found.")
-        self.refused(lambda: playlist_commands.update(db, ctx, course, {"title": "x" * 301}), "title exceeds 300 bytes.")
-        self.refused(lambda: playlist_commands.create(db, ctx, "x" * 301), "title exceeds 300 bytes.")
+        self.assert_refused(lambda: playlist_commands.update(db, ctx, _MISSING_PLAYLIST, {"title": "X"}), "Playlist not found.")
+        self.assert_refused(lambda: playlist_commands.update(db, ctx, course, {"title": "x" * 301}), "title exceeds 300 bytes.")
+        self.assert_refused(lambda: playlist_commands.create(db, ctx, "x" * 301), "title exceeds 300 bytes.")
         self.assertEqual(self.fields(course), ({"description": 0, "original_url": 1, "title": 1}, 0))
         self.assertEqual(self.fields(bare), (_UNTOUCHED, 0))
         self.assertIsNone(playlist_commands.sync_state(db, ctx, _MISSING_PLAYLIST))
@@ -536,7 +536,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
                     {"playlist_id": "", "revision": 0, "work_id": "<W First>"})
         for playlist_id, work_id in ((_MISSING_PLAYLIST, first), (a, _MISSING_WORK), (" ", first), (a, " ")):
             with self.subTest(playlist=playlist_id, work=work_id):
-                self.refused(lambda: playlist_commands.add_item(db, ctx, playlist_id, work_id), _NOT_FOUND)
+                self.assert_refused(lambda: playlist_commands.add_item(db, ctx, playlist_id, work_id), _NOT_FOUND)
         for work_id in (first, first, second):  # the second add changes nothing
             self.assertIsNone(playlist_commands.add_item(db, ctx, a, work_id))
         playlist_commands.add_item(db, ctx, a, third, 0)  # then moved to the front
@@ -549,7 +549,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
         # Unknown and repeated ids are dropped; the Works not named keep their order after the named ones.
         playlist_commands.reorder(db, ctx, a, [second, "x", first, second])
         playlist_commands.reorder(db, ctx, a, [])
-        self.refused(lambda: playlist_commands.reorder(db, ctx, _MISSING_PLAYLIST, ["x"]), "Playlist not found.")
+        self.assert_refused(lambda: playlist_commands.reorder(db, ctx, _MISSING_PLAYLIST, ["x"]), "Playlist not found.")
         self.assertEqual(self.order(a), [("<W Second>", 0), ("<W First>", 1), ("<W Third>", 2)])
         # A move takes the Work out of one order and appends it to the other.
         playlist_commands.add_item(db, ctx, b, second, 5)

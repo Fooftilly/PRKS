@@ -107,7 +107,7 @@ class AnswerAssertions(unittest.TestCase):
     def answer(self, value: Any, expected: Any, msg: str = "") -> None:
         assert_answer(self, sort_keys(self.labels.show(value), self.id_lists), expected, msg)
 
-    def refused(self, call: Callable[[], Any], message: str, error: type[Exception] = ValueError) -> None:
+    def assert_refused(self, call: Callable[[], Any], message: str, error: type[Exception] = ValueError) -> None:
         with self.assertRaises(error) as caught:
             call()
         self.assertEqual(str(caught.exception), message)

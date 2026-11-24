@@ -380,7 +380,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
                 (lambda: self.library.add_role(self.bo, self.work, "Editor", credit_name="x" * 501),
                  "credit_name exceeds 500 bytes"),
                 (lambda: self.library.delete_work_role(self.work, self.ann, "Producer"), _NOT_A_ROLE)):
-            self.refused(call, message)
+            self.assert_refused(call, message)
         self.assertEqual(self.roles(), [("Author", 0, None)])
 
     def test_credit_edits_and_removal(self) -> None:
@@ -438,7 +438,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
     def test_one_constructed_role(self) -> None:
         self.library.insert_initial_role(self.work, self.ann, "Author", 2, "A. Lee")
         self.library.insert_initial_role(self.work, self.bo, "Editor")
-        self.refused(lambda: self.library.insert_initial_role(self.work, self.bo, "Producer"), _NOT_A_ROLE)
+        self.assert_refused(lambda: self.library.insert_initial_role(self.work, self.bo, "Producer"), _NOT_A_ROLE)
         with self.assertRaisesRegex(ValueError, "no longer exists"):
             self.library.insert_initial_role(self.work, _MISSING_PERSON, "Author")
         self.assertEqual([(role, index) for role, index, _ in self.roles()], [("Editor", 0), ("Author", 2)])

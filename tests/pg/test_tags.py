@@ -539,7 +539,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
                                     (ethics, "  ", "alias is empty"),
                                     ("T-" + "0" * 32, "x", "tag not found")):
             with self.subTest(alias=alias):
-                self.refused(lambda: tag_commands.add_alias(db, ctx, tag, alias), message)
+                self.assert_refused(lambda: tag_commands.add_alias(db, ctx, tag, alias), message)
         # An alias resolves to its Tag, in a create too.
         self.answer(self.create("Morals"), {"color": "#6d6cf7", "existed": True, "id": "<T Ethics>",
                                             "name": "Ethics"})
@@ -556,7 +556,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         catalog = tag_commands.all_tags(db, ctx)
         self.answer([row["aliases"] for row in catalog], [[], []])
         self.assertNotEqual(etag_for_representation("tags", catalog), before)
-        self.refused(lambda: self.create("  "), "tag name is empty")
+        self.assert_refused(lambda: self.create("  "), "tag name is empty")
 
     def test_work_and_folder_tags_and_their_options(self) -> None:
         db, ctx = self.db, self.actor.context
@@ -602,8 +602,8 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
                     {"assigned": [], "folder_id": "<F F>", "known_absent": {}})
         self.assertEqual(tag_commands.all_tags(db, ctx), [])
         self.assertIsNone(self.library.resolve_tag_id_by_label("Morals"))
-        self.refused(lambda: tag_commands.delete(db, ctx, ethics), "tag not found")
-        self.refused(lambda: tag_commands.delete(db, ctx, ""), "tag_id is required")
+        self.assert_refused(lambda: tag_commands.delete(db, ctx, ethics), "tag not found")
+        self.assert_refused(lambda: tag_commands.delete(db, ctx, ""), "tag_id is required")
 
     def test_merge(self) -> None:
         db, ctx = self.db, self.actor.context
