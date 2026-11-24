@@ -1,7 +1,7 @@
 {
   "complete": true,
   "count": 2,
-  "generated_at": "2026-11-24T10:54:23Z",
+  "generated_at": "2026-11-24T21:10:09Z",
   "issues": [
     {
       "agent": "ChatGPT/Codex",
@@ -24,6 +24,6 @@
   },
   "repository": "Fooftilly/PRKS",
   "schema": "prks-project3-agent-queue/v1",
-  "source_run_id": 45379140913,
-  "stale_after": "2026-11-24T22:54:23Z"
+  "source_run_id": 45488284803,
+  "stale_after": "2026-11-25T09:10:09Z"
 }
