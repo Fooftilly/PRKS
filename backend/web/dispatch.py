@@ -295,14 +295,23 @@ def dispatch(request: Request) -> Response:
 
 
 def _public(request: Request) -> Response:
-    """A probe (a public route of the table), else a frontend file."""
+    """A probe (a public route of the table), else a frontend file.
+
+    Only a route outside ``/api/`` answers here: the path is decoded to
+    recognize ``/%72eadyz``, so ``/%61pi/...`` decodes to an API path that
+    never went through admission and must not reach its handler.
+    """
     normalized = unquote(request.path).rstrip("/") or "/"
     found = request.app.routes.resolve(request.method, normalized)
-    if isinstance(found, Match):
+    if isinstance(found, Match) and not _is_api_pattern(found.route.pattern):
         return found.route.handler(request)
     if request.method in ("GET", "HEAD"):
         return serve_frontend(request)
     return error_response(405, "Method Not Allowed")
+
+
+def _is_api_pattern(pattern: str) -> bool:
+    return pattern == "/api" or pattern.startswith("/api/")
 
 
 def _admit(request: Request) -> Optional[Response]:

@@ -71,6 +71,42 @@ class RouteTableTests(unittest.TestCase):
             self.assertTrue(one.pattern.startswith(("/api/", "/healthz", "/readyz")), one.pattern)
 
 
+class PublicPathTests(unittest.TestCase):
+    """A path outside ``/api/`` never reaches an API handler without admission."""
+
+    def setUp(self) -> None:
+        from backend.api import health
+
+        self.calls: list[str] = []
+
+        def secret(req: Request) -> Response:
+            self.calls.append(req.path)
+            return Response(200, [("Content-Length", "6")], b"secret")
+
+        routes = RouteTable((route("GET", "/api/storage-status", secret), *health.ROUTES))
+        self.app = App(routes=routes, bind_host="127.0.0.1", frontend_dir=_PROJECT_DIR + "/no-such-frontend")
+
+    def get(self, path: str) -> Response:
+        from backend.web.dispatch import dispatch
+
+        return dispatch(Request("GET", path, "", Headers([("Host", "127.0.0.1")]), self.app))
+
+    def test_an_encoded_api_prefix_is_not_routed(self) -> None:
+        for path in ("/%61pi/storage-status", "/%61%70%69/storage-status", "/%2Fapi/storage-status",
+                     "//api/storage-status", "/%61pi/storage-status/"):
+            with self.subTest(path=path):
+                response = self.get(path)
+                self.assertNotEqual(response.body, b"secret")
+        self.assertEqual(self.calls, [])
+
+    def test_an_api_path_without_identity_is_refused(self) -> None:
+        self.assertEqual(self.get("/api/storage-status").status, 503)
+        self.assertEqual(self.calls, [])
+
+    def test_an_encoded_probe_is_still_a_probe(self) -> None:
+        self.assertEqual(self.get("/%68ealthz/").body, b"ok")
+
+
 class _Body:
     def __init__(self, payload: bytes) -> None:
         self.payload = payload
