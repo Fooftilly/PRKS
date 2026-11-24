@@ -78,8 +78,12 @@ walks the route table and sends each JSON route these bodies, so a new route
 is covered without being listed.
 
 **Paths.** The route table sees the path as sent: `;params` are no longer
-stripped, so `/index.html;x` is 404, not `index.html`. A path segment is
-percent-decoded by the route that reads it, once.
+stripped, so `;x` stays part of the segment. `/api/pdfs/<name>;x` names
+another file (404), and a frontend path such as `/index.html;x` falls back to
+the app shell. A path segment is percent-decoded by the route that reads it,
+once. The most specific pattern that takes a path owns it: a wrong method on
+a literal endpoint such as `/api/works/bulk` is 405 with that endpoint's own
+`Allow`, never a fall-through to `/api/works/{work_id}`.
 
 Only regular files beneath the frontend directory are served, each resolved
 with its symlinks (the shell too): `/` and unknown paths get `index.html`,

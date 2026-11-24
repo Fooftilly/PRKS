@@ -108,6 +108,10 @@ class Route:
                 params[segment.name] = part
         return params if len(parts) == len(segments) else None
 
+    def shape(self) -> tuple[Optional[str], ...]:
+        """The pattern with parameter names left out: routes of one shape share a path."""
+        return tuple(s.literal if s.literal is not None else ("*" if s.rest else "") for s in self.segments)
+
     def rank(self) -> tuple[int, ...]:
         """Sort key: literal segments before parameters, a rest parameter last."""
         return tuple(0 if s.literal is not None else (2 if s.rest else 1) for s in self.segments)
@@ -137,18 +141,25 @@ class RouteTable:
         self.routes: tuple[Route, ...] = tuple(sorted(routes, key=Route.rank))
         seen: set[tuple[str, tuple[Optional[str], ...]]] = set()
         for one in self.routes:
-            key = (one.method, tuple(s.literal if s.literal is not None else ("*" if s.rest else "")
-                                     for s in one.segments))
+            key = (one.method, one.shape())
             if key in seen:
                 raise ValueError(f"duplicate route {one.method} {one.pattern}")
             seen.add(key)
 
     def resolve(self, method: str, path: str) -> Union[Match, NoRoute]:
+        # The most specific pattern that takes the path owns it: a literal
+        # endpoint such as /api/works/bulk never falls through to the methods
+        # of /api/works/{work_id}, and its Allow names only its own methods.
         parts = path.split("/")[1:]
         allowed: list[str] = []
+        owner: Optional[tuple[Optional[str], ...]] = None
         for one in self.routes:
             params = one.match(parts)
             if params is None:
+                continue
+            if owner is None:
+                owner = one.shape()
+            elif one.shape() != owner:
                 continue
             if one.method == method:
                 return Match(one, params)

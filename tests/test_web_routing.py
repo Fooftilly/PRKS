@@ -30,6 +30,7 @@ class RouteTableTests(unittest.TestCase):
             route("GET", "/api/works/{work_id}", _answer),
             route("PATCH", "/api/works/{work_id}", _answer),
             route("GET", "/api/works/recent", _answer),
+            route("POST", "/api/works/bulk", _answer),
             route("GET", "/api/pdfs/{filename:path}", _answer),
         ))
 
@@ -51,6 +52,11 @@ class RouteTableTests(unittest.TestCase):
         self.assertEqual(self.table.resolve("GET", "/api/nothing"), NoRoute())
         self.assertEqual(self.table.resolve("GET", "/api/works/W-1/extra"), NoRoute())
         self.assertEqual(self.table.resolve("DELETE", "/api/works/W-1"), NoRoute(("GET", "PATCH")))
+
+    def test_a_literal_endpoint_does_not_take_the_methods_of_a_parameter_route(self) -> None:
+        self.assertEqual(self.table.resolve("DELETE", "/api/works/bulk"), NoRoute(("POST",)))
+        self.assertEqual(self.table.resolve("PATCH", "/api/works/recent"), NoRoute(("GET",)))
+        self.assertEqual(self.table.resolve("GET", "/api/works/bulk"), NoRoute(("POST",)))
 
     def test_an_empty_segment_is_no_parameter(self) -> None:
         self.assertEqual(self.table.resolve("GET", "/api/works/"), NoRoute())
