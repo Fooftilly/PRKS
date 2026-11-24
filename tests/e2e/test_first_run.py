@@ -23,6 +23,8 @@ import json
 import os
 import unittest
 
+import psycopg
+
 from tests.e2e.harness import AppServer, PageCollector, require_chromium
 from tests.e2e.postgres_identity import issue_setup_token
 
@@ -192,7 +194,15 @@ class ChooseFolderSetupTests(unittest.TestCase):
 
         # Setup claimed the chosen folder, so it can no longer change.
         self.assertEqual(self.setup_status(context), {"state": "ready", "storage": "fixed"})
-        self.assertTrue(os.path.isfile(os.path.join(chosen, "prks-root.json")))
+        # The database is paired with the chosen folder, not the one PRKS first ran on.
+        with psycopg.connect(self.server.library.conninfo) as conn:
+            row = conn.execute("SELECT id, storage_root_id FROM prks.instance").fetchone()
+        assert row is not None
+        with open(os.path.join(chosen, "prks-root.json"), encoding="utf-8") as handle:
+            marker = json.load(handle)
+        self.assertEqual((marker.get("instance_id"), marker.get("storage_root_id")), row)
+        with open(os.path.join(self.server.storage_root, "prks-root.json"), encoding="utf-8") as handle:
+            self.assertIsNone(json.load(handle).get("instance_id"))
 
 
 if __name__ == "__main__":
