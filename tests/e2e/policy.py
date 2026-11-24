@@ -1619,13 +1619,26 @@ PACKAGED_FULL_PATHS = (
 PACKAGED_FULL_SHARDS = 8
 
 
-def plan_packaged_e2e(changed_paths, *, force_full: bool = False) -> dict:
+def plan_packaged_e2e(changed_paths, *, force_full: bool = False, path_diffs=None) -> dict:
     """Full or smoke packaged run for one pull request (never skip: the path filter decides that).
 
     Smoke has no shard matrix: the workflow runs its ``packaged-smoke`` job.
+    A ``frontend/sw.js`` diff that is only the generated ``DEPENDENCY_REVISION``
+    stamp, beside a rebuilt Vue bundle that explains it, is not a packaging
+    change (as in ``plan_ci_e2e``); a missing diff fails closed to full.
     """
-    risky = [p for p in (_posix(path) for path in changed_paths)
-             if any(_path_matches(p, pattern) for pattern in PACKAGED_FULL_PATHS)]
+    paths = [_posix(path) for path in changed_paths]
+    bundle_rebuilt = any(_is_generated_vue_bundle(p) for p in paths)
+    diffs = path_diffs or {}
+    risky = [
+        p for p in paths
+        if any(_path_matches(p, pattern) for pattern in PACKAGED_FULL_PATHS)
+        and not (
+            p == "frontend/sw.js"
+            and bundle_rebuilt
+            and sw_js_diff_is_dependency_revision_only(diffs.get(p))
+        )
+    ]
     if force_full or risky:
         reason = "full packaged run requested" if force_full else "packaging paths changed: " + ", ".join(risky[:8])
         include = [{"shard": i, "total": PACKAGED_FULL_SHARDS} for i in range(1, PACKAGED_FULL_SHARDS + 1)]

@@ -78,7 +78,7 @@ The gate does not read the map. It is evidence for deciding whether it should. N
 
 `.github/workflows/e2e-classic-distribution-gate.yml` (not required) re-runs browser tests on the bundled production frontend. Its `packaged-plan` job (`tests/e2e/run.py --packaged-plan`, rules in `plan_packaged_e2e` in `tests/e2e/policy.py`) picks the set:
 
-- a pull request that changes a `PACKAGED_FULL_PATHS` file (packaging scripts, `Dockerfile`, `frontend/sw.js`, the shell page, the manifest, the gate itself, `tests/e2e/run.py` or `tests/e2e/policy.py`) runs every test on 8 shards;
+- a pull request that changes a `PACKAGED_FULL_PATHS` file (packaging scripts, `Dockerfile`, `frontend/sw.js`, the shell page, the manifest, the gate itself, `tests/e2e/run.py` or `tests/e2e/policy.py`) runs every test on 8 shards. As in the required gate's plan, a `frontend/sw.js` diff that is only the generated `DEPENDENCY_REVISION` stamp beside a rebuilt Vue bundle does not count;
 - any other pull request that matches the gate's `paths` filter runs only the `packaged-smoke` job (the 9 curated smoke tests plus 5 packaged PDF, offline and Graph boundaries). The required Full E2E gate already runs every test on the source tree, and an audit of three weeks of runs (November 2026) found no packaged-only failure outside the Docker build, which still runs on every such pull request with the service worker upgrade/rollback job;
 - manual `full` and `compare` runs, including the nightly master CI (`master-ci.yml`, which dispatches `full`), run every test, so the rest of the suite still runs on the packaged frontend once per night after merges. Manual `smoke` runs only the smoke job; manual `compare` runs both.
 

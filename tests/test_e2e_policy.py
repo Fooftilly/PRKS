@@ -231,6 +231,45 @@ class PackagedGatePlanTests(unittest.TestCase):
                     [{"shard": i, "total": policy.PACKAGED_FULL_SHARDS} for i in range(1, 9)],
                 )
 
+    @staticmethod
+    def _sw_diff(*lines):
+        return "\n".join(
+            ["diff --git a/frontend/sw.js b/frontend/sw.js", "--- a/frontend/sw.js",
+             "+++ b/frontend/sw.js", "@@ -1,3 +1,3 @@", *lines]
+        )
+
+    def test_generated_service_worker_stamp_with_a_rebuilt_bundle_stays_smoke(self):
+        # PR #1420 shape: Vue source, rebuilt bundle and manifest, and only the
+        # generated revision line in sw.js.
+        paths = [
+            "frontend-app/src/setup/SetupApp.vue",
+            "frontend/vue/prks-vue-app.js",
+            "frontend/vendor/DEPENDENCY-MANIFEST.json",
+            "frontend/sw.js",
+        ]
+        stamp = self._sw_diff(
+            "-const DEPENDENCY_REVISION = '0123456789ab';",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+        )
+        plan = policy.plan_packaged_e2e(paths, path_diffs={"frontend/sw.js": stamp})
+        self.assertEqual(plan["mode"], "smoke")
+        # A real service worker edit, a missing diff or a stamp with no rebuilt
+        # bundle behind it stays on the full packaged run.
+        logic = self._sw_diff(
+            "-const DEPENDENCY_REVISION = '0123456789ab';",
+            "+const DEPENDENCY_REVISION = 'ba9876543210';",
+            "+self.addEventListener('fetch', () => {});",
+        )
+        for label, changed, diffs in (
+            ("logic edit", paths, {"frontend/sw.js": logic}),
+            ("missing diff", paths, None),
+            ("no bundle", ["frontend/sw.js"], {"frontend/sw.js": stamp}),
+        ):
+            with self.subTest(label):
+                plan = policy.plan_packaged_e2e(changed, path_diffs=diffs)
+                self.assertEqual(plan["mode"], "full")
+                self.assertIn("frontend/sw.js", plan["reason"])
+
     def test_other_changes_run_only_the_smoke_job_and_force_wins(self):
         plan = policy.plan_packaged_e2e(["frontend/js/app.js", "backend/api/works.py"])
         self.assertEqual(plan["mode"], "smoke")

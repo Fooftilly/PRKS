@@ -2310,7 +2310,10 @@ def _main(argv=None) -> int:
         except ChangeDiscoveryError as exc:
             print("packaged-plan: change discovery failed, running the full set: %s" % exc, file=sys.stderr)
             paths, force = [], True
-        plan = plan_packaged_e2e(paths, force_full=force)
+        path_diffs = None
+        if any(path.replace("\\", "/") == "frontend/sw.js" for path in paths):
+            path_diffs = {"frontend/sw.js": service_worker_diff_for_plan(REPO, args.base)}
+        plan = plan_packaged_e2e(paths, force_full=force, path_diffs=path_diffs)
         plan["changed_paths"] = None if force else len(paths)
         print(json.dumps(plan, sort_keys=True))
         return 0
