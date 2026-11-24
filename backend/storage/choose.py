@@ -221,8 +221,8 @@ def choose_root(
     a setup that claimed the root meanwhile, is seen before anything is written.
 
     ``setup_state`` reads the database's setup state; it is asked under the
-    lease, last, and anything but ``unconfigured`` refuses. The command line
-    passes it; the setup page checks the state itself before calling.
+    lease, last, and anything but ``unconfigured`` refuses. Both callers pass
+    it: another process may begin setup between their own check and this one.
     """
     env = dict(os.environ if environ is None else environ)
     if paths.testing_from_value(env.get("PRKS_TESTING", "")):
