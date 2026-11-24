@@ -11,9 +11,15 @@ the empty Library signed in as the new owner, and then:
 
 The 409 for a second setup request is covered without a browser in
 ``tests/pg/test_readiness.py``.
+
+A server whose folder is still choosable (#720: selected by a config file,
+not by PRKS_STORAGE) offers another folder on the token step. Choosing one
+asks for a restart; after it, PRKS runs on the chosen folder, setup finishes
+there with the same token, and the folder can no longer be changed.
 """
 from __future__ import annotations
 
+import json
 import os
 import unittest
 
@@ -125,6 +131,68 @@ class FirstRunSetupTests(unittest.TestCase):
         page.wait_for_selector(".prks-folder-library")
         self.assertEqual(page.locator("#prks-sign-in").count(), 0)
         self.open_library(self.new_page(other))
+
+
+class ChooseFolderSetupTests(unittest.TestCase):
+    def setUp(self):
+        self.server = AppServer(first_run=True, choosable=True)
+        self.addCleanup(self.server.stop_later)
+        self.server.start()
+
+    def setup_status(self, context):
+        response = context.request.get(self.server.origin + "/api/setup")
+        self.assertEqual(response.status, 200, response.text())
+        return response.json()
+
+    def test_choose_a_folder_restart_and_finish_setup_on_it(self):
+        assert self.server.library is not None
+        chosen = os.path.join(os.path.dirname(self.server.storage_root), "chosen-library")
+        context = _BROWSER.new_context(viewport={"width": 1280, "height": 900}, service_workers="block")
+        self.addCleanup(context.close)
+        page = context.new_page()
+        collector = PageCollector(page, self.server.origin)
+        self.addCleanup(lambda: self.assertEqual(collector.pageerrors, []))
+        self.assertEqual(self.setup_status(context)["storage"], "choosable")
+
+        page.goto(self.server.origin + "/", wait_until="domcontentloaded")
+        page.locator("#prks-setup-heading").wait_for()
+        token = issue_setup_token(self.server.library)
+        page.fill("#prks-setup-token", token)
+        page.click("#prks-setup-folder summary")
+        page.fill("#prks-setup-folder-path", chosen)
+        page.get_by_role("button", name="Use this folder").click()
+
+        page.get_by_role("heading", name="Restart PRKS").wait_for()
+        self.assertEqual(page.locator("#prks-setup-chosen-folder").inner_text(), chosen)
+        # The choice is recorded for the next start; this process keeps its folder.
+        self.assertEqual(self.setup_status(context)["storage"], "restart_required")
+        with open(self.server.config_file, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["storage"]["local_root"], chosen)
+        page.reload(wait_until="domcontentloaded")
+        page.get_by_role("heading", name="Restart PRKS").wait_for()
+
+        self.server._release_process()
+        self.server.start()
+        status = self.setup_status(context)
+        self.assertEqual((status["state"], status["storage"]), ("unconfigured", "choosable"))
+
+        # The same token finishes setup on the chosen folder.
+        page.reload(wait_until="domcontentloaded")
+        page.fill("#prks-setup-token", token)
+        page.get_by_role("button", name="Continue").click()
+        page.get_by_role("heading", name="Owner and Library").wait_for()
+        page.fill("#prks-setup-login", OWNER_LOGIN)
+        page.fill("#prks-setup-password", OWNER_PASSWORD)
+        page.fill("#prks-setup-password-again", OWNER_PASSWORD)
+        page.fill("#prks-setup-library", LIBRARY_NAME)
+        page.get_by_role("button", name="Continue").click()
+        page.get_by_role("heading", name="Review").wait_for()
+        page.get_by_role("button", name="Finish setup").click()
+        page.wait_for_selector(".prks-folder-library", timeout=30000)
+
+        # Setup claimed the chosen folder, so it can no longer change.
+        self.assertEqual(self.setup_status(context), {"state": "ready", "storage": "fixed"})
+        self.assertTrue(os.path.isfile(os.path.join(chosen, "prks-root.json")))
 
 
 if __name__ == "__main__":
