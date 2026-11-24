@@ -322,14 +322,38 @@ class SelectionRaceTests(ChooseTestCase):
 
 
 class StorageCommandTests(ChooseTestCase):
-    def run_command(self, *argv: str, environ=None) -> tuple[int, str, str]:
+    def run_command(self, *argv: str, environ=None, setup_state=lambda: "unconfigured") -> tuple[int, str, str]:
         import io
 
         import prks_app
 
         out, err = io.StringIO(), io.StringIO()
-        code = prks_app.run_storage(list(argv), environ=environ or self.environ, out=out, err=err)
+        code = prks_app.run_storage(
+            list(argv), environ=environ or self.environ, out=out, err=err, setup_state=setup_state
+        )
         return code, out.getvalue(), err.getvalue()
+
+    def test_storage_choose_refuses_once_the_database_records_that_setup_started(self) -> None:
+        # Setup commits the instance row before it claims the marker: a setup
+        # that stopped in between leaves the marker unclaimed (§8.1).
+        for state in ("bootstrapping", "ready"):
+            with self.subTest(state=state):
+                code, out, err = self.run_command("choose", self.path("late"), setup_state=lambda s=state: s)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("Setup has already started", err)
+                self.assertEqual(self.selected(), self.default_root)
+                self.assertFalse(os.path.exists(self.path("late")))
+
+    def test_storage_choose_refuses_when_the_database_cannot_be_read(self) -> None:
+        from backend.db.errors import DatabaseUnavailableError
+
+        def unreachable() -> str:
+            raise DatabaseUnavailableError()
+
+        code, out, err = self.run_command("choose", self.path("blind"), setup_state=unreachable)
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("could not read its database", err)
+        self.assertEqual(self.selected(), self.default_root)
 
     def test_storage_choose_records_the_folder(self) -> None:
         code, out, err = self.run_command("choose", self.path("cli-chosen"))

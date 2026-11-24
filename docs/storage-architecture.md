@@ -624,7 +624,11 @@ runs only on PostgreSQL, and the database is paired with exactly one root
   (exclusive, without waiting, unless the caller is the setup page's own
   process), then the target's lease, and writes the config last. It
   resolves the current root under the config lock and checks its claim again
-  under that root's lease. A process that read the old selection (from the
+  under that root's lease. Setup commits the instance row before it claims
+  the marker, so "claimed" means either: the command line also reads the
+  database's setup state under that lease and refuses unless it is
+  `unconfigured` (or the database cannot be read); the setup page checks the
+  state in its own process. A process that read the old selection (from the
   bootstrap file or a default) re-reads the bootstrap file under its new
   lease and refuses (`storage_selection_changed`) when the selection moved
   on. Setup claims a root under the same config lock (web setup page and

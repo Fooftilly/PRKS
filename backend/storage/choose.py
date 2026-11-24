@@ -46,9 +46,11 @@ from __future__ import annotations
 
 import contextlib
 import os
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from backend.db.errors import DatabaseError
 
 from backend.storage import paths, resolver
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_unchanged
@@ -79,6 +81,30 @@ def _claimed(marker: Optional[RootMarker]) -> bool:
 
 def _refuse(reason: str, message: str) -> StorageRootRefused:
     return StorageRootRefused(reason, message)
+
+
+# ``setup_state`` returns the database's setup state; only "unconfigured" lets a choice through.
+SetupState = Callable[[], str]
+SETUP_UNCONFIGURED = "unconfigured"
+
+
+def _refuse_unless_setup_unconfigured(setup_state: SetupState) -> None:
+    """Refuse once the database names a root, not only once its marker is claimed (§8.1).
+
+    Setup commits the instance row before it writes the marker; a setup that
+    stopped between the two leaves the marker unclaimed while the database
+    already names the root, and setup on any other folder is then refused.
+    """
+    try:
+        state = setup_state()
+    except DatabaseError as exc:  # DatabaseConfigError too: no usable settings
+        raise _refuse(
+            "choose_database_unavailable",
+            "PRKS could not read its database to check that setup has not started. "
+            "Run the command with the same database settings as PRKS (PRKS_DATABASE_URL).",
+        ) from exc
+    if state != SETUP_UNCONFIGURED:
+        raise _refuse("choose_root_claimed", "Setup has already started on the current Library folder.")
 
 
 def refusal_before_target(environ: Mapping[str, str], current_root: str) -> Optional[StorageRootRefused]:
@@ -182,6 +208,7 @@ def choose_root(
     environ: Optional[Mapping[str, str]] = None,
     held_current_root: Optional[str] = None,
     cwd: Optional[str] = None,
+    setup_state: Optional[SetupState] = None,
 ) -> Chosen:
     """Validate ``target`` and record it as the Library folder for the next start.
 
@@ -192,6 +219,10 @@ def choose_root(
     The current root is resolved again under the config lock and checked
     again under its lease: a choice that committed while this one waited, or
     a setup that claimed the root meanwhile, is seen before anything is written.
+
+    ``setup_state`` reads the database's setup state; it is asked under the
+    lease, last, and anything but ``unconfigured`` refuses. The command line
+    passes it; the setup page checks the state itself before calling.
     """
     env = dict(os.environ if environ is None else environ)
     if paths.testing_from_value(env.get("PRKS_TESTING", "")):
@@ -223,6 +254,8 @@ def choose_root(
             again = refusal_before_target(env, current_root)
             if again is not None:
                 raise again
+            if setup_state is not None:
+                _refuse_unless_setup_unconfigured(setup_state)
             if any(os.path.lexists(os.path.join(folder, name)) for name in paths.SQLITE_CATALOGUES):
                 # A start refuses this root (prks_app.refuse_sqlite_catalogue).
                 raise _refuse(

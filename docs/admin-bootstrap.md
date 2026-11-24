@@ -59,7 +59,10 @@ the folder (no `--storage-root`, no `PRKS_STORAGE`), you may pick another
 folder:
 
 - **Command line:** `python prks_app.py storage choose PATH` (stop PRKS
-  first; it refuses while a PRKS process runs on the current folder).
+  first; it refuses while a PRKS process runs on the current folder). It
+  reads the database through the same `PRKS_DATABASE_URL` as PRKS and refuses
+  once setup has started there, even if setup stopped before it marked the
+  folder, and when it cannot reach the database.
 - **Setup page:** on the token step, open *Use a different folder for the
   Library's files*, enter the token and the folder, and press **Use this
   folder**. Setup then waits for a restart.

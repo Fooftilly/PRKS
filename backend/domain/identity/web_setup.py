@@ -198,6 +198,19 @@ def read_state(db: Database) -> str:
     return db.query(read)
 
 
+def read_state_if_installed(db: Database) -> str:
+    """:func:`read_state`, or ``unconfigured`` before the first start installed the schema."""
+
+    def read(tx: Transaction) -> str:
+        installed = tx.execute("SELECT to_regclass('prks.instance') IS NOT NULL AS installed").fetchone()
+        if not installed["installed"]:
+            return STATE_UNCONFIGURED
+        row = tx.execute("SELECT setup_state FROM prks.instance").fetchone()
+        return STATE_UNCONFIGURED if row is None else str(row["setup_state"])
+
+    return db.query(read)
+
+
 def _token_usable(db: Database, token: BootstrapToken) -> None:
     def check(tx: Transaction) -> None:
         row = tx.execute("SELECT setup_state FROM prks.instance").fetchone()

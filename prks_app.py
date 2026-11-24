@@ -628,15 +628,33 @@ def run_config(argv, environ=None, *, out=None):
     return 0 if not found else 2
 
 
-def run_storage(argv, environ=None, *, out=None, err=None):
+def _database_setup_state(environ):
+    """The setup state of the database this installation uses (``storage choose``)."""
+    import dataclasses
+
+    from backend.db.config import load_database_config
+    from backend.db.database import Database
+    from backend.domain.identity.web_setup import read_state_if_installed
+
+    def read():
+        config = load_database_config(environ, role="worker")
+        with Database(dataclasses.replace(config, pool_min=0, pool_max=1)) as db:
+            return read_state_if_installed(db)
+
+    return read
+
+
+def run_storage(argv, environ=None, *, out=None, err=None, setup_state=None):
     """``storage choose PATH``: pick the Library folder before setup claims it (#720).
 
     Writes the bootstrap file through its guarded compare-and-set and takes
     effect at the next start (``backend.storage.choose``). Refused once setup
     has paired the current folder, when ``--storage-root`` or
     ``PRKS_STORAGE`` selects the folder, for a folder that already belongs to
-    a database ("open another library" is not supported), and while a PRKS
-    process runs on the current folder. Exit 0 when recorded, 2 when refused.
+    a database ("open another library" is not supported), while a PRKS
+    process runs on the current folder, and once the database records that
+    setup started (it reads ``PRKS_DATABASE_URL`` like a start; unreachable
+    refuses). Exit 0 when recorded, 2 when refused.
     """
     from backend.storage.choose import choose_root
 
@@ -652,7 +670,10 @@ def run_storage(argv, environ=None, *, out=None, err=None):
     stdout = out or sys.stdout
     stderr = err or sys.stderr
     try:
-        chosen = choose_root(args.path, environ=os.environ if environ is None else environ)
+        env = os.environ if environ is None else environ
+        chosen = choose_root(
+            args.path, environ=env, setup_state=setup_state or _database_setup_state(env)
+        )
     except StorageRootError as exc:
         print(f"PRKS cannot use that folder: {exc.message}", file=stderr)
         return 2
