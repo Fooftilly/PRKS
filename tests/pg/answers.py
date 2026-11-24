@@ -9,7 +9,8 @@ becomes ``<unknown id>``, a timestamp becomes ``<s>`` (seconds) or ``<ms>``
 :func:`assert_answer` compares such an answer with the expected literal. A
 dict in the expected value lists the keys the test checks: the answer must
 hold each of them with the expected value, and may hold more, so a new field
-on a row does not break every test that spells the row out.
+on a row does not break every test that spells the row out. An empty dict
+is the exception: ``{}`` means the answer's dict is empty.
 """
 
 from __future__ import annotations
@@ -65,6 +66,8 @@ def _mismatch(actual: Any, expected: Any, path: str) -> str | None:
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return f"{path}: expected a dict, got {actual!r}"
+        if not expected and actual:
+            return f"{path}: expected an empty dict, got {actual!r}"
         for key, item in expected.items():
             if key not in actual:
                 return f"{path}: missing key {key!r}"
@@ -86,7 +89,10 @@ def _mismatch(actual: Any, expected: Any, path: str) -> str | None:
 
 
 def assert_answer(test: unittest.TestCase, actual: Any, expected: Any, msg: str = "") -> None:
-    """``actual`` holds ``expected``: equal, except that dicts may carry keys ``expected`` leaves out."""
+    """``actual`` holds ``expected``: equal, except that dicts may carry keys ``expected`` leaves out.
+
+    An empty expected dict matches only an empty dict.
+    """
     found = _mismatch(actual, expected, "answer")
     if found:
         test.fail(f"{msg}: {found}" if msg else found)
