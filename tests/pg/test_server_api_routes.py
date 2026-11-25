@@ -70,7 +70,7 @@ class PublisherTests(ServerApiTestCase):
         parsed = urlsplit(path)
         api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=parsed.path,
-                              args=dict(parse_qsl(parsed.query)), data=data)
+                              args=dict(parse_qsl(parsed.query)), headers={"PRKS-Library-Epoch": "1"}, data=data)
         if schema_valid:
             api.validate_request(request)
         api.validate_response(request, MockResponse(data=res.raw, status_code=res.status,
