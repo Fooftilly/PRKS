@@ -26,6 +26,8 @@ from tests.pg.test_playlists import PlaylistTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_payload
 from tests.narrowing import require
 from backend.domain.organization import playlist_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _PLAYLIST_OPERATIONS = frozenset({"CREATE_PLAYLIST", "SET_PLAYLIST_FIELD", "REORDER_PLAYLIST_ITEMS",
                                   "DELETE_PLAYLIST"})
@@ -87,7 +89,7 @@ class CreateTests(PlaylistSyncTestCase):
                                        "playlist": {"id": playlist_id, "title": "Course", "description": "About",
                                                     "original_url": None, "item_count": 0}}))
         self.assertEqual(self.send(data), first)  # a replay
-        playlist_commands.add_item(self.db, self.ctx, playlist_id, self.library.add_work("W"))
+        playlist_commands.add_item(self.db, self.ctx, playlist_id, works_fixtures.add_work(self.db, self.ctx, self.storage, "W"))
         again = self.send(self.create("Other", playlist_id))
         self.assertEqual((again[1]["changed"], again[1]["playlist"]["title"], again[1]["playlist"]["item_count"]),
                          (False, "Course", 1))
@@ -156,7 +158,7 @@ class EnvelopeTests(PlaylistSyncTestCase):
 class WorkPlaylistTests(PlaylistSyncTestCase):
     def test_two_moves_of_one_work_advance_it_in_turn(self) -> None:
         a, b = self.create_playlist("A"), self.create_playlist("B")
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(self.applying(playlist_handlers.WORK_PLAYLIST_HANDLER, self.put(work_id, a, 0)),
                                       lambda: self.send(self.put(work_id, b, 0)), serializable=True)
         self.assertEqual((holder[1]["server_revision"], holder[1]["playlist_title"]), (1, "A"))
@@ -175,7 +177,7 @@ class WorkPlaylistTests(PlaylistSyncTestCase):
         self.assertEqual((self.items(playlist_id), self.state(playlist_id)[1]), ([(first, 0), (second, 1)], 2))
 
     def test_an_add_to_a_playlist_being_deleted_is_refused(self) -> None:
-        doomed, work_id = self.create_playlist("Doomed"), self.library.add_work("W")
+        doomed, work_id = self.create_playlist("Doomed"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(self.applying(playlist_handlers.DELETE_HANDLER, self.delete(doomed)),
                                       lambda: self.send(self.put(work_id, doomed, 0)))
         self.assertEqual(holder[1]["changed"], True)
@@ -183,7 +185,7 @@ class WorkPlaylistTests(PlaylistSyncTestCase):
         self.assertEqual(self.count("playlist_items"), 0)
 
     def test_a_delete_waits_for_an_add_and_releases_the_work(self) -> None:
-        playlist_id, work_id = self.create_playlist("Busy"), self.library.add_work("W")
+        playlist_id, work_id = self.create_playlist("Busy"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(
             self.applying(playlist_handlers.WORK_PLAYLIST_HANDLER, self.put(work_id, playlist_id, 0)),
             lambda: self.send(self.delete(playlist_id)), serializable=True)
@@ -251,7 +253,7 @@ class DeleteTests(PlaylistSyncTestCase):
     def test_a_base_from_before_the_delete_never_lands_on_the_playlist_created_again(self) -> None:
         playlist_id = generate("PL")
         self.send(self.create("Old", playlist_id))
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.send(self.put(work_id, playlist_id, 0))
         self.assertEqual(self.send(self.delete(playlist_id))[1]["changed"], True)
         self.assertEqual(self.send(self.delete(playlist_id))[1]["changed"], False)
@@ -273,7 +275,7 @@ class DeleteTests(PlaylistSyncTestCase):
 class CreateWorkFilingTests(PlaylistSyncTestCase):
     def test_a_work_created_into_a_playlist_is_appended_without_a_revision(self) -> None:
         playlist_id = self.create_playlist("Talks")
-        listed = self.library.add_work("Listed")
+        listed = works_fixtures.add_work(self.db, self.ctx, self.storage, "Listed")
         self.send(self.put(listed, playlist_id, 0))
         data = self.create_work(playlist_id=playlist_id)
         status, result = self.send(data)
@@ -281,7 +283,7 @@ class CreateWorkFilingTests(PlaylistSyncTestCase):
         self.assertEqual(self.send(data), (status, result))  # a replay
         self.assertEqual(self.items(playlist_id), [(listed, 0), (data["entity_id"], 1)])
         self.assertEqual((self.membership(data["entity_id"]), self.state(playlist_id)[1]), ((playlist_id, 0), 1))
-        detail = self.library.get_work(data["entity_id"])
+        detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, data["entity_id"])
         assert detail is not None
         self.assertEqual((detail["playlist_id"], detail["playlist_title"]), (playlist_id, "Talks"))
 
@@ -343,13 +345,13 @@ class RecreatedListedWorkTests(PlaylistSyncTestCase):
 
 class LedgerAndIsolationTests(PlaylistSyncTestCase):
     def test_another_library_cannot_see_or_change_these_playlists(self) -> None:
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         playlist_id = self.create_playlist("Mine")
         self.send(self.put(work_id, playlist_id, 0))
         other = self.other_actor()
         device = {"device_id": str(other.context.device_id)}
         with facade_context.acting_as(other.context):
-            their_work = self.library.add_work("Theirs")
+            their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         for data, answer in (
                 (self.playlist_field(playlist_id, "title", "Theirs", 0),
                  (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": playlist_id, "field": "title"})),

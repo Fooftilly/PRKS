@@ -31,6 +31,7 @@ from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
 from backend.domain.research import concept_commands
 from backend.domain.research import note_commands
+from tests import works_fixtures
 
 
 class ConceptSyncTestCase(SyncTestCase, ConceptTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
@@ -180,7 +181,7 @@ class ParentsTests(ConceptSyncTestCase):
 class DeleteTests(ConceptSyncTestCase):
     def test_in_use_refused_and_absence_converges(self) -> None:
         ethics = self.create_concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:ethics]]")
         delete = self.envelope("DELETE_CONCEPT", ethics, {})
         self.assertEqual(self.send(delete), (409, {"concept_id": ethics, "code": "CONCEPT_IN_USE"}))
@@ -259,7 +260,7 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
     def test_a_note_never_carries_a_name_the_create_would_refuse(self) -> None:
         emergence = concept_commands.create(self.db, self.ctx, "Emergence")["id"]
         concept_commands.replace_aliases(self.db, self.ctx, emergence, ["Self-organization"])
-        work = self.library.add_work("A paper")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "A paper")
         with self.assertRaises(ResearchError) as caught:
             note_commands.save(self.db, self.ctx, work, "See [[concept:Bell\x07 Curve]].")
         self.assertEqual(caught.exception.code, "invalid_text")
@@ -482,7 +483,7 @@ class AnswerTests(AnswerAssertions, ConceptSyncTestCase):
     def test_delete(self) -> None:
         a, b = self.made("A"), self.made("B")
         self.op("SET_CONCEPT_PARENTS", b, {"parent_ids": [a]}, 0)
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:A]]")
         self.assertEqual(self.op("DELETE_CONCEPT", a, {}), (409, {"code": "CONCEPT_IN_USE", "concept_id": "<C A>"}))
         self.research_note(work, "")

@@ -30,6 +30,8 @@ from backend.domain.people import role_commands
 from tests import people_fixtures
 from backend.domain.research import argument_commands
 from backend.domain.research import position_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class ResearchTestCase(ConceptTestCase):
@@ -122,7 +124,7 @@ class PositionTests(ResearchTestCase):
 
 class ArgumentTests(ResearchTestCase):
     def test_create_with_sources_and_targets_and_read(self) -> None:
-        work = self.library.add_work("Republic")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Republic")
         claim = self.position("Claim")
         base = self.argument("Base", "stance")
         reply = argument_commands.create(self.db, self.ctx, name=" Reply ", kind="argument", main_text="Body", sources=[source(f" {work} ", " 514a ")], targets=[target("argument", base, "opposes"), target("position", claim)])
@@ -145,7 +147,7 @@ class ArgumentTests(ResearchTestCase):
             self.assertEqual(self.revisions(scope_type), {})
 
     def test_a_refused_create_leaves_nothing(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         claim = self.position("Claim")
         for code, lists in (("work_not_found", {"sources": [source(generate("W"))]}),
                             ("invalid_sources", {"sources": [source(work), source(work, "2")]}),
@@ -172,7 +174,7 @@ class ArgumentTests(ResearchTestCase):
         self.assertEqual(self.count("argument_target_arguments"), 3)
 
     def test_only_a_change_advances_a_scope(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         claim = self.position("Claim")
         a = self.argument("A", sources=[source(w1), source(w2, "3")], targets=[target("position", claim)])
         argument_commands.replace_sources(self.db, self.ctx, a, [source(w1), source(w2, " 3 ")])
@@ -197,7 +199,7 @@ class ArgumentTests(ResearchTestCase):
     def test_an_answered_or_noted_argument_refuses_its_delete(self) -> None:
         a = self.argument("A")
         b = self.argument("B", targets=[target("argument", a)])
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.assertEqual(self.refused("argument_targeted", partial(argument_commands.delete, self.db, self.ctx), a).http_status, 409)
         argument_commands.replace_targets(self.db, self.ctx, b, [])
         self.research_note(work, f"Against [[argument:{a}|A]].")
@@ -219,7 +221,7 @@ class CitationTests(ResearchTestCase):
     def test_a_citation_credits_the_authors_of_the_primary_version(self) -> None:
         # The Work's own credits (roles.credits_by_work): Work-scoped roles
         # and the primary Version's, never another Version's.
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         other = self.add_manifestation(work)
         ada, bea = people_fixtures.add_person(self.db, self.ctx, "Ada", "A"), people_fixtures.add_person(self.db, self.ctx, "Bea", "B")
         for order, (person, manifestation) in enumerate(((ada, self.primary(work)), (bea, other))):
@@ -231,14 +233,14 @@ class CitationTests(ResearchTestCase):
                          [ada])
 
     def test_a_pinpoint_pins_the_only_version_and_a_bare_entry_cites_the_work(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         a = self.argument("A", sources=[source(work, "12")])
         self.assertEqual(self.citations(a), [(0, work, self.primary(work), "12")])
         argument_commands.replace_sources(self.db, self.ctx, a, [source(work)])
         self.assertEqual(self.citations(a), [(0, work, None, "")])
 
     def test_a_replaced_entry_keeps_its_version(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         second = self.add_manifestation(w1)
         a = self.argument("A")
         self.cite(a, 0, w1, second, "12")
@@ -248,7 +250,7 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(0, w2, self.primary(w2), "4"), (1, w1, second, "12")])
 
     def test_a_version_the_legacy_list_cannot_name_refuses_the_list(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         second = self.add_manifestation(work)
         a = self.argument("A", sources=[source(work)])  # Work-level: no Version to name
         error = self.refused("argument_source_version_required", partial(argument_commands.replace_sources, self.db, self.ctx), a,
@@ -267,7 +269,7 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(b), [])
 
     def test_a_pinned_citation_follows_its_version_to_another_work(self) -> None:
-        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        origin, other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Origin"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")
         moved = self.add_manifestation(origin)
         a = self.argument("A")
         self.cite(a, 0, origin, moved, "7")
@@ -278,11 +280,11 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(0, other, moved, "7"), (1, origin, None, "")])
 
     def test_a_work_delete_removes_its_citations_and_advances_each_list(self) -> None:
-        cited, kept = self.library.add_work("Cited"), self.library.add_work("Kept")
+        cited, kept = works_fixtures.add_work(self.db, self.ctx, self.storage, "Cited"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Kept")
         a = self.argument("A", sources=[source(cited, "1"), source(kept)])
         b = self.argument("B", sources=[source(cited)])
         c = self.argument("C", sources=[source(kept)])
-        self.library.delete_work_record(cited)
+        work_commands.delete(self.db, self.ctx, cited)
         self.assertEqual(self.citations(a), [(1, kept, None, "")])
         self.assertEqual(self.citations(b), [])
         self.assertEqual(self.revisions("argument-sources"), {a: 1, b: 1})
@@ -290,7 +292,7 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(c), [(0, kept, None, "")])
 
     def test_malformed_lists_are_refused_in_sqlites_order(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         a = self.argument("A")
         for code, sources in (("invalid_sources", "W"), ("invalid_sources", [work]),
                               ("invalid_sources", [{"pages": "1"}]), ("invalid_sources", [source("  ")]),
@@ -310,7 +312,7 @@ class VersionAwareCitationTests(ResearchTestCase):
                 for row in require(argument_commands.detail(self.db, self.ctx, argument_id))["sources"]]
 
     def test_a_work_with_one_version(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         only = self.primary(work)
         a = self.argument("A", sources=[pinned(work, only, "12"), pinned(work, None, "514a")])
         self.assertEqual(self.citations(a), [(0, work, only, "12"), (1, work, None, "514a")])
@@ -321,7 +323,7 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.read_back(b), [(work, only, "12")])
 
     def test_a_work_with_several_versions_is_cited_version_by_version(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         first, second = self.primary(work), self.add_manifestation(work)
         a = self.argument("A")
         wanted = [pinned(work, None), pinned(work, second, "5"), pinned(work, first, "5"), pinned(work, second, "9")]
@@ -337,7 +339,7 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.read_back(a), expected)
 
     def test_a_non_primary_version_survives_a_change_of_pages_or_order(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         second = self.add_manifestation(w1)
         a = self.argument("A", sources=[pinned(w1, second, "5"), pinned(w2, None)])
         argument_commands.replace_sources(self.db, self.ctx, a, [pinned(w2, None), pinned(w1, second, "6-7")])
@@ -352,10 +354,10 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.revisions("argument-sources"), {a: 3})
 
     def test_a_version_missing_or_of_another_work_or_library_refuses_the_list(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         a = self.argument("A", sources=[pinned(w1, None, "1")])
         with facade_context.acting_as(self.other_actor().context):
-            foreign_work = self.library.add_work("Theirs")
+            foreign_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
             foreign = self.sql("SELECT primary_manifestation_id AS id FROM prks.works WHERE id = %s",
                                (foreign_work,))[0]["id"]
         cases = (("argument_source_version_mismatch", 409, [pinned(w1, None), pinned(w2, self.primary(w1))]),
@@ -372,7 +374,7 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.count("arguments"), 1)
 
     def test_malformed_version_aware_lists_are_refused(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         only = self.primary(work)
         a = self.argument("A")
         for message, sources in (
@@ -388,7 +390,7 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [])
 
     def test_a_legacy_list_cannot_rewrite_a_list_citing_one_work_twice(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         second = self.add_manifestation(work)
         a = self.argument("A", sources=[pinned(work, None), pinned(work, second, "3")])
         self.refused("invalid_sources", partial(argument_commands.replace_sources, self.db, self.ctx), a, [source(work), source(work, "3")])
@@ -401,7 +403,7 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [])
 
     def test_a_pinned_version_cannot_be_deleted_and_follows_a_move(self) -> None:
-        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        origin, other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Origin"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")
         moved = self.add_manifestation(origin)
         a = self.argument("A", sources=[pinned(origin, moved, "7")])
         with self.assertRaises(DatabaseError) as caught:
@@ -419,7 +421,7 @@ class VersionAwareCitationTests(ResearchTestCase):
 
 class IsolationTests(ResearchTestCase):
     def test_another_librarys_records_are_invisible_and_untouchable(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         claim = self.position("Claim")
         a = self.argument("A", sources=[source(work)], targets=[target("position", claim)])
         with facade_context.acting_as(self.other_actor().context):
@@ -485,7 +487,7 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual(contender.code, "argument_not_found")
 
     def test_a_work_delete_racing_a_citation_of_it(self) -> None:
-        work, a = self.library.add_work("W"), self.argument("A")
+        work, a = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.argument("A")
         holder, contender = self.race(lambda scope: commands.delete_work(scope, work),
                                       lambda: argument_commands.replace_sources(self.db, self.ctx, a, [source(work)]))
         self.assertIsNotNone(holder)
@@ -493,25 +495,25 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [])
 
     def test_a_citation_racing_a_delete_of_its_work(self) -> None:
-        work, a = self.library.add_work("W"), self.argument("A")
+        work, a = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.argument("A")
         holder, contender = self.race(lambda scope: arguments.replace_sources(scope, a, [source(work)]),
-                                      lambda: self.library.delete_work_record(work), serializable=True)
+                                      lambda: work_commands.delete(self.db, self.ctx, work), serializable=True)
         self.assertEqual(len(holder["sources"]), 1)
         self.assertIsNotNone(contender)
         # The delete waited, then removed the citation and advanced the list.
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([], {a: 2}))
 
     def test_a_list_change_racing_a_work_delete_that_drops_its_old_citation(self) -> None:
-        old, new = self.library.add_work("Old"), self.library.add_work("New")
+        old, new = works_fixtures.add_work(self.db, self.ctx, self.storage, "Old"), works_fixtures.add_work(self.db, self.ctx, self.storage, "New")
         a = self.argument("A", sources=[source(old)])
         holder, contender = self.race(lambda scope: arguments.replace_sources(scope, a, [source(new)]),
-                                      lambda: self.library.delete_work_record(old), serializable=True)
+                                      lambda: work_commands.delete(self.db, self.ctx, old), serializable=True)
         self.assertEqual(holder["sources"][0]["work_id"], new)
         self.assertIsNotNone(contender)
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([(0, new, None, "")], {a: 1}))
 
     def test_a_version_move_waits_for_the_citation_pinning_it(self) -> None:
-        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        origin, other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Origin"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")
         moved = self.add_manifestation(origin)
         a = self.argument("A")
         holder, contender = self.race(
@@ -524,7 +526,7 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(0, other, moved, "7")])
 
     def test_a_citation_racing_a_move_of_its_version(self) -> None:
-        origin, other = self.library.add_work("Origin"), self.library.add_work("Other")
+        origin, other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Origin"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")
         moved = self.add_manifestation(origin)
         a = self.argument("A")
         holder, contender = self.race(
@@ -538,7 +540,7 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([], {}))
 
     def test_a_version_delete_waits_for_the_citation_pinning_it_and_is_refused(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         second = self.add_manifestation(work)
         a = self.argument("A")
         holder, contender = self.race(
@@ -551,7 +553,7 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(0, work, second, "1")])
 
     def test_two_version_aware_lists_of_one_argument_queue(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         second = self.add_manifestation(work)
         a = self.argument("A")
         holder, contender = self.race(
@@ -565,7 +567,7 @@ class ConcurrencyTests(ResearchTestCase):
 
     def test_a_citation_after_a_merge_snapshot_fails_the_merge_and_its_retry_sees_it(self) -> None:
         # §7.1: argument_sources is a peer table of the merge, and its writers are SERIALIZABLE.
-        source_work, target_work = self.library.add_work("S"), self.library.add_work("T")
+        source_work, target_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         second = self.add_manifestation(source_work)
         a = self.argument("A")
         snapshot_taken, cited = threading.Event(), threading.Event()
@@ -591,7 +593,7 @@ class ConcurrencyTests(ResearchTestCase):
         self.assertEqual((plans[0].citing_arguments, plans[1].citing_arguments), ((), (a,)))
 
     def test_an_argument_delete_and_a_research_note_naming_it(self) -> None:
-        a, work = self.argument("A"), self.library.add_work("W")
+        a, work = self.argument("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(
             lambda scope: notes.set_note(scope, work, notes.RESEARCH, f"[[argument:{a}]]"),
             lambda: argument_commands.delete(self.db, self.ctx, a))
@@ -668,8 +670,8 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
         self.answer(position_commands.catalog(self.db, self.ctx), [{"id": "<P b>", "name": "b claim"}])
 
     def test_arguments_and_their_lists(self) -> None:
-        one = self.named(self.library.add_work("One"), "<W One>")
-        two = self.named(self.library.add_work("Two"), "<W Two>")
+        one = self.named(works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), "<W One>")
+        two = self.named(works_fixtures.add_work(self.db, self.ctx, self.storage, "Two"), "<W Two>")
         plato = self.named(people_fixtures.add_person(self.db, self.ctx, "", "Plato"), "<PE Plato>")
         role_commands.add(self.db, self.ctx, plato, one, "Author")
         claim = self.named(self.position("Claim"), "<P Claim>")
@@ -767,7 +769,7 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
              "verdict_label": "Opposes"}]})
 
     def test_refused_creates(self) -> None:
-        one = self.library.add_work("One")
+        one = works_fixtures.add_work(self.db, self.ctx, self.storage, "One")
         claim = self.position("Claim")
         for lists, expected in (
                 ({"name": " "}, ("invalid_name", "Name is required.", 400)),
@@ -789,7 +791,7 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
         self.assertEqual(self.refusal(partial(argument_commands.delete, self.db, self.ctx), a), (
             "argument_targeted", "Another Argument or Stance still responds to this record.", 409))
         argument_commands.replace_targets(self.db, self.ctx, b, [])
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, f"[[argument:{a}]]")
         self.assertEqual(self.refusal(partial(argument_commands.delete, self.db, self.ctx), a), (
             "argument_in_use", "This Argument is still referenced in research notes.", 409))
@@ -803,10 +805,10 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
              "targets": [], "updated_at": "<s>"}])
 
     def test_a_work_delete_drops_its_citations(self) -> None:
-        one = self.library.add_work("One")
-        two = self.named(self.library.add_work("Two"), "<W Two>")
+        one = works_fixtures.add_work(self.db, self.ctx, self.storage, "One")
+        two = self.named(works_fixtures.add_work(self.db, self.ctx, self.storage, "Two"), "<W Two>")
         a = self.argument("A", sources=[source(one, "1"), source(two)])
-        self.library.delete_work_record(one)
+        work_commands.delete(self.db, self.ctx, one)
         remaining = [{"authors": [], "order_index": 1, "pages": "", "work_id": "<W Two>", "work_title": "Two"}]
         self.answer(argument_commands.detail(self.db, self.ctx, a), {"sources": remaining})
         self.answer(argument_commands.catalog(self.db, self.ctx), [{"sources": remaining}])

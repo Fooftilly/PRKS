@@ -20,6 +20,8 @@ from backend.domain.maintenance import backup, restore
 from backend.media.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
+from tests import works_fixtures
+from tests.acting_context import current_context
 
 THUMB = "https://i.ytimg.example/vi/abc/hqdefault.jpg"
 FIGURE = "https://figures.example/graph.png"
@@ -41,9 +43,7 @@ class RemoteImageRouteTests(ServerApiTestCase):
         super().setUp()
         self.picture = picture()
         with self.acting():
-            self.work_id = self.facade.add_work(
-                "A talk", source_kind="video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-                thumb_url=THUMB)
+            self.work_id = works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "A talk", source_kind="video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", thumb_url=THUMB)
         self.sql("INSERT INTO prks.work_notes (library_id, work_id, kind, body) VALUES (%s, %s, 'research', %s)",
                  (self.lib, self.work_id, f"![graph]({FIGURE})"))
 

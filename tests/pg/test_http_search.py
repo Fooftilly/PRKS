@@ -30,6 +30,7 @@ from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_search_text import pdf_bytes
 from backend.domain.organization import tag_commands
 from tests.acting_context import current_context
+from tests import works_fixtures
 
 
 class SearchHttpTests(HttpAuthTestCase):
@@ -57,7 +58,8 @@ class SearchHttpTests(HttpAuthTestCase):
         with open(os.path.join(self.storage.pdfs_dir, name), "wb") as handle:
             handle.write(pdf_bytes(text))
         with self.acting():
-            return self.facade.add_work(title, file_path=f"/api/pdfs/{name}", **fields)
+            return works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, title,
+                                          file_path=f"/api/pdfs/{name}", **fields)
 
     def run_jobs(self) -> list[Outcome]:
         registry = REGISTRY.copy()
@@ -75,8 +77,8 @@ class SearchHttpTests(HttpAuthTestCase):
 
     def test_keyword_search_and_its_filters(self) -> None:
         with self.acting():
-            self.facade.add_work("Quantum notes", author_text="Ann", publisher="Press")
-            self.facade.add_work("Quantum drafts", author_text="Bob", publisher="Press")
+            works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Quantum notes", author_text="Ann", publisher="Press")
+            works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Quantum drafts", author_text="Bob", publisher="Press")
         self.assertEqual(sorted(self.search(q="quant")), ["Quantum drafts", "Quantum notes"])
         self.assertEqual(self.search(q="quant", author="ann"), ["Quantum notes"])
         self.assertEqual(sorted(self.search(publisher="press")), ["Quantum drafts", "Quantum notes"])
@@ -86,9 +88,9 @@ class SearchHttpTests(HttpAuthTestCase):
         with self.acting():
             tag = tag_commands.create(self.facade.database, current_context(), "Physics")
             tag_commands.add_alias(self.facade.database, current_context(), tag["id"], "phys")
-            kept = self.facade.add_work("Tagged by Ann", author_text="Ann")
-            other = self.facade.add_work("Tagged by Bob", author_text="Bob")
-            self.facade.add_work("Untagged", author_text="Ann")
+            kept = works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Tagged by Ann", author_text="Ann")
+            other = works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Tagged by Bob", author_text="Bob")
+            works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Untagged", author_text="Ann")
             for work in (kept, other):
                 tag_commands.tag_work(self.facade.database, current_context(), work, tag["id"])
         self.assertEqual(self.search(tag="phys"), ["Tagged by Bob", "Tagged by Ann"])  # newest first
@@ -97,7 +99,7 @@ class SearchHttpTests(HttpAuthTestCase):
 
     def test_any_mode_appends_pdf_text_hits_that_pass_the_filters(self) -> None:
         with self.acting():
-            self.facade.add_work("Zebra in the title")
+            works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Zebra in the title")
         self.pdf_work("Body only", "a zebra hides in the body", "a.pdf", author_text="Ann")
         self.pdf_work("Other author", "another zebra in the body", "b.pdf", author_text="Bob")
         self.assertEqual(self.search(q="zebra", any="1"), ["Zebra in the title"])  # not extracted yet
@@ -116,7 +118,7 @@ class SearchHttpTests(HttpAuthTestCase):
         from backend.domain.search import search_commands
 
         with self.acting():
-            self.facade.add_work("Zebra in the title", author_text="Ann", publisher="Press")
+            works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Zebra in the title", author_text="Ann", publisher="Press")
         self.pdf_work("Body only", "a zebra hides in the body", "a.pdf", author_text="Ann", publisher="Press")
         self.run_jobs()
         for params in ({"q": "zebra", "any": "1", "author": "ann", "publisher": "press"},

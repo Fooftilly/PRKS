@@ -45,6 +45,7 @@ from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_backup_export import BackupTestCase
 from backend.domain.organization import tag_commands
+from backend.domain.works import work_commands
 
 
 csv.field_size_limit(sys.maxsize)
@@ -481,7 +482,7 @@ class StagingTests(StagingTestCase):
         obj = self.put(b"%PDF shared bytes")
         work_id = self.create(obj)
         result = self.backup()
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         self.sql("DELETE FROM prks.object_cleanup_claims WHERE name = %s", (obj.key.name,))
         other = self.other_actor()
         self.create(obj, ctx=other.context)  # Library B now owns the key, with the same bytes
@@ -491,7 +492,7 @@ class StagingTests(StagingTestCase):
         obj = self.put(b"%PDF released bytes")
         work_id = self.create(obj)
         result = self.backup()
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         other = self.other_actor()
         self.sql("UPDATE prks.object_cleanup_claims SET library_id = %s WHERE name = %s",
                  (other.library_id, obj.key.name))

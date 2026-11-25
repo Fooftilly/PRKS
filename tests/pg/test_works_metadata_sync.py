@@ -24,6 +24,10 @@ from backend.domain.works import metadata, revisions
 from backend.domain.works.rules import BulkWorkError
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
+from backend.domain.search import search_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
+from backend.web import etags
 
 _MISSING = "W-" + "E" * 32
 _WATCH = "https://www.youtube.com/watch?v=%s"
@@ -33,7 +37,7 @@ _OPERATION = "SET_WORK_METADATA_FIELD"
 class MetadataSyncTestCase(SyncTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.work = self.library.add_work("Metadata work", file_path=self.store_pdf("m.pdf", b"%PDF-1.4\n"))
+        self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Metadata work", file_path=self.store_pdf("m.pdf", b"%PDF-1.4\n"))
 
     def op(self, field: Any, value: Any, base: Optional[int] = 0, work: Optional[str] = None,
            **changes: Any) -> dict[str, Any]:
@@ -44,20 +48,20 @@ class MetadataSyncTestCase(SyncTestCase):
         return self.send(self.op(field, value, base, work))
 
     def state(self, work: Optional[str] = None) -> dict[str, Any]:
-        return require(self.library.get_work_metadata_state(work or self.work))["fields"]
+        return require(work_commands.metadata_state(self.db, self.ctx, work or self.work))["fields"]
 
     def value(self, field: str, work: Optional[str] = None) -> Any:
         """The Work record's value: typed for ``thumb_page``, as stored for every other field."""
-        return require(self.library.get_work(work or self.work))[field]
+        return require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work or self.work))[field]
 
     def wire_value(self, field: str) -> str:
         return rules.database_to_wire(field, self.value(field))
 
     def patch(self, fields: dict[str, Any], work: Optional[str] = None) -> None:
-        self.library.update_work_metadata(work or self.work, fields)
+        work_commands.update_metadata(self.db, self.ctx, work or self.work, fields)
 
     def bulk_status(self, work_ids: list[str], status: str) -> None:
-        self.library.bulk_update_works({"work_ids": work_ids, "action": "set_status", "status": status})
+        work_commands.bulk_update(self.db, self.ctx, {"work_ids": work_ids, "action": "set_status", "status": status})
 
     def sample(self, field: str, index: int) -> str:
         """A value the field accepts and the Work does not already hold."""
@@ -132,7 +136,7 @@ class FieldRegistryTests(MetadataSyncTestCase):
             with self.subTest(value=value):
                 self.put("doi", value, base=self.state()["doi"]["revision"])
                 self.assertEqual(self.value("doi"), value)
-        second = self.library.add_work("Patch mirror")
+        second = works_fixtures.add_work(self.db, self.ctx, self.storage, "Patch mirror")
         self.patch({"doi": "10.1234/Example-MiXeD"}, second)
         self.assertEqual(self.value("doi", second), "10.1234/Example-MiXeD")
 
@@ -236,9 +240,7 @@ class PatchBoundaryTests(MetadataSyncTestCase):
         self.assertEqual(self.revisions_of(self.work), {})
 
     def test_creation_manufactures_no_revision(self) -> None:
-        created = self.library.add_work("Fresh Title", status="Planned", doc_type="book", author_text="Jane Smith",
-                                        doi="10.1/initial", isbn="999",
-                                        file_path=self.store_pdf("f.pdf", b"%PDF-1.4\n"), thumb_page=4)
+        created = works_fixtures.add_work(self.db, self.ctx, self.storage, "Fresh Title", status="Planned", file_path=self.store_pdf("f.pdf", b"%PDF-1.4\n"), author_text="Jane Smith", isbn="999", doi="10.1/initial", doc_type="book", thumb_page=4)
         state = self.state(created)
         self.assertEqual({field: entry["revision"] for field, entry in state.items()},
                          {field: 0 for field in rules.SYNCED_FIELDS})
@@ -246,7 +248,7 @@ class PatchBoundaryTests(MetadataSyncTestCase):
                           state["isbn"]["value"], state["thumb_page"]["value"]),
                          ("Planned", "book", "10.1/initial", "999", "4"))
         self.assertEqual((state["title"], state["author_text"]), ({"revision": 0}, {"revision": 0}))
-        work = self.library.get_work(created)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, created)
         assert work is not None
         self.assertEqual((work["title"], work["author_text"], work["thumb_page"]),
                          ("Fresh Title", "Jane Smith", 4))
@@ -254,7 +256,7 @@ class PatchBoundaryTests(MetadataSyncTestCase):
 
 class StatusTests(MetadataSyncTestCase):
     def test_bulk_status_advances_the_revisions_every_other_path_uses(self) -> None:
-        other = self.library.add_work("Second", status="Planned")
+        other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Second", status="Planned")
         self.patch({"status": "Planned"})
         before = self.state()["status"]["revision"]
         self.bulk_status([self.work, other], "Completed")
@@ -272,7 +274,7 @@ class StatusTests(MetadataSyncTestCase):
         self.assertEqual(self.put("status", "Paused", base=after_first)[1]["code"], "ACKNOWLEDGED")
 
     def test_bulk_status_values_and_revisions_roll_back_together(self) -> None:
-        other = self.library.add_work("Second", status="Planned")
+        other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Second", status="Planned")
         self.patch({"status": "Planned"})
         before = (self.state(), self.state(other))
         with self.fail_on_advance(2), self.assertRaises(RuntimeError):
@@ -378,7 +380,7 @@ class LargeFieldTests(MetadataSyncTestCase):
         self.assertEqual(result["value"], "10.1/echoed")
         self.assertNotIn("value_omitted", result)
         self.assertEqual(self.state()["doi"], {"value": "10.1/echoed", "revision": 1})
-        self.assertEqual(require(self.library.get_work(self.work))["title"], "A Renamed Work")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["title"], "A Renamed Work")
 
     def test_large_conflicts_report_sizes_and_previews_within_the_bound(self) -> None:
         for field, server, device in (("author_text", "S" * (40 * 1024), "D" * (40 * 1024)),
@@ -412,14 +414,13 @@ class LargeFieldTests(MetadataSyncTestCase):
         status, result = self.put("source_url", "https://example.com/paper")
         self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
         self.assertEqual(self.value("source_url"), "https://example.com/paper")
-        video = self.library.add_work("Clip", source_kind="video", source_url=_WATCH % "AAA",
-                                      provider="youtube", provider_id="AAA")
+        video = works_fixtures.add_work(self.db, self.ctx, self.storage, "Clip", source_kind="video", source_url=_WATCH % "AAA", provider="youtube", provider_id="AAA")
         status, result = self.put("source_url", _WATCH % "BBB", work=video)
         self.assertEqual((status, result["code"]), (409, "WRONG_OPERATION_FOR_SOURCE"))
         self.assertNotIn("current_value", result)
         with self.assertRaises(ValueError):
             self.patch({"source_url": "https://x/B"}, video)
-        work = self.library.get_work(video)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, video)
         assert work is not None
         self.assertEqual((work["source_url"], work["provider_id"]), (_WATCH % "AAA", "AAA"))
         self.patch({"source_url": "https://example.com/other"})
@@ -557,16 +558,16 @@ class ConflictBoundTests(MetadataSyncTestCase):
 
 class ProjectionTests(MetadataSyncTestCase):
     def test_projection_lists_every_field_of_its_own_work_only(self) -> None:
-        state = self.library.get_work_metadata_state(self.work)
+        state = work_commands.metadata_state(self.db, self.ctx, self.work)
         assert state is not None
         self.assertEqual((state["work_id"], sorted(state["fields"])), (self.work, sorted(rules.SYNCED_FIELDS)))
-        self.assertIsNone(self.library.get_work_metadata_state(_MISSING))
-        noisy = [self.library.add_work("Noise %d" % i) for i in range(5)]
+        self.assertIsNone(work_commands.metadata_state(self.db, self.ctx, _MISSING))
+        noisy = [works_fixtures.add_work(self.db, self.ctx, self.storage, "Noise %d" % i) for i in range(5)]
         for work in noisy:
             self.patch({"doi": "10.1/%s" % work, "isbn": work}, work)
         self.patch({"doi": "10.1/mine"})
         with mock.patch.object(revisions, "read", wraps=revisions.read) as read:
-            state = require(self.library.get_work_metadata_state(self.work))["fields"]
+            state = require(work_commands.metadata_state(self.db, self.ctx, self.work))["fields"]
         self.assertEqual((state["doi"], state["isbn"]), ({"value": "10.1/mine", "revision": 1},
                                                           {"value": "", "revision": 0}))
         self.assertEqual(read.call_count, 1, "one query, not one per field")
@@ -579,8 +580,8 @@ class ProjectionTests(MetadataSyncTestCase):
         seen: set[str] = set()
 
         def snapshot(label: str) -> None:
-            etag = self.library.etag_for_representation("work-metadata-state",
-                                                         self.library.get_work_metadata_state(self.work))
+            etag = etags.etag_for_representation("work-metadata-state",
+                                         require(work_commands.metadata_state(self.db, self.ctx, self.work)))
             self.assertNotIn(etag, seen, label)
             seen.add(etag)
 
@@ -597,7 +598,7 @@ class ProjectionTests(MetadataSyncTestCase):
 
     def test_recently_added_carries_publisher_for_its_local_filter(self) -> None:
         self.patch({"publisher": "Fixture Press"})
-        row = next(r for r in self.library.get_recently_added_browse() if r["id"] == self.work)
+        row = next(r for r in work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir) if r["id"] == self.work)
         self.assertEqual(row["publisher"], "Fixture Press")
 
     def test_year_and_published_date_are_independent_conflict_units(self) -> None:
@@ -630,7 +631,7 @@ class ProjectionTests(MetadataSyncTestCase):
 
 class SearchTests(MetadataSyncTestCase):
     def found(self, term: str) -> list[str]:
-        return [row["id"] for row in self.library.search_works(term)]
+        return [row["id"] for row in works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, term, '', ''))]
 
     def test_search_finds_a_synchronized_title_and_author_text(self) -> None:
         for field, old, new in (("title", "Alpha Treatise", "Beta Treatise"),

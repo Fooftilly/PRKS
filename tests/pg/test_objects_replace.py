@@ -38,6 +38,10 @@ from tests.narrowing import require
 from backend.domain.identity.library_scope import library_query
 from backend.domain.people import roles
 from tests import people_fixtures
+from backend.domain.annotations import annotation_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
+from tests.acting_context import current_context
 
 NEW = b"%PDF-1.7\n% another document\n" + b"n" * 300 + b"\n%%EOF\n"
 LINEARIZED = b"%PDF-1.7\n/Linearized 1\n% qpdf output\n" + b"l" * 200 + b"\n%%EOF\n"
@@ -68,7 +72,7 @@ class BoundedReads:
 
 class ReplaceTestCase(MaterializeTestCase):
     def replace(self, work_id: str, data: bytes = NEW, before: Any = None) -> dict[str, Any]:
-        return self.library._replace_work_pdf(work_id, writing(data, before))
+        return annotation_commands.replace_pdf(self.db, self.ctx, works_fixtures.objects(self.storage), work_id, writing(data, before))
 
     def replace_in(self, scope: LibraryScope, work_id: str, written: IngestedPdf) -> Any:
         return replace.commit(scope, self.objects, work_id, written)
@@ -126,7 +130,7 @@ class SuccessTests(ReplaceTestCase):
                                 "content_sha256": sha(NEW), "ingest_sha256": sha(NEW), "byte_size": len(NEW),
                                 "canonical_annotation_set_revision": 1,
                                 "materialized_pdf_annotation_revision": 1, "stale": False})
-        self.assertEqual(require(self.library.get_work(work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["file_path"], done["file_path"])
         # Nothing was modified in place; the old object is claimed and kept until settled.
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
@@ -137,22 +141,21 @@ class SuccessTests(ReplaceTestCase):
         work_id = self.add_pdf_work()
         canonical = self.edited(work_id)
         self.materialize(work_id, canonical)
-        self.assertEqual(self.library.mark_work_pdf_materialized_if_claim_current(work_id, canonical), canonical)
-        listed, state = self.listed(work_id), self.library.get_work_annotations_state(work_id)
+        self.assertEqual(works_fixtures.mark_materialized_if_claim_current(self.db, self.ctx, self.storage, work_id, canonical), canonical)
+        listed, state = self.listed(work_id), annotation_commands.state(self.db, self.ctx, work_id)
         done = self.replace(work_id)
-        self.assertEqual((self.listed(work_id), self.library.get_work_annotations_state(work_id)), (listed, state))
+        self.assertEqual((self.listed(work_id), annotation_commands.state(self.db, self.ctx, work_id)), (listed, state))
         self.assertEqual((done["canonical_annotation_set_revision"], done["materialized_pdf_annotation_revision"],
                           done["stale"]), (canonical + 1, 0, True))
-        status = self.library.get_work_pdf_materialization(work_id)
+        status = require(annotation_commands.materialization(self.db, self.ctx, work_id))
         self.assertEqual((status["stale"], status["code"]), (True, STALE_CODE))
         # No acknowledgement for a claim on the old document, nor for the new revision before materializing.
         for claim in (canonical, canonical + 1):
-            self.assert_refused(STALE_CODE, lambda claim=claim: self.library.mark_work_pdf_materialized_if_claim_current(
-                work_id, claim))
-        self.assert_refused(STALE_CODE, lambda: self.library.accept_work_pdf_materialization_claim(work_id, canonical))
+            self.assert_refused(STALE_CODE, lambda claim=claim: works_fixtures.mark_materialized_if_claim_current(self.db, self.ctx, self.storage, work_id, claim))
+        self.assert_refused(STALE_CODE, lambda: works_fixtures.accept_materialization_claim(self.db, self.ctx, work_id, canonical))
         # Materializing the set into the new document makes it current again.
         self.materialize(work_id, canonical + 1)
-        self.assertEqual(self.library.mark_work_pdf_materialized_if_claim_current(work_id, canonical + 1),
+        self.assertEqual(works_fixtures.mark_materialized_if_claim_current(self.db, self.ctx, self.storage, work_id, canonical + 1),
                          canonical + 1)
 
     def test_without_annotations_the_new_bytes_are_current(self) -> None:
@@ -163,10 +166,10 @@ class SuccessTests(ReplaceTestCase):
         done = self.replace(work_id)
         self.assertEqual((done["canonical_annotation_set_revision"], done["materialized_pdf_annotation_revision"],
                           done["stale"]), (canonical + 1, canonical + 1, False))
-        self.assertEqual(self.library.mark_work_pdf_materialized_if_claim_current(work_id, canonical + 1),
+        self.assertEqual(works_fixtures.mark_materialized_if_claim_current(self.db, self.ctx, self.storage, work_id, canonical + 1),
                          canonical + 1)
         # Byte-only markup in the new document may be adopted: the bytes are not stale.
-        adopted = self.library.adopt_byte_only_user_markup(work_id, [annotation(id="ann-from-bytes")])
+        adopted = annotation_commands.adopt(self.db, self.ctx, work_id, [annotation(id="ann-from-bytes")])
         self.assertEqual(adopted["adopted"], ["ann-from-bytes"])
 
     def test_mentioned_people_are_linked(self) -> None:
@@ -275,17 +278,17 @@ class LinearizedTests(LinearizingTestCase):
 class SharedReferenceTests(LinearizingTestCase):
     def test_keys_another_asset_names_are_not_claimed(self) -> None:
         work_id = self.add_pdf_work("shared.pdf")
-        sibling = self.library.add_work("Sibling", file_path="/api/pdfs/shared.pdf")
+        sibling = works_fixtures.add_work(self.db, self.ctx, self.storage, "Sibling", file_path="/api/pdfs/shared.pdf")
         self.replace(work_id)
         self.assertEqual(self.claims(), set())
         self.assertEqual(self.full_asset(sibling)["storage_locator"], "shared.pdf")
-        self.library.delete_work_record(sibling)
+        work_commands.delete(self.db, self.ctx, sibling)
         self.assertEqual(self.claims(), {"shared.pdf"})
 
     def test_a_shared_pristine_source_is_not_claimed(self) -> None:
         work_id = self.uploaded_work(b"%PDF-1.4 pristine", b"%PDF-1.4 linearized")
         before = self.full_asset(work_id)
-        sibling = self.library.add_work("Sibling", file_path="/api/pdfs/" + before["source_locator"])
+        sibling = works_fixtures.add_work(self.db, self.ctx, self.storage, "Sibling", file_path="/api/pdfs/" + before["source_locator"])
         self.replace(work_id)
         self.assertEqual(self.claims(), {before["storage_locator"]})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 1})
@@ -294,7 +297,7 @@ class SharedReferenceTests(LinearizingTestCase):
 
 class RefusalTests(ReplaceTestCase):
     def test_a_missing_work_or_one_without_a_managed_pdf(self) -> None:
-        video = self.library.add_work("Video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        video = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         for work_id in (video, "W-" + "E" * 32):
             with self.subTest(work_id=work_id):
                 self.assert_refused(replace.NOT_FOUND, lambda work_id=work_id: self.replace(work_id))
@@ -397,8 +400,7 @@ class ConcurrencyTests(ReplaceTestCase):
         self.assertIsInstance(done, materialize.Materialized)
         self.assertEqual((replaced.canonical, replaced.materialized), (canonical + 1, 0))
         self.assertEqual(self.claims(), {"p.pdf", rendered.working.key.name})
-        self.assert_refused(STALE_CODE, lambda: self.library.mark_work_pdf_materialized_if_claim_current(
-            work_id, canonical))
+        self.assert_refused(STALE_CODE, lambda: works_fixtures.mark_materialized_if_claim_current(self.db, self.ctx, self.storage, work_id, canonical))
 
     def test_a_work_delete_holding_the_work_refuses_the_replacement(self) -> None:
         work_id = self.add_pdf_work()
@@ -423,7 +425,7 @@ class ConcurrencyTests(ReplaceTestCase):
     def test_a_work_deleted_while_uploading_is_not_found(self) -> None:
         work_id = self.add_pdf_work()
         self.assert_refused(replace.NOT_FOUND, lambda: self.replace(
-            work_id, before=lambda: self.library.delete_work_record(work_id)))
+            work_id, before=lambda: work_commands.delete(self.db, self.ctx, work_id)))
         self.assertEqual(self.claims(), self.names())
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 2})
 
@@ -484,7 +486,7 @@ class FailureTests(ReplaceTestCase):
             raise OSError("the upload broke off")
 
         with self.assertRaises(OSError):
-            self.library._replace_work_pdf(work_id, broken)
+            annotation_commands.replace_pdf(self.db, self.ctx, works_fixtures.objects(self.storage), work_id, broken)
         self.assertEqual((self.full_asset(work_id), self.names(), self.claims()), (before, names, set()))
 
 
@@ -497,8 +499,8 @@ class RestartTests(ReplaceTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
         library = TestLibrary(self.db, storage=self.storage)
-        self.assertEqual(require(library.get_work(work_id))["file_path"], done["file_path"])
-        status = library.get_work_pdf_materialization(work_id)
+        self.assertEqual(require(work_commands.detail(library.database, current_context(), works_fixtures.pdfs_dir(library.storage), work_id))["file_path"], done["file_path"])
+        status = require(annotation_commands.materialization(library.database, current_context(), work_id))
         self.assertEqual((status["canonical_annotation_set_revision"], status["stale"]), (2, True))
         self.assertEqual(self.claims(), {"p.pdf"})
         # Settling is idempotent: a second pass finds nothing owed.

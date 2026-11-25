@@ -31,6 +31,8 @@ from tests.pg.answers import AnswerAssertions
 from backend.domain.organization import tag_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class FolderTestCase(OrganizationTestCase):
@@ -152,7 +154,7 @@ class DeleteTests(FolderTestCase):
         parent = self.add("Parent")
         self.add("Child", parent)
         holder = self.add("Holder")
-        folder_commands.file_work(self.db, self.ctx, holder, self.library.add_work("W"))
+        folder_commands.file_work(self.db, self.ctx, holder, works_fixtures.add_work(self.db, self.ctx, self.storage, "W"))
         self.refused("Cannot delete folder: Folder has subfolders. Please move or delete them first.",
                      partial(folder_commands.delete, self.db, self.ctx), parent)
         self.refused("Cannot delete folder: Folder is not empty. Please remove all files first.",
@@ -200,17 +202,17 @@ class DeleteTests(FolderTestCase):
 class WorkFilingTests(FolderTestCase):
     def test_filing_moving_and_clearing_advance_the_work_folder(self) -> None:
         a, b = self.add("A"), self.add("B")
-        work_id = self.library.add_work("Paper")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper")
         self.assertEqual(self.work_folder(work_id), ("", 0))
         folder_commands.file_work(self.db, self.ctx, a, work_id)
         folder_commands.file_work(self.db, self.ctx, a, work_id)  # already there: nothing changes
         self.assertEqual(self.work_folder(work_id), (a, 1))
         self.refused("This file is already in another folder.", partial(folder_commands.file_work, self.db, self.ctx), b, work_id)
-        detail = self.library.get_work(work_id)
+        detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert detail is not None
         self.assertEqual((detail["folder_id"], detail["folder_title"]), (a, "A"))
-        self.assertEqual(self.library.get_all_works()[0]["folder_id"], a)
-        self.assertEqual(self.library.get_recently_added_browse()[0]["folder_id"], a)
+        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir)[0]["folder_id"], a)
+        self.assertEqual(work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir)[0]["folder_id"], a)
         folder_commands.move_work(self.db, self.ctx, work_id, b)
         folder_commands.move_work(self.db, self.ctx, work_id, b)
         self.assertEqual(self.work_folder(work_id), (b, 2))
@@ -219,11 +221,11 @@ class WorkFilingTests(FolderTestCase):
         self.assertEqual(folder_commands.member_work_ids(self.db, self.ctx, b), [work_id])
         folder_commands.move_work(self.db, self.ctx, work_id, None)
         self.assertEqual(self.work_folder(work_id), ("", 3))
-        self.assertEqual(require(self.library.get_work(work_id))["folder_title"], None)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["folder_title"], None)
         self.assertEqual(self.filed(), [])
 
     def test_a_missing_work_or_folder_is_refused(self) -> None:
-        folder_id, work_id = self.add("A"), self.library.add_work("Paper")
+        folder_id, work_id = self.add("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper")
         missing_work, missing_folder = generate("W"), generate("F")
         self.refused("The selected folder no longer exists.", partial(folder_commands.file_work, self.db, self.ctx),
                      missing_folder, work_id)
@@ -240,7 +242,7 @@ class WorkFilingTests(FolderTestCase):
         self.assertEqual(folder_commands.ensure_uncategorized(self.db, self.ctx), first)
         self.assertEqual(folder_commands.catalog(self.db, self.ctx), [])
         self.assertTrue(folder_commands.exists(self.db, self.ctx, first))
-        folder_commands.file_work(self.db, self.ctx, first, self.library.add_work("W"))
+        folder_commands.file_work(self.db, self.ctx, first, works_fixtures.add_work(self.db, self.ctx, self.storage, "W"))
         self.assertEqual(folders_named(folder_commands.catalog(self.db, self.ctx)), ["Uncategorized"])
         self.refused(_TAKEN, partial(folder_commands.create, self.db, self.ctx), "UNCATEGORIZED")
 
@@ -253,10 +255,10 @@ class WorkFilingTests(FolderTestCase):
 class WorkDeleteTests(FolderTestCase):
     def test_deleting_a_filed_work_unfiles_it_and_tombstones_its_folder_scope(self) -> None:
         folder_id = self.add("A")
-        filed, never = self.library.add_work("Filed"), self.library.add_work("Never filed")
+        filed, never = works_fixtures.add_work(self.db, self.ctx, self.storage, "Filed"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Never filed")
         folder_commands.move_work(self.db, self.ctx, filed, folder_id)
-        self.assertIsNotNone(self.library.delete_work_record(filed))
-        self.assertIsNotNone(self.library.delete_work_record(never))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, filed))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, never))
         self.assertEqual(self.filed(), [])
         # A never-filed Work's scope is tombstoned from revision 0 too.
         self.assertEqual(self.revisions("work-folder"), {filed: 2, never: 1})
@@ -265,7 +267,7 @@ class WorkDeleteTests(FolderTestCase):
 
     def test_a_missing_folder_reads_as_missing_without_a_data_root(self) -> None:
         folder_id = self.add("A")
-        folder_commands.move_work(self.db, self.ctx, self.library.add_work("Filed"), folder_id)
+        folder_commands.move_work(self.db, self.ctx, works_fixtures.add_work(self.db, self.ctx, self.storage, "Filed"), folder_id)
         self.assertIsNone(folder_commands.detail(self.db, self.ctx, "F-missing", None))
         # Finishing a Work summary needs the PDF directory.
         with self.assertRaisesRegex(RuntimeError, "no data root"):
@@ -277,8 +279,8 @@ class IsolationTests(FolderTestCase):
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = folder_commands.create(self.db, self.ctx, "Theirs")
-            their_work = self.library.add_work("Their work")
-        mine = self.library.add_work("Mine")
+            their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Their work")
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")
         self.assertIsNone(folder_commands.detail(self.db, self.ctx, theirs, self.pdfs_dir))
         self.assertIsNone(folder_commands.sync_state(self.db, self.ctx, theirs))
         self.assertIsNone(folder_commands.work_state(self.db, self.ctx, their_work))
@@ -294,7 +296,7 @@ class IsolationTests(FolderTestCase):
             self.assertEqual([row["id"] for row in folder_commands.catalog(self.db, self.ctx)], [theirs])
 
     def test_a_reader_reads_folders_but_cannot_change_them(self) -> None:
-        folder_id, work_id = self.add("A"), self.library.add_work("W")
+        folder_id, work_id = self.add("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with facade_context.acting_as(self.reader_context()):
             self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir))["title"], "A")
             for call in (lambda: folder_commands.create(self.db, self.ctx, "B"),
@@ -512,7 +514,7 @@ class RaceTests(FolderTestCase):
         self.assertIn("Folder has subfolders", str(contender))
 
     def test_filing_into_a_folder_being_deleted_is_refused(self) -> None:
-        doomed, work_id = self.add("Doomed"), self.library.add_work("W")
+        doomed, work_id = self.add("Doomed"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(lambda scope: folders.delete(scope, doomed),
                                       lambda: folder_commands.file_work(self.db, self.ctx, doomed, work_id))
         self.assertEqual(holder, (True, None))
@@ -521,7 +523,7 @@ class RaceTests(FolderTestCase):
         self.assertEqual(self.filed(), [])
 
     def test_a_delete_waits_for_a_filing_into_the_folder(self) -> None:
-        folder_id, work_id = self.add("Busy"), self.library.add_work("W")
+        folder_id, work_id = self.add("Busy"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
 
         def file(scope: Any) -> bool:
             folders.lock_work(scope, work_id)
@@ -535,7 +537,7 @@ class RaceTests(FolderTestCase):
         self.assertEqual(self.filed(), [(work_id, folder_id)])
 
     def test_two_moves_of_one_work_serialize(self) -> None:
-        a, b, work_id = self.add("A"), self.add("B"), self.library.add_work("W")
+        a, b, work_id = self.add("A"), self.add("B"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
 
         def move(scope: Any) -> bool:
             folders.lock_work(scope, work_id)
@@ -547,7 +549,7 @@ class RaceTests(FolderTestCase):
         self.assertEqual((self.work_folder(work_id), self.filed()), ((b, 2), [(work_id, b)]))
 
     def test_a_move_of_a_work_being_deleted_is_refused(self) -> None:
-        folder_id, work_id = self.add("A"), self.library.add_work("W")
+        folder_id, work_id = self.add("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(lambda scope: commands.delete_work(scope, work_id) is not None,
                                       lambda: folder_commands.move_work(self.db, self.ctx, work_id, folder_id))
         self.assertIs(holder, True)
@@ -556,13 +558,13 @@ class RaceTests(FolderTestCase):
         self.assertEqual((self.filed(), self.revisions("work-folder")), ([], {work_id: 1}))
 
     def test_a_work_delete_waits_for_a_move_and_then_unfiles_it(self) -> None:
-        folder_id, work_id = self.add("A"), self.library.add_work("W")
+        folder_id, work_id = self.add("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
 
         def move(scope: Any) -> bool:
             folders.lock_work(scope, work_id)
             return folders.set_work_folder(scope, work_id, folder_id)
 
-        holder, contender = self.race(move, lambda: self.library.delete_work_record(work_id) is not None,
+        holder, contender = self.race(move, lambda: work_commands.delete(self.db, self.ctx, work_id) is not None,
                                       serializable=True)
         self.assertEqual((holder, contender), (True, True))
         self.assertEqual((self.filed(), self.revisions("work-folder")), ([], {work_id: 2}))
@@ -604,7 +606,7 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
         return self.labels.name(folder_id, f"<F {title}>")
 
     def named_work(self, title: str) -> str:
-        return self.labels.name(self.library.add_work(title), f"<W {title}>")
+        return self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, title), f"<W {title}>")
 
     def detail(self, folder_id: str) -> Optional[dict[str, Any]]:
         return folder_commands.detail(self.db, self.actor.context, folder_id, self.storage.pdfs_dir)
@@ -698,9 +700,9 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
         self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "<F A>", "revision": 1, "work_id": "<W Paper>"})
         self.assert_refused(lambda: folder_commands.file_work(db, ctx, b, work), "This file is already in another folder.")
         self.assertIsNone(folder_commands.file_work(db, ctx, a, work))
-        self.answer(require(self.library.get_work(work)), {"folder_id": "<F A>", "folder_title": "A"})
-        self.answer([row["folder_id"] for row in self.library.get_all_works()], ["<F A>"])
-        self.answer([row["folder_id"] for row in self.library.get_recently_added_browse()], ["<F A>"])
+        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work)), {"folder_id": "<F A>", "folder_title": "A"})
+        self.answer([row["folder_id"] for row in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)], ["<F A>"])
+        self.answer([row["folder_id"] for row in work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir)], ["<F A>"])
         works = require(self.detail(a))["works"]
         self.answer([row["id"] for row in works], ["<W Paper>"])
         self.assertNotIn("folder_id", works[0])
@@ -711,7 +713,7 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
         folder_commands.move_work(db, ctx, work, None)
         self.answer(folder_commands.work_state(db, ctx, work), {"folder_id": "", "revision": 3, "work_id": "<W Paper>"})
         self.assertIsNone(folder_commands.work_state(db, ctx, _MISSING_WORK))
-        self.answer(require(self.library.get_work(work)), {"folder_id": None, "folder_title": None})
+        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work)), {"folder_id": None, "folder_title": None})
 
     def test_uncategorized_and_related_folders(self) -> None:
         db, ctx = self.db, self.actor.context

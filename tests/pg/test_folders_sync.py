@@ -31,6 +31,8 @@ from backend.domain.organization import tag_commands
 from backend.domain.identity.library_scope import library_query
 from backend.domain.people import roles
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _FOLDER_OPERATIONS = frozenset({"CREATE_FOLDER", "SET_FOLDER_FIELD", "DELETE_FOLDER"})
 
@@ -85,7 +87,7 @@ class CreateTests(FolderSyncTestCase):
                                                   "parent_id": parent, "private_notes": "",
                                                   "work_count": 0, "child_count": 0}}))
         self.assertEqual(self.send(data), first)  # a replay
-        folder_commands.file_work(self.db, self.ctx, folder_id, self.library.add_work("W"))
+        folder_commands.file_work(self.db, self.ctx, folder_id, works_fixtures.add_work(self.db, self.ctx, self.storage, "W"))
         again = self.send(self.create("Other", folder_id))
         self.assertEqual((again[1]["changed"], again[1]["folder"]["title"], again[1]["folder"]["work_count"]),
                          (False, "Λόγος", 1))
@@ -167,7 +169,7 @@ class EnvelopeTests(FolderSyncTestCase):
 
 class FieldTests(FolderSyncTestCase):
     def test_the_decision_table(self) -> None:
-        folder_id, work_id = self.create_folder("Folder"), self.library.add_work("W")
+        folder_id, work_id = self.create_folder("Folder"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         folder_commands.file_work(self.db, self.ctx, folder_id, work_id)
         renamed = self.send(self.folder_field(folder_id, "title", "Renamed", 0))
         self.assertEqual(renamed, (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "field": "title",
@@ -221,7 +223,7 @@ class FieldTests(FolderSyncTestCase):
 class WorkFolderTests(FolderSyncTestCase):
     def test_the_decision_table(self) -> None:
         a, b = self.create_folder("A"), self.create_folder("B")
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.assertEqual(self.send(self.file(work_id, a, 0)), (200, {
             "code": "ACKNOWLEDGED", "work_id": work_id, "changed": True, "folder_id": a, "server_revision": 1,
             "folder_title": "A"}))
@@ -243,7 +245,7 @@ class WorkFolderTests(FolderSyncTestCase):
 
     def test_two_moves_of_one_work_advance_it_in_turn(self) -> None:
         a, b = self.create_folder("A"), self.create_folder("B")
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(self.applying(folder_handlers.WORK_FOLDER_HANDLER, self.file(work_id, a, 0)),
                                       lambda: self.send(self.file(work_id, b, 0)), serializable=True)
         self.assertEqual(holder[1]["server_revision"], 1)
@@ -252,7 +254,7 @@ class WorkFolderTests(FolderSyncTestCase):
         self.assertEqual(self.work_folder(work_id), (a, 1))
 
     def test_a_filing_into_a_folder_being_deleted_is_refused(self) -> None:
-        doomed, work_id = self.create_folder("Doomed"), self.library.add_work("W")
+        doomed, work_id = self.create_folder("Doomed"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(
             self.applying(folder_handlers.DELETE_HANDLER, self.envelope("DELETE_FOLDER", doomed, {})),
             lambda: self.send(self.file(work_id, doomed, 0)))
@@ -266,7 +268,7 @@ class DeleteTests(FolderSyncTestCase):
         parent = self.create_folder("Parent")
         self.create_folder("Child", parent_id=parent)
         busy = self.create_folder("Busy")
-        self.send(self.file(self.library.add_work("W"), busy, 0))
+        self.send(self.file(works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), busy, 0))
         self.assertEqual(self.send(self.envelope("DELETE_FOLDER", parent, {})),
                          (409, {"code": "FOLDER_HAS_SUBFOLDERS", "folder_id": parent}))
         self.assertEqual(self.send(self.envelope("DELETE_FOLDER", busy, {})),
@@ -308,7 +310,7 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         self.assertEqual(self.send(second)[1]["folder_id"], uncategorized)
         self.assertEqual(require(folder_commands.detail(self.db, self.ctx, uncategorized, self.pdfs_dir))["title"], "Uncategorized")
         self.assertEqual(folder_commands.catalog(self.db, self.ctx)[0]["work_count"], 2)
-        self.assertEqual(require(self.library.get_work(first["entity_id"]))["folder_title"], "Uncategorized")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first["entity_id"]))["folder_title"], "Uncategorized")
         # Filing is construction: no revision moved.
         self.assertEqual(self.work_folder(first["entity_id"]), (uncategorized, 0))
         self.assertEqual(self.revisions("work-folder"), {})
@@ -395,7 +397,7 @@ class RecreatedFiledWorkTests(FolderSyncTestCase):
         folder_id, work_id = self.create_folder("A"), generate("W")
         self.recreate(work_id)
         self.assertEqual(self.send(self.file(work_id, folder_id, 0))[1]["server_revision"], 1)
-        self.assertIsNotNone(self.library.delete_work_record(work_id))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, work_id))
         self.recreate(work_id)
         self.assertEqual(self.work_folder(work_id), ("", 2))
         self.assertEqual(self.send(self.file(work_id, folder_id, 1))[0], 409)
@@ -403,7 +405,7 @@ class RecreatedFiledWorkTests(FolderSyncTestCase):
 
 class LedgerAndIsolationTests(FolderSyncTestCase):
     def test_dependencies_name_acknowledged_operations_of_the_device(self) -> None:
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         create = self.create("Talks")
         self.send(create)
         filed = self.file(work_id, create["entity_id"], 0, depends_on=[create["op_id"]])
@@ -423,11 +425,11 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
         self.assertEqual(len(self.ledger()), 1)
 
     def test_another_library_cannot_see_or_change_these_folders(self) -> None:
-        folder_id, work_id = self.create_folder("Mine"), self.library.add_work("W")
+        folder_id, work_id = self.create_folder("Mine"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         other = self.other_actor()
         device = {"device_id": str(other.context.device_id)}
         with facade_context.acting_as(other.context):
-            their_work = self.library.add_work("Theirs")
+            their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         for data, answer in (
                 (self.folder_field(folder_id, "title", "Theirs", 0),
                  (404, {"code": "ENTITY_NOT_FOUND", "folder_id": folder_id, "field": "title"})),

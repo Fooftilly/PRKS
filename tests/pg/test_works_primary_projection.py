@@ -23,6 +23,11 @@ from backend.domain.organization import playlist_commands
 from backend.domain.people import person_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.identity.library_scope import library_query
+from backend.domain.search import queries
+from backend.domain.search import search_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -74,7 +79,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.refresh(work_id)
 
     def origin(self, work_id: str) -> str:
-        return str(require(self.library.get_work(work_id))["primary_manifestation_id"])
+        return str(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["primary_manifestation_id"])
 
     @staticmethod
     def identity(row: dict[str, Any]) -> dict[str, Any]:
@@ -82,23 +87,22 @@ class PrimaryProjectionTests(SearchTestCase):
                 ("primary_manifestation_id", "primary_asset_id", "manifestation_count", "asset_count")}
 
     def browse_row(self, work_id: str) -> dict[str, Any]:
-        return next(row for row in self.library.get_works_browse_catalog() if row["id"] == work_id)
+        return next(row for row in work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir) if row["id"] == work_id)
 
     def ids(self, rows: list[dict[str, Any]]) -> list[str]:
         return [row["id"] for row in rows]
 
     def test_the_projection_follows_the_primary_manifestation_and_its_asset(self) -> None:
-        work_id = self.library.add_work("Canonical Work", abstract="Canonical abstract", publisher="Old Press",
-                                        file_path=self.store_pdf("original.pdf", b"original"))
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Canonical Work", abstract="Canonical abstract", file_path=self.store_pdf("original.pdf", b"original"), publisher="Old Press")
         origin = self.origin(work_id)
-        self.assertNotIn("citation_manifestation_id", require(self.library.get_work(work_id)))
+        self.assertNotIn("citation_manifestation_id", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)))
         mf = self.manifestation(work_id, title="Translated Version", publisher="New Press",
                                 abstract="Translated abstract", primary=False)
         asset = self.stream(work_id, mf)
-        self.assertEqual(require(self.library.get_work(work_id))["title"], "Canonical Work")  # not primary yet
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Canonical Work")  # not primary yet
         self.make_primary(work_id, mf)
 
-        work = self.library.get_work(work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert work is not None
         self.assertEqual({key: work[key] for key in ("title", "abstract", "publisher", "year", "source_url",
                                                      "source_kind", "provider", "provider_id", "file_path",
@@ -113,7 +117,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertNotIn("citation_manifestation_id", work)
 
     def test_every_reader_family_carries_the_same_identity(self) -> None:
-        work_id = self.library.add_work("Reader Family Work", file_path=self.store_pdf("family.pdf", b"family"))
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Reader Family Work", file_path=self.store_pdf("family.pdf", b"family"))
         self.stream(work_id, self.manifestation(work_id))
         folder_id = folder_commands.create(self.db, self.ctx, "Projection Folder")
         folder_commands.file_work(self.db, self.ctx, folder_id, work_id)
@@ -121,18 +125,18 @@ class PrimaryProjectionTests(SearchTestCase):
         role_commands.add(self.db, self.ctx, person_id, work_id, "Author")
         playlist_id = playlist_commands.create(self.db, self.ctx, "Projection Playlist")
         playlist_commands.add_item(self.db, self.ctx, playlist_id, work_id)
-        self.library.mark_work_opened(work_id)
+        work_commands.mark_opened(self.db, self.ctx, work_id)
 
-        expected = self.identity(require(self.library.get_work(work_id)))
+        expected = self.identity(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)))
         self.assertEqual((expected["manifestation_count"], expected["asset_count"]), (2, 2))
         folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir), person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir),
                                     playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
         assert folder is not None and person is not None and playlist is not None
         families = {
-            "all": self.library.get_all_works(),
-            "browse": self.library.get_works_browse_catalog(),
-            "recent": self.library.get_recent_browse(),
-            "added": self.library.get_recently_added_browse(),
+            "all": work_commands.catalog(self.db, self.ctx, self.pdfs_dir),
+            "browse": work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir),
+            "recent": work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir),
+            "added": work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir),
             "folder": folder["works"],
             "person": person["works"],
             "playlist": playlist["items"],
@@ -145,30 +149,29 @@ class PrimaryProjectionTests(SearchTestCase):
                 self.assertNotIn("citation_manifestation_id", row)
 
     def test_the_thumbnail_fields_follow_the_primary_asset(self) -> None:
-        work_id = self.library.add_work("Thumb Work", file_path=self.store_pdf("original.pdf", b"original"),
-                                        thumb_page=1)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Thumb Work", file_path=self.store_pdf("original.pdf", b"original"), thumb_page=1)
         mf = self.manifestation(work_id, primary=False)
         asset = self.managed_file(work_id, mf, "secondary.pdf", 7)
         self.make_primary(work_id, mf)
-        fields = self.library.get_primary_thumbnail_fields(work_id)
+        fields = work_commands.thumbnail_fields(self.db, self.ctx, work_id)
         assert fields is not None
         self.assertEqual((fields["file_path"], fields["thumb_page"], fields["primary_asset_id"]),
                          ("/api/pdfs/secondary.pdf", 7, asset))
-        work = self.library.get_work(work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert work is not None
         self.assertEqual((work["file_path"], work["thumb_page"]), ("/api/pdfs/secondary.pdf", 7))
 
     def test_the_browse_catalog_orders_by_the_displayed_title(self) -> None:
-        early = self.library.add_work("AAA Legacy")
-        late = self.library.add_work("ZZZ Legacy")
+        early = works_fixtures.add_work(self.db, self.ctx, self.storage, "AAA Legacy")
+        late = works_fixtures.add_work(self.db, self.ctx, self.storage, "ZZZ Legacy")
         self.manifestation(early, title="ZZZ Displayed")
         self.manifestation(late, title="AAA Displayed")
-        rows = [row for row in self.library.get_works_browse_catalog() if row["id"] in (early, late)]
+        rows = [row for row in work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir) if row["id"] in (early, late)]
         self.assertEqual([(row["id"], row["title"]) for row in rows],
                          [(late, "AAA Displayed"), (early, "ZZZ Displayed")])
 
     def test_credits_of_a_manifestation_that_is_no_longer_primary_reach_no_reader(self) -> None:
-        work_id = self.library.add_work("Credit Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Credit Work")
         ada = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         charles = people_fixtures.add_person(self.db, self.ctx, "Charles", "Babbage")
         role_commands.add(self.db, self.ctx, ada, work_id, "Author")  # Work scope: holds for every Manifestation
@@ -178,7 +181,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.credit(work_id, charles, "Author", origin, 2)
 
         def credits() -> set[tuple[str, str]]:
-            return {(role["role_type"], role["last_name"]) for role in require(self.library.get_work(work_id))["roles"]}
+            return {(role["role_type"], role["last_name"]) for role in require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["roles"]}
 
         self.assertEqual(credits(), {("Author", "Lovelace")})
         row = self.browse_row(work_id)
@@ -190,12 +193,12 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertNotIn(work_id, self.ids(charles_page["works"]))
         self.assertIn(work_id, self.ids(ada_page["works"]))
 
-        self.assertNotIn(work_id, self.library.work_ids_matching_author("Babbage"))
-        self.assertNotIn(work_id, self.ids(self.library.search_works("", author_filter="Babbage")))
-        self.assertNotIn(work_id, self.ids(self.library.search_works("Babbage")))
-        self.assertIn(work_id, self.library.work_ids_matching_author("Lovelace"))
-        self.assertIn(work_id, self.ids(self.library.search_works("", author_filter="Lovelace")))
-        self.assertIn(work_id, self.ids(self.library.search_works("Lovelace")))
+        self.assertNotIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.author_work_ids(scope, "Babbage")))
+        self.assertNotIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "", "Babbage", ''))))
+        self.assertNotIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "Babbage", '', ''))))
+        self.assertIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.author_work_ids(scope, "Lovelace")))
+        self.assertIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "", "Lovelace", ''))))
+        self.assertIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "Lovelace", '', ''))))
 
         # A credit on the primary Manifestation itself is shown everywhere.
         self.credit(work_id, charles, "Translator", mf, 3)
@@ -207,22 +210,21 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertEqual([(w["id"], w["role_type"]) for w in charles_page["works"]], [(work_id, "Translator")])
 
     def test_a_primary_without_a_publisher_hides_the_one_before_it(self) -> None:
-        work_id = self.library.add_work("Legacy Pub Work", publisher="Legacy Press")
-        self.assertIn(work_id, self.library.work_ids_matching_publisher("Legacy Press"))
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Legacy Pub Work", publisher="Legacy Press")
+        self.assertIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.publisher_work_ids(scope, "Legacy Press")))
         self.manifestation(work_id, title="Null Publisher Edition", publisher=None)
-        self.assertIsNone(require(self.library.get_work(work_id))["publisher"])
-        self.assertNotIn(work_id, self.library.work_ids_matching_publisher("Legacy Press"))
-        self.assertNotIn(work_id, self.ids(self.library.search_works("", publisher_filter="Legacy Press")))
+        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["publisher"])
+        self.assertNotIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.publisher_work_ids(scope, "Legacy Press")))
+        self.assertNotIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "", '', "Legacy Press"))))
 
     def test_search_finds_the_displayed_metadata_and_not_the_hidden(self) -> None:
-        work_id = self.library.add_work("Legacy Hidden Title", abstract="Legacy hidden abstract",
-                                        publisher="Legacy Press")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Legacy Hidden Title", abstract="Legacy hidden abstract", publisher="Legacy Press")
         self.manifestation(work_id, title="Displayed Search Title", publisher="Displayed Press",
                            abstract="Displayed search abstract")
         for query in ("Displayed Search Title", "Displayed", "displayed search abstract"):
             with self.subTest(query=query):
-                self.assertIn(work_id, self.ids(self.library.search_works(query)))
-        self.assertNotIn(work_id, self.ids(self.library.search_works("Hidden")))
-        self.assertIn(work_id, self.ids(self.library.search_works("", publisher_filter="Displayed Press")))
-        row = next(row for row in self.library.search_works("Displayed Search Title") if row["id"] == work_id)
+                self.assertIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope, query=query: search_commands.keyword_rows(scope, query, '', ''))))
+        self.assertNotIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "Hidden", '', ''))))
+        self.assertIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "", '', "Displayed Press"))))
+        row = next(row for row in works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "Displayed Search Title", '', '')) if row["id"] == work_id)
         self.assertEqual((row["title"], row["publisher"]), ("Displayed Search Title", "Displayed Press"))

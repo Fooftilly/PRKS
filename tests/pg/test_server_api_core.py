@@ -24,6 +24,7 @@ from backend.domain.organization import folder_commands
 from tests.acting_context import current_context
 from backend.domain.identity.library_scope import library_query
 from backend.domain.people import roles
+from tests import works_fixtures
 
 
 class RequestIdTests(ServerApiTestCase):
@@ -158,7 +159,7 @@ class CreateRefusalTests(ServerApiTestCase):
     def test_the_domain_refuses_filing_into_a_missing_folder_or_a_missing_work(self) -> None:
         folder = self.ok(self.send("POST", "/api/folders", {"title": "Filing Target", "description": ""}))["id"]
         with self.acting():
-            work_id = self.facade.add_work("Race Filing Work")  # not filed anywhere yet
+            work_id = works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Race Filing Work")  # not filed anywhere yet
             with self.assertRaisesRegex(ValueError, "no longer exists"):
                 folder_commands.file_work(self.facade.database, current_context(), "F-does-not-exist", work_id)
             with self.assertRaisesRegex(ValueError, "file no longer exists"):

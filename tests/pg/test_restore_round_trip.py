@@ -39,6 +39,8 @@ from backend.domain.research import argument_commands
 from backend.domain.research import concept_commands
 from backend.domain.research import note_commands
 from backend.domain.research import position_commands
+from backend.domain.annotations import annotation_commands
+from backend.domain.works import work_commands
 
 # Identity columns the restore renumbers from the live sequence (see the staging tests).
 _RENUMBERED = {"seq"}
@@ -75,7 +77,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.sql("INSERT INTO prks.duplicate_decisions (library_id, entity_type, low_id, high_id, decision) "
                  "VALUES (%s, 'work', %s, %s, 'not_duplicate')", (self.actor.library_id, low, high))
         gone = self.create(self.put(b"%PDF deleted"))
-        lib.delete_work_record(gone)  # its object is claimed for cleanup
+        work_commands.delete(lib.database, current_context(), gone)  # its object is claimed for cleanup
         self.sql("INSERT INTO prks.sync_work_lifecycle (library_id, work_id, state) VALUES (%s, %s, 'deleted')",
                  (self.actor.library_id, gone))
         # People.
@@ -116,7 +118,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         claim = position_commands.create(lib.database, current_context(), "Engines compute")["id"]
         base = argument_commands.create(lib.database, current_context(), name="Base", kind="argument", sources=[{"work_id": first, "manifestation_id": revision, "pages": "1"}], targets=[{"type": "position", "id": claim, "verdict_id": "supports"}])["id"]
         argument_commands.create(lib.database, current_context(), name="Reply", kind="argument", targets=[{"type": "argument", "id": base, "verdict_id": "opposes"}])
-        lib.save_work_annotations(first, json.dumps([HIGHLIGHT]), base_set_revision=0)
+        annotation_commands.save(lib.database, current_context(), first, json.dumps([HIGHLIGHT]), base_set_revision=0)
         # Processing: a ready item whose draft has roles and tags.
         data = b"%PDF-1.4\n% queued\n%%EOF\n"
         item = processing.upload(self.db, self.actor.context, self.objects, upload_key=uuid.uuid4().hex,
@@ -154,8 +156,8 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.assertEqual(namespaces, set(NAMESPACES))
 
         # Change every family after the backup.
-        self.library.delete_work_record(ids["second"])
-        self.library.update_work_metadata(ids["first"], {"title": "Changed"})
+        work_commands.delete(self.db, self.ctx, ids["second"])
+        work_commands.update_metadata(self.db, self.ctx, ids["first"], {"title": "Changed"})
         tag_commands.delete(self.db, self.ctx, ids["tag"])
         people_fixtures.add_person(self.db, self.ctx, "Later", "Person")
         self.sql("DELETE FROM prks.library_settings")

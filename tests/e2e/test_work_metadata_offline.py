@@ -15,6 +15,7 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -170,14 +171,16 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             postgres="SELECT abstract FROM prks.works WHERE id = %s", params=(work_id,))[0]['abstract']
 
     def server_fields(self, server, work_id):
-        return self.db_for(server).get_work_metadata_state(work_id)['fields']
+        from backend.domain.works import work_commands
+        return require(self.db_for(server).run(work_commands.metadata_state, work_id))['fields']
 
     def server_value(self, server, work_id, field):
         """The canonical column. A BYTE-LIMITED field's metadata-state entry
         carries its revision alone -- the Work record already has the value,
         and duplicating it into a second projection would double what every
         read costs -- so the projection is the wrong place to ask."""
-        return self.db_for(server).get_work(work_id)[field]
+        from backend.domain.works import work_commands
+        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work_id))[field]
 
     def record_paths(self, page):
         seen = []
@@ -258,6 +261,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_different_fields_synchronize_independently(self):
         """Two devices editing DOI and ISBN have not disagreed about anything.
         A single Work-level revision would tell them they had."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -265,7 +269,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
         # Another device changes a DIFFERENT field while this one is away.
-        self.db_for(server).update_work_metadata(work, {'isbn': 'other-device-isbn'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'isbn': 'other-device-isbn'})
         self.reconnect(page, context)
         self.pending(page, 0)
         state = self.server_fields(server, work)
@@ -277,13 +281,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def test_a_convergent_edit_is_not_a_conflict(self):
         """Two people typing the same DOI have converged, not collided."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
         self.field(page, 'doi', '10.1/agreed')
         self.save(page)
         self.pending(page, 1)
-        self.db_for(server).update_work_metadata(work, {'doi': '10.1/agreed'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'doi': '10.1/agreed'})
         self.reconnect(page, context)
         self.pending(page, 0)
         self.assertEqual(self.server_fields(server, work)['doi'],
@@ -291,6 +296,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'convergence advances nothing further')
 
     def test_same_field_conflict_leaves_the_other_fields_working(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -298,7 +304,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.field(page, 'journal', 'device-journal')
         self.save(page)
         self.pending(page, 2)
-        self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'doi': 'server-doi'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -314,13 +320,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertIn('server-doi', page.locator('[data-prks-role="work-bib-sync"]').inner_text())
 
     def test_use_server_resolves_one_field_without_touching_the_server(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
         self.field(page, 'doi', 'device-doi')
         self.save(page)
         self.pending(page, 1)
-        self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'doi': 'server-doi'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -336,6 +343,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(cached, {'value': 'server-doi', 'revision': 1})
 
     def test_apply_my_value_creates_a_new_operation_against_the_server_revision(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -343,7 +351,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
         original = self.operations(page)[0]['op_id']
-        self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'doi': 'server-doi'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -361,13 +369,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_clearing_the_cache_keeps_intent_and_diagnostics_can_resolve_it(self):
         """The Work page may be gone entirely; a change the user cannot reach
         is a change they cannot decide about."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
         self.field(page, 'doi', 'device-doi')
         self.save(page)
         self.pending(page, 1)
-        self.db_for(server).update_work_metadata(work, {'doi': 'server-doi'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'doi': 'server-doi'})
 
         page.locator('button.settings-btn').click()
         page.locator('#prks-settings-tab-diagnostics').click()
@@ -474,9 +483,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         Publisher, so a pending value has to reach that projection's filtering
         even though no card renders it -- while the acknowledged snapshot on
         disk still says what the server said."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'publisher': 'Elsevier'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.recently_added(page)
@@ -499,9 +509,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                          'the acknowledged snapshot is untouched until the server answers')
 
     def test_the_pending_publisher_overlay_survives_a_reload(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'publisher': 'Elsevier'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.recently_added(page)
@@ -522,9 +533,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
 
     def test_acknowledgement_reconciles_the_projection_and_retires_the_overlay(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'publisher': 'Elsevier'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'publisher': 'Elsevier'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.recently_added(page)
@@ -556,8 +568,8 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def seed_dates(self, server, page, year='1970', published='1954-06-07'):
         """Give Work A an acknowledged Year and Published Date, then reload so
         every cached projection holds them."""
-        self.db_for(server).update_work_metadata(
-            server.ids['work_a'], {'year': year, 'published_date': published})
+        from backend.domain.works import work_commands
+        self.db_for(server).run(work_commands.update_metadata, server.ids['work_a'], {'year': year, 'published_date': published})
         page.reload()
         page.wait_for_selector('#sidebar')
 
@@ -841,6 +853,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """They are rendered by the same derived value, which is exactly why a
         conflict on one must not block the other: they are still two fields and
         two people can change them without disagreeing."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.seed_dates(server, page)
@@ -853,7 +866,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 2)
 
         # Someone else changes only the Year while this device is away.
-        self.db_for(server).update_work_metadata(work, {'year': '1988'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'year': '1988'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
         fields = self.server_fields(server, work)
@@ -1028,6 +1041,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_a_status_conflict_uses_the_existing_field_level_ux(self):
         """Two devices genuinely disagreed about this Work's status, so the
         user decides -- and only about Status. No new conflict architecture."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -1037,7 +1051,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 2)
 
-        self.db_for(server).update_work_metadata(work, {'status': 'Paused'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'status': 'Paused'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -1069,6 +1083,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """The bulk action is an ordinary canonical mutation: it advances the
         same revision this device observed, so an edit made while away is a
         real disagreement rather than a silent overwrite."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -1076,8 +1091,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save_status(page)
         self.pending(page, 1)
 
-        self.db_for(server).bulk_update_works(
-            {'work_ids': [work], 'action': 'set_status', 'status': 'Paused'})
+        self.db_for(server).run(work_commands.bulk_update, {'work_ids': [work], 'action': 'set_status', 'status': 'Paused'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
         result = self.operations(page)[0]['server_result']
@@ -1119,9 +1133,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         pending value has to reach every cached card, survive a reload, and
         still be there after the server answers -- without the card visibly
         changing at acknowledgement."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_b']
-        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Author'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'author_text': 'Old Author'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.warm_all_catalogs(page, work, status='Not Started', open_title=WORK_B_TITLE)
@@ -1165,9 +1180,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         textual author changes the FIELD -- the editor shows it -- while the
         card keeps crediting the linked person. Synchronizing a field is not
         permission to take over how a credit is composed."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Text'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'author_text': 'Old Text'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.warm_all_catalogs(page, work)
@@ -1201,11 +1217,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """The fallback runs in the other direction too -- which is why the
         overlay has to happen BEFORE the credit is composed. Patching a
         rendered credit could never reveal a different person."""
+        from backend.domain.works import work_commands
         from backend.domain.people import role_commands
         server, page, context = self.start()
         work, person = server.ids['work_b'], server.ids['person']
         db = self.db_for(server)
-        db.update_work_metadata(work, {'author_text': 'Text Author'})
+        db.run(work_commands.update_metadata, work, {'author_text': 'Text Author'})
         db.run(role_commands.add, person, work, 'Editor')
         page.reload()
         page.wait_for_selector('#sidebar')
@@ -1237,6 +1254,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         the old contract would have put the whole value in the server ledger
         and, on a conflict, tried to store two of them in a 2 KB durable
         result. Small enough to keep the browser test cheap."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_b']
         big = 'Q' * (8 * 1024)
@@ -1259,7 +1277,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(self.server_fields(server, work)['author_text'], {'revision': 1},
                          'the projection carries the revision alone')
         self.assertEqual(
-            self.db_for(server).get_work(work)['author_text'], big,
+            require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], big,
             'while the Work record has the whole value')
         ledger = self.ledger(server)[0]['result_json']
         self.assertNotIn(big, ledger, 'the ledger never became a second copy of it')
@@ -1276,6 +1294,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         operation could not settle at all -- it would fail to store its own
         outcome rather than reach the user, which is worse than either value
         winning."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_b']
         self.open_work_b(page)
@@ -1284,7 +1303,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
 
-        self.db_for(server).update_work_metadata(work, {'author_text': 'S' * (8 * 1024)})
+        self.db_for(server).run(work_commands.update_metadata, work, {'author_text': 'S' * (8 * 1024)})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -1304,7 +1323,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['author_text'], 'D' * (8 * 1024))
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], 'D' * (8 * 1024))
 
     def test_a_conflict_the_browser_could_not_store_still_reaches_the_user(self):
         """The 2I.2 regression, end to end. The server's answer used to be
@@ -1318,6 +1337,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         Nothing here asserts a size: it asserts the operation reaches a
         TERMINAL state and the user can act on it, which is the thing that was
         actually broken."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_b']
         self.open_work_b(page)
@@ -1327,8 +1347,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.pending(page, 1)
 
         # 400+ control characters: what the old character cap let through.
-        self.db_for(server).update_work_metadata(
-            server.ids['work_b'], {'author_text': '\x01' * 5000})
+        self.db_for(server).run(work_commands.update_metadata, server.ids['work_b'], {'author_text': '\x01' * 5000})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -1352,12 +1371,13 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_a_rename_saves_durably_and_synchronizes(self):
         """Title is the widest synchronized field; this is the smoke test that
         its durable group works end to end."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.field(page, 'title', 'A Durable Rename')
         page.locator('#save-work-identity-btn').click()
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['title'], 'A Durable Rename')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], 'A Durable Rename')
         self.assertEqual(self.server_fields(server, work)['title'], {'revision': 1})
 
     def pick_doc_type(self, page, value):
@@ -1388,9 +1408,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_a_pending_doc_type_moves_the_work_between_type_groups(self):
         """doc_type is a grouping key, not a label: a pending change has to
         move the Work in the surface that groups on it, before it syncs."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        before = self.db_for(server).get_work(work)['doc_type']
+        before = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type']
         self.assertNotEqual(before, 'phdthesis')
         # Types reads the browse catalog, so that catalog has to be cached
         # before the network goes away or there is nothing to group at all.
@@ -1406,12 +1427,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                       'the pending type decides where the Work is filed')
         self.assertNotIn(work, self.type_group_ids(page, before),
                          'and it has left the group it was filed under')
-        self.assertEqual(self.db_for(server).get_work(work)['doc_type'], before,
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type'], before,
                          'while the server still holds the old one')
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['doc_type'], 'phdthesis')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type'], 'phdthesis')
         self.assertIn(work, self.type_group_ids(page, 'phdthesis'),
                       'and the acknowledged type keeps it there')
 
@@ -1420,6 +1441,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         embedded summaries and the labels other domains hold by reference. One
         offline rename has to be true on all of them at once, or the library
         shows a user two different names for one file."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         renamed = 'A Rename Seen Everywhere'
@@ -1454,7 +1476,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['title'], renamed)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], renamed)
         self.assertEqual(
             self.cached_list_field(page, 'works-browse:index', work, 'title'), renamed,
             'the acknowledgement patches the cached row rather than dropping the catalog')
@@ -1466,6 +1488,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         the Work detail. A pending value has to be the link that row actually
         offers, because a user who edits it and then clicks through would
         otherwise be sent to the address they just replaced."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         provenance = 'https://example.org/papers/the-corrected-source.pdf'
@@ -1483,12 +1506,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             }"""),
             provenance,
             'the link goes where the pending value says, not where the cache does')
-        self.assertFalse(self.db_for(server).get_work(work)['source_url'],
+        self.assertFalse(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['source_url'],
                          'and the server still holds the old provenance')
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['source_url'], provenance)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['source_url'], provenance)
         self.assertEqual(self.server_fields(server, work)['source_url'], {'revision': 1},
                          'a byte-limited field carries its revision alone')
 
@@ -1525,9 +1548,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """The wire carries "5"; every cached row must carry the integer 5.
         A string there does not merely look wrong -- the row fails its own
         shape validator and the whole catalog is discarded as corrupt."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 2})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.warm_all_catalogs(page, work)
@@ -1569,7 +1593,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5)
         self.assertEqual(self.server_fields(server, work)['thumb_page'],
                          {'value': '5', 'revision': 2},
                          'metadata-state keeps the wire form; the Work record is typed')
@@ -1583,9 +1607,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         the offline case cannot show this at all. Synchronization is held with
         a route gate rather than a delay, so the pending window is
         deterministic rather than a race with the coordinator."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 5})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 5})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.navigate(page, self.PROGRESS)
@@ -1622,14 +1647,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             src = self.thumb_src(page, work)
             self.assertIn('page=1', src, 'a pending clear means page 1, immediately')
             self.assertNotIn('page=5', src, 'not the page the server still stores')
-            self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5,
+            self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5,
                              'and the server has not been told anything yet')
             self.assertTrue(blocked, 'the gate actually held a send')
         finally:
             page.unroute('**/api/sync/operations', hold)
 
         self.pending(page, 0)
-        self.assertIsNone(self.db_for(server).get_work(work)['thumb_page'])
+        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'])
         self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('page=1', self.thumb_src(page, work),
@@ -1638,9 +1663,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_an_online_pending_page_renders_before_the_server_is_told(self):
         """The endpoint already accepts an explicit page, so a pending value
         needs nothing from the column to be rendered."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 2})
         page.reload()
         page.wait_for_selector('#sidebar')
 
@@ -1660,21 +1686,22 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             self.navigate(page, self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn('page=5', self.thumb_src(page, work))
-            self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 2,
+            self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 2,
                              'the column still says 2')
         finally:
             page.unroute('**/api/sync/operations', hold)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 5)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5)
 
     def test_a_cached_card_makes_no_thumbnail_request_for_a_pending_page(self):
         """Offline suppression is absolute and decided before any URL exists.
         This counts actual requests to the endpoint rather than checking that
         an image is hidden -- a hidden image that was still fetched is exactly
         the failure being excluded."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 2})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.warm_all_catalogs(page, work)
@@ -1698,9 +1725,10 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """PATCH used to turn 0, -1 and junk into NULL silently -- a client
         asking for an impossible page was told the field had been emptied on
         purpose. Refusing is not clearing."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 3})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 3})
         page.reload()
         page.wait_for_selector('#sidebar')
         o._open_work_from_home(page, WORK_A_TITLE)
@@ -1723,13 +1751,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                 self.assertEqual(
                     page.locator('[data-prks-work-field="thumb_page"]').input_value(), bad,
                     'the draft is preserved')
-        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 3,
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 3,
                          'and the stored page is untouched')
 
     def test_a_thumb_page_conflict_uses_the_existing_field_level_ux(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 2})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 2})
         page.reload()
         page.wait_for_selector('#sidebar')
         o._open_work_from_home(page, WORK_A_TITLE)
@@ -1739,7 +1768,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.save(page)
         self.pending(page, 1)
 
-        self.db_for(server).update_work_metadata(work, {'thumb_page': 4})
+        self.db_for(server).run(work_commands.update_metadata, work, {'thumb_page': 4})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
         result = self.operations(page)[0]['server_result']
@@ -1749,15 +1778,16 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work(work)['thumb_page'], 7)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 7)
 
     def test_recently_added_filters_on_the_pending_author_text(self):
         """That filter indexes the RAW field, which is deliberately not the
         same as the displayed credit -- 2I preserves that rather than
         redesigning it."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_b']
-        self.db_for(server).update_work_metadata(work, {'author_text': 'Old Author'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'author_text': 'Old Author'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.recently_added(page)
@@ -1781,13 +1811,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         displayed. Work A credits a linked Author throughout, so nothing on its
         card ever changes -- and the disagreement still has to be surfaced and
         resolvable."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
         self.field(page, 'author_text', 'Alice')
         self.save(page)
         self.pending(page, 1)
-        self.db_for(server).update_work_metadata(work, {'author_text': 'Bob'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'author_text': 'Bob'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -1836,6 +1867,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
     def test_a_publisher_conflict_uses_the_existing_field_path(self):
         """No new conflict machinery: the expanded registry reuses 2D's."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -1844,7 +1876,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.field(page, 'doi', 'device-doi')
         self.save(page)
         self.pending(page, 3)
-        self.db_for(server).update_work_metadata(work, {'publisher': 'server-publisher'})
+        self.db_for(server).run(work_commands.update_metadata, work, {'publisher': 'server-publisher'})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 
@@ -1951,10 +1983,11 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """The derived projection. Progress shows the first 100 code points of
         the pending Abstract, cut exactly where the server would cut it -- and
         the acknowledged catalog on disk still says what the server said."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         db = self.db_for(server)
-        db.update_work_metadata(work, {'abstract': 'Server abstract text.', 'status': 'In Progress'})
+        db.run(work_commands.update_metadata, work, {'abstract': 'Server abstract text.', 'status': 'In Progress'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.progress(page)
@@ -1997,10 +2030,11 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         accepted 64 KiB-1 MiB, but durable storage refused it -- so the save
         failed at the one step the user had been told already succeeded. 150 KiB
         crosses that boundary without making the browser test slow."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         db = self.db_for(server)
-        db.update_work_metadata(work, {'status': 'In Progress'})
+        db.run(work_commands.update_metadata, work, {'status': 'In Progress'})
         page.reload()
         page.wait_for_selector('#sidebar')
         self.progress(page)
@@ -2047,13 +2081,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
     def test_an_abstract_conflict_shows_bounded_previews(self):
         """A megabyte of Abstract must not be dumped into a conflict sentence,
         and the durable row could not store it even if it were."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
         page.locator('[data-prks-work-field="abstract"]').fill('D' * 5000)
         self.save(page)
         self.pending(page, 1)
-        self.db_for(server).update_work_metadata(work, {'abstract': 'S' * 5000})
+        self.db_for(server).run(work_commands.update_metadata, work, {'abstract': 'S' * 5000})
         self.reconnect(page, context)
         self.settled_conflicts(page, 1)
 

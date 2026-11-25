@@ -19,12 +19,13 @@ from backend.sync import handlers, protocol
 from backend.sync.handlers import work_open
 from tests.pg.test_works_sync import SyncTestCase
 from backend.domain.organization import tag_commands
+from tests import works_fixtures
 
 
 class ProtocolTests(SyncTestCase):
     def setUp(self) -> None:
         super().setUp()
-        self.work = self.library.add_work("Protocol work")
+        self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Protocol work")
         self.tag = tag_commands.create(self.db, self.ctx, "Protocol tag")["id"]
 
     def op(self, operation: str, payload: dict[str, Any], base: Optional[int], **changes: Any) -> dict[str, Any]:

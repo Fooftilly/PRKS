@@ -27,6 +27,8 @@ from backend.pdf.pdf_text import PDFTextExtractorUnavailable
 from tests.pg.test_search_text import TextTestCase
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class RebuildTestCase(TextTestCase):
@@ -47,7 +49,7 @@ class RebuildTestCase(TextTestCase):
         first = self.pdf_work("Analytical engine", "notes on the engine", "a.pdf")
         role_commands.add(self.db, self.ctx, person, first, "Author")
         second = self.pdf_work("Second paper", "bernoulli numbers", "b.pdf")
-        third = self.library.add_work("Plain record", abstract="An understatement")
+        third = works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain record", abstract="An understatement")
         self.command(lambda scope: notes.set_note(scope, third, notes.RESEARCH, "[[concept:Engines]]"))
         self.run_jobs()
         return [first, second, third]
@@ -144,7 +146,7 @@ class RebuildTests(RebuildTestCase):
 
     def test_text_extracts_what_is_missing_and_records_a_corrupt_pdf(self) -> None:
         good = self.pdf_work("Good", "readable words", "g.pdf")
-        broken = self.library.add_work("Broken", file_path=self.store_pdf("x.pdf", b"%PDF-1.4 not a pdf"))
+        broken = works_fixtures.add_work(self.db, self.ctx, self.storage, "Broken", file_path=self.store_pdf("x.pdf", b"%PDF-1.4 not a pdf"))
         later = self.pdf_work("Later", "more readable words", "l.pdf")
         self.sql("DELETE FROM prks.jobs")
         self.assertEqual(self.rebuild("text"), [Outcome.SUCCEEDED])
@@ -175,7 +177,7 @@ class RebuildTests(RebuildTestCase):
         self.assertEqual(self.all_rows(), 3)
 
     def test_a_work_whose_reindex_fails_fails_the_run_which_resumes_from_its_work(self) -> None:
-        works = sorted((self.library.add_work(f"Work {i}") for i in range(3)), key=lambda w: w.encode())
+        works = sorted((works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {i}") for i in range(3)), key=lambda w: w.encode())
         for work in works:
             self.command(lambda scope, work=work: notes.set_note(scope, work, notes.RESEARCH, "[[concept:C]]"))
         self.run_jobs()
@@ -255,13 +257,13 @@ class ConcurrencyTests(RebuildTestCase):
         self.assertEqual(set(outcomes), {Outcome.SUCCEEDED})
 
     def test_a_metadata_edit_during_a_batch_waits_and_keeps_its_projection(self) -> None:
-        work = self.library.add_work("Original title")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Original title")
         self.sql("DELETE FROM prks.jobs")
         edits: list[Any] = []
 
         def edit() -> None:
             edits.extend(self.facade_thread(
-                lambda: self.library.update_work_metadata(work, {"title": "Renamed title"})))
+                lambda: work_commands.update_metadata(self.db, self.ctx, work, {"title": "Renamed title"})))
             self.wait_for_lock_waiter()
 
         self.run_paused_in_search_batch(edit)
@@ -271,19 +273,19 @@ class ConcurrencyTests(RebuildTestCase):
         self.assertFalse(self.matches(work, "original"))
 
     def test_a_work_created_during_a_rebuild_keeps_its_row(self) -> None:
-        self.library.add_work("Existing")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Existing")
         self.sql("DELETE FROM prks.jobs")
         created: list[str] = []
-        self.run_paused_in_search_batch(lambda: created.append(self.library.add_work("Created meanwhile")))
+        self.run_paused_in_search_batch(lambda: created.append(works_fixtures.add_work(self.db, self.ctx, self.storage, "Created meanwhile")))
         self.assertTrue(self.matches(created[0], "created", "meanwhile"))
 
     def test_a_work_deleted_during_a_rebuild_leaves_no_row(self) -> None:
-        doomed = self.library.add_work("Doomed")
+        doomed = works_fixtures.add_work(self.db, self.ctx, self.storage, "Doomed")
         self.sql("DELETE FROM prks.jobs")
         deleted: list[Any] = []
 
         def delete() -> None:
-            deleted.extend(self.facade_thread(lambda: self.library.delete_work_record(doomed)))
+            deleted.extend(self.facade_thread(lambda: work_commands.delete(self.db, self.ctx, doomed)))
             self.wait_for_lock_waiter()
 
         self.run_paused_in_search_batch(delete)
@@ -295,7 +297,7 @@ class ConcurrencyTests(RebuildTestCase):
 
     def test_a_heartbeat_waiting_on_a_batch_lets_the_batch_save_its_cursor(self) -> None:
         """The batch holds its job row ``FOR SHARE`` and then updates it; a heartbeat queued behind it waits."""
-        self.library.add_work("Existing")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Existing")
         self.sql("DELETE FROM prks.jobs")
         beats: list[Any] = []
 
@@ -315,7 +317,7 @@ class ConcurrencyTests(RebuildTestCase):
 
 class RepairTests(RebuildTestCase):
     def test_a_gap_schedules_a_repair_that_closes_it(self) -> None:
-        works = [self.library.add_work(f"Work {i}") for i in range(3)]
+        works = [works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {i}") for i in range(3)]
         self.assertTrue(self.command(rebuild.consistency).consistent)
         self.assertIsNone(self.command(rebuild.schedule_repair))
         fresh = self.snapshot()["search"]
@@ -426,7 +428,7 @@ class FoldingTests(RebuildTestCase):
         self.assertEqual(self.check(), [])
 
     def test_a_resume_under_a_changed_folding_walks_every_scope_again(self) -> None:
-        works = [self.library.add_work(f"Work {i}") for i in range(3)]
+        works = [works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {i}") for i in range(3)]
         self.pdf_work("Paper", "folded words")
         self.run_jobs()
         self.set_stored("rules=old;server=1")
@@ -461,7 +463,7 @@ class FoldingTests(RebuildTestCase):
     def test_the_idle_tick_checks_at_start_and_again_when_the_folding_changes(self) -> None:
         now = [0.0]
         tick = rebuild.SearchMaintenance(clock=lambda: now[0]).tick
-        self.sql("DELETE FROM derived.work_search WHERE work_id = %s", (self.library.add_work("Unindexed"),))
+        self.sql("DELETE FROM derived.work_search WHERE work_id = %s", (works_fixtures.add_work(self.db, self.ctx, self.storage, "Unindexed"),))
         self.sql("DELETE FROM prks.jobs")
         tick(self.db)  # the start: the consistency count and the folding check
         kinds = [row["kind"] for row in self.sql("SELECT kind FROM prks.jobs ORDER BY created_at")]

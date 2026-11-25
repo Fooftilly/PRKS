@@ -30,6 +30,7 @@ from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
 from backend.domain.research import argument_commands
 from backend.domain.research import position_commands
+from tests import works_fixtures
 
 
 class ResearchSyncTestCase(SyncTestCase, ResearchTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
@@ -180,7 +181,7 @@ class ArgumentCreateTests(ResearchSyncTestCase):
         self.assertEqual(self.count("arguments"), 0)
 
     def test_a_create_acknowledges_and_converges(self) -> None:
-        work, claim = self.library.add_work("W"), self.position("Claim")
+        work, claim = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.position("Claim")
         data = self.create_argument_op(sources=[source(work, "3")], targets=[target("position", claim)])
         self.assertEqual(self.send(data), (200, {"argument_id": data["entity_id"], "code": "ACKNOWLEDGED",
                                                  "changed": True}))
@@ -225,7 +226,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         return [(row["type"], row["id"], row["verdict_id"]) for row in require(argument_commands.detail(self.db, self.ctx, argument_id))["targets"]]
 
     def test_refused_envelopes_change_nothing_and_are_never_ledgered(self) -> None:
-        work, claim = self.library.add_work("W"), self.position("Claim")
+        work, claim = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.position("Claim")
         a = self.sent(self.create_argument_op())
         before = (len(self.ledger()), self.count("arguments"))
         missing_lists = self.create_argument_op()
@@ -264,7 +265,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         self.assertEqual((self.count("arguments"), len(self.ledger())), (1, 1))
 
     def test_a_create_carries_its_lists_without_advancing_a_revision(self) -> None:
-        work, claim = self.library.add_work("W"), self.position("Claim")
+        work, claim = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.position("Claim")
         data = self.envelope("CREATE_ARGUMENT", generate("A"), {
             "name": "  Spaced   out  ", "kind": "stance", "main_text": "Body.",
             "sources": [source(work, "4")], "targets": [target("position", claim)]})
@@ -347,7 +348,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         self.assertEqual({value["revision"] for value in state["fields"].values()}, {0})
 
     def test_ordinary_list_replacements_advance_the_same_revisions(self) -> None:
-        work, claim = self.library.add_work("W"), self.position("Claim")
+        work, claim = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.position("Claim")
         a = self.sent(self.create_argument_op())
         rows = [target("position", claim)]
         argument_commands.replace_targets(self.db, self.ctx, a, rows)
@@ -363,7 +364,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
 
 class ArgumentListTests(ResearchSyncTestCase):
     def test_the_lists_decision_tables(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         a = self.sent(self.create_argument_op())
         self.assertEqual(self.send(self.sources_op(a, [source(w1)], 0))[1]["server_revision"], 1)
         # A stale base with the same list converges; another list conflicts.
@@ -381,7 +382,7 @@ class ArgumentListTests(ResearchSyncTestCase):
                          (409, {"argument_id": a, "code": "ARGUMENT_TARGETED"}))
 
     def test_a_citation_the_legacy_list_cannot_pin_is_ledgered_as_refused(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.add_manifestation(work)
         a = self.sent(self.create_argument_op())
         self.assertEqual(self.send(self.sources_op(a, [source(work, "5")], 0)),
@@ -390,7 +391,7 @@ class ArgumentListTests(ResearchSyncTestCase):
         self.assertEqual(self.send(self.sources_op(a, [source(work)], 0))[1]["changed"], True)
 
     def test_a_citation_of_a_merged_away_work_is_refused(self) -> None:
-        source_work, target_work = self.library.add_work("Source"), self.library.add_work("Target")
+        source_work, target_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
         a = self.sent(self.create_argument_op())
 
         def merge_away(scope: Any) -> None:
@@ -415,7 +416,7 @@ class ArgumentListTests(ResearchSyncTestCase):
                 self.assertIs(protocol._HANDLERS[operation].isolation, Isolation.READ_COMMITTED)
 
     def test_a_citation_racing_a_delete_of_its_work(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         a = self.sent(self.create_argument_op())
         holder, contender = self.race(lambda scope: commands.delete_work(scope, work),
                                       lambda: self.send(self.sources_op(a, [source(work)], 0)))
@@ -427,7 +428,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
     """``{work_id, manifestation_id, pages}`` entries in ``CREATE_ARGUMENT`` and ``SET_ARGUMENT_SOURCES``."""
 
     def test_the_envelope_of_a_version_aware_list(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         only = self.primary(work)
         a = self.sent(self.create_argument_op())
         bad: list[list[Any]] = [
@@ -456,7 +457,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
         self.assertEqual((self.citations(a), self.count("arguments")), ([], 1))
 
     def test_create_and_replace_with_pins_and_the_decision_table(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         first, second = self.primary(work), self.add_manifestation(work)
         a = self.sent(self.create_argument_op(sources=[pinned(work, second, "5"), pinned(work, None)]))
         self.assertEqual(self.citations(a), [(0, work, second, "5"), (1, work, None, "")])
@@ -474,7 +475,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
         self.assertEqual(self.citations(a), [(0, work, None, ""), (1, work, first, "5"), (2, work, second, "5")])
 
     def test_a_version_refusal_is_ledgered_and_changes_nothing(self) -> None:
-        w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Two")
         a = self.sent(self.create_argument_op(sources=[pinned(w1, None, "1")]))
         for code, status, sources in (
                 ("ARGUMENT_SOURCE_VERSION_MISMATCH", 409, [pinned(w2, self.primary(w1))]),
@@ -489,7 +490,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
                          ([(0, w1, None, "1")], {}, 1))
 
     def test_a_pin_of_a_merged_away_work_is_refused(self) -> None:
-        source_work, target_work = self.library.add_work("Source"), self.library.add_work("Target")
+        source_work, target_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
         a = self.sent(self.create_argument_op())
 
         def merge_away(scope: Any) -> None:
@@ -501,7 +502,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
                          (409, {"code": "WORK_MERGED", "work_id": source_work, "target_work_id": target_work}))
 
     def test_two_lists_on_one_base_one_lands_the_other_conflicts(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         second = self.add_manifestation(work)
         a = self.sent(self.create_argument_op())
         holder, contender = self.race(
@@ -515,7 +516,7 @@ class VersionAwareSourcesTests(ResearchSyncTestCase):
 class ArgumentDeleteTests(ResearchSyncTestCase):
     def test_in_use_refused_absence_converges_and_no_base_outlives_it(self) -> None:
         a = self.sent(self.create_argument_op())
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, f"[[argument:{a}]]")
         self.assertEqual(self.send(self.envelope("DELETE_ARGUMENT", a, {})),
                          (409, {"argument_id": a, "code": "ARGUMENT_IN_USE"}))
@@ -590,8 +591,8 @@ class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
         self.assertEqual(position_commands.catalog(self.db, self.ctx), [])
 
     def test_arguments(self) -> None:
-        one = self.labels.name(self.library.add_work("One"), "<W One>")
-        two = self.labels.name(self.library.add_work("Two"), "<W Two>")
+        one = self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, "One"), "<W One>")
+        two = self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, "Two"), "<W Two>")
         claim = self.labels.name(self.position("Claim"), "<P Claim>")
         base = self.labels.name(self.argument("Base"), "<A Base>")
         reply = self.labels.name(generate("A"), "<A Reply>")

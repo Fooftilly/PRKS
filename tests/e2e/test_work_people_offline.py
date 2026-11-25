@@ -319,6 +319,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         """The highest-value cross-family case: two durable families, one
         displayed credit. Composition has to use the effective state of BOTH,
         and neither overlay may decide the precedence."""
+        from backend.domain.works import work_commands
         server, page, context = self.start(PEOPLE_CREDITED_TITLE)
         work = server.ids['credited_work']
         # Both editors' bases are read while connected -- each family refuses to
@@ -353,7 +354,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.pending(page, 0)
         self.pending(page, 0, self.FIELD_OPS)
         self.assertEqual(self.roles(server, work), set())
-        self.assertEqual(self.db_for(server).get_work(work)['author_text'], 'New Text Author')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], 'New Text Author')
 
     # ---- 5: credit override -------------------------------------------------
 

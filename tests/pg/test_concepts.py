@@ -28,6 +28,8 @@ from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 from backend.domain.research import concept_commands
 from backend.domain.research import note_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class ConceptTestCase(OrganizationTestCase):
@@ -177,7 +179,7 @@ class DeleteTests(ConceptTestCase):
     def test_a_concept_a_research_note_names_is_refused(self) -> None:
         ethics = self.concept("Ethics")
         concept_commands.replace_aliases(self.db, self.ctx, ethics, ["Morals"])
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "See `[[concept:Ethics]]` and [[concept: MORALS ]].")
         error = self.refused("concept_in_use", partial(concept_commands.delete, self.db, self.ctx), ethics)
         self.assertEqual(error.http_status, 409)
@@ -191,7 +193,7 @@ class DeleteTests(ConceptTestCase):
 
     def test_encoded_reference_prevents_deleting_canonical_concept(self) -> None:
         target = self.concept("Category]] Theory")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "See [[concept-encoded:Category%5D%5D%20Theory]].")
         self.refused("concept_in_use", partial(concept_commands.delete, self.db, self.ctx), target)
         self.assertIsNotNone(concept_commands.detail(self.db, self.ctx, target))
@@ -347,7 +349,7 @@ class ConcurrencyTests(ConceptTestCase):
 
     def test_a_delete_racing_a_research_note_that_names_it(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(
             lambda scope: notes.set_note(scope, work, notes.RESEARCH, "On [[concept:ETHICS]]."),
             lambda: concept_commands.delete(self.db, self.ctx, ethics))
@@ -358,7 +360,7 @@ class ConcurrencyTests(ConceptTestCase):
 
     def test_a_research_note_racing_a_delete_of_a_concept_it_names(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(
             lambda scope: concepts.remove(scope, ethics),
             lambda: self.run_command(lambda scope: notes.set_note(scope, work, notes.RESEARCH,
@@ -490,12 +492,12 @@ class AnswerTests(AnswerAssertions, ConceptTestCase):
     def test_research_note_save(self) -> None:
         """``save_work_notes`` (the Work PATCH's note): the Concepts it names, revisions, refusals."""
         self.named("Ethics")
-        work = self.labels.name(self.library.add_work("W"), "<W W>")
+        work = self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), "<W W>")
         note = "On [[concept:ethics]] and [[concept:Logic]]."
         notes_state = {"private_note_revision": 0, "research_note_revision": 1, "work_id": "<W W>"}
         for _ in range(2):  # the same text again advances nothing
             self.assertIsNone(note_commands.save(self.db, self.ctx, work, note))
-            self.answer(self.library.get_work_notes_state(work), notes_state)
+            self.answer(work_commands.notes_state(self.db, self.ctx, work), notes_state)
         # A Concept the note names that does not exist yet is created.
         self.answer(concept_commands.catalog(self.db, self.ctx), [{"id": "<C Ethics>", "name": "Ethics"},
                                                    {"id": "<unknown id>", "name": "Logic", "description": ""}])
@@ -508,7 +510,7 @@ class AnswerTests(AnswerAssertions, ConceptTestCase):
         self.assertEqual(self.refusal(partial(note_commands.save, self.db, self.ctx), "W-" + "0" * 32, "[[concept:Gone]]"), work_missing)
         self.assertEqual(self.refusal(partial(note_commands.save, self.db, self.ctx), "  ", "text"), work_missing)
         self.assertEqual([row["name"] for row in concept_commands.catalog(self.db, self.ctx)], ["Ethics", "Logic"])
-        self.answer(self.library.get_work_notes_state(work), notes_state)
+        self.answer(work_commands.notes_state(self.db, self.ctx, work), notes_state)
 
     def test_identity_and_definition(self) -> None:
         ethics, logic = self.named("Ethics"), self.named("Logic")
@@ -574,7 +576,7 @@ class AnswerTests(AnswerAssertions, ConceptTestCase):
         a, b, c = self.named("A"), self.named("B"), self.named("C")
         concept_commands.replace_parents(self.db, self.ctx, b, [a])
         concept_commands.replace_parents(self.db, self.ctx, c, [b])
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "On [[concept:b]].")
         self.assertEqual(self.refusal(partial(concept_commands.delete, self.db, self.ctx), b), (
             "concept_in_use", "This Concept is still referenced in research notes. Remove or replace those"

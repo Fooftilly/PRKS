@@ -43,15 +43,12 @@ def seed(root):
     The Work detail page mounts its Playlist card only for a video, so a seeded
     PDF would make every assertion about that card vacuous.
     """
+    from tests import works_fixtures
     from backend.domain.organization import playlist_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    ids['video_a'] = db.add_work(
-        title=VIDEO_A_TITLE, doc_type='video', source_kind='video',
-        source_url='https://www.youtube.com/watch?v=E2EONELECT')
-    ids['video_b'] = db.add_work(
-        title=VIDEO_B_TITLE, doc_type='video', source_kind='video',
-        source_url='https://www.youtube.com/watch?v=E2ETWOLECT')
+    ids['video_a'] = works_fixtures.add_work(db.database, current_context(), db.storage, VIDEO_A_TITLE, doc_type='video', source_kind='video', source_url='https://www.youtube.com/watch?v=E2EONELECT')
+    ids['video_b'] = works_fixtures.add_work(db.database, current_context(), db.storage, VIDEO_B_TITLE, doc_type='video', source_kind='video', source_url='https://www.youtube.com/watch?v=E2ETWOLECT')
     ids['playlist'] = playlist_commands.create(db.database, current_context(), 'Durable Playlist', 'Seeded description')
     playlist_commands.add_item(db.database, current_context(), ids['playlist'], ids['video_a'])
     playlist_commands.add_item(db.database, current_context(), ids['playlist'], ids['video_b'])
@@ -334,6 +331,7 @@ class DurablePlaylistTests(unittest.TestCase):
     def test_deleting_a_playlist_holding_videos_keeps_the_videos(self):
         """Unlike a Folder, a Playlist holding files is NOT protected: its items
         are memberships, not the videos themselves."""
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         playlist = server.ids['playlist']
         self.prepare_playlist(page, playlist)
@@ -349,7 +347,7 @@ class DurablePlaylistTests(unittest.TestCase):
             timeout=60000,
             message='a playlist holding videos is deleted, not refused')
         self.assertNotIn('Durable Playlist', self.playlists_in_db(server))
-        self.assertIsNotNone(self.db_for(server).get_work(server.ids['video_a']))
+        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, server.ids['video_a']))
 
 
 if __name__ == '__main__':

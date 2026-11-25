@@ -38,6 +38,7 @@ from typing import Any, Optional
 from backend.domain.organization import folders, links
 from backend.domain.works import metadata
 from tests.pg.test_tags_sync import TagSyncTestCase
+from tests import works_fixtures
 
 SEEDS = range(1285_000, 1285_010)
 STEPS = 14
@@ -240,7 +241,7 @@ class WorkLifecycleModelTests(TagSyncTestCase):
         Answers the model and the Works and Tags in creation order: the
         generator picks by that order, never by the server's random ids.
         """
-        every_work = [self.library.add_work(f"Seed {seed} W{index}") for index in range(2)]
+        every_work = [works_fixtures.add_work(self.db, self.ctx, self.storage, f"Seed {seed} W{index}") for index in range(2)]
         every_tag = [self.create_tag(f"Seed {seed} T{index}") for index in range(2)]
         every_folder = tuple(self.folder(f"Folder {seed} F{index}") for index in range(2))
         names = {entity_id: f"{prefix}{index}" for prefix, ids in (("W", every_work), ("T", every_tag),

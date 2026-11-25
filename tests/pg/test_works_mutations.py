@@ -22,6 +22,8 @@ from backend.domain.works import commands, metadata, notes, revisions, source
 from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksAnswerTestCase, WorksFacadeTestCase
 from tests.narrowing import require
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 T = TypeVar("T")
 
@@ -141,7 +143,7 @@ class MutationTestCase(WorksFacadeTestCase):
 
 class FieldDecisionTests(MutationTestCase):
     def test_each_row_of_the_decision_table(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         status, body = self.field(work_id, "title", "Renamed", 0)
         self.assertEqual((status, body["code"], body["server_revision"], body["changed"]),
                          (200, "ACKNOWLEDGED", 1, True))
@@ -167,7 +169,7 @@ class FieldDecisionTests(MutationTestCase):
         })
 
     def test_fields_land_in_the_row_that_owns_them(self) -> None:
-        work_id = self.library.add_work("Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
         for name, value in (("year", "1999"), ("source_url", "https://e.org/p"), ("thumb_page", "3"),
                             ("source_mime", "application/pdf")):
             self.assertEqual(self.field(work_id, name, value, 0)[0], 200, name)
@@ -177,10 +179,10 @@ class FieldDecisionTests(MutationTestCase):
                                  "media_type": "application/pdf"}])
 
     def test_fields_the_source_decides_are_refused(self) -> None:
-        video = self.library.add_work("Video", source_url=_VIDEO)
+        video = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO)
         status, body = self.field(video, "source_url", "https://e.org/x", 0)
         self.assertEqual((status, body["code"]), (409, metadata.WRONG_OPERATION_FOR_SOURCE))
-        plain = self.library.add_work("Plain")
+        plain = works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain")
         status, body = self.field(plain, "thumb_page", "2", 0)
         self.assertEqual((status, body["code"]), (409, metadata.WRONG_OPERATION_FOR_SOURCE))
         # Clearing it is a no-op, not a refusal: there is nothing to clear.
@@ -190,9 +192,9 @@ class FieldDecisionTests(MutationTestCase):
         self.assertEqual(self.field(_MISSING, "title", "Ghost", 0)[1]["code"], "ENTITY_NOT_FOUND")
 
     def test_concurrent_writers_of_one_field_on_one_base(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         for _ in range(3):
-            base = require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"]
+            base = require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["title"]["revision"]
             results = self.concurrently([
                 (lambda value=value, base=base: self.field(work_id, "title", value, base))
                 for value in ("A%d" % base, "B%d" % base, "C%d" % base, "D%d" % base)
@@ -204,14 +206,14 @@ class FieldDecisionTests(MutationTestCase):
             for _status, body in results:
                 if body["code"] == "REVISION_CONFLICT":
                     self.assertEqual(body["current_revision"], base + 1)
-        self.assertEqual(require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"], 3)
+        self.assertEqual(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["title"]["revision"], 3)
 
     def test_concurrent_writers_of_different_fields_never_block_each_other_out(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         names = ("year", "publisher", "journal", "volume", "issue", "pages")
         results = self.concurrently([(lambda name=name: self.field(work_id, name, name, 0)) for name in names])
         self.assertEqual([body["server_revision"] for _status, body in results], [1] * len(names))
-        state = require(self.library.get_work_metadata_state(work_id))["fields"]
+        state = require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]
         self.assertEqual({name: state[name]["value"] for name in names}, {name: name for name in names})
 
 
@@ -223,7 +225,7 @@ class WaitedForLockTests(MutationTestCase):
     """
 
     def test_the_same_value_on_one_base_converges(self) -> None:
-        work_id = self.library.add_work("Paper")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper")
         first, second = self.hold_work_then(
             lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/x", 0),
             lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/x", 0))
@@ -232,17 +234,17 @@ class WaitedForLockTests(MutationTestCase):
                          ("ACKNOWLEDGED", 1, False))
 
     def test_a_stale_base_holding_the_old_value_conflicts(self) -> None:
-        work_id = self.library.add_work("Paper", doi="10.1/old")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", doi="10.1/old")
         first, second = self.hold_work_then(
             lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/new", 0),
             lambda scope: metadata.apply_field_operation(scope, work_id, "doi", "10.1/old", 0))
         self.assertEqual(first[1]["server_revision"], 1)
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "REVISION_CONFLICT", 1))
-        self.assertEqual(require(self.library.get_work(work_id))["doi"], "10.1/new")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["doi"], "10.1/new")
 
     def test_the_same_video_on_one_base_converges(self) -> None:
-        work_id = self.library.add_work("Video", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO)
         first, second = self.hold_work_then(
             lambda scope: source.apply_source_operation(
                 scope, work_id, {"kind": "video", "url": _OTHER_VIDEO}, 0),
@@ -253,7 +255,7 @@ class WaitedForLockTests(MutationTestCase):
                           second[1]["provider_id"]), ("ACKNOWLEDGED", False, 1, "9bZkp7q19f0"))
 
     def test_the_old_video_on_a_stale_base_conflicts(self) -> None:
-        work_id = self.library.add_work("Video", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO)
         _first, second = self.hold_work_then(
             lambda scope: source.apply_source_operation(
                 scope, work_id, {"kind": "video", "url": _OTHER_VIDEO}, 0),
@@ -261,12 +263,12 @@ class WaitedForLockTests(MutationTestCase):
                 scope, work_id, {"kind": "video", "url": _VIDEO}, 0))
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "SOURCE_REVISION_CONFLICT", 1))
-        self.assertEqual(require(self.library.get_work(work_id))["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["source_url"], _OTHER_VIDEO)
 
 
 class NoteDecisionTests(MutationTestCase):
     def test_each_row_of_the_decision_table(self) -> None:
-        work_id = self.library.add_work("Work", private_notes="secret")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", private_notes="secret")
         status, body = self.note(work_id, "research", "First", 0)
         self.assertEqual((status, body["code"], body["server_revision"], body["value_omitted"]),
                          (200, "ACKNOWLEDGED", 1, True))
@@ -285,18 +287,18 @@ class NoteDecisionTests(MutationTestCase):
             notes.validate("research", "bell\x07")
 
     def test_concurrent_writers_of_one_note(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         results = self.concurrently([
             (lambda text=text: self.note(work_id, "research", text, 0)) for text in ("a", "b", "c", "d", "e")
         ])
         self.assertEqual(sorted(body["code"] for _status, body in results),
                          ["ACKNOWLEDGED"] + ["REVISION_CONFLICT"] * 4)
-        self.assertEqual(require(self.library.get_work_notes_state(work_id))["research_note_revision"], 1)
+        self.assertEqual(require(work_commands.notes_state(self.db, self.ctx, work_id))["research_note_revision"], 1)
 
 
 class SourceDecisionTests(MutationTestCase):
     def test_replacing_a_video(self) -> None:
-        work_id = self.library.add_work("Video", source_url=_VIDEO, thumb_url="https://img/old.jpg")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO, thumb_url="https://img/old.jpg")
         # Another spelling of the same video is the same source: nothing changes.
         status, body = self.set_source(work_id, "https://youtu.be/dQw4w9WgXcQ", 0)
         self.assertEqual((status, body["changed"], body["server_revision"], body["thumb_url"]),
@@ -308,13 +310,13 @@ class SourceDecisionTests(MutationTestCase):
         status, body = self.set_source(work_id, _VIDEO, 0)
         self.assertEqual((status, body["code"], body["current_revision"]), (409, "SOURCE_REVISION_CONFLICT", 1))
         self.assertEqual(self.set_source(work_id, _VIDEO, 2)[1]["code"], "FUTURE_REVISION")
-        self.assertEqual(require(self.library.get_work(work_id))["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["source_url"], _OTHER_VIDEO)
         state = self.run_command(lambda scope: source.source_state(scope, work_id))
         self.assertEqual(state, {"work_id": work_id, "revision": 1})
 
     def test_only_a_video_may_be_replaced(self) -> None:
-        pdf = self.library.add_work("Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
-        plain = self.library.add_work("Plain")
+        pdf = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
+        plain = works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain")
         for work_id in (pdf, plain):
             status, body = self.set_source(work_id, _VIDEO, 0)
             self.assertEqual((status, body["code"]), (409, "UNSUPPORTED_SOURCE_TRANSITION"))
@@ -324,7 +326,7 @@ class SourceDecisionTests(MutationTestCase):
         self.assertEqual(self.revisions_of(pdf), {})
 
     def test_a_stream_with_a_broken_identity_is_refused(self) -> None:
-        work_id = self.library.add_work("Video", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO)
         self.sql("UPDATE prks.assets SET provider_id = 'not valid!' WHERE work_id = %s", (work_id,))
         self.assertEqual(self.set_source(work_id, _OTHER_VIDEO, 0)[1]["code"], source.INVALID_SOURCE_STATE)
         self.assertEqual(self.run_command(lambda scope: source.source_state(scope, work_id)),
@@ -333,14 +335,14 @@ class SourceDecisionTests(MutationTestCase):
 
 class OpenTests(MutationTestCase):
     def test_concurrent_opens_keep_the_latest(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         start = datetime(2026, 1, 2, 3, 4, 5, 678_901, tzinfo=timezone.utc)
         moments = [start + timedelta(milliseconds=i * 7) for i in range(8)]
         self.concurrently([
             (lambda moment=moment: self.run_command(lambda scope: commands.mark_opened(scope, work_id, moment)))
             for moment in reversed(moments)
         ])
-        self.assertEqual(require(self.library.get_work(work_id))["last_opened_at"], "2026-01-02 03:04:05.727")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["last_opened_at"], "2026-01-02 03:04:05.727")
         # An older event changes nothing and reports the recorded value.
         self.assertEqual(self.run_command(lambda scope: commands.mark_opened(scope, work_id, start)),
                          (True, False, "2026-01-02 03:04:05.727"))
@@ -350,7 +352,7 @@ class OpenTests(MutationTestCase):
 
 class DeleteTests(MutationTestCase):
     def test_a_delete_cascades_and_tombstones_every_scope(self) -> None:
-        work_id = self.library.add_work("Video", source_url=_VIDEO, text_content="research", private_notes="p")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", text_content="research", source_url=_VIDEO, private_notes="p")
         self.field(work_id, "title", "Renamed", 0)
         self.field(work_id, "year", "2001", 0)
         self.note(work_id, "private", "changed", 0)
@@ -358,9 +360,9 @@ class DeleteTests(MutationTestCase):
         self.run_command(lambda scope: revisions.lock(scope, "work-research-note", work_id))
         before = self.revisions_of(work_id)
         self.assertEqual(len(before), 5)
-        survivor = self.library.add_work("Survivor")
+        survivor = works_fixtures.add_work(self.db, self.ctx, self.storage, "Survivor")
         self.field(survivor, "title", "Kept", 0)
-        deleted = self.library.delete_work_record(work_id)
+        deleted = work_commands.delete(self.db, self.ctx, work_id)
         assert deleted is not None
         self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), ("", False))
         # Edited scopes advance once past their last edit; never-edited ones from 0 to 1.
@@ -375,7 +377,7 @@ class DeleteTests(MutationTestCase):
         self.assertEqual((status, body["code"]), (404, "ENTITY_NOT_FOUND"))
 
     def test_an_edit_holding_the_work_delays_the_delete(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         edit, deleted = self.hold_work_then(
             lambda scope: metadata.apply_field_operation(scope, work_id, "title", "Edited", 0),
             lambda scope: commands.delete_work(scope, work_id))
@@ -386,7 +388,7 @@ class DeleteTests(MutationTestCase):
                          self.tombstoned(work_id, {("work-field", metadata.scope_id(work_id, "title")): 2}))
 
     def test_a_delete_holding_the_work_makes_the_edit_find_nothing(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         deleted, edit = self.hold_work_then(
             lambda scope: commands.delete_work(scope, work_id),
             lambda scope: metadata.apply_field_operation(scope, work_id, "title", "Edited", 0))
@@ -397,23 +399,23 @@ class DeleteTests(MutationTestCase):
 
     def test_a_shared_file_stays_referenced_only_within_the_library(self) -> None:
         path = self.store_pdf("shared.pdf", b"%PDF-1.4\n")
-        first = self.library.add_work("First", file_path=path)
+        first = works_fixtures.add_work(self.db, self.ctx, self.storage, "First", file_path=path)
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs", file_path=self.store_pdf("theirs.pdf", b"%PDF-1.4\n"))
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", file_path=self.store_pdf("theirs.pdf", b"%PDF-1.4\n"))
         # Create refuses another Library's key, so give theirs the same name directly:
         # the delete's reference check still looks only inside its own Library.
         self.sql("UPDATE prks.assets SET storage_locator = 'shared.pdf' WHERE work_id = %s", (theirs,))
-        deleted = self.library.delete_work_record(first)
+        deleted = work_commands.delete(self.db, self.ctx, first)
         assert deleted is not None
         self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), (path, False))
         with facade_context.acting_as(other.context):
-            self.assertIsNotNone(self.library.get_work(theirs))
+            self.assertIsNotNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, theirs))
 
 
 class IsolationTests(MutationTestCase):
     def test_another_library_cannot_touch_a_work(self) -> None:
-        work_id = self.library.add_work("Mine", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", source_url=_VIDEO)
         other = self.other_actor()
         ctx = other.context
         self.assertEqual(self.run_command(lambda scope: metadata.apply_field_operation(
@@ -427,23 +429,23 @@ class IsolationTests(MutationTestCase):
             (False, False, None))
         self.assertIsNone(self.run_command(lambda scope: commands.delete_work(scope, work_id), ctx))
         with facade_context.acting_as(ctx):
-            self.library.update_work_metadata(work_id, {"title": "Stolen"})
-            self.assertIsNone(self.library.get_work_metadata_state(work_id))
-        self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
+            work_commands.update_metadata(self.db, self.ctx, work_id, {"title": "Stolen"})
+            self.assertIsNone(work_commands.metadata_state(self.db, self.ctx, work_id))
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Mine")
         self.assertEqual(self.revisions_of(work_id), {})
 
     def test_a_reader_cannot_change_a_work(self) -> None:
-        work_id = self.library.add_work("Mine", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", source_url=_VIDEO)
         with facade_context.acting_as(self.reader_context()):
-            for call in (lambda: self.library.mark_work_opened(work_id),
-                         lambda: self.library.update_work_metadata(work_id, {"title": "Changed"}),
-                         lambda: self.library.update_work_metadata(work_id, {"private_notes": "x"}),
-                         lambda: self.library.delete_work_record(work_id)):
+            for call in (lambda: work_commands.mark_opened(self.db, self.ctx, work_id),
+                         lambda: work_commands.update_metadata(self.db, self.ctx, work_id, {"title": "Changed"}),
+                         lambda: work_commands.update_metadata(self.db, self.ctx, work_id, {"private_notes": "x"}),
+                         lambda: work_commands.delete(self.db, self.ctx, work_id)):
                 with self.assertRaises(AccessRefused) as caught:
                     call()
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-            self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
-        self.assertIsNone(require(self.library.get_work(work_id))["last_opened_at"])
+            self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Mine")
+        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["last_opened_at"])
         self.assertEqual(self.revisions_of(work_id), {})
 
 
@@ -468,27 +470,27 @@ class AnswerTests(WorksAnswerTestCase):
     """What the Work patches, opens and deletes answer and leave, spelled out."""
 
     def state(self, work_id: str) -> tuple[Any, Any]:
-        return (self.library.get_work_metadata_state(work_id), self.library.get_work_notes_state(work_id))
+        return (work_commands.metadata_state(self.db, self.ctx, work_id), work_commands.notes_state(self.db, self.ctx, work_id))
 
     def test_opening_orders_recent(self) -> None:
         first = self.add("first", title="First")
         second = self.add("second", title="Second", source_url=_VIDEO)
         self.add("never", title="Never")
         for work_id in (first, second, first):
-            self.assertIs(self.library.mark_work_opened(work_id), True)
-        self.answer(self.library.get_recent_browse(), [
+            self.assertIs(work_commands.mark_opened(self.db, self.ctx, work_id), True)
+        self.answer(work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir), [
             {"id": "<W first>", "title": "First", "last_opened_at": "<ms>", "source_kind": None,
              "asset_count": 0, "primary_asset_id": None},
             {"id": "<W second>", "title": "Second", "last_opened_at": "<ms>", "source_kind": "video",
              "asset_count": 1, "primary_asset_id": "<AS second>", "provider": "youtube"}])
-        self.answer(self.library.get_recent_works(1), [{"id": "<W first>", "last_opened_at": "<ms>"}])
-        self.answer(self.library.etag_recent_works(), 'W/"prks-recent-2-<ms>"')
-        self.answer(self.library.get_work(first), {"last_opened_at": "<ms>"})
+        self.answer(works_fixtures.recent_works(self.db, self.ctx, self.storage, 1), [{"id": "<W first>", "last_opened_at": "<ms>"}])
+        self.answer(works_fixtures.etag_recent(self.db, self.ctx), 'W/"prks-recent-2-<ms>"')
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first), {"last_opened_at": "<ms>"})
 
     def test_opening_a_missing_work(self) -> None:
-        self.assertIs(self.library.mark_work_opened(_MISSING), False)
+        self.assertIs(work_commands.mark_opened(self.db, self.ctx, _MISSING), False)
         with self.assertRaises(ValueError):
-            self.library.mark_work_opened("  ")
+            work_commands.mark_opened(self.db, self.ctx, "  ")
 
     def test_a_metadata_patch_and_its_revisions(self) -> None:
         work_id = self.add("work", title="Work")
@@ -507,42 +509,41 @@ class AnswerTests(WorksAnswerTestCase):
         work = {"title": "Renamed", "status": "Completed", "abstract": "New abstract", "author_text": "Ann",
                 "doc_type": "book", "year": "1999", "urldate": "2024-01-02", "source_url": "https://e.org/x",
                 "hide_pdf_link_annotations": 1, "publisher": "Press", "updated_at": "<s>"}
-        self.assertEqual(self.library.update_work_metadata(work_id, patch), ())
-        self.answer(self.library.get_work(work_id), work)
+        self.assertIsNone(work_commands.update_metadata(self.db, self.ctx, work_id, patch))
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), work)
         self.answer(self.state(work_id), (patched, _notes("<W work>")))
         # The same values again change nothing and advance nothing.
-        self.library.update_work_metadata(work_id, patch)
+        work_commands.update_metadata(self.db, self.ctx, work_id, patch)
         self.answer(self.state(work_id), (patched, _notes("<W work>")))
         # An unknown document type is stored as misc; None clears.
-        self.library.update_work_metadata(work_id, {"doc_type": "nonsense", "year": None})
+        work_commands.update_metadata(self.db, self.ctx, work_id, {"doc_type": "nonsense", "year": None})
         cleared = _state("<W work>", **{**patched["fields"], "doc_type": {"revision": 2, "value": "misc"},
                                         "year": {"revision": 2, "value": ""}})
         self.answer(self.state(work_id), (cleared, _notes("<W work>")))
         row = {"id": "<W work>", "title": "Renamed", "doc_type": "misc", "year": "", "status": "Completed",
                "source_url": "https://e.org/x", "published_date": "1999-02"}
-        self.answer(self.library.get_all_works(), [{**row, "abstract": "New abstract", "urldate": "2024-01-02"}])
-        self.answer(self.library.get_works_browse_catalog(), [{**row, "abstract_excerpt": "New abstract"}])
-        self.answer(self.library.get_recently_added_browse(), [{**row, "publisher": "Press"}])
+        self.answer(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [{**row, "abstract": "New abstract", "urldate": "2024-01-02"}])
+        self.answer(work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir), [{**row, "abstract_excerpt": "New abstract"}])
+        self.answer(work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir), [{**row, "publisher": "Press"}])
 
     def test_pdf_fields(self) -> None:
         work_id = self.add_pdf("pdf", "a.pdf", title="Pdf", source_url="https://e.org/a")
-        self.library.update_work_metadata(
-            work_id, {"thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b"})
-        self.answer(self.library.get_work(work_id), {
+        work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b"})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {
             "thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b",
             "file_path": "/api/pdfs/a.pdf", "source_kind": "pdf"})
         self.answer(self.state(work_id), (
             _state("<W pdf>", source_url={"revision": 1}, thumb_page={"revision": 1, "value": "4"}),
             _notes("<W pdf>")))
-        self.answer(self.library.get_primary_thumbnail_fields(work_id), {
+        self.answer(work_commands.thumbnail_fields(self.db, self.ctx, work_id), {
             "file_path": "/api/pdfs/a.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 4})
         # The same page as text is no change.
-        self.library.update_work_metadata(work_id, {"thumb_page": "4"})
-        self.answer(require(self.library.get_work_metadata_state(work_id))["fields"]["thumb_page"],
+        work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": "4"})
+        self.answer(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["thumb_page"],
                     {"revision": 1, "value": "4"})
-        self.library.update_work_metadata(work_id, {"thumb_page": None})
-        self.answer(self.library.get_work(work_id), {"thumb_page": None})
-        self.answer(require(self.library.get_work_metadata_state(work_id))["fields"]["thumb_page"],
+        work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": None})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"thumb_page": None})
+        self.answer(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["thumb_page"],
                     {"revision": 2, "value": ""})
 
     def test_refused_patches_change_nothing(self) -> None:
@@ -561,53 +562,53 @@ class AnswerTests(WorksAnswerTestCase):
         ):
             with self.subTest(patch=sorted(patch)):
                 with self.assertRaises(ValueError):
-                    self.library.update_work_metadata(target, patch)
-        self.answer(self.library.get_work(work_id), {"title": "Work", "source_kind": None, "thumb_page": None,
+                    work_commands.update_metadata(self.db, self.ctx, target, patch)
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"title": "Work", "source_kind": None, "thumb_page": None,
                                                      "thumb_url": None, "year": "", "status": "Not Started"})
-        self.answer(self.library.get_work(video), {"source_url": _VIDEO, "provider_id": "dQw4w9WgXcQ"})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, video), {"source_url": _VIDEO, "provider_id": "dQw4w9WgXcQ"})
         for found, label in ((work_id, "<W work>"), (video, "<W video>")):
             self.answer(self.state(found), (_state(label), _notes(label)))
 
     def test_a_patch_of_nothing_or_of_a_missing_work(self) -> None:
         work_id = self.add("work", title="Work")
-        self.assertEqual(self.library.update_work_metadata(work_id, {}), ())
-        self.assertEqual(self.library.update_work_metadata(_MISSING, {"title": "Ghost"}), ())
-        self.assertIsNone(self.library.get_work_metadata_state(_MISSING))
-        self.assertIsNone(self.library.get_work_notes_state(_MISSING))
+        self.assertIsNone(work_commands.update_metadata(self.db, self.ctx, work_id, {}))
+        self.assertIsNone(work_commands.update_metadata(self.db, self.ctx, _MISSING, {"title": "Ghost"}))
+        self.assertIsNone(work_commands.metadata_state(self.db, self.ctx, _MISSING))
+        self.assertIsNone(work_commands.notes_state(self.db, self.ctx, _MISSING))
 
     def test_the_source_state(self) -> None:
         plain = self.add("plain", title="Plain")
         video = self.add("video", title="Video", source_url=_VIDEO)
-        self.answer(self.library.get_work_source_state(plain), {"revision": 0, "work_id": "<W plain>"})
-        self.answer(self.library.get_work_source_state(video), {"revision": 0, "work_id": "<W video>"})
-        self.assertIsNone(self.library.get_work_source_state(_MISSING))
+        self.answer(work_commands.source_state(self.db, self.ctx, plain), {"revision": 0, "work_id": "<W plain>"})
+        self.answer(work_commands.source_state(self.db, self.ctx, video), {"revision": 0, "work_id": "<W video>"})
+        self.assertIsNone(work_commands.source_state(self.db, self.ctx, _MISSING))
 
     def test_a_private_note_through_patch(self) -> None:
         work_id = self.add("work", title="Work", private_notes="first")
         for value, stored, revision in (("second", "second", 1), ("second", "second", 1),
                                         ("  spaced  ", "  spaced  ", 2), ("", None, 3), (None, None, 3)):
             with self.subTest(value=value):
-                self.library.update_work_metadata(work_id, {"private_notes": value})
-                self.answer(self.library.get_work(work_id), {"private_notes": stored})
+                work_commands.update_metadata(self.db, self.ctx, work_id, {"private_notes": value})
+                self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"private_notes": stored})
                 self.answer(self.state(work_id), (_state("<W work>"), _notes("<W work>", private=revision)))
 
     def test_deleting_works(self) -> None:
         plain = self.add("plain", title="Plain")
         video = self.add("video", title="Video", source_url=_VIDEO)
         for work_id, label in ((plain, "<W plain>"), (video, "<W video>")):
-            self.answer(require(self.library.delete_work_record(work_id)).__dict__,
+            self.answer(require(work_commands.delete(self.db, self.ctx, work_id)).__dict__,
                         {"file_path": "", "managed_pdf_still_referenced": False, "work_id": label})
-            self.assertIsNone(self.library.get_work(work_id))
-        self.assertIsNone(self.library.delete_work_record(_MISSING))
-        self.assertEqual(self.library.get_all_works(), [])
+            self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
+        self.assertIsNone(work_commands.delete(self.db, self.ctx, _MISSING))
+        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])
 
     def test_deleting_one_of_two_works_on_one_file(self) -> None:
         first = self.add_pdf("first", "shared.pdf", title="First")
         second = self.add("second", title="Second", file_path="/api/pdfs/shared.pdf")
-        self.answer(require(self.library.delete_work_record(first)).__dict__, {
+        self.answer(require(work_commands.delete(self.db, self.ctx, first)).__dict__, {
             "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": True, "work_id": "<W first>"})
-        self.answer(self.library.get_work(second), {
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, second), {
             "file_path": "/api/pdfs/shared.pdf", "file_size_bytes": 32, "asset_count": 1,
             "primary_asset_id": "<AS second>", "source_kind": "pdf"})
-        self.answer(require(self.library.delete_work_record(second, claim_pdf=False)).__dict__, {
+        self.answer(require(work_commands.delete(self.db, self.ctx, second, claim_pdf=False)).__dict__, {
             "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": False, "work_id": "<W second>"})

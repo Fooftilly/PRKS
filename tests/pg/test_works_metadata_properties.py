@@ -15,6 +15,7 @@ import random
 from typing import Any
 
 from tests.pg.test_works_metadata_sync import MetadataSyncTestCase
+from tests import works_fixtures
 
 FIELDS = ("doi", "isbn", "journal", "publisher", "location", "edition")
 ALPHABET = ("a", "Z", "9", " ", "/", ":", "|", '"', "\\", "'", "é", "λ", "中", "🔥")
@@ -27,7 +28,7 @@ def text(rng: random.Random) -> str:
 
 class MetadataPropertyTests(MetadataSyncTestCase):
     def fresh(self) -> str:
-        return self.library.add_work("Property work")
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, "Property work")
 
     def observed(self, work: str) -> dict[str, tuple[str, int]]:
         state = self.state(work)

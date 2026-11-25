@@ -38,6 +38,8 @@ from backend.storage.objects import (
 from backend.sync import protocol
 from backend.sync.families import Environment
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 DAY = 24 * 60 * 60
 
@@ -79,7 +81,7 @@ class ObjectsTestCase(WorksFacadeTestCase):
         return self.objects.stat(key(name)) is not None
 
     def work_with(self, obj: StoredObject) -> str:
-        return self.library.add_work("Paper", file_path=f"/api/pdfs/{obj.key.name}")
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=f"/api/pdfs/{obj.key.name}")
 
     def command(self, fn: Callable[[LibraryScope], Any], ctx: Any = None) -> Any:
         return library_command(self.db, ctx or self.actor.context, Capability.EDIT_LIBRARY, fn)
@@ -148,7 +150,7 @@ class ClaimTests(ObjectsTestCase):
         self.assertEqual(self.asset_of(work_id)["byte_size"], obj.size)
         self.assertEqual(self.asset_of(work_id)["content_sha256"], obj.sha256)
         self.assertEqual(self.claims(), {})
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         claim = self.claims()[obj.key.name]
         self.assertEqual((claim["namespace"], claim["library_id"], claim["hold"]),
                          (NAMESPACE_ASSET_OBJECTS, self.actor.library_id, False))
@@ -168,14 +170,14 @@ class ClaimTests(ObjectsTestCase):
                  "VALUES (%s, %s, %s, %s, 'managed_file', 'attachment', %s, %s, %s, 'upload')",
                  (self.actor.library_id, generate("AS"), manifestation, work_id, attachment.key.name,
                   pristine.key.name, attachment.sha256))
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         self.assertEqual(set(self.claims()), {primary.key.name, attachment.key.name, pristine.key.name})
         self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 3})
 
     def test_undoing_a_create_that_adopted_existing_bytes_claims_nothing(self) -> None:
         obj = self.put()
         work_id = self.work_with(obj)
-        self.library.delete_work_record(work_id, claim_pdf=False)
+        work_commands.delete(self.db, self.ctx, work_id, claim_pdf=False)
         self.assertEqual(self.count("works"), 0)
         self.assertEqual(self.claims(), {})
         self.assertTrue(self.stored(obj.key.name))
@@ -192,14 +194,14 @@ class ClaimTests(ObjectsTestCase):
     def test_a_key_another_asset_names_is_kept(self) -> None:
         shared = self.put()
         first, second = self.work_with(shared), self.work_with(shared)
-        self.library.delete_work_record(first)
+        work_commands.delete(self.db, self.ctx, first)
         self.assertEqual(self.claims(), {}, "another Asset still names the key")
         # A claim recorded anyway (a stale one) is retired, never acted on.
         self.claim(shared.key, self.actor.library_id)
         self.assertIs(self.settle(shared.key), Settled.REFERENCED)
         self.assertTrue(self.stored(shared.key.name))
         self.assertEqual(self.claims(), {})
-        self.library.delete_work_record(second)
+        work_commands.delete(self.db, self.ctx, second)
         self.assertIs(self.settle(shared.key), Settled.REMOVED)
 
     def test_identical_bytes_under_two_keys_are_two_objects(self) -> None:
@@ -207,7 +209,7 @@ class ClaimTests(ObjectsTestCase):
         one, two = self.put(b"same bytes"), self.put(b"same bytes")
         self.assertEqual(one.sha256, two.sha256)
         first, second = self.work_with(one), self.work_with(two)
-        self.library.delete_work_record(first)
+        work_commands.delete(self.db, self.ctx, first)
         self.assertEqual(set(self.claims()), {one.key.name})
         self.assertIs(self.settle(one.key), Settled.REMOVED)
         self.assertTrue(self.stored(two.key.name))
@@ -238,7 +240,7 @@ class ClaimTests(ObjectsTestCase):
         self.assertEqual(self.sweep(), 1)
         self.assertIsNone(self.claims()[obj.key.name]["library_id"])
         work_id = self.work_with(obj)
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         # Settling it now waits for this Library's backups (§11.3).
         self.assertEqual(self.claims()[obj.key.name]["library_id"], self.actor.library_id)
 
@@ -408,7 +410,7 @@ class IsolationTests(ObjectsTestCase):
 
     def test_a_key_another_library_released_cannot_be_adopted(self) -> None:
         obj = self.put()
-        self.library.delete_work_record(self.work_with(obj))
+        work_commands.delete(self.db, self.ctx, self.work_with(obj))
         other = self.other_actor()
         with self.assertRaises(ObjectMissing):
             self.create(obj, ctx=other.context)

@@ -26,6 +26,8 @@ from backend.web.etags import etag_for_representation
 from tests.narrowing import require
 from tests.pg.answers import AnswerAssertions
 from backend.domain.organization import folder_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class OrganizationTestCase(PeopleFacadeTestCase):
@@ -144,7 +146,7 @@ class IdentityTests(OrganizationTestCase):
 
 class LinkTests(OrganizationTestCase):
     def test_links_advance_their_scopes_and_no_op_edits_leave_no_row(self) -> None:
-        work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
+        work, folder, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.folder(), self.tag("Ethics")
         tag_commands.untag_work(self.db, self.ctx, work, tag)
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         tag_commands.tag_work(self.db, self.ctx, work, tag)
@@ -157,12 +159,12 @@ class LinkTests(OrganizationTestCase):
         self.assertEqual(tag_commands.folder_options(self.db, self.ctx, folder),
                          {"folder_id": folder, "assigned": [], "known_absent": {tag: 2}})
         self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [tag])
-        self.assertEqual(require(self.library.get_work(work))["tags"], library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)))
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["tags"], library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)))
         self.assertIsNone(tag_commands.work_options(self.db, self.ctx, generate("W")))
         self.assertIsNone(tag_commands.folder_options(self.db, self.ctx, generate("F")))
 
     def test_a_link_needs_its_work_folder_and_tag(self) -> None:
-        work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
+        work, folder, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.folder(), self.tag("Ethics")
         for call, args, message in (("tag_work", (generate("W"), tag), "work not found"),
                                     ("tag_work", (work, generate("T")), "tag not found"),
                                     ("tag_folder", (generate("F"), tag), "folder not found"),
@@ -175,12 +177,12 @@ class LinkTests(OrganizationTestCase):
         self.assertEqual(self.revisions("work-tag"), {})
 
     def test_a_work_delete_takes_its_links_and_tombstones_their_scopes(self) -> None:
-        work, tag = self.library.add_work("W"), self.tag("Ethics")
+        work, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.tag("Ethics")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         tag_commands.untag_work(self.db, self.ctx, work, tag)
         other = self.tag("Logic")
         tag_commands.tag_work(self.db, self.ctx, work, other)
-        self.assertIsNotNone(self.library.delete_work_record(work))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, work))
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 3,
                                                       links.WORK.scope_id(work, other): 2})
         self.assertEqual(self.count("work_tags"), 0)
@@ -194,8 +196,8 @@ class LinkTests(OrganizationTestCase):
 
 class DeleteTests(OrganizationTestCase):
     def test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle(self) -> None:
-        work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
-        unlinked = self.library.add_work("Unlinked")
+        work, folder, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.folder(), self.tag("Ethics")
+        unlinked = works_fixtures.add_work(self.db, self.ctx, self.storage, "Unlinked")
         tag_commands.add_alias(self.db, self.ctx, tag, "Morals")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         tag_commands.tag_folder(self.db, self.ctx, folder, tag)
@@ -220,7 +222,7 @@ class DeleteTests(OrganizationTestCase):
 
 
     def test_a_delete_in_a_failed_command_leaves_the_tag_and_its_links(self) -> None:
-        work, tag = self.library.add_work("W"), self.tag("Ethics")
+        work, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W"), self.tag("Ethics")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
 
         class Abort(Exception):
@@ -268,7 +270,7 @@ class TagIdentityTests(OrganizationTestCase):
         self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.ACTIVE})
 
     def test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag(self) -> None:
-        folder, work, tag = self.folder("Tagged"), self.library.add_work("Tagged work"), self.tag("SoleUse")
+        folder, work, tag = self.folder("Tagged"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Tagged work"), self.tag("SoleUse")
         tag_commands.tag_folder(self.db, self.ctx, folder, tag)
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
@@ -279,23 +281,23 @@ class TagIdentityTests(OrganizationTestCase):
 
     def test_bulk_tag_removal_keeps_the_tags(self) -> None:
         tag = self.tag("BulkTag")
-        works = [self.library.add_work("Bulk %d" % i) for i in range(3)]
+        works = [works_fixtures.add_work(self.db, self.ctx, self.storage, "Bulk %d" % i) for i in range(3)]
         for work in works:
             tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
-        self.library.bulk_update_works({"action": "remove_tags", "work_ids": works, "tag_ids": [tag]})
+        work_commands.bulk_update(self.db, self.ctx, {"action": "remove_tags", "work_ids": works, "tag_ids": [tag]})
         self.assertEqual([library_query(self.db, self.ctx, lambda scope, work=work: links.tags_of(scope, links.WORK, work)) for work in works], [[], [], []])
         self.assertEqual(self.count("tags"), 1)
 
     def test_deleting_a_work_keeps_its_tags(self) -> None:
-        work, tag = self.library.add_work("Doomed work"), self.tag("OnlyOnThisWork")
+        work, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "Doomed work"), self.tag("OnlyOnThisWork")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
         self.run_command(lambda scope: commands.delete_work(scope, work), serializable=True)
         self.assertEqual((self.count("works"), self.count("work_tags"), self.count("tags")), (0, 0, 1))
 
     def test_an_explicit_delete_destroys_the_tag_and_all_its_links(self) -> None:
-        work, folder, tag = self.library.add_work("Explicit"), self.folder("Explicit"), self.tag("Doomed")
+        work, folder, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "Explicit"), self.folder("Explicit"), self.tag("Doomed")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         tag_commands.tag_folder(self.db, self.ctx, folder, tag)
         tag_commands.delete(self.db, self.ctx, tag)
@@ -303,7 +305,7 @@ class TagIdentityTests(OrganizationTestCase):
                          (0, [], []))
 
     def test_a_merge_destroys_only_the_source_tag(self) -> None:
-        work, source, target = self.library.add_work("Merged"), self.tag("Source"), self.tag("Target")
+        work, source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Merged"), self.tag("Source"), self.tag("Target")
         tag_commands.tag_work(self.db, self.ctx, work, source)
         tag_commands.merge(self.db, self.ctx, source, target)
         self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [target])
@@ -315,7 +317,7 @@ class MergeTests(OrganizationTestCase):
         source, target = self.tag("Moral philosophy"), self.tag("Ethics")
         tag_commands.add_alias(self.db, self.ctx, source, "Morals")
         tag_commands.add_alias(self.db, self.ctx, target, "Ethik")
-        only_source, both = self.library.add_work("Only"), self.library.add_work("Both")
+        only_source, both = works_fixtures.add_work(self.db, self.ctx, self.storage, "Only"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Both")
         folder = self.folder()
         for work in (only_source, both):
             tag_commands.tag_work(self.db, self.ctx, work, source)
@@ -372,14 +374,14 @@ class MergeTests(OrganizationTestCase):
 
 class IsolationTests(OrganizationTestCase):
     def test_another_librarys_tags_are_invisible_and_untouchable(self) -> None:
-        tag, work = self.tag("Ethics"), self.library.add_work("W")
+        tag, work = self.tag("Ethics"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             self.assertEqual(tag_commands.all_tags(self.db, self.ctx), [])
             self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Ethics")))
             theirs = tag_commands.create(self.db, self.ctx, "Ethics")  # the namespace is per Library
             self.assertFalse(theirs["existed"])
-            their_work = self.library.add_work("Theirs")
+            their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
             for call, args in (("tag_work", (their_work, tag)), ("tag_work", (work, theirs["id"])),
                                ("add_alias", (tag, "x")), ("delete", (tag,)),
                                ("merge", (theirs["id"], tag))):
@@ -391,7 +393,7 @@ class IsolationTests(OrganizationTestCase):
         self.assertEqual(self.lifecycle_of(theirs["id"]), {"state": lifecycle.UNKNOWN})
 
     def test_a_reader_reads_tags_but_cannot_change_them(self) -> None:
-        tag, work = self.tag("Ethics"), self.library.add_work("W")
+        tag, work = self.tag("Ethics"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with facade_context.acting_as(self.reader_context()):
             self.assertEqual(len(tag_commands.all_tags(self.db, self.ctx)), 1)
             for call, args in (("create", ("New",)), ("tag_work", (work, tag)), ("delete", (tag,))):
@@ -429,7 +431,7 @@ class ConcurrencyTests(OrganizationTestCase):
         self.assert_integrity()
 
     def test_a_link_to_the_source_waits_for_the_merge_and_is_refused(self) -> None:
-        source, target, work = self.tag("A"), self.tag("B"), self.library.add_work("W")
+        source, target, work = self.tag("A"), self.tag("B"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(lambda scope: tags.merge(scope, source, target, generate("L")),
                                       lambda: tag_commands.tag_work(self.db, self.ctx, work, source), serializable=True)
         self.assertEqual(holder["canonical_tag_id"], target)
@@ -438,7 +440,7 @@ class ConcurrencyTests(OrganizationTestCase):
         self.assert_integrity()
 
     def merge_after_link(self, *, serializable: bool) -> None:
-        source, target, work = self.tag("A"), self.tag("B"), self.library.add_work("W")
+        source, target, work = self.tag("A"), self.tag("B"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
 
         def link(scope: LibraryScope) -> None:
             links.edit(scope, links.WORK, work, source, True)
@@ -479,7 +481,7 @@ class ConcurrencyTests(OrganizationTestCase):
         self.assert_integrity()
 
     def test_a_link_waits_for_the_delete_and_is_refused(self) -> None:
-        tag, work = self.tag("A"), self.library.add_work("W")
+        tag, work = self.tag("A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         holder, contender = self.race(lambda scope: tags.delete_tag(scope, tag),
                                       lambda: tag_commands.tag_work(self.db, self.ctx, work, tag))
         self.assertTrue(holder[0])
@@ -487,14 +489,14 @@ class ConcurrencyTests(OrganizationTestCase):
         self.assertEqual(self.count("work_tags"), 0)
 
     def linked(self) -> tuple[str, str, str]:
-        tag, work = self.tag("Ethics"), self.library.add_work("W")
+        tag, work = self.tag("Ethics"), works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         return tag, work, links.WORK.scope_id(work, tag)
 
     def test_a_work_delete_waits_for_a_tag_delete(self) -> None:
         tag, work, scope_id = self.linked()
         holder, contender = self.race(lambda scope: tags.delete_tag(scope, tag),
-                                      lambda: self.library.delete_work_record(work))
+                                      lambda: work_commands.delete(self.db, self.ctx, work))
         self.assertTrue(holder[0])
         self.assertIsNotNone(contender)
         # The removal advanced the scope, then the tombstone.
@@ -522,7 +524,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         return self.labels.name(self.create(name)["id"], f"<T {name}>")
 
     def named_work(self, title: str) -> str:
-        return self.labels.name(self.library.add_work(title), f"<W {title}>")
+        return self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, title), f"<W {title}>")
 
     def named_folder(self, title: str) -> str:
         return self.labels.name(self.folder(title), f"<F {title}>")
@@ -578,7 +580,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         row = {"color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"}
         self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)), [row])
         self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.FOLDER, folder)), [row])
-        self.answer(require(self.library.get_work(work))["tags"], [row])
+        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["tags"], [row])
         self.answer(tag_commands.in_use(db, ctx), [{**row, "aliases": [], "folder_count": 1, "work_count": 1}])
         self.assertIsNone(tag_commands.work_options(db, ctx, "W-" + "0" * 32))
 
