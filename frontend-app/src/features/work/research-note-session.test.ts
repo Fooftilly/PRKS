@@ -3,9 +3,13 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import worksSource from '../../../../frontend/js/components/works.js?raw'
-import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workNotesStateClassic from '../../../../frontend/js/work-notes-state.js?raw'
+import syncReconcileSource from '../../../../frontend/js/sync-reconcile.js?raw'
 import easyMdeVendorSource from '../../../../frontend/vendor/easymde/easymde.min.js?raw'
 import { presentWorkResearchNotes, registerWorkResearchNotesBridge, resetWorkResearchNotesForTests } from './research-note-session'
+
+// The notes state loads the shared ACK core as the page does, from its global.
+const workNotesStateSource = syncReconcileSource + '\n' + workNotesStateClassic
 
 type NoteEntry = {
   workId: string

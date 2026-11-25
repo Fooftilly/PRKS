@@ -130,8 +130,9 @@ var prksSyncReconcile = (function(exports) {
 		const next = carryObservation(value, owner.patch(value));
 		owner.set(next);
 		if (plan === "unproven") adoptFresh(owner.read, owner.get, next, (fresh) => {
-			owner.set(fresh);
-			if (owner.adopted) owner.adopted(fresh);
+			const value = owner.merge ? carryObservation(fresh, owner.merge(next, fresh)) : fresh;
+			owner.set(value);
+			if (owner.adopted) owner.adopted(value);
 		}).catch(() => false);
 		return plan;
 	}

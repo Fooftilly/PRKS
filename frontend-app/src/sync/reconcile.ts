@@ -228,6 +228,13 @@ export interface OwnerValue<T extends object> {
   patch(value: T): T
   /** An authoritative re-read of the whole value. */
   read(): Promise<FreshRead<T> | null | undefined>
+  /**
+   * The value to adopt from `fresh` while the owner holds `held`. Without it
+   * the whole fresh value replaces the held one. An owner whose held value
+   * carries more than this family (pending edits of other families, another
+   * family's newer ACK) takes only this family's part from the re-read.
+   */
+  merge?(held: T, fresh: T): T
   /** Called after a re-read replaced the value, to repaint. */
   adopted?(value: T): void
 }
@@ -256,8 +263,11 @@ export function applyOwnerAck<T extends object>(
   owner.set(next)
   if (plan === 'unproven') {
     adoptFresh(owner.read, owner.get, next, (fresh) => {
-      owner.set(fresh)
-      if (owner.adopted) owner.adopted(fresh)
+      // A merged value is stamped with the re-read's time: part of it is
+      // that new, so a later ACK must not prove itself against an older one.
+      const value = owner.merge ? carryObservation(fresh, owner.merge(next, fresh)) : fresh
+      owner.set(value)
+      if (owner.adopted) owner.adopted(value)
     }).catch(() => false)
   }
   return plan

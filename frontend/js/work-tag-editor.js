@@ -144,11 +144,50 @@
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         state.readVersion = (state.readVersion || 0) + 1;
         const held = state.options ? root.prksWorkTagBase(state.options, ack.tag_id).revision : null;
-        const plan = applyWorkTagAck(ctx, ack, op, held, () => {
-            if (live(ctx, state)) void paint(ctx, state).catch(() => {});
-        });
+        const plan = applyWorkTagAck(ctx, ack, op, held);
         if (plan === 'superseded') return;
         if (state.options) setOptionsBase(state.options, ack.tag_id, ack.present, ack.server_revision);
+        // An ACK during a refresh cancelled its read (readVersion): read again.
+        if (state.refreshing) refreshOptions(ctx, state);
+    }
+    /* A re-read moved the Work past the options base (another device's link
+     * change), so an edit made against the old base could be a no-op or the
+     * wrong direction. Editing waits for options read after it. */
+    function refreshOptions(ctx, state) {
+        if (!live(ctx, state)) return;
+        state.options = null;
+        state.refreshing = true;
+        state.refreshTries = 0;
+        state.preparing = prepare(ctx, state, { dedupe: false });
+    }
+    /* The links of the held Work, read again from the server. Only the links
+     * are taken, and only while this tab still holds the value it read past. */
+    async function rereadLinks(ctx, state, readVersion) {
+        const id = state.workId;
+        const held = ctx.getEntity('work');
+        if (!held || held.id !== id) return;
+        await reconcileCore.adoptFresh(
+            () => root.prksOfflineReadEntity('work', id, '/api/works/' + encodeURIComponent(id), { validate: value => !!value && value.id === id, requestPolicy: { dedupe: false } }),
+            // A parked or superseded editor no longer owns the held links.
+            () => (live(ctx, state) && readVersion === state.readVersion ? ctx.getEntity('work') : null), held,
+            fresh => ctx.setEntity('work', reconcileCore.carryObservation(fresh,
+                { ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags })));
+    }
+    function refreshMountedOptions(ctx, workId) {
+        const current = ctx.getResource('workTagEditor');
+        if (current && current.workId === workId) refreshOptions(ctx, current);
+    }
+    /* A corrective refresh takes only a server answer that agrees with the
+     * adopted links. A cached fallback still holds the delayed ACK's base, and
+     * two server reads can straddle another device's change: either would let
+     * an edit coalesce against the wrong base, so editing stays off. */
+    function consistentOptions(ctx, state, read) {
+        if (!read || read.source !== 'server' || !read.value) return false;
+        const owner = ctx.getEntity('work');
+        if (!owner || owner.id !== state.workId || !Array.isArray(owner.tags)) return false;
+        const shown = new Set(owner.tags.map(t => t.id));
+        const based = new Set(read.value.assigned.map(t => t.tag_id));
+        return shown.size === based.size && [...shown].every(id => based.has(id));
     }
     /**
      * One Tag-link ACK into this owner's Work, under the shared ordering rule
@@ -156,7 +195,7 @@
      * link, and a Work this tab cannot prove older than the ACK is patched and
      * then re-read from the server, whose answer wins.
      */
-    function applyWorkTagAck(ctx, ack, op, heldRevision, adopted) {
+    function applyWorkTagAck(ctx, ack, op, heldRevision) {
         return reconcileCore.applyOwnerAck({
             ackRevision: ack.server_revision,
             heldRevision,
@@ -173,10 +212,18 @@
                 if (ack.present) tags.push(ack.tag);
                 return { ...work, tags };
             },
+            // A corrective read must start after the ACK, never join an older flight.
             read: () => root.prksOfflineReadEntity('work', ack.work_id,
                 '/api/works/' + encodeURIComponent(ack.work_id),
-                { validate: value => !!value && value.id === ack.work_id }),
-            adopted,
+                { validate: value => !!value && value.id === ack.work_id, requestPolicy: { dedupe: false } }),
+            // Only the links come from the re-read: the held Work also carries
+            // pending Folder, Playlist and source values and other ACKs.
+            merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
+            /* The editor mounted when the re-read lands, not the one that
+             * started it: a warm park and resume replaces the editor while
+             * keeping this Work, and the new one measures edits against
+             * options read before the links moved. */
+            adopted: () => refreshMountedOptions(ctx, ack.work_id),
         });
     }
     function setOptionsBase(options, tagId, present, revision) {
@@ -188,15 +235,35 @@
     /** Entity-only tag acknowledgement for a parked owner. No options, no paint. */
     function applyWorkTagEntityAck(ctx, ack, op) {
         if (!ctx || !ack || !Number.isSafeInteger(ack.server_revision)) return;
-        applyWorkTagAck(ctx, ack, op, null, null);
+        applyWorkTagAck(ctx, ack, op, null);
     }
-    async function prepare(ctx, state) {
+    async function prepare(ctx, state, requestPolicy) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
             const [options, catalog] = await Promise.allSettled([
-                root.prksReadWorkTagOptions(state.workId), root.prksReadTagsIndex(),
+                root.prksReadWorkTagOptions(state.workId, requestPolicy ? { requestPolicy } : undefined),
+                root.prksReadTagsIndex(),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (state.refreshing) {
+                const read = options.status === 'fulfilled' ? options.value : null;
+                if (!consistentOptions(ctx, state, read)) {
+                    state.options = null;
+                    // Another device may have moved a link between the reads: read again, a bounded number of times.
+                    if (read && read.source === 'server' && (state.refreshTries = (state.refreshTries || 0) + 1) < 3) {
+                        // Either read may be the older one, so both are read again.
+                        await rereadLinks(ctx, state, readVersion);
+                        if (!live(ctx, state) || readVersion !== state.readVersion) return;
+                        await (state.preparing = prepare(ctx, state, { dedupe: false }));
+                        return;
+                    }
+                    state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
+                    state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
+                    await paint(ctx, state);
+                    return;
+                }
+            }
+            state.refreshing = false;
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
             state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
@@ -397,7 +464,11 @@
              * this Tag alone, and another Tag's base must never run ahead of
              * the chip it is measured against. */
             if (state.options) setOptionsBase(state.options, tagId, base.present, base.revision);
-            else state.options = read.value;
+            // A corrective refresh installs only options it proved consistent.
+            else if (!state.refreshing) state.options = read.value;
+            // Superseding a corrective refresh (readVersion) must not end it:
+            // start it again past this read, or editing stays off for good.
+            if (state.refreshing) refreshOptions(ctx, state);
             return base;
         }
         if (outcome === 'settled') return null;
@@ -431,8 +502,12 @@
             (work.tags || []).find(t => t.id === tagId) ||
             (state.catalog || []).find(t => t.id === tagId);
         if (!base.present || tag) {
-            applyWorkTagEntityAck(ctx, { work_id: state.workId, tag_id: tagId, present: base.present,
-                server_revision: base.revision, tag }, op);
+            /* The mounted editor's own adoption: a corrective re-read that
+             * replaces the links also refreshes the options it measures edits
+             * against, under the same consistency checks as acceptAck. */
+            const ack = { work_id: state.workId, tag_id: tagId, present: base.present,
+                server_revision: base.revision, tag };
+            applyWorkTagAck(ctx, ack, op, state.options ? base.revision : null);
         }
         return base;
     }
