@@ -81,7 +81,8 @@ a row) is proven by its read finishing before the operation was created
 Otherwise the cache drops the value and a live owner re-reads it
 (`applyOwnerAck`). Pending overlays fold the queue with `overlay`. Never
 hand-write another revision comparison in a family. Ported so far: Tag links
-(Work and Folder), Work source, Work notes. See *ACK ordering: one shared core* in
+(Work and Folder), Work source, Work notes, Folder fields, Work filing,
+Person Group fields and memberships. See *ACK ordering: one shared core* in
 `docs/local-first-sync.md`.
 
 A family becomes durable only by being *implemented* as one — a semantic
