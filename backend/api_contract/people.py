@@ -82,7 +82,7 @@ class PersonProfile(BaseModel):
     id: str
     first_name: Optional[str]
     last_name: Optional[str]
-    aliases: str = Field(description="The aliases, one per line; empty when none.")
+    aliases: str = Field(description="The aliases, comma-separated; empty when none.")
     about: Optional[str]
     image_url: Optional[str]
     link_wikipedia: Optional[str]
@@ -141,7 +141,7 @@ class PersonCreateRequest(BaseModel):
 
     first_name: Optional[str] = omittable()
     last_name: Optional[str] = omittable()
-    aliases: Optional[str] = omittable("One per line.")
+    aliases: Optional[str] = omittable("Comma-separated.")
     about: Optional[str] = omittable()
     image_url: Optional[str] = omittable("A public http(s) URL (else 400).")
     link_wikipedia: Optional[str] = omittable()

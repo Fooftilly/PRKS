@@ -59,6 +59,15 @@ class CatalogTests(ServerApiTestCase):
         playlist = self.ok(self.get(f"/api/playlists/{playlist_id}"))
         self.assertIn(work_id, [item.get("id") for item in playlist.get("items") or []])
 
+    def test_a_refused_playlist_value_or_a_missing_playlist_is_not_a_server_error(self) -> None:
+        long_title = "x" * 301
+        self.assertIn("title", self.refused(self.send("POST", "/api/playlists", {"title": long_title}), 400)["error"])
+        playlist_id = self.ok(self.send("POST", "/api/playlists", {"title": "Bounded"}))["id"]
+        self.refused(self.send("PATCH", f"/api/playlists/{playlist_id}", {"title": long_title}), 400)
+        self.assertEqual(self.ok(self.get(f"/api/playlists/{playlist_id}"))["title"], "Bounded")
+        missing = self.refused(self.send("PATCH", f"/api/playlists/{generate('PL')}", {"title": "Gone"}), 404)
+        self.assertEqual(missing["error"], "Playlist not found.")
+
     def test_a_folder_that_holds_a_work_refuses_deletion(self) -> None:
         folder_id = self.ok(self.send("POST", "/api/folders", {"title": "Conflict Folder", "description": ""}))["id"]
         self.create_work("Foldered Work", status="Planned", folder_id=folder_id)

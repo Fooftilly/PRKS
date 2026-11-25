@@ -42,7 +42,8 @@ def list_tags(req: Request) -> Response:
     from backend.domain.organization import tag_commands
 
     if req.query_value("used") in ("1", "true", "yes"):
-        return json_response(req, 200, tag_commands.in_use(*req.actor))
+        used = tag_commands.in_use(*req.actor)
+        return json_response(req, 200, used, etag=etag_for_representation("tags-in-use", used))
     data = tag_commands.all_tags(*req.actor)
     return json_response(req, 200, data, etag=etag_for_representation("tags", data))
 
@@ -162,7 +163,7 @@ def delete(req: Request) -> Response:
 _TAG = "tags"
 _REFUSED = error("A domain refusal, with its message (a blank, unknown or merged Tag, a taken name).")
 _USED = Param("used", schema={"type": "string", "enum": ["1", "true", "yes"]},
-              description="Only the Tags linked to a Work or a Folder, with the counts (no ETag).")
+              description="Only the Tags linked to a Work or a Folder, with the counts.")
 
 
 def _options(op_id: str, owner: str, schema: object) -> Operation:

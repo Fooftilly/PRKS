@@ -4707,7 +4707,14 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "description": "A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/NotAuthenticated"
@@ -4883,13 +4890,30 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "description": "A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/NotAuthenticated"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Playlist with that id (a change was sent).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           },
           "409": {
             "$ref": "#/components/responses/EpochChanged"
@@ -5087,6 +5111,7 @@
         "tags": [
           "playlists"
         ],
+        "description": "Unknown and repeated ids are ignored; the members left out follow the named ones in their current order.",
         "parameters": [
           {
             "name": "PRKS-Library-Epoch",
@@ -5123,7 +5148,7 @@
             }
           },
           "400": {
-            "description": "``work_ids`` is not an array, or not exactly the member Works. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "description": "``work_ids`` is not an array, or no such Playlist. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -7964,7 +7989,7 @@
                 "yes"
               ]
             },
-            "description": "Only the Tags linked to a Work or a Folder, with the counts (no ETag)."
+            "description": "Only the Tags linked to a Work or a Folder, with the counts."
           },
           {
             "name": "If-None-Match",
@@ -12232,10 +12257,12 @@
       "BulkMoveFolder": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -12267,10 +12294,12 @@
       "BulkSetStatus": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -12295,10 +12324,12 @@
       "BulkTags": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -12311,10 +12342,12 @@
             "type": "string"
           },
           "tag_ids": {
-            "description": "The Tags to add or remove; at least one.",
+            "description": "The Tags to add or remove: 1 to 500 entries; the limit counts repeats.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Tag Ids",
             "type": "array"
           }
@@ -13526,28 +13559,14 @@
       "FolderCreateRequest": {
         "properties": {
           "title": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
             "description": "Left out: ``Untitled Folder``.",
-            "title": "Title"
+            "title": "Title",
+            "type": "string"
           },
           "description": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
             "description": "Left out: empty.",
-            "title": "Description"
+            "title": "Description",
+            "type": "string"
           },
           "parent_id": {
             "anyOf": [
@@ -14991,7 +15010,7 @@
             "title": "Last Name"
           },
           "aliases": {
-            "description": "The aliases, one per line; empty when none.",
+            "description": "The aliases, comma-separated; empty when none.",
             "title": "Aliases",
             "type": "string"
           },
@@ -15161,7 +15180,7 @@
                 "type": "null"
               }
             ],
-            "description": "One per line.",
+            "description": "Comma-separated.",
             "title": "Aliases"
           },
           "about": {
@@ -15287,7 +15306,7 @@
             "title": "Last Name"
           },
           "aliases": {
-            "description": "The aliases, one per line; empty when none.",
+            "description": "The aliases, comma-separated; empty when none.",
             "title": "Aliases",
             "type": "string"
           },
@@ -15941,7 +15960,7 @@
                 "type": "null"
               }
             ],
-            "description": "One per line.",
+            "description": "Comma-separated.",
             "title": "Aliases"
           },
           "about": {

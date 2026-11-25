@@ -192,8 +192,8 @@ class FolderDetail(Folder):
 class FolderCreateRequest(BaseModel):
     model_config = _IGNORE
 
-    title: Optional[str] = omittable("Left out: ``Untitled Folder``.")
-    description: Optional[str] = omittable("Left out: empty.")
+    title: str = omittable("Left out: ``Untitled Folder``.")
+    description: str = omittable("Left out: empty.")
     parent_id: Optional[str] = omittable("Left out or null: a root Folder.")
 
 

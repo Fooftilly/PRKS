@@ -4,7 +4,8 @@
 that, while a test server serves it:
 
 - the answer's status is one the route's operation documents (its own or a
-  shared refusal of ``backend.api_contract.openapi``);
+  shared refusal of ``backend.api_contract.openapi``), with every header
+  that status documents as required;
 - a JSON answer validates against the documented schema for that status
   (a ``gzip`` Content-Encoding is undone first), and an answer with no body
   is one whose status documents none;
@@ -79,6 +80,9 @@ class ContractCheck:
         if reply is None:
             self.violations.append(f"{where}: status not documented")
             return
+        for name, header in (self._reply(reply).get("headers") or {}).items():
+            if header.get("required") and response.header(name) is None:
+                self.violations.append(f"{where}: required header {name} missing")
         content = self._reply(reply).get("content") or {}
         media = (response.header("Content-Type") or "").split(";", 1)[0].strip().lower()
         if response.stream is None and route.method != "HEAD":

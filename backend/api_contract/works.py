@@ -402,7 +402,8 @@ class WorkStatus(BaseModel):
 class _BulkWorks(BaseModel):
     model_config = _IGNORE
 
-    work_ids: list[str] = Field(description="1 to 500 Work ids; repeats count once.")
+    work_ids: list[str] = Field(min_length=1, max_length=500, description=(
+        "1 to 500 entries; the limit counts repeats, which then count once."))
 
 
 class BulkSetStatus(_BulkWorks):
@@ -418,7 +419,8 @@ class BulkMoveFolder(_BulkWorks):
 
 class BulkTags(_BulkWorks):
     action: Literal["add_tags", "remove_tags"]
-    tag_ids: list[str] = Field(description="The Tags to add or remove; at least one.")
+    tag_ids: list[str] = Field(min_length=1, max_length=500, description=(
+        "The Tags to add or remove: 1 to 500 entries; the limit counts repeats."))
 
 
 BulkWorkRequest = Annotated[Union[BulkSetStatus, BulkMoveFolder, BulkTags], Field(discriminator="action")]
