@@ -147,6 +147,9 @@ async function onSave(): Promise<void> {
 function onNameKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Enter' || event.isComposing || event.defaultPrevented) return
   event.preventDefault()
+  // A held key is one decision: its repeats must not save again once a
+  // conflict refreshed the revision -- that needs a second press.
+  if (event.repeat) return
   void onSave()
 }
 

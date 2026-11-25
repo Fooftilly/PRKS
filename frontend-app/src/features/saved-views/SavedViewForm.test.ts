@@ -167,6 +167,15 @@ describe('Saved View form', () => {
     expect(h.records.create).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores a held Enter key: its repeats are not another save', async () => {
+    window.prksOpenSavedViewModal?.({ definition: { mode: 'all', q: 'x' } })
+    await flush()
+    await type('saved-view-name', 'Held view')
+    input('saved-view-name').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, repeat: true }))
+    await flush()
+    expect(h.records.create).not.toHaveBeenCalled()
+  })
+
   it('shows and hides fields by mode', async () => {
     window.prksOpenSavedViewModal?.({ definition: { mode: 'all', q: 'x' } })
     await flush()

@@ -169,6 +169,61 @@ describe('SettingsExport BibTeX toggles', () => {
     expect(patches).toEqual([{ url: false }])
   })
 
+  /* PRKS answers each PATCH only when the test releases it. */
+  function holdPatches(): Array<() => void> {
+    const held: Array<() => void> = []
+    const patch = win.prksPatchAppSettings!
+    win.prksPatchAppSettings = vi.fn((partial) => {
+      return new Promise((resolve) => {
+        held.push(() => resolve(patch(partial)))
+      })
+    }) as StyleWindow['prksPatchAppSettings']
+    return held
+  }
+
+  it('sends one toggle patch at a time, so an older one never lands last', async () => {
+    const held = holdPatches()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(held).toHaveLength(1)
+    held[0]()
+    await flushPromises()
+    expect(held).toHaveLength(2)
+    held[1]()
+    await flushPromises()
+    expect(patches).toEqual([{ url: false }, { url: true }])
+    expect(server.url).toBe(true)
+    expect(isOn(wrapper, 'url')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('waits for a pending toggle before restoring, and shows the restored defaults', async () => {
+    const held = holdPatches()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    await wrapper.get('#prks-bibtex-export-reset').trigger('click')
+    await flushPromises()
+    expect(held).toHaveLength(1)
+    held[0]()
+    await flushPromises()
+    expect(isOn(wrapper, 'url')).toBe(true) // the older answer does not repaint over the reset
+    expect(held).toHaveLength(2)
+    held[1]()
+    await flushPromises()
+    expect(patches).toEqual([{ url: false }, { author: true, doi: true, url: true }])
+    expect(['author', 'doi', 'url'].every((id) => isOn(wrapper, id))).toBe(true)
+    wrapper.unmount()
+  })
+
   it('restores every toggle explicitly', async () => {
     const wrapper = mount(SettingsExport)
     await flushPromises()

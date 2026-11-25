@@ -92,24 +92,32 @@ function currentMap(): Record<string, boolean> {
  * saved meanwhile; PRKS merges a partial map under its row lock (#889). */
 let changed: Record<string, boolean> = {}
 let inFlight = 0
+let queue: Promise<void> = Promise.resolve()
+
+/* Every write of the toggles -- a debounced patch or Restore defaults -- runs
+ * after the one before it, so an older patch can never land after a newer
+ * one. Once nothing of ours is waiting, the switches show what PRKS holds:
+ * our toggles merged with any another session saved. */
+function send(patch: Record<string, boolean>): Promise<void> {
+  inFlight += 1
+  const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
+    .then(() => undefined, (error: unknown) => {
+      console.warn(error)
+    })
+  queue = run
+  return run.finally(() => {
+    inFlight -= 1
+    if (inFlight || timer || Object.keys(changed).length) return
+    const stored = window.__prksBibtexExportFields
+    if (stored && typeof stored === 'object') applyMap(stored)
+  })
+}
 
 function flush(): void {
   const patch = changed
   changed = {}
   if (!Object.keys(patch).length) return
-  inFlight += 1
-  void Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch }))
-    .catch((error: unknown) => {
-      console.warn(error)
-    })
-    .finally(() => {
-      inFlight -= 1
-      // Once nothing of ours is waiting, show what PRKS holds: our toggles
-      // merged with any another session saved.
-      if (inFlight || timer || Object.keys(changed).length) return
-      const stored = window.__prksBibtexExportFields
-      if (stored && typeof stored === 'object') applyMap(stored)
-    })
+  void send(patch)
 }
 
 function persist(id: string, on: boolean): void {
@@ -140,11 +148,7 @@ async function restoreDefaults(): Promise<void> {
   timer = 0
   changed = {}
   // Restore defaults is an explicit choice about every toggle, so it sends all of them.
-  try {
-    await window.prksPatchAppSettings?.({ bibtex_export_fields: allTrue })
-  } catch (error) {
-    console.warn(error)
-  }
+  await send(allTrue)
 }
 
 onMounted(async () => {
