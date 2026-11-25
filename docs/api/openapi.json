@@ -5100,7 +5100,7 @@
             }
           },
           "400": {
-            "description": "A value past its limit (title 300 bytes, the others 4000); other values are sent as their text. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "description": "A value past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
             "content": {
               "application/json": {
                 "schema": {
