@@ -1,5 +1,5 @@
 import { nextTick } from 'vue'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
@@ -103,6 +103,7 @@ type LifecycleWindow = {
   prksCanonicalWorkSource: (value: string) => { source_url: string; provider: string; provider_id: string } | null
   prksEffectiveWorkSource: (work: WorkRecord) => WorkRecord
   prksWorkSourceOf: (work: unknown) => { source_url: string }
+  prksAcknowledgedWorkSource: (data: Record<string, unknown>) => Record<string, unknown>
   prksWorkSourceIdentity: (source: { provider_id?: string; source_url?: string }) => string
   prksOfflineReadEntity: (type: string, id: string) => Promise<{ source: string; value: WorkRecord & { revision?: number; work_id?: string } }>
   prksRefreshPendingWorkSources: () => Promise<unknown[]>
@@ -535,10 +536,10 @@ describe('work metadata editor lifecycle', () => {
       return { source_url: String(source.source_url || '') }
     }
     panelWindow.prksWorkSourceIdentity = source => source.source_url || ''
-    const reads: Array<ReturnType<typeof deferred<{ source: string; value: WorkRecord & { revision?: number } }>>> = []
+    const reads: Array<ReturnType<typeof deferred<{ source: string; value: WorkRecord & { revision?: number; work_id?: string } }>>> = []
     let paints = 0
     panelWindow.prksOfflineReadEntity = () => {
-      const gate = deferred<{ source: string; value: WorkRecord & { revision?: number } }>()
+      const gate = deferred<{ source: string; value: WorkRecord & { revision?: number; work_id?: string } }>()
       reads.push(gate)
       return gate.promise
     }
@@ -552,14 +553,13 @@ describe('work metadata editor lifecycle', () => {
     panelWindow.prksMountWorkSourceEditor(ctx, 'work-a', { editing: true })
     const secondPrepare = state?.preparing
     if (!state || !firstPrepare || !secondPrepare) throw new Error('source read missing')
-    // The revision is read first; the Work only after it answers.
+    // One source-state read each: the revision with its source.
     expect(reads.length).toBe(2)
     const newerWork = work()
     newerWork.source_url = 'https://example.test/newer'
-    reads[1].resolve({ source: 'server', value: { ...newerWork, revision: 7 } })
-    await vi.waitFor(() => expect(reads.length).toBe(3))
-    reads[2].resolve({ source: 'server', value: newerWork })
+    reads[1].resolve({ source: 'server', value: { ...newerWork, revision: 7, work_id: 'work-a' } })
     await secondPrepare
+    expect(reads.length).toBe(2)
     expect(state.observed).toEqual({ revision: 7, identity: 'https://example.test/newer' })
     const paintsAfterNewer = paints
     reads[0].reject(new Error('stale source read'))
@@ -596,4 +596,12 @@ function installEditorRuntime() {
   panelWindow.prksOfflineRuntimeState = () => 'online'
   panelWindow.prksRefreshPendingWorkSources = () => Promise.resolve([])
   panelWindow.prksWorkSourceOperations = () => []
+  panelWindow.prksAcknowledgedWorkSource = data => ({
+    source_kind: data.source_kind,
+    provider: data.provider,
+    provider_id: data.provider_id,
+    source_url: data.source_url,
+    thumb_url: data.thumb_url,
+    urldate: data.urldate,
+  })
 }
