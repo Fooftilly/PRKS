@@ -81,6 +81,9 @@ class Operation:
     request: Optional[RequestBody] = None
     params: tuple[Param, ...] = ()
     description: str = ""
+    #: The session cookie an ``/api/`` operation needs: ``none`` for sign-in
+    #: and setup, ``optional`` where admission answers without one too.
+    session: Literal["required", "optional", "none"] = "required"
 
     def head(self) -> Operation:
         """The same operation answered to ``HEAD``: no bodies, the same headers."""

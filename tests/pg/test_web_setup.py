@@ -41,6 +41,7 @@ from backend.server import start_setup_server
 from backend.web.hosts import parse_request_origin
 from backend.storage import root_marker
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent, read_bootstrap_config
+from tests.contract_check import ContractCheck
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
 
 
@@ -263,6 +264,16 @@ class SetupHttpTests(SetupTestCase):
         self.addCleanup(server.stop)
         return int(server.server_address[1])
 
+    def setUp(self) -> None:
+        super().setUp()
+        self.contract = ContractCheck()  # every answer on a setup, sign-in or session path keeps its contract
+        self.addCleanup(self._assert_contract_kept)
+
+    def _assert_contract_kept(self) -> None:
+        report = self.contract.report()
+        if report is not None:
+            self.fail(report)
+
     def request(
         self, port: int, method: str, path: str, data: Any = None, headers: Optional[dict[str, str]] = None
     ) -> tuple[int, dict[str, str], bytes]:
@@ -275,6 +286,7 @@ class SetupHttpTests(SetupTestCase):
             conn.request(method, path, body=payload, headers=sent)
             response = conn.getresponse()
             raw = response.read()
+            self.contract.check_admission(method, path, response.status, response.getheaders(), raw, data)
             got = {k.lower(): v for k, v in response.getheaders()}
             got["set-cookie"] = "\n".join(response.headers.get_all("Set-Cookie") or [])
             return response.status, got, raw

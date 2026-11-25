@@ -95,6 +95,14 @@ class RoleTests(AnnotationHttpTestCase):
 
 
 class LegacyReplaceTests(AnnotationHttpTestCase):
+    def test_the_snapshot_keeps_a_numeric_and_a_named_type(self) -> None:
+        work_id = self.pdf_work("Ann HTTP Types")
+        self.save(work_id, [row("numeric-type", "n"),
+                            {"id": "named-type", "type": "note", "contents": "t", "pageIndex": 0}])
+        snapshot = self.ok(self.get(f"/api/works/{work_id}/annotations-snapshot"))
+        self.assertEqual({item["id"]: item["type"] for item in snapshot["items"]},
+                         {"numeric-type": 9, "named-type": "note"})
+
     def test_a_malformed_or_conflicting_list_changes_nothing(self) -> None:
         work_id = self.pdf_work("Ann HTTP Valid")
         other = self.pdf_work("Ann HTTP Other")

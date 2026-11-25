@@ -179,8 +179,9 @@ ROUTES = (
     route("GET", "/api/arguments", catalog, contract=Operation(
         "listArguments", "Every Argument (or every one of a kind) with its lists and counts", _TAG,
         {200: ok(list[ArgumentCard], "By name."), 400: error("An unknown kind (invalid_kind).")},
-        params=(Param("kind", schema={"type": "string", "enum": ["argument", "stance"]},
-                      description="Only this kind; blank: every Argument."),))),
+        params=(Param("kind", schema={"type": "string"},
+                      description="After trimming, argument or stance: only that kind; blank or left out: "
+                                  "every Argument."),))),
     route("POST", "/api/arguments", create, contract=Operation(
         "createArgument", "Create an Argument or Stance", _TAG,
         {201: ok(ArgumentDetail, "The new Argument."), 400: _INVALID, 404: _MISSING, 409: _CONFLICT},

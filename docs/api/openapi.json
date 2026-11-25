@@ -3,7 +3,7 @@
   "info": {
     "title": "PRKS API",
     "version": "0.2.0",
-    "description": "The PRKS HTTP API, generated from the route table (backend/api) and the Pydantic boundary models (backend/api_contract). Every /api/ request needs a live session; a mutation also sends the PRKS-Library-Epoch header."
+    "description": "The PRKS HTTP API, generated from the route table (backend/api) and the Pydantic boundary models (backend/api_contract). Every /api/ request needs a live session (POST /api/login signs in), except /api/setup; a mutation also sends the PRKS-Library-Epoch header."
   },
   "tags": [
     {
@@ -26,6 +26,9 @@
     },
     {
       "name": "folders"
+    },
+    {
+      "name": "identity"
     },
     {
       "name": "meta"
@@ -128,13 +131,9 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "enum": [
-                "argument",
-                "stance"
-              ]
+              "type": "string"
             },
-            "description": "Only this kind; blank: every Argument."
+            "description": "After trimming, argument or stance: only that kind; blank or left out: every Argument."
           }
         ],
         "responses": {
@@ -980,7 +979,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -996,7 +1002,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -1084,7 +1097,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BackupRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/BackupRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -3124,6 +3144,196 @@
           {
             "session": []
           }
+        ]
+      }
+    },
+    "/api/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "Sign in to the Library this server serves",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in: sets the session and login device cookies and replaces this browser's earlier session.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookie (prks_session); on a login also the login device cookie.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "PRKS-Library-Epoch": {
+                "description": "The Library's current epoch.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedIn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A forwarded client address is malformed (invalid_request). Also: The body is not one JSON object, or not JSON (invalid_request).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Any refused login, alike for every account (invalid_credentials).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Origin or Sec-Fetch-Site is not allowed (origin_not_allowed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The server acts as its owner without sign-in (loopback-owner mode).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "description": "Too many attempts (too_many_attempts).",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "Sign out: revoke the presented session",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed out (also without a session): clears the session cookie.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The session cookie (prks_session); on a login also the login device cookie.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedOut"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The Origin or Sec-Fetch-Site is not allowed (origin_not_allowed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The server acts as its owner without sign-in (loopback-owner mode).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {}
         ]
       }
     },
@@ -5826,7 +6036,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -5852,7 +6069,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -5945,7 +6169,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -6041,7 +6272,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -6144,7 +6382,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -6170,7 +6415,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -6260,7 +6512,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -6286,7 +6545,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingItemRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -7710,6 +7976,73 @@
         ]
       }
     },
+    "/api/session": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "The signed-in session: user, Library, epoch and expiry",
+        "tags": [
+          "identity"
+        ],
+        "description": "In loopback-owner mode every request acts as the owner and needs no cookie.",
+        "responses": {
+          "200": {
+            "description": "The session; a session cookie is sent again with the renewed expiry.",
+            "headers": {
+              "PRKS-Library-Epoch": {
+                "description": "The Library's current epoch.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionState"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The session's user is no longer a member of the Library.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {}
+        ]
+      }
+    },
     "/api/settings": {
       "get": {
         "operationId": "getSettings",
@@ -7822,6 +8155,254 @@
         ]
       }
     },
+    "/api/setup": {
+      "get": {
+        "operationId": "getSetupState",
+        "summary": "How far first-run setup is",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The setup state; ready, with storage fixed, once the server serves normally.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupState"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      },
+      "post": {
+        "operationId": "completeSetup",
+        "summary": "Create the owner and the Library with the bootstrap token",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Setup is complete; signed_in: a session cookie for the owner is set.",
+            "headers": {
+              "Set-Cookie": {
+                "description": "The owner's session cookie, when signed_in.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupDone"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is missing or refused (invalid_request, with field and reason), or the token is not a bootstrap token (bootstrap_token_malformed). Also: The body is not one JSON object, or not JSON (invalid_request).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SetupRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bootstrap token is wrong or expired (bootstrap_token_invalid, bootstrap_token_expired), or the Origin is not allowed (origin_not_allowed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup is already complete or needs a restart (already_ready, restart_required), another attempt is running (setup_busy), or the pairing was refused (setup_refused, with reason and message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "description": "Too many refused tokens (too_many_attempts).",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/setup/storage": {
+      "post": {
+        "operationId": "chooseSetupStorage",
+        "summary": "Choose the storage folder before setup completes",
+        "tags": [
+          "identity"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageChoiceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The folder is recorded; the server must restart to use it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageChosen"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A field is missing or refused (invalid_request, with field and reason), or the token is not a bootstrap token (bootstrap_token_malformed). Also: The body is not one JSON object, or not JSON (invalid_request).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SetupRefusal"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bootstrap token is wrong or expired (bootstrap_token_invalid, bootstrap_token_expired), or the Origin is not allowed (origin_not_allowed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Setup is already complete or needs a restart (already_ready, restart_required), another attempt is running (setup_busy), the pairing was refused (setup_refused) or the folder was (storage_refused), with reason and message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "429": {
+            "description": "Too many refused tokens (too_many_attempts).",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^[0-9]+$"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
     "/api/storage-status": {
       "get": {
         "operationId": "getStorageStatus",
@@ -7921,7 +8502,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncResult"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SyncResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -7947,7 +8535,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncResult"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/SyncResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -10201,7 +10796,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/MaterializationStale"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/MaterializationStale"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ApiErrorEnvelope"
+                    }
+                  ]
                 }
               }
             }
@@ -11106,8 +11708,9 @@
       "AnnotationsReplaceRequest": {
         "properties": {
           "annotations_json": {
-            "description": "The whole list: a JSON array, or its JSON text.",
-            "title": "Annotations Json"
+            "description": "The whole list, as the JSON text of an array.",
+            "title": "Annotations Json",
+            "type": "string"
           },
           "canonical_annotation_set_revision": {
             "description": "The set revision the list was edited at.",
@@ -14269,6 +14872,23 @@
         ],
         "type": "object"
       },
+      "LoginRequest": {
+        "properties": {
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "required": [
+          "login",
+          "password"
+        ],
+        "type": "object"
+      },
       "Materialization": {
         "additionalProperties": false,
         "description": "``GET /api/works/{id}/pdf-materialization``: whether the PDF bytes hold the current set.",
@@ -14485,8 +15105,16 @@
             "type": "string"
           },
           "type": {
-            "title": "Type",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "description": "The viewer's type: a PDF subtype number (9: highlight), or its name.",
+            "title": "Type"
           },
           "contents": {
             "title": "Contents",
@@ -20001,6 +20629,260 @@
         },
         "type": "object"
       },
+      "SessionLibrary": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "description": "The user's role in the Library.",
+            "title": "Role",
+            "type": "string"
+          },
+          "epoch": {
+            "description": "The Library epoch a mutation sends as PRKS-Library-Epoch.",
+            "title": "Epoch",
+            "type": "integer"
+          },
+          "content": {
+            "description": "Where the Library's content is kept (postgres).",
+            "title": "Content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "role",
+          "epoch",
+          "content"
+        ],
+        "type": "object"
+      },
+      "SessionState": {
+        "additionalProperties": false,
+        "description": "``GET /api/session``: who is signed in, to which Library, until when.",
+        "properties": {
+          "auth_mode": {
+            "enum": [
+              "session",
+              "loopback-owner"
+            ],
+            "title": "Auth Mode",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionUser"
+          },
+          "library": {
+            "$ref": "#/components/schemas/SessionLibrary"
+          },
+          "expires_at": {
+            "description": "ISO 8601, UTC.",
+            "title": "Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "auth_mode",
+          "instance_id",
+          "user",
+          "library",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "SessionUser": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "SetupDone": {
+        "additionalProperties": false,
+        "properties": {
+          "state": {
+            "const": "ready",
+            "title": "State",
+            "type": "string"
+          },
+          "created": {
+            "description": "False when an earlier attempt had already completed setup.",
+            "title": "Created",
+            "type": "boolean"
+          },
+          "signed_in": {
+            "description": "Whether the answer sets a session cookie for the owner.",
+            "title": "Signed In",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "state",
+          "created",
+          "signed_in"
+        ],
+        "type": "object"
+      },
+      "SetupRefusal": {
+        "additionalProperties": false,
+        "description": "A refused setup step: ``error``, and for a bad field or a refused pairing what was wrong.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "field": {
+            "description": "The request field that was refused.",
+            "title": "Field",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why the field or the pairing was refused.",
+            "title": "Reason",
+            "type": "string"
+          },
+          "message": {
+            "description": "A fixed explanation of a refused pairing or storage folder.",
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "SetupRequest": {
+        "properties": {
+          "token": {
+            "description": "The bootstrap token the server printed.",
+            "title": "Token",
+            "type": "string"
+          },
+          "login": {
+            "title": "Login",
+            "type": "string"
+          },
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or blank: the login.",
+            "title": "Display Name"
+          },
+          "library_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or blank: Library.",
+            "title": "Library Name"
+          }
+        },
+        "required": [
+          "token",
+          "login",
+          "password"
+        ],
+        "type": "object"
+      },
+      "SetupState": {
+        "additionalProperties": false,
+        "description": "``GET /api/setup``: how far first-run setup is, and whether the storage folder may be chosen.",
+        "properties": {
+          "state": {
+            "enum": [
+              "unconfigured",
+              "bootstrapping",
+              "ready"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "storage": {
+            "enum": [
+              "choosable",
+              "fixed",
+              "restart_required"
+            ],
+            "title": "Storage",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "storage"
+        ],
+        "type": "object"
+      },
+      "SignedIn": {
+        "additionalProperties": false,
+        "properties": {
+          "signed_in": {
+            "const": true,
+            "title": "Signed In",
+            "type": "boolean"
+          },
+          "session": {
+            "$ref": "#/components/schemas/SessionState"
+          }
+        },
+        "required": [
+          "signed_in",
+          "session"
+        ],
+        "type": "object"
+      },
+      "SignedOut": {
+        "additionalProperties": false,
+        "properties": {
+          "signed_out": {
+            "const": true,
+            "title": "Signed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "signed_out"
+        ],
+        "type": "object"
+      },
       "SourceAuthor": {
         "additionalProperties": false,
         "properties": {
@@ -20157,6 +21039,49 @@
           "pdf_files",
           "persons",
           "annotations"
+        ],
+        "type": "object"
+      },
+      "StorageChoiceRequest": {
+        "properties": {
+          "token": {
+            "description": "The bootstrap token the server printed.",
+            "title": "Token",
+            "type": "string"
+          },
+          "folder": {
+            "description": "The storage folder: up to 4096 characters, no NUL.",
+            "title": "Folder",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "folder"
+        ],
+        "type": "object"
+      },
+      "StorageChosen": {
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "title": "Folder",
+            "type": "string"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "restart_required": {
+            "const": true,
+            "title": "Restart Required",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "folder",
+          "created",
+          "restart_required"
         ],
         "type": "object"
       },

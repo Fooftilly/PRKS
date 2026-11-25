@@ -593,6 +593,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign in to the Library this server serves */
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sign out: revoke the presented session */
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/openapi.json": {
         parameters: {
             query?: never;
@@ -1311,6 +1345,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in session: user, Library, epoch and expiry
+         * @description In loopback-owner mode every request acts as the owner and needs no cookie.
+         */
+        get: operations["getSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -1330,6 +1384,41 @@ export interface paths {
          * @description Every key is checked before any is written. Needs the Library owner.
          */
         patch: operations["updateSettings"];
+        trace?: never;
+    };
+    "/api/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** How far first-run setup is */
+        get: operations["getSetupState"];
+        put?: never;
+        /** Create the owner and the Library with the bootstrap token */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/setup/storage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Choose the storage folder before setup completes */
+        post: operations["chooseSetupStorage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/storage-status": {
@@ -2004,9 +2093,9 @@ export interface components {
         AnnotationsReplaceRequest: {
             /**
              * Annotations Json
-             * @description The whole list: a JSON array, or its JSON text.
+             * @description The whole list, as the JSON text of an array.
              */
-            annotations_json: unknown;
+            annotations_json: string;
             /**
              * Canonical Annotation Set Revision
              * @description The set revision the list was edited at.
@@ -3276,6 +3365,12 @@ export interface components {
             /** Role Type */
             role_type: string;
         };
+        LoginRequest: {
+            /** Login */
+            login: string;
+            /** Password */
+            password: string;
+        };
         /** @description ``GET /api/works/{id}/pdf-materialization``: whether the PDF bytes hold the current set. */
         Materialization: {
             /** Canonical Annotation Set Revision */
@@ -3360,8 +3455,11 @@ export interface components {
             id: string;
             /** Pageindex */
             pageIndex: number | null;
-            /** Type */
-            type: string;
+            /**
+             * Type
+             * @description The viewer's type: a PDF subtype number (9: highlight), or its name.
+             */
+            type: string | number;
             /**
              * Updated At
              * @description When it was last stored, ``YYYY-MM-DD HH:MM:SS`` UTC.
@@ -5012,6 +5110,136 @@ export interface components {
             /** @default null */
             search?: components["schemas"]["SavedViewSearchInput"] | null;
         };
+        SessionLibrary: {
+            /**
+             * Content
+             * @description Where the Library's content is kept (postgres).
+             */
+            content: string;
+            /**
+             * Epoch
+             * @description The Library epoch a mutation sends as PRKS-Library-Epoch.
+             */
+            epoch: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @description The user's role in the Library.
+             */
+            role: string;
+        };
+        /** @description ``GET /api/session``: who is signed in, to which Library, until when. */
+        SessionState: {
+            /**
+             * Auth Mode
+             * @enum {string}
+             */
+            auth_mode: "session" | "loopback-owner";
+            /**
+             * Expires At
+             * @description ISO 8601, UTC.
+             */
+            expires_at: string;
+            /** Instance Id */
+            instance_id: string;
+            library: components["schemas"]["SessionLibrary"];
+            user: components["schemas"]["SessionUser"];
+        };
+        SessionUser: {
+            /** Display Name */
+            display_name: string;
+            /** Id */
+            id: string;
+        };
+        SetupDone: {
+            /**
+             * Created
+             * @description False when an earlier attempt had already completed setup.
+             */
+            created: boolean;
+            /**
+             * Signed In
+             * @description Whether the answer sets a session cookie for the owner.
+             */
+            signed_in: boolean;
+            /**
+             * State
+             * @constant
+             */
+            state: "ready";
+        };
+        /** @description A refused setup step: ``error``, and for a bad field or a refused pairing what was wrong. */
+        SetupRefusal: {
+            /** Error */
+            error: string;
+            /**
+             * Field
+             * @description The request field that was refused.
+             */
+            field?: string;
+            /**
+             * Message
+             * @description A fixed explanation of a refused pairing or storage folder.
+             */
+            message?: string;
+            /**
+             * Reason
+             * @description Why the field or the pairing was refused.
+             */
+            reason?: string;
+        };
+        SetupRequest: {
+            /**
+             * Display Name
+             * @description Left out or blank: the login.
+             */
+            display_name?: string | null;
+            /**
+             * Library Name
+             * @description Left out or blank: Library.
+             */
+            library_name?: string | null;
+            /** Login */
+            login: string;
+            /** Password */
+            password: string;
+            /**
+             * Token
+             * @description The bootstrap token the server printed.
+             */
+            token: string;
+        };
+        /** @description ``GET /api/setup``: how far first-run setup is, and whether the storage folder may be chosen. */
+        SetupState: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "unconfigured" | "bootstrapping" | "ready";
+            /**
+             * Storage
+             * @enum {string}
+             */
+            storage: "choosable" | "fixed" | "restart_required";
+        };
+        SignedIn: {
+            session: components["schemas"]["SessionState"];
+            /**
+             * Signed In
+             * @constant
+             */
+            signed_in: true;
+        };
+        SignedOut: {
+            /**
+             * Signed Out
+             * @constant
+             */
+            signed_out: true;
+        };
         SourceAuthor: {
             /** Credit Name */
             credit_name: string | null;
@@ -5058,6 +5286,29 @@ export interface components {
             persons: number | null;
             /** Works */
             works: number | null;
+        };
+        StorageChoiceRequest: {
+            /**
+             * Folder
+             * @description The storage folder: up to 4096 characters, no NUL.
+             */
+            folder: string;
+            /**
+             * Token
+             * @description The bootstrap token the server printed.
+             */
+            token: string;
+        };
+        StorageChosen: {
+            /** Created */
+            created: boolean;
+            /** Folder */
+            folder: string;
+            /**
+             * Restart Required
+             * @constant
+             */
+            restart_required: true;
         };
         /** @description The database half of the Library (storage-architecture §9.2), read-only. */
         StorageDatabase: {
@@ -6229,6 +6480,7 @@ export type JobDiagnostics = components['schemas']['JobDiagnostics'];
 export type JobQueueDepth = components['schemas']['JobQueueDepth'];
 export type JobWorkerCounters = components['schemas']['JobWorkerCounters'];
 export type LinkedPerson = components['schemas']['LinkedPerson'];
+export type LoginRequest = components['schemas']['LoginRequest'];
 export type Materialization = components['schemas']['Materialization'];
 export type MaterializationStale = components['schemas']['MaterializationStale'];
 export type Mention = components['schemas']['Mention'];
@@ -6321,9 +6573,20 @@ export type SavedViewDeleted = components['schemas']['SavedViewDeleted'];
 export type SavedViewSearch = components['schemas']['SavedViewSearch'];
 export type SavedViewSearchInput = components['schemas']['SavedViewSearchInput'];
 export type SavedViewUpdateRequest = components['schemas']['SavedViewUpdateRequest'];
+export type SessionLibrary = components['schemas']['SessionLibrary'];
+export type SessionState = components['schemas']['SessionState'];
+export type SessionUser = components['schemas']['SessionUser'];
+export type SetupDone = components['schemas']['SetupDone'];
+export type SetupRefusal = components['schemas']['SetupRefusal'];
+export type SetupRequest = components['schemas']['SetupRequest'];
+export type SetupState = components['schemas']['SetupState'];
+export type SignedIn = components['schemas']['SignedIn'];
+export type SignedOut = components['schemas']['SignedOut'];
 export type SourceAuthor = components['schemas']['SourceAuthor'];
 export type SourceInput = components['schemas']['SourceInput'];
 export type StagedSummary = components['schemas']['StagedSummary'];
+export type StorageChoiceRequest = components['schemas']['StorageChoiceRequest'];
+export type StorageChosen = components['schemas']['StorageChosen'];
 export type StorageDatabase = components['schemas']['StorageDatabase'];
 export type StorageFilesystem = components['schemas']['StorageFilesystem'];
 export type StorageIdentity = components['schemas']['StorageIdentity'];
@@ -6400,8 +6663,8 @@ export interface operations {
     listArguments: {
         parameters: {
             query?: {
-                /** @description Only this kind; blank: every Argument. */
-                kind?: "argument" | "stance";
+                /** @description After trimming, argument or stance: only that kind; blank or left out: every Argument. */
+                kind?: string;
             };
             header?: never;
             path?: never;
@@ -6910,7 +7173,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BackupRefusal"];
+                    "application/json": components["schemas"]["BackupRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -6921,7 +7184,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BackupRefusal"];
+                    "application/json": components["schemas"]["BackupRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             413: components["responses"]["RequestTooLarge"];
@@ -6970,7 +7233,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BackupRefusal"];
+                    "application/json": components["schemas"]["BackupRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -8176,6 +8439,141 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             409: components["responses"]["EpochChanged"];
             503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Signed in: sets the session and login device cookies and replaces this browser's earlier session. */
+            200: {
+                headers: {
+                    /** @description The Library's current epoch. */
+                    "PRKS-Library-Epoch": string;
+                    /** @description The session cookie (prks_session); on a login also the login device cookie. */
+                    "Set-Cookie": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedIn"];
+                };
+            };
+            /** @description A forwarded client address is malformed (invalid_request). Also: The body is not one JSON object, or not JSON (invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description Any refused login, alike for every account (invalid_credentials). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The Origin or Sec-Fetch-Site is not allowed (origin_not_allowed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The server acts as its owner without sign-in (loopback-owner mode). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            /** @description Too many attempts (too_many_attempts). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out (also without a session): clears the session cookie. */
+            200: {
+                headers: {
+                    /** @description The session cookie (prks_session); on a login also the login device cookie. */
+                    "Set-Cookie": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SignedOut"];
+                };
+            };
+            /** @description The Origin or Sec-Fetch-Site is not allowed (origin_not_allowed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The server acts as its owner without sign-in (loopback-owner mode). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
         };
     };
     getOpenApiDocument: {
@@ -9711,7 +10109,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -9731,7 +10129,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             /** @description No Content-Length (PROCESSING_LENGTH_REQUIRED). */
@@ -9839,7 +10237,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             503: components["responses"]["UnavailableOrMaintenance"];
@@ -9878,7 +10276,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -9898,7 +10296,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             413: components["responses"]["RequestTooLarge"];
@@ -9949,7 +10347,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -9969,7 +10367,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             413: components["responses"]["RequestTooLarge"];
@@ -10158,7 +10556,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProcessingItemRefusal"];
+                    "application/json": components["schemas"]["ProcessingItemRefusal"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -10804,6 +11202,55 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    getSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session; a session cookie is sent again with the renewed expiry. */
+            200: {
+                headers: {
+                    /** @description The Library's current epoch. */
+                    "PRKS-Library-Epoch": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionState"];
+                };
+            };
+            /** @description No live session (not_authenticated). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The session's user is no longer a member of the Library. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -10870,6 +11317,183 @@ export interface operations {
             503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
+    getSetupState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setup state; ready, with storage fixed, once the server serves normally. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupState"];
+                };
+            };
+            /** @description The database is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Setup is complete; signed_in: a session cookie for the owner is set. */
+            200: {
+                headers: {
+                    /** @description The owner's session cookie, when signed_in. */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupDone"];
+                };
+            };
+            /** @description A field is missing or refused (invalid_request, with field and reason), or the token is not a bootstrap token (bootstrap_token_malformed). Also: The body is not one JSON object, or not JSON (invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"] | components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The bootstrap token is wrong or expired (bootstrap_token_invalid, bootstrap_token_expired), or the Origin is not allowed (origin_not_allowed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            /** @description Setup is already complete or needs a restart (already_ready, restart_required), another attempt is running (setup_busy), or the pairing was refused (setup_refused, with reason and message). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            /** @description Too many refused tokens (too_many_attempts). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            /** @description The database is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
+    chooseSetupStorage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageChoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description The folder is recorded; the server must restart to use it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageChosen"];
+                };
+            };
+            /** @description A field is missing or refused (invalid_request, with field and reason), or the token is not a bootstrap token (bootstrap_token_malformed). Also: The body is not one JSON object, or not JSON (invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"] | components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The bootstrap token is wrong or expired (bootstrap_token_invalid, bootstrap_token_expired), or the Origin is not allowed (origin_not_allowed). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            /** @description Setup is already complete or needs a restart (already_ready, restart_required), another attempt is running (setup_busy), the pairing was refused (setup_refused) or the folder was (storage_refused), with reason and message. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            /** @description Too many refused tokens (too_many_attempts). */
+            429: {
+                headers: {
+                    /** @description Seconds to wait. */
+                    "Retry-After": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupRefusal"];
+                };
+            };
+            /** @description The database is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
     getStorageStatus: {
         parameters: {
             query?: never;
@@ -10934,7 +11558,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncResult"];
+                    "application/json": components["schemas"]["SyncResult"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             401: components["responses"]["NotAuthenticated"];
@@ -10954,7 +11578,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SyncResult"];
+                    "application/json": components["schemas"]["SyncResult"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             413: components["responses"]["RequestTooLarge"];
@@ -12080,7 +12704,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MaterializationStale"];
+                    "application/json": components["schemas"]["MaterializationStale"] | components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             413: components["responses"]["RequestTooLarge"];

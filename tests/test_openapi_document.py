@@ -17,6 +17,7 @@ from pydantic import create_model
 
 from backend.api.session import epoch_fenced, fills_derived_cache
 from backend.api import ROUTES
+from backend.api.identity import IDENTITY_ROUTES
 from backend.api_contract.openapi import SchemaConflict, build_document, openapi_document, openapi_path
 from backend.api_contract.operation import Operation, ok
 from backend.web.routing import Body, route
@@ -30,6 +31,10 @@ ARTIFACT = ROOT / "docs" / "api" / "openapi.json"
 #: one leaves this set and documents its success.
 _NOT_PORTED = frozenset({"linearizeExistingPdfs"})
 
+
+
+#: The paths admission answers itself: sign-in, session and setup.
+_ADMISSION = frozenset((r.method, r.pattern) for r in IDENTITY_ROUTES)
 
 
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
@@ -50,7 +55,13 @@ class OpenApiDocumentTests(unittest.TestCase):
         OpenAPI.from_dict(self.document)
 
     def test_every_route_is_one_operation(self) -> None:
-        self.assertEqual(set(_operations(self.document)), {(r.method, openapi_path(r.pattern)) for r in ROUTES})
+        self.assertEqual(set(_operations(self.document)),
+                         {(r.method, openapi_path(r.pattern)) for r in (*ROUTES, *IDENTITY_ROUTES)})
+
+    def test_the_paths_admission_answers_are_not_routed(self) -> None:
+        self.assertFalse(_ADMISSION & {(r.method, r.pattern) for r in ROUTES})
+        self.assertEqual({path for _, path in _ADMISSION},
+                         {"/api/login", "/api/logout", "/api/session", "/api/setup", "/api/setup/storage"})
 
     def test_a_route_without_a_contract_is_refused(self) -> None:
         def handler(req):  # pragma: no cover - never called
@@ -63,9 +74,15 @@ class OpenApiDocumentTests(unittest.TestCase):
         scheme = self.document["components"]["securitySchemes"]["session"]
         self.assertEqual(scheme, {"type": "apiKey", "in": "cookie", "name": "prks_session",
                                   "description": scheme["description"]})
+        optional = {("POST", "/api/logout"), ("GET", "/api/session")}
         for (method, path), op in _operations(self.document).items():
             with self.subTest(method=method, path=path):
-                self.assertEqual(op["security"], [{"session": []}] if path.startswith("/api/") else [])
+                if (method, path) in optional:
+                    self.assertEqual(op["security"], [{"session": []}, {}])
+                elif (method, path) in _ADMISSION or not path.startswith("/api/"):
+                    self.assertEqual(op["security"], [])
+                else:
+                    self.assertEqual(op["security"], [{"session": []}])
 
     def test_each_operation_names_a_success_and_its_path_parameters(self) -> None:
         for (method, path), op in _operations(self.document).items():
@@ -90,7 +107,7 @@ class OpenApiDocumentTests(unittest.TestCase):
 
     def test_an_api_route_documents_admission(self) -> None:
         for (method, path), op in _operations(self.document).items():
-            if not path.startswith("/api/"):
+            if not path.startswith("/api/") or (method, path) in _ADMISSION:
                 continue
             with self.subTest(method=method, path=path):
                 self.assertTrue({"401", "403", "503"} <= set(op["responses"]))
@@ -117,6 +134,9 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
         for (method, path), op in _operations(self.document).items():
             if not path.startswith("/api/"):
+                continue
+            if (method, path) in _ADMISSION:  # answered before admission reads an epoch
+                self.assertNotIn("parameters", op)
                 continue
             headers = {p["name"]: p for p in op.get("parameters", []) if p["in"] == "header"}
             with self.subTest(method=method, path=path):
@@ -154,6 +174,13 @@ class OpenApiDocumentTests(unittest.TestCase):
                 self.assertNotIn("409", responses)
                 self.assertNotEqual(responses.get("400"), {"$ref": "#/components/responses/EpochRequired"})
                 self.assertNotEqual(responses.get("400"), {"$ref": "#/components/responses/BadRequest"})
+
+    def test_a_route_refusal_of_its_own_shape_also_admits_the_shared_body(self) -> None:
+        conflict = self.document["paths"]["/api/works/{work_id}/pdf"]["post"]["responses"]["409"]
+        self.assertEqual(conflict["content"]["application/json"]["schema"], {"anyOf": [
+            {"$ref": "#/components/schemas/MaterializationStale"},
+            {"$ref": "#/components/schemas/ApiErrorEnvelope"}]})
+        self.assertIn("LIBRARY_EPOCH_CHANGED", conflict["description"])
 
     def test_shared_responses_are_published_only_when_used(self) -> None:
         refs = json.dumps(self.document["paths"])

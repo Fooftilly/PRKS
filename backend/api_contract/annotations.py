@@ -25,7 +25,7 @@ class PdfAnnotation(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     id: str
-    type: str
+    type: Union[str, int] = Field(description="The viewer's type: a PDF subtype number (9: highlight), or its name.")
     contents: str
     pageIndex: Optional[int]
     color: str
@@ -82,7 +82,7 @@ class AnnotationList(BaseModel):
 class AnnotationsReplaceRequest(BaseModel):
     model_config = _IGNORE
 
-    annotations_json: Any = Field(description="The whole list: a JSON array, or its JSON text.")
+    annotations_json: str = Field(description="The whole list, as the JSON text of an array.")
     canonical_annotation_set_revision: int = Field(description="The set revision the list was edited at.")
 
 
