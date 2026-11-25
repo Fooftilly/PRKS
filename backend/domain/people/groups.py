@@ -487,8 +487,12 @@ def apply_member_operation(scope: LibraryScope, group_id: str, person_id: str, d
                       current_present=existing, requested_present=desired)
         return 409, result
     changed = set_member(scope, group_id, person_id, desired)
+    # The group's name, under the same lock: a client patches the member
+    # chip it shows from this ACK instead of dropping a People list it cannot
+    # refetch offline.
     result.update(code="ACKNOWLEDGED", changed=changed, present=desired,
-                  server_revision=revision + int(changed))
+                  server_revision=revision + int(changed),
+                  group_name=_current_field(scope, group_id, "name") or "")
     return 200, result
 
 
