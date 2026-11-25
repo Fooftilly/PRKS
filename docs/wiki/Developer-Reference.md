@@ -11,8 +11,7 @@ status) on its row in `backend/api/<family>.py`, with Pydantic models from
 `backend/api_contract/`. One OpenAPI 3.1 document is built from the route
 table: `GET /api/openapi.json` serves it and `docs/api/openapi.json` is its
 checked-in copy (`python scripts/write_openapi.py`; `tests/test_openapi_document.py`
-fails when it is stale). Routes not typed yet are listed in that test's
-`UNTYPED`, which only shrinks (#1431). See
+fails when it is stale). A route without a contract fails the build (#1431). See
 [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
 for the pattern, the error envelope and the openapi-core / Schemathesis notes.
 `npm run openapi:types` reads the checked-in document and writes the

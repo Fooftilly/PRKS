@@ -7,10 +7,19 @@
   },
   "tags": [
     {
+      "name": "annotations"
+    },
+    {
+      "name": "arguments"
+    },
+    {
       "name": "backups"
     },
     {
       "name": "citations"
+    },
+    {
+      "name": "concepts"
     },
     {
       "name": "diagnostics"
@@ -46,6 +55,9 @@
       "name": "remote-images"
     },
     {
+      "name": "research-graph"
+    },
+    {
       "name": "roles"
     },
     {
@@ -65,6 +77,708 @@
     }
   ],
   "paths": {
+    "/api/argument-verdicts": {
+      "get": {
+        "operationId": "listArgumentVerdicts",
+        "summary": "The enabled verdicts, in order",
+        "tags": [
+          "arguments"
+        ],
+        "responses": {
+          "200": {
+            "description": "The verdicts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Verdict"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/arguments": {
+      "get": {
+        "operationId": "listArguments",
+        "summary": "Every Argument (or every one of a kind) with its lists and counts",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "argument",
+                "stance"
+              ]
+            },
+            "description": "Only this kind; blank: every Argument."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "By name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArgumentCard"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An unknown kind (invalid_kind).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createArgument",
+        "summary": "Create an Argument or Stance",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArgumentCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new Argument.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/arguments/{argument_id}": {
+      "parameters": [
+        {
+          "name": "argument_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteArgument",
+        "summary": "Delete an Argument",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Done"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id (not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A Research Note references it (argument_in_use), or another Argument responds to it (argument_targeted). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getArgument",
+        "summary": "An Argument with its lists, responses, mentions and the verdicts",
+        "tags": [
+          "arguments"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Argument.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateArgument",
+        "summary": "Change an Argument's name, kind or text",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArgumentPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Argument as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/arguments/{argument_id}/sources": {
+      "parameters": [
+        {
+          "name": "argument_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "setArgumentSources",
+        "summary": "Replace an Argument's citations",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArgumentSourcesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Argument as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/arguments/{argument_id}/sync-state": {
+      "parameters": [
+        {
+          "name": "argument_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getArgumentState",
+        "summary": "An Argument's field and list revisions",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions only.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/arguments/{argument_id}/targets": {
+      "parameters": [
+        {
+          "name": "argument_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "setArgumentTargets",
+        "summary": "Replace what an Argument responds to",
+        "tags": [
+          "arguments"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArgumentTargetsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Argument as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArgumentDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/backups/download": {
       "get": {
         "operationId": "downloadBackup",
@@ -128,7 +842,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/backups/progress": {
@@ -207,7 +926,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/backups/restore": {
@@ -296,7 +1020,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/backups/stage": {
@@ -402,7 +1131,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/bibtex/{work_id}": {
@@ -442,7 +1176,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/citation-styles": {
@@ -472,7 +1211,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "importCitationStyle",
@@ -543,7 +1287,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/citation-styles/{style_id}": {
@@ -613,7 +1362,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getCitationStyle",
@@ -651,7 +1405,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/citations": {
@@ -722,7 +1481,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/client-errors": {
@@ -772,7 +1536,641 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/concepts": {
+      "get": {
+        "operationId": "listConcepts",
+        "summary": "Every Concept with its parents, aliases and counts",
+        "tags": [
+          "concepts"
+        ],
+        "responses": {
+          "200": {
+            "description": "By name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ConceptCard"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createConcept",
+        "summary": "Create a Concept",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConceptCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new Concept.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "The name is another Concept's name or alias (concept_exists). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/concepts/{concept_id}": {
+      "parameters": [
+        {
+          "name": "concept_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
         }
+      ],
+      "delete": {
+        "operationId": "deleteConcept",
+        "summary": "Delete a Concept",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Done"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id (not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A Research Note still references it (concept_in_use). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "get": {
+        "operationId": "getConcept",
+        "summary": "A Concept with its hierarchy, aliases and mentions",
+        "tags": [
+          "concepts"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Concept.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptRead"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateConcept",
+        "summary": "Rename a Concept or change its definition",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConceptPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Concept as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id (not_found), or a parent that is not one (parent_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The new name is another Concept's name or alias (concept_exists, alias_conflict). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/concepts/{concept_id}/aliases": {
+      "parameters": [
+        {
+          "name": "concept_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "setConceptAliases",
+        "summary": "Replace a Concept's alias set",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConceptAliasesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Concept as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id (not_found), or a parent that is not one (parent_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An alias is another Concept's name or alias (concept_exists, alias_conflict). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/concepts/{concept_id}/parents": {
+      "parameters": [
+        {
+          "name": "concept_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "operationId": "setConceptParents",
+        "summary": "Replace a Concept's parent set",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConceptParentsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The Concept as it now stands.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id (not_found), or a parent that is not one (parent_not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A parent would make a cycle (concept_cycle). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/concepts/{concept_id}/sync-state": {
+      "parameters": [
+        {
+          "name": "concept_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getConceptState",
+        "summary": "A Concept's field revisions, identity and parent set",
+        "tags": [
+          "concepts"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Values and revisions.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConceptState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Concept with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/deployment-settings": {
@@ -802,7 +2200,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/diagnostics/jobs": {
@@ -849,7 +2252,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/diagnostics/performance": {
@@ -879,7 +2287,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/diagnostics/performance/reset": {
@@ -936,7 +2349,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders": {
@@ -999,7 +2417,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createFolder",
@@ -1070,7 +2493,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{folder_id}": {
@@ -1136,7 +2564,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getFolder",
@@ -1174,7 +2607,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateFolder",
@@ -1245,7 +2683,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{folder_id}/sync-state": {
@@ -1325,7 +2768,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{folder_id}/works": {
@@ -1424,7 +2872,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{owner_id}/tag-options": {
@@ -1504,7 +2957,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{owner_id}/tags": {
@@ -1589,7 +3047,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/folders/{owner_id}/tags/{tag_id}": {
@@ -1656,7 +3119,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/openapi.json": {
@@ -1686,7 +3154,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/pdfs/{filename}": {
@@ -1832,7 +3305,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "head": {
         "operationId": "getManagedPdfHead",
@@ -1943,7 +3421,12 @@
           "503": {
             "description": "The Library is unavailable (unavailable)."
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/person-groups": {
@@ -2006,7 +3489,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createPersonGroup",
@@ -2076,7 +3564,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/person-groups/{group_id}": {
@@ -2142,7 +3635,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getPersonGroup",
@@ -2180,7 +3678,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updatePersonGroup",
@@ -2251,7 +3754,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/person-groups/{group_id}/members": {
@@ -2333,7 +3841,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/person-groups/{group_id}/members/{person_id}": {
@@ -2400,7 +3913,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/person-groups/{group_id}/sync-state": {
@@ -2480,7 +3998,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/persons": {
@@ -2543,7 +4066,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createPerson",
@@ -2614,7 +4142,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/persons/{person_id}": {
@@ -2697,7 +4230,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getPerson",
@@ -2735,7 +4273,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updatePerson",
@@ -2806,7 +4349,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/persons/{person_id}/group-state": {
@@ -2886,7 +4434,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/persons/{person_id}/metadata-state": {
@@ -2966,7 +4519,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/persons/{person_id}/profile-image": {
@@ -3030,16 +4588,14 @@
             }
           },
           "503": {
-            "description": "The Library is unavailable, or in maintenance when an editor's miss caches the portrait (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable).",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
-                }
-              }
-            }
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists": {
@@ -3102,7 +4658,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createPlaylist",
@@ -3166,7 +4727,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists/{playlist_id}": {
@@ -3225,7 +4791,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getPlaylist",
@@ -3263,7 +4834,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updatePlaylist",
@@ -3327,7 +4903,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists/{playlist_id}/items": {
@@ -3409,7 +4990,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists/{playlist_id}/items/{work_id}": {
@@ -3476,7 +5062,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists/{playlist_id}/reorder": {
@@ -3559,7 +5150,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/playlists/{playlist_id}/sync-state": {
@@ -3639,7 +5235,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/positions": {
@@ -3672,7 +5273,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createPosition",
@@ -3742,7 +5348,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/positions/{position_id}": {
@@ -3818,7 +5429,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getPosition",
@@ -3856,7 +5472,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updatePosition",
@@ -3936,7 +5557,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/positions/{position_id}/sync-state": {
@@ -4016,7 +5642,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/processing-items": {
@@ -4078,7 +5709,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "uploadProcessingItem",
@@ -4229,7 +5865,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/processing-items/import": {
@@ -4302,7 +5943,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/processing-items/{item_id}": {
@@ -4378,7 +6024,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getProcessingItem",
@@ -4416,7 +6067,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateProcessingItem",
@@ -4503,7 +6159,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/processing-items/{item_id}/import": {
@@ -4614,7 +6275,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/processing-items/{item_id}/pdf": {
@@ -4760,7 +6426,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "head": {
         "operationId": "getProcessingItemPdfHead",
@@ -4871,7 +6542,12 @@
           "503": {
             "description": "The Library is unavailable (unavailable)."
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/publishers": {
@@ -4915,7 +6591,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createPublisher",
@@ -4985,7 +6666,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/publishers/{publisher_id}": {
@@ -5045,7 +6731,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/publishers/{publisher_id}/aliases": {
@@ -5129,7 +6820,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "addPublisherAlias",
@@ -5199,7 +6895,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/recent": {
@@ -5262,7 +6963,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/recently-added": {
@@ -5325,7 +7031,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/remote-images": {
@@ -5416,16 +7127,70 @@
             }
           },
           "503": {
-            "description": "The Library is unavailable, or in maintenance when an editor's miss saves the copy (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable).",
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/research-graph": {
+      "get": {
+        "operationId": "getResearchGraph",
+        "summary": "The Library's Research graph",
+        "tags": [
+          "research-graph"
+        ],
+        "parameters": [
+          {
+            "name": "people",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "``1``, ``true``, ``yes`` or ``on``: also the Works' Authors."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Concepts, Positions, Arguments and the Works they cite or mention.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "$ref": "#/components/schemas/ResearchGraph"
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "Past the node or edge bound (graph_too_large), with the counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphTooLarge"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/roles": {
@@ -5497,7 +7262,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/saved-views": {
@@ -5530,7 +7300,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createSavedView",
@@ -5607,7 +7382,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/saved-views/{view_id}": {
@@ -5677,7 +7457,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getSavedView",
@@ -5715,7 +7500,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateSavedView",
@@ -5802,7 +7592,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/search": {
@@ -5882,7 +7677,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/settings": {
@@ -5912,7 +7712,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateSettings",
@@ -5984,7 +7789,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/storage-status": {
@@ -6031,7 +7841,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/sync/operations": {
@@ -6121,7 +7936,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/tags": {
@@ -6208,7 +8028,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createTag",
@@ -6278,7 +8103,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/tags/merge": {
@@ -6350,7 +8180,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/tags/{tag_id}": {
@@ -6426,7 +8261,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/tags/{tag_id}/aliases": {
@@ -6511,7 +8351,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "addTagAlias",
@@ -6581,7 +8426,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works": {
@@ -6666,7 +8516,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "post": {
         "operationId": "createWork",
@@ -6754,7 +8609,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/bulk": {
@@ -6855,7 +8715,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/linearize-existing-pdfs": {
@@ -6921,7 +8786,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/reindex-pdf-text": {
@@ -6987,7 +8857,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{owner_id}/tag-options": {
@@ -7067,7 +8942,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{owner_id}/tags": {
@@ -7152,7 +9032,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{owner_id}/tags/{tag_id}": {
@@ -7219,7 +9104,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}": {
@@ -7278,7 +9168,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "get": {
         "operationId": "getWork",
@@ -7316,7 +9211,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateWork",
@@ -7414,7 +9314,424 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/annotations": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
         }
+      ],
+      "get": {
+        "operationId": "listAnnotations",
+        "summary": "A Work's annotations as one JSON text",
+        "tags": [
+          "annotations"
+        ],
+        "responses": {
+          "200": {
+            "description": "The list (``[]`` for a missing Work).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "replaceAnnotations",
+        "summary": "Replace a Work's whole annotation list at a set revision",
+        "tags": [
+          "annotations"
+        ],
+        "description": "The legacy full-list path; the sync operations are the product's writes.",
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationsReplaceRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved; the new set revision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationsReplaced"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No list or no set revision, or a malformed one (malformed_annotation_payload). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Work, or it has no managed PDF.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The set revision is not the current one (ANNOTATION_SET_STALE), or an id a deleted annotation used (ANNOTATION_ID_REUSED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/annotations-snapshot": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAnnotationsSnapshot",
+        "summary": "A Work's annotations with their revisions, in one snapshot",
+        "tags": [
+          "annotations"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The annotations, their revisions and the set revisions.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationsSnapshot"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/annotations-state": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAnnotationsState",
+        "summary": "A Work's annotation revisions",
+        "tags": [
+          "annotations"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each annotation's revision and the kept tombstones.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationsState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/annotations/adopt": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "adoptAnnotations",
+        "summary": "Store the user markup only the PDF bytes hold",
+        "tags": [
+          "annotations"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Adopted, with what was skipped.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Adopted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed list or annotation (malformed_annotation_payload). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Work, or it has no managed PDF.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The bytes are known stale (ANNOTATION_MATERIALIZATION_STALE). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/folder-state": {
@@ -7494,7 +9811,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/metadata-state": {
@@ -7574,7 +9896,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/notes-state": {
@@ -7654,7 +9981,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/opened": {
@@ -7747,7 +10079,178 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/pdf": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
         }
+      ],
+      "post": {
+        "operationId": "writeWorkPdf",
+        "summary": "Replace a Work's PDF, or store its annotated rendering",
+        "tags": [
+          "annotations"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PdfWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stored; what the Asset now holds.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/PdfReplaced"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PdfMaterialized"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No or invalid file_b64, or an invalid materialization revision. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Work, or it has no managed PDF.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The claimed set revision is not the current one. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MaterializationStale"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/api/works/{work_id}/pdf-materialization": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPdfMaterialization",
+        "summary": "Whether a Work's PDF bytes hold its current annotations",
+        "tags": [
+          "annotations"
+        ],
+        "responses": {
+          "200": {
+            "description": "The set revisions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Materialization"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/people-state": {
@@ -7827,7 +10330,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/playlist-state": {
@@ -7907,7 +10415,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/related_folders": {
@@ -7950,7 +10463,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/roles": {
@@ -8051,7 +10569,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       },
       "patch": {
         "operationId": "updateRoleCredit",
@@ -8131,7 +10654,12 @@
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/source-state": {
@@ -8221,7 +10749,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/api/works/{work_id}/thumbnail": {
@@ -8303,7 +10836,12 @@
           "503": {
             "$ref": "#/components/responses/Unavailable"
           }
-        }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
       }
     },
     "/healthz": {
@@ -8334,7 +10872,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       },
       "head": {
         "operationId": "healthzHead",
@@ -8355,7 +10894,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     },
     "/readyz": {
@@ -8405,7 +10945,8 @@
               }
             }
           }
-        }
+        },
+        "security": []
       },
       "head": {
         "operationId": "readyzHead",
@@ -8437,12 +10978,229 @@
               }
             }
           }
-        }
+        },
+        "security": []
       }
     }
   },
   "components": {
     "schemas": {
+      "AdoptRequest": {
+        "properties": {
+          "viewer_annotations": {
+            "description": "The annotations the viewer read from the PDF bytes.",
+            "items": {},
+            "title": "Viewer Annotations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "viewer_annotations"
+        ],
+        "type": "object"
+      },
+      "Adopted": {
+        "additionalProperties": false,
+        "description": "The user markup only the bytes held, now stored; the rest counted by why it was skipped.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "adopted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Adopted",
+            "type": "array"
+          },
+          "adopted_count": {
+            "title": "Adopted Count",
+            "type": "integer"
+          },
+          "skipped_existing": {
+            "title": "Skipped Existing",
+            "type": "integer"
+          },
+          "skipped_non_user": {
+            "title": "Skipped Non User",
+            "type": "integer"
+          },
+          "skipped_known_absent": {
+            "title": "Skipped Known Absent",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "work_id",
+          "adopted",
+          "adopted_count",
+          "skipped_existing",
+          "skipped_non_user",
+          "skipped_known_absent"
+        ],
+        "type": "object"
+      },
+      "AnnotationList": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/{id}/annotations``: the list as one JSON text (``[]`` for a missing Work).",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "annotations_json": {
+            "title": "Annotations Json",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_id",
+          "annotations_json"
+        ],
+        "type": "object"
+      },
+      "AnnotationRevision": {
+        "additionalProperties": false,
+        "properties": {
+          "annotation_id": {
+            "title": "Annotation Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "annotation_id",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "AnnotationsReplaceRequest": {
+        "properties": {
+          "annotations_json": {
+            "description": "The whole list: a JSON array, or its JSON text.",
+            "title": "Annotations Json"
+          },
+          "canonical_annotation_set_revision": {
+            "description": "The set revision the list was edited at.",
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "annotations_json",
+          "canonical_annotation_set_revision"
+        ],
+        "type": "object"
+      },
+      "AnnotationsReplaced": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "saved",
+            "title": "Status",
+            "type": "string"
+          },
+          "path": {
+            "const": "legacy-full-list",
+            "title": "Path",
+            "type": "string"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "path",
+          "canonical_annotation_set_revision"
+        ],
+        "type": "object"
+      },
+      "AnnotationsSnapshot": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/{id}/annotations-snapshot``: the annotations, their revisions and the set revisions.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationRevision"
+            },
+            "title": "Annotations",
+            "type": "array"
+          },
+          "known_absent": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Deleted annotation ids whose revision is kept: id -> revision.",
+            "title": "Known Absent",
+            "type": "object"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PdfAnnotation"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          },
+          "materialized_pdf_annotation_revision": {
+            "title": "Materialized Pdf Annotation Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "work_id",
+          "annotations",
+          "known_absent",
+          "items",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision"
+        ],
+        "type": "object"
+      },
+      "AnnotationsState": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/{id}/annotations-state``: each annotation's revision, tombstones included.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "annotations": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationRevision"
+            },
+            "title": "Annotations",
+            "type": "array"
+          },
+          "known_absent": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Deleted annotation ids whose revision is kept: id -> revision.",
+            "title": "Known Absent",
+            "type": "object"
+          }
+        },
+        "required": [
+          "work_id",
+          "annotations",
+          "known_absent"
+        ],
+        "type": "object"
+      },
       "ApiErrorEnvelope": {
         "additionalProperties": false,
         "description": "Standard JSON error body at the HTTP adapter boundary.",
@@ -8529,6 +11287,354 @@
         },
         "type": "object"
       },
+      "ArgumentCard": {
+        "additionalProperties": false,
+        "description": "``GET /api/arguments``: an Argument with its lists and counts, by name.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentTarget"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "response_count": {
+            "title": "Response Count",
+            "type": "integer"
+          },
+          "mention_count": {
+            "title": "Mention Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "created_at",
+          "updated_at",
+          "targets",
+          "sources",
+          "response_count",
+          "mention_count"
+        ],
+        "type": "object"
+      },
+      "ArgumentCreateRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "main_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or null: empty.",
+            "title": "Main Text"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SourceInput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or null: none.",
+            "title": "Sources"
+          },
+          "targets": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TargetInput"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or null: none.",
+            "title": "Targets"
+          }
+        },
+        "required": [
+          "name",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ArgumentDetail": {
+        "additionalProperties": false,
+        "description": "An Argument with its sources, targets and responses (the answer of every write).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "main_text": {
+            "title": "Main Text",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentTarget"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "responses": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentResponse"
+            },
+            "title": "Responses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "main_text",
+          "created_at",
+          "updated_at",
+          "sources",
+          "targets",
+          "responses"
+        ],
+        "type": "object"
+      },
+      "ArgumentFieldRevisions": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "main_text": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "kind",
+          "main_text",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ArgumentPatch": {
+        "description": "The fields to change; at least one (else ``nothing_to_update``).",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: unchanged.",
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "argument",
+                  "stance"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: unchanged.",
+            "title": "Kind"
+          },
+          "main_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: unchanged.",
+            "title": "Main Text"
+          }
+        },
+        "type": "object"
+      },
+      "ArgumentRead": {
+        "additionalProperties": false,
+        "description": "``GET /api/arguments/{id}``: the detail with its mentions and the verdicts.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "main_text": {
+            "title": "Main Text",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentSource"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentTarget"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "responses": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentResponse"
+            },
+            "title": "Responses",
+            "type": "array"
+          },
+          "mention_count": {
+            "title": "Mention Count",
+            "type": "integer"
+          },
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/Mention"
+            },
+            "title": "Mentions",
+            "type": "array"
+          },
+          "verdicts": {
+            "items": {
+              "$ref": "#/components/schemas/Verdict"
+            },
+            "title": "Verdicts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "main_text",
+          "created_at",
+          "updated_at",
+          "sources",
+          "targets",
+          "responses",
+          "mention_count",
+          "mentions",
+          "verdicts"
+        ],
+        "type": "object"
+      },
       "ArgumentRef": {
         "additionalProperties": false,
         "properties": {
@@ -8544,6 +11650,211 @@
         "required": [
           "id",
           "name"
+        ],
+        "type": "object"
+      },
+      "ArgumentResponse": {
+        "additionalProperties": false,
+        "description": "An Argument that responds to this one.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "verdict_id": {
+            "title": "Verdict Id",
+            "type": "string"
+          },
+          "verdict_label": {
+            "title": "Verdict Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "verdict_id",
+          "verdict_label"
+        ],
+        "type": "object"
+      },
+      "ArgumentSource": {
+        "additionalProperties": false,
+        "description": "A citation: the Work (its primary Version's title), the pinned Version and the pages.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "manifestation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cited Version; null: the Work as a whole.",
+            "title": "Manifestation Id"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          },
+          "work_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Title"
+          },
+          "authors": {
+            "items": {
+              "$ref": "#/components/schemas/SourceAuthor"
+            },
+            "title": "Authors",
+            "type": "array"
+          }
+        },
+        "required": [
+          "work_id",
+          "manifestation_id",
+          "pages",
+          "order_index",
+          "work_title",
+          "authors"
+        ],
+        "type": "object"
+      },
+      "ArgumentSourcesRequest": {
+        "properties": {
+          "sources": {
+            "description": "The whole citation list, in order.",
+            "items": {
+              "$ref": "#/components/schemas/SourceInput"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "type": "object"
+      },
+      "ArgumentState": {
+        "additionalProperties": false,
+        "description": "``GET /api/arguments/{id}/sync-state``: revisions only.",
+        "properties": {
+          "argument_id": {
+            "title": "Argument Id",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/ArgumentFieldRevisions"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "targets": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        },
+        "required": [
+          "argument_id",
+          "fields",
+          "sources",
+          "targets"
+        ],
+        "type": "object"
+      },
+      "ArgumentTarget": {
+        "additionalProperties": false,
+        "description": "A Position or Argument the Argument responds to, with the verdict.",
+        "properties": {
+          "type": {
+            "enum": [
+              "position",
+              "argument"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "description": "An Argument target's kind; left out for a Position.",
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "verdict_id": {
+            "title": "Verdict Id",
+            "type": "string"
+          },
+          "verdict_label": {
+            "title": "Verdict Label",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "name",
+          "verdict_id",
+          "verdict_label",
+          "order_index"
+        ],
+        "type": "object"
+      },
+      "ArgumentTargetsRequest": {
+        "properties": {
+          "targets": {
+            "description": "The whole target list, in order.",
+            "items": {
+              "$ref": "#/components/schemas/TargetInput"
+            },
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "targets"
         ],
         "type": "object"
       },
@@ -9285,6 +12596,350 @@
         },
         "type": "object"
       },
+      "ConceptAliasesRequest": {
+        "properties": {
+          "aliases": {
+            "description": "The whole alias set.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "aliases"
+        ],
+        "type": "object"
+      },
+      "ConceptCard": {
+        "additionalProperties": false,
+        "description": "``GET /api/concepts``: a Concept with its parents, aliases and counts, by name.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "subconcept_count": {
+            "title": "Subconcept Count",
+            "type": "integer"
+          },
+          "parents": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptChip"
+            },
+            "title": "Parents",
+            "type": "array"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "mention_count": {
+            "title": "Mention Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "subconcept_count",
+          "parents",
+          "aliases",
+          "mention_count"
+        ],
+        "type": "object"
+      },
+      "ConceptChip": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConceptCreateRequest": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or null: empty.",
+            "title": "Description"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ConceptDetail": {
+        "additionalProperties": false,
+        "description": "A Concept with its aliases, parents and children (the answer of every write).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "parents": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptChip"
+            },
+            "title": "Parents",
+            "type": "array"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptChip"
+            },
+            "title": "Children",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "aliases",
+          "parents",
+          "children"
+        ],
+        "type": "object"
+      },
+      "ConceptFieldStates": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "$ref": "#/components/schemas/ConceptFieldValue"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "ConceptFieldValue": {
+        "additionalProperties": false,
+        "properties": {
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "value",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ConceptIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "aliases"
+        ],
+        "type": "object"
+      },
+      "ConceptParentsRequest": {
+        "properties": {
+          "parent_ids": {
+            "description": "The whole parent set.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Parent Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "parent_ids"
+        ],
+        "type": "object"
+      },
+      "ConceptPatch": {
+        "description": "The fields to change; at least one (else ``nothing_to_update``).",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A rename; the old name joins the aliases. Null: unchanged.",
+            "title": "Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: unchanged.",
+            "title": "Description"
+          }
+        },
+        "type": "object"
+      },
+      "ConceptRead": {
+        "additionalProperties": false,
+        "description": "``GET /api/concepts/{id}``: the detail with the Works that mention it.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "parents": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptChip"
+            },
+            "title": "Parents",
+            "type": "array"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptChip"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "mention_count": {
+            "title": "Mention Count",
+            "type": "integer"
+          },
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/Mention"
+            },
+            "title": "Mentions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "aliases",
+          "parents",
+          "children",
+          "mention_count",
+          "mentions"
+        ],
+        "type": "object"
+      },
       "ConceptRef": {
         "additionalProperties": false,
         "properties": {
@@ -9308,6 +12963,46 @@
           "id",
           "name",
           "aliases"
+        ],
+        "type": "object"
+      },
+      "ConceptState": {
+        "additionalProperties": false,
+        "description": "``GET /api/concepts/{id}/sync-state``: field values and revisions, and the identity and parent sets.",
+        "properties": {
+          "concept_id": {
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/ConceptFieldStates"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/ConceptIdentity"
+          },
+          "identity_revision": {
+            "title": "Identity Revision",
+            "type": "integer"
+          },
+          "parent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parent Ids",
+            "type": "array"
+          },
+          "parents_revision": {
+            "title": "Parents Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "concept_id",
+          "fields",
+          "identity",
+          "identity_revision",
+          "parent_ids",
+          "parents_revision"
         ],
         "type": "object"
       },
@@ -10134,6 +13829,177 @@
         ],
         "type": "object"
       },
+      "GraphEdge": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "``<type>:<source>><target>``.",
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "concept_parent",
+              "argument_position",
+              "argument_argument",
+              "argument_source",
+              "mentions_concept",
+              "mentions_argument",
+              "work_author"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "verdict_id": {
+            "description": "An Argument target's verdict.",
+            "title": "Verdict Id",
+            "type": "string"
+          },
+          "verdict_label": {
+            "description": "An Argument target's verdict.",
+            "title": "Verdict Label",
+            "type": "string"
+          },
+          "pages": {
+            "description": "An Argument source's pages, when it has some.",
+            "title": "Pages",
+            "type": "string"
+          },
+          "count": {
+            "description": "A mention edge's occurrences.",
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "source",
+          "target"
+        ],
+        "type": "object"
+      },
+      "GraphMeta": {
+        "additionalProperties": false,
+        "properties": {
+          "node_count": {
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "edge_count": {
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "derived_note_edges_available": {
+            "title": "Derived Note Edges Available",
+            "type": "boolean"
+          },
+          "people_included": {
+            "title": "People Included",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node_count",
+          "edge_count",
+          "derived_note_edges_available",
+          "people_included"
+        ],
+        "type": "object"
+      },
+      "GraphNode": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "description": "``<type>:<record id>``.",
+            "title": "Id",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "concept",
+              "position",
+              "argument",
+              "work",
+              "person"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "route": {
+            "description": "The record's app route, ``#/<plural>/<id>``.",
+            "title": "Route",
+            "type": "string"
+          },
+          "kind": {
+            "description": "An Argument's kind.",
+            "enum": [
+              "argument",
+              "stance"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "doc_type": {
+            "description": "A Work's document type, when it has one.",
+            "title": "Doc Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "record_id",
+          "type",
+          "label",
+          "route"
+        ],
+        "type": "object"
+      },
+      "GraphTooLarge": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "const": "graph_too_large",
+            "title": "Code",
+            "type": "string"
+          },
+          "node_count": {
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "edge_count": {
+            "title": "Edge Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "node_count",
+          "edge_count"
+        ],
+        "type": "object"
+      },
       "GroupChip": {
         "additionalProperties": false,
         "properties": {
@@ -10384,6 +14250,144 @@
         ],
         "type": "object"
       },
+      "Materialization": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/{id}/pdf-materialization``: whether the PDF bytes hold the current set.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          },
+          "materialized_pdf_annotation_revision": {
+            "title": "Materialized Pdf Annotation Revision",
+            "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "const": "ANNOTATION_MATERIALIZATION_STALE",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set when stale.",
+            "title": "Code"
+          }
+        },
+        "required": [
+          "work_id",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision",
+          "stale",
+          "code"
+        ],
+        "type": "object"
+      },
+      "MaterializationStale": {
+        "additionalProperties": false,
+        "description": "The claimed set revision is not the current one.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "const": "ANNOTATION_MATERIALIZATION_STALE",
+            "title": "Code",
+            "type": "string"
+          },
+          "canonical_annotation_set_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Annotation Set Revision"
+          },
+          "materialized_pdf_annotation_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Materialized Pdf Annotation Revision"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision"
+        ],
+        "type": "object"
+      },
+      "Mention": {
+        "additionalProperties": false,
+        "description": "A Work whose Research Note names the record, with each occurrence in note order.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/MentionOccurrence"
+            },
+            "title": "Occurrences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "work_id",
+          "title",
+          "occurrences"
+        ],
+        "type": "object"
+      },
+      "MentionOccurrence": {
+        "additionalProperties": false,
+        "properties": {
+          "start": {
+            "title": "Start",
+            "type": "integer"
+          },
+          "end": {
+            "title": "End",
+            "type": "integer"
+          },
+          "snippet": {
+            "description": "Cut from the Research Note; empty while the Work's reindex is pending.",
+            "title": "Snippet",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "snippet"
+        ],
+        "type": "object"
+      },
       "MetadataFieldRevision": {
         "additionalProperties": false,
         "description": "A field measured in bytes: its revision alone, never its value.",
@@ -10450,6 +14454,198 @@
           "error",
           "code",
           "request_id"
+        ],
+        "type": "object"
+      },
+      "PdfAnnotation": {
+        "additionalProperties": true,
+        "description": "One stored annotation as the viewer creates it: the canonical columns and its geometry keys.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "contents": {
+            "title": "Contents",
+            "type": "string"
+          },
+          "pageIndex": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pageindex"
+          },
+          "color": {
+            "title": "Color",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When it was last stored, ``YYYY-MM-DD HH:MM:SS`` UTC.",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "contents",
+          "pageIndex",
+          "color"
+        ],
+        "type": "object"
+      },
+      "PdfMaterialized": {
+        "additionalProperties": false,
+        "description": "The viewer's annotated PDF is the Work's bytes at the claimed set revision.",
+        "properties": {
+          "status": {
+            "const": "success",
+            "title": "Status",
+            "type": "string"
+          },
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>``.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "content_sha256": {
+            "description": "The stored working file (linearization may rewrite it).",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          },
+          "materialized_pdf_annotation_revision": {
+            "title": "Materialized Pdf Annotation Revision",
+            "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "export_sha256": {
+            "description": "The bytes as uploaded.",
+            "title": "Export Sha256",
+            "type": "string"
+          },
+          "export_byte_size": {
+            "title": "Export Byte Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "work_id",
+          "file_path",
+          "content_sha256",
+          "byte_size",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision",
+          "stale",
+          "export_sha256",
+          "export_byte_size"
+        ],
+        "type": "object"
+      },
+      "PdfReplaced": {
+        "additionalProperties": false,
+        "description": "The Work's PDF was replaced.",
+        "properties": {
+          "status": {
+            "const": "success",
+            "title": "Status",
+            "type": "string"
+          },
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>``.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "content_sha256": {
+            "description": "The stored working file (linearization may rewrite it).",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          },
+          "materialized_pdf_annotation_revision": {
+            "title": "Materialized Pdf Annotation Revision",
+            "type": "integer"
+          },
+          "stale": {
+            "title": "Stale",
+            "type": "boolean"
+          },
+          "ingest_sha256": {
+            "description": "The bytes as uploaded.",
+            "title": "Ingest Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "work_id",
+          "file_path",
+          "content_sha256",
+          "byte_size",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision",
+          "stale",
+          "ingest_sha256"
+        ],
+        "type": "object"
+      },
+      "PdfWriteRequest": {
+        "properties": {
+          "file_b64": {
+            "description": "The PDF, base64 encoded.",
+            "title": "File B64",
+            "type": "string"
+          },
+          "materialized_annotation_set_revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The set revision the bytes render: they are the viewer's annotated PDF. Left out or null: the bytes replace the Work's PDF.",
+            "title": "Materialized Annotation Set Revision"
+          }
+        },
+        "required": [
+          "file_b64"
         ],
         "type": "object"
       },
@@ -15342,6 +19538,35 @@
         ],
         "type": "object"
       },
+      "ResearchGraph": {
+        "additionalProperties": false,
+        "description": "``GET /api/research-graph``: nodes by type and label, edges by type and ends.",
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/GraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/GraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/GraphMeta"
+          }
+        },
+        "required": [
+          "nodes",
+          "edges",
+          "meta"
+        ],
+        "type": "object"
+      },
       "ResearchRefs": {
         "additionalProperties": false,
         "description": "The Concepts and Arguments the Research Note links to.",
@@ -15755,6 +19980,103 @@
             "default": null
           }
         },
+        "type": "object"
+      },
+      "SourceAuthor": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "role_type": {
+            "const": "Author",
+            "title": "Role Type",
+            "type": "string"
+          },
+          "credit_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Name"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "first_name",
+          "last_name",
+          "role_type",
+          "credit_name",
+          "order_index"
+        ],
+        "type": "object"
+      },
+      "SourceInput": {
+        "description": "A citation; every entry names ``manifestation_id`` (a Version or null), or none does.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "manifestation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The cited Version; null: the Work as a whole.",
+            "title": "Manifestation Id"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Left out or null: none.",
+            "title": "Pages"
+          }
+        },
+        "required": [
+          "work_id"
+        ],
         "type": "object"
       },
       "StagedSummary": {
@@ -16560,6 +20882,33 @@
         ],
         "type": "object"
       },
+      "TargetInput": {
+        "properties": {
+          "type": {
+            "enum": [
+              "position",
+              "argument"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "verdict_id": {
+            "description": "An enabled verdict.",
+            "title": "Verdict Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "verdict_id"
+        ],
+        "type": "object"
+      },
       "TextRebuildQueued": {
         "additionalProperties": false,
         "description": "``POST /api/works/reindex-pdf-text``: the rebuild is queued; the counters are zero.",
@@ -16649,6 +20998,36 @@
             "type": "boolean"
           }
         },
+        "type": "object"
+      },
+      "Verdict": {
+        "additionalProperties": false,
+        "description": "An enabled verdict, in its order.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "sort_order": {
+            "title": "Sort Order",
+            "type": "integer"
+          },
+          "enabled": {
+            "const": 1,
+            "title": "Enabled",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "sort_order",
+          "enabled"
+        ],
         "type": "object"
       },
       "WorkBrowseRow": {
@@ -18759,6 +23138,14 @@
           "work_id"
         ],
         "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "prks_session",
+        "description": "The session cookie POST /api/login sets."
       }
     },
     "responses": {

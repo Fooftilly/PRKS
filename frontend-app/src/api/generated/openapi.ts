@@ -10,6 +10,119 @@
  */
 
 export interface paths {
+    "/api/argument-verdicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The enabled verdicts, in order */
+        get: operations["listArgumentVerdicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/arguments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Argument (or every one of a kind) with its lists and counts */
+        get: operations["listArguments"];
+        put?: never;
+        /** Create an Argument or Stance */
+        post: operations["createArgument"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/arguments/{argument_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        /** An Argument with its lists, responses, mentions and the verdicts */
+        get: operations["getArgument"];
+        put?: never;
+        post?: never;
+        /** Delete an Argument */
+        delete: operations["deleteArgument"];
+        options?: never;
+        head?: never;
+        /** Change an Argument's name, kind or text */
+        patch: operations["updateArgument"];
+        trace?: never;
+    };
+    "/api/arguments/{argument_id}/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace an Argument's citations */
+        put: operations["setArgumentSources"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/arguments/{argument_id}/sync-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        /** An Argument's field and list revisions */
+        get: operations["getArgumentState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/arguments/{argument_id}/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace what an Argument responds to */
+        put: operations["setArgumentTargets"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/backups/download": {
         parameters: {
             query?: never;
@@ -175,6 +288,102 @@ export interface paths {
         put?: never;
         /** Log a browser error as metadata only */
         post: operations["reportClientError"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/concepts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Concept with its parents, aliases and counts */
+        get: operations["listConcepts"];
+        put?: never;
+        /** Create a Concept */
+        post: operations["createConcept"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/concepts/{concept_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Concept with its hierarchy, aliases and mentions */
+        get: operations["getConcept"];
+        put?: never;
+        post?: never;
+        /** Delete a Concept */
+        delete: operations["deleteConcept"];
+        options?: never;
+        head?: never;
+        /** Rename a Concept or change its definition */
+        patch: operations["updateConcept"];
+        trace?: never;
+    };
+    "/api/concepts/{concept_id}/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a Concept's alias set */
+        put: operations["setConceptAliases"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/concepts/{concept_id}/parents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** Replace a Concept's parent set */
+        put: operations["setConceptParents"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/concepts/{concept_id}/sync-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Concept's field revisions, identity and parent set */
+        get: operations["getConceptState"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1006,6 +1215,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/research-graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Library's Research graph */
+        get: operations["getResearchGraph"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/roles": {
         parameters: {
             query?: never;
@@ -1311,6 +1537,86 @@ export interface paths {
         patch: operations["updateWork"];
         trace?: never;
     };
+    "/api/works/{work_id}/annotations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's annotations as one JSON text */
+        get: operations["listAnnotations"];
+        put?: never;
+        /**
+         * Replace a Work's whole annotation list at a set revision
+         * @description The legacy full-list path; the sync operations are the product's writes.
+         */
+        post: operations["replaceAnnotations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/annotations-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's annotations with their revisions, in one snapshot */
+        get: operations["getAnnotationsSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/annotations-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's annotation revisions */
+        get: operations["getAnnotationsState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/annotations/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store the user markup only the PDF bytes hold */
+        post: operations["adoptAnnotations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/works/{work_id}/folder-state": {
         parameters: {
             query?: never;
@@ -1381,6 +1687,44 @@ export interface paths {
         put?: never;
         /** Record an open of a Work now */
         post: operations["markWorkOpened"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/pdf": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace a Work's PDF, or store its annotated rendering */
+        post: operations["writeWorkPdf"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/pdf-materialization": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** Whether a Work's PDF bytes hold its current annotations */
+        get: operations["getPdfMaterialization"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1605,6 +1949,101 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description The user markup only the bytes held, now stored; the rest counted by why it was skipped. */
+        Adopted: {
+            /** Adopted */
+            adopted: string[];
+            /** Adopted Count */
+            adopted_count: number;
+            /** Skipped Existing */
+            skipped_existing: number;
+            /** Skipped Known Absent */
+            skipped_known_absent: number;
+            /** Skipped Non User */
+            skipped_non_user: number;
+            /** Work Id */
+            work_id: string;
+        };
+        AdoptRequest: {
+            /**
+             * Viewer Annotations
+             * @description The annotations the viewer read from the PDF bytes.
+             */
+            viewer_annotations: unknown[];
+        };
+        /** @description ``GET /api/works/{id}/annotations``: the list as one JSON text (``[]`` for a missing Work). */
+        AnnotationList: {
+            /** Annotations Json */
+            annotations_json: string;
+            /** Work Id */
+            work_id: string;
+        };
+        AnnotationRevision: {
+            /** Annotation Id */
+            annotation_id: string;
+            /** Revision */
+            revision: number;
+        };
+        AnnotationsReplaced: {
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /**
+             * Path
+             * @constant
+             */
+            path: "legacy-full-list";
+            /**
+             * Status
+             * @constant
+             */
+            status: "saved";
+        };
+        AnnotationsReplaceRequest: {
+            /**
+             * Annotations Json
+             * @description The whole list: a JSON array, or its JSON text.
+             */
+            annotations_json: unknown;
+            /**
+             * Canonical Annotation Set Revision
+             * @description The set revision the list was edited at.
+             */
+            canonical_annotation_set_revision: number;
+        };
+        /** @description ``GET /api/works/{id}/annotations-snapshot``: the annotations, their revisions and the set revisions. */
+        AnnotationsSnapshot: {
+            /** Annotations */
+            annotations: components["schemas"]["AnnotationRevision"][];
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /** Items */
+            items: components["schemas"]["PdfAnnotation"][];
+            /**
+             * Known Absent
+             * @description Deleted annotation ids whose revision is kept: id -> revision.
+             */
+            known_absent: {
+                [key: string]: number;
+            };
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description ``GET /api/works/{id}/annotations-state``: each annotation's revision, tombstones included. */
+        AnnotationsState: {
+            /** Annotations */
+            annotations: components["schemas"]["AnnotationRevision"][];
+            /**
+             * Known Absent
+             * @description Deleted annotation ids whose revision is kept: id -> revision.
+             */
+            known_absent: {
+                [key: string]: number;
+            };
+            /** Work Id */
+            work_id: string;
+        };
         /** @description Standard JSON error body at the HTTP adapter boundary. */
         ApiErrorEnvelope: {
             /**
@@ -1654,11 +2093,216 @@ export interface components {
              */
             citation_style?: string;
         };
+        /** @description ``GET /api/arguments``: an Argument with its lists and counts, by name. */
+        ArgumentCard: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "argument" | "stance";
+            /** Mention Count */
+            mention_count: number;
+            /** Name */
+            name: string;
+            /** Response Count */
+            response_count: number;
+            /** Sources */
+            sources: components["schemas"]["ArgumentSource"][];
+            /** Targets */
+            targets: components["schemas"]["ArgumentTarget"][];
+            /** Updated At */
+            updated_at: string;
+        };
+        ArgumentCreateRequest: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "argument" | "stance";
+            /**
+             * Main Text
+             * @description Left out or null: empty.
+             */
+            main_text?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Sources
+             * @description Left out or null: none.
+             */
+            sources?: components["schemas"]["SourceInput"][] | null;
+            /**
+             * Targets
+             * @description Left out or null: none.
+             */
+            targets?: components["schemas"]["TargetInput"][] | null;
+        };
+        /** @description An Argument with its sources, targets and responses (the answer of every write). */
+        ArgumentDetail: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "argument" | "stance";
+            /** Main Text */
+            main_text: string;
+            /** Name */
+            name: string;
+            /** Responses */
+            responses: components["schemas"]["ArgumentResponse"][];
+            /** Sources */
+            sources: components["schemas"]["ArgumentSource"][];
+            /** Targets */
+            targets: components["schemas"]["ArgumentTarget"][];
+            /** Updated At */
+            updated_at: string;
+        };
+        ArgumentFieldRevisions: {
+            kind: components["schemas"]["Revision"];
+            main_text: components["schemas"]["Revision"];
+            name: components["schemas"]["Revision"];
+        };
+        /** @description The fields to change; at least one (else ``nothing_to_update``). */
+        ArgumentPatch: {
+            /**
+             * Kind
+             * @description Null: unchanged.
+             */
+            kind?: ("argument" | "stance") | null;
+            /**
+             * Main Text
+             * @description Null: unchanged.
+             */
+            main_text?: string | null;
+            /**
+             * Name
+             * @description Null: unchanged.
+             */
+            name?: string | null;
+        };
+        /** @description ``GET /api/arguments/{id}``: the detail with its mentions and the verdicts. */
+        ArgumentRead: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "argument" | "stance";
+            /** Main Text */
+            main_text: string;
+            /** Mention Count */
+            mention_count: number;
+            /** Mentions */
+            mentions: components["schemas"]["Mention"][];
+            /** Name */
+            name: string;
+            /** Responses */
+            responses: components["schemas"]["ArgumentResponse"][];
+            /** Sources */
+            sources: components["schemas"]["ArgumentSource"][];
+            /** Targets */
+            targets: components["schemas"]["ArgumentTarget"][];
+            /** Updated At */
+            updated_at: string;
+            /** Verdicts */
+            verdicts: components["schemas"]["Verdict"][];
+        };
         ArgumentRef: {
             /** Id */
             id: string;
             /** Name */
             name: string;
+        };
+        /** @description An Argument that responds to this one. */
+        ArgumentResponse: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "argument" | "stance";
+            /** Name */
+            name: string;
+            /** Verdict Id */
+            verdict_id: string;
+            /** Verdict Label */
+            verdict_label: string;
+        };
+        /** @description A citation: the Work (its primary Version's title), the pinned Version and the pages. */
+        ArgumentSource: {
+            /** Authors */
+            authors: components["schemas"]["SourceAuthor"][];
+            /**
+             * Manifestation Id
+             * @description The cited Version; null: the Work as a whole.
+             */
+            manifestation_id: string | null;
+            /** Order Index */
+            order_index: number;
+            /** Pages */
+            pages: string;
+            /** Work Id */
+            work_id: string;
+            /** Work Title */
+            work_title: string | null;
+        };
+        ArgumentSourcesRequest: {
+            /**
+             * Sources
+             * @description The whole citation list, in order.
+             */
+            sources: components["schemas"]["SourceInput"][];
+        };
+        /** @description ``GET /api/arguments/{id}/sync-state``: revisions only. */
+        ArgumentState: {
+            /** Argument Id */
+            argument_id: string;
+            fields: components["schemas"]["ArgumentFieldRevisions"];
+            sources: components["schemas"]["Revision"];
+            targets: components["schemas"]["Revision"];
+        };
+        /** @description A Position or Argument the Argument responds to, with the verdict. */
+        ArgumentTarget: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @description An Argument target's kind; left out for a Position.
+             * @enum {string}
+             */
+            kind?: "argument" | "stance";
+            /** Name */
+            name: string;
+            /** Order Index */
+            order_index: number;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "position" | "argument";
+            /** Verdict Id */
+            verdict_id: string;
+            /** Verdict Label */
+            verdict_label: string;
+        };
+        ArgumentTargetsRequest: {
+            /**
+             * Targets
+             * @description The whole target list, in order.
+             */
+            targets: components["schemas"]["TargetInput"][];
         };
         AssignedTag: {
             /** Relation Revision */
@@ -2016,6 +2660,126 @@ export interface components {
              */
             source?: unknown;
         };
+        ConceptAliasesRequest: {
+            /**
+             * Aliases
+             * @description The whole alias set.
+             */
+            aliases: string[];
+        };
+        /** @description ``GET /api/concepts``: a Concept with its parents, aliases and counts, by name. */
+        ConceptCard: {
+            /** Aliases */
+            aliases: string[];
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Mention Count */
+            mention_count: number;
+            /** Name */
+            name: string;
+            /** Parents */
+            parents: components["schemas"]["ConceptChip"][];
+            /** Subconcept Count */
+            subconcept_count: number;
+            /** Updated At */
+            updated_at: string;
+        };
+        ConceptChip: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        ConceptCreateRequest: {
+            /**
+             * Description
+             * @description Left out or null: empty.
+             */
+            description?: string | null;
+            /** Name */
+            name: string;
+        };
+        /** @description A Concept with its aliases, parents and children (the answer of every write). */
+        ConceptDetail: {
+            /** Aliases */
+            aliases: string[];
+            /** Children */
+            children: components["schemas"]["ConceptChip"][];
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Parents */
+            parents: components["schemas"]["ConceptChip"][];
+            /** Updated At */
+            updated_at: string;
+        };
+        ConceptFieldStates: {
+            description: components["schemas"]["ConceptFieldValue"];
+        };
+        ConceptFieldValue: {
+            /** Revision */
+            revision: number;
+            /** Value */
+            value: string;
+        };
+        ConceptIdentity: {
+            /** Aliases */
+            aliases: string[];
+            /** Name */
+            name: string;
+        };
+        ConceptParentsRequest: {
+            /**
+             * Parent Ids
+             * @description The whole parent set.
+             */
+            parent_ids: string[];
+        };
+        /** @description The fields to change; at least one (else ``nothing_to_update``). */
+        ConceptPatch: {
+            /**
+             * Description
+             * @description Null: unchanged.
+             */
+            description?: string | null;
+            /**
+             * Name
+             * @description A rename; the old name joins the aliases. Null: unchanged.
+             */
+            name?: string | null;
+        };
+        /** @description ``GET /api/concepts/{id}``: the detail with the Works that mention it. */
+        ConceptRead: {
+            /** Aliases */
+            aliases: string[];
+            /** Children */
+            children: components["schemas"]["ConceptChip"][];
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string;
+            /** Id */
+            id: string;
+            /** Mention Count */
+            mention_count: number;
+            /** Mentions */
+            mentions: components["schemas"]["Mention"][];
+            /** Name */
+            name: string;
+            /** Parents */
+            parents: components["schemas"]["ConceptChip"][];
+            /** Updated At */
+            updated_at: string;
+        };
         ConceptRef: {
             /** Aliases */
             aliases: string[];
@@ -2023,6 +2787,19 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+        };
+        /** @description ``GET /api/concepts/{id}/sync-state``: field values and revisions, and the identity and parent sets. */
+        ConceptState: {
+            /** Concept Id */
+            concept_id: string;
+            fields: components["schemas"]["ConceptFieldStates"];
+            identity: components["schemas"]["ConceptIdentity"];
+            /** Identity Revision */
+            identity_revision: number;
+            /** Parent Ids */
+            parent_ids: string[];
+            /** Parents Revision */
+            parents_revision: number;
         };
         Created: {
             /** Id */
@@ -2313,6 +3090,97 @@ export interface components {
              */
             status: "updated";
         };
+        GraphEdge: {
+            /**
+             * Count
+             * @description A mention edge's occurrences.
+             */
+            count?: number;
+            /**
+             * Id
+             * @description ``<type>:<source>><target>``.
+             */
+            id: string;
+            /**
+             * Pages
+             * @description An Argument source's pages, when it has some.
+             */
+            pages?: string;
+            /** Source */
+            source: string;
+            /** Target */
+            target: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "concept_parent" | "argument_position" | "argument_argument" | "argument_source" | "mentions_concept" | "mentions_argument" | "work_author";
+            /**
+             * Verdict Id
+             * @description An Argument target's verdict.
+             */
+            verdict_id?: string;
+            /**
+             * Verdict Label
+             * @description An Argument target's verdict.
+             */
+            verdict_label?: string;
+        };
+        GraphMeta: {
+            /** Derived Note Edges Available */
+            derived_note_edges_available: boolean;
+            /** Edge Count */
+            edge_count: number;
+            /** Node Count */
+            node_count: number;
+            /** People Included */
+            people_included: boolean;
+        };
+        GraphNode: {
+            /**
+             * Doc Type
+             * @description A Work's document type, when it has one.
+             */
+            doc_type?: string;
+            /**
+             * Id
+             * @description ``<type>:<record id>``.
+             */
+            id: string;
+            /**
+             * Kind
+             * @description An Argument's kind.
+             * @enum {string}
+             */
+            kind?: "argument" | "stance";
+            /** Label */
+            label: string;
+            /** Record Id */
+            record_id: string;
+            /**
+             * Route
+             * @description The record's app route, ``#/<plural>/<id>``.
+             */
+            route: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "concept" | "position" | "argument" | "work" | "person";
+        };
+        GraphTooLarge: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "graph_too_large";
+            /** Edge Count */
+            edge_count: number;
+            /** Error */
+            error: string;
+            /** Node Count */
+            node_count: number;
+        };
         GroupChip: {
             /** Id */
             id: string;
@@ -2405,6 +3273,56 @@ export interface components {
             /** Role Type */
             role_type: string;
         };
+        /** @description ``GET /api/works/{id}/pdf-materialization``: whether the PDF bytes hold the current set. */
+        Materialization: {
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /**
+             * Code
+             * @description Set when stale.
+             */
+            code: "ANNOTATION_MATERIALIZATION_STALE" | null;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Stale */
+            stale: boolean;
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description The claimed set revision is not the current one. */
+        MaterializationStale: {
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number | null;
+            /**
+             * Code
+             * @constant
+             */
+            code: "ANNOTATION_MATERIALIZATION_STALE";
+            /** Error */
+            error: string;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number | null;
+        };
+        /** @description A Work whose Research Note names the record, with each occurrence in note order. */
+        Mention: {
+            /** Occurrences */
+            occurrences: components["schemas"]["MentionOccurrence"][];
+            /** Title */
+            title: string;
+            /** Work Id */
+            work_id: string;
+        };
+        MentionOccurrence: {
+            /** End */
+            end: number;
+            /**
+             * Snippet
+             * @description Cut from the Research Note; empty while the Work's reindex is pending.
+             */
+            snippet: string;
+            /** Start */
+            start: number;
+        };
         /** @description A field measured in bytes: its revision alone, never its value. */
         MetadataFieldRevision: {
             /** Revision */
@@ -2428,6 +3346,106 @@ export interface components {
             error: string;
             /** Request Id */
             request_id: string;
+        };
+        /** @description One stored annotation as the viewer creates it: the canonical columns and its geometry keys. */
+        PdfAnnotation: {
+            /** Color */
+            color: string;
+            /** Contents */
+            contents: string;
+            /** Id */
+            id: string;
+            /** Pageindex */
+            pageIndex: number | null;
+            /** Type */
+            type: string;
+            /**
+             * Updated At
+             * @description When it was last stored, ``YYYY-MM-DD HH:MM:SS`` UTC.
+             */
+            updated_at?: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** @description The viewer's annotated PDF is the Work's bytes at the claimed set revision. */
+        PdfMaterialized: {
+            /** Byte Size */
+            byte_size: number;
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /**
+             * Content Sha256
+             * @description The stored working file (linearization may rewrite it).
+             */
+            content_sha256: string;
+            /** Export Byte Size */
+            export_byte_size: number;
+            /**
+             * Export Sha256
+             * @description The bytes as uploaded.
+             */
+            export_sha256: string;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>``.
+             */
+            file_path: string;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description The Work's PDF was replaced. */
+        PdfReplaced: {
+            /** Byte Size */
+            byte_size: number;
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /**
+             * Content Sha256
+             * @description The stored working file (linearization may rewrite it).
+             */
+            content_sha256: string;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>``.
+             */
+            file_path: string;
+            /**
+             * Ingest Sha256
+             * @description The bytes as uploaded.
+             */
+            ingest_sha256: string;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Stale */
+            stale: boolean;
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+            /** Work Id */
+            work_id: string;
+        };
+        PdfWriteRequest: {
+            /**
+             * File B64
+             * @description The PDF, base64 encoded.
+             */
+            file_b64: string;
+            /**
+             * Materialized Annotation Set Revision
+             * @description The set revision the bytes render: they are the viewer's annotated PDF. Left out or null: the bytes replace the Work's PDF.
+             */
+            materialized_annotation_set_revision?: number | null;
         };
         /** @description Exact counter map the registry always emits (zeros included). */
         PerformanceCounters: {
@@ -3809,6 +4827,14 @@ export interface components {
             /** Year */
             year: string | null;
         };
+        /** @description ``GET /api/research-graph``: nodes by type and label, edges by type and ends. */
+        ResearchGraph: {
+            /** Edges */
+            edges: components["schemas"]["GraphEdge"][];
+            meta: components["schemas"]["GraphMeta"];
+            /** Nodes */
+            nodes: components["schemas"]["GraphNode"][];
+        };
         /** @description The Concepts and Arguments the Research Note links to. */
         ResearchRefs: {
             /** Arguments */
@@ -3982,6 +5008,38 @@ export interface components {
             name?: string | null;
             /** @default null */
             search?: components["schemas"]["SavedViewSearchInput"] | null;
+        };
+        SourceAuthor: {
+            /** Credit Name */
+            credit_name: string | null;
+            /** First Name */
+            first_name: string | null;
+            /** Id */
+            id: string;
+            /** Last Name */
+            last_name: string | null;
+            /** Order Index */
+            order_index: number;
+            /**
+             * Role Type
+             * @constant
+             */
+            role_type: "Author";
+        };
+        /** @description A citation; every entry names ``manifestation_id`` (a Version or null), or none does. */
+        SourceInput: {
+            /**
+             * Manifestation Id
+             * @description The cited Version; null: the Work as a whole.
+             */
+            manifestation_id?: string | null;
+            /**
+             * Pages
+             * @description Left out or null: none.
+             */
+            pages?: string | null;
+            /** Work Id */
+            work_id: string;
         };
         StagedSummary: {
             /** Annotations */
@@ -4306,6 +5364,20 @@ export interface components {
             /** Target Tag Id */
             target_tag_id: string;
         };
+        TargetInput: {
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "position" | "argument";
+            /**
+             * Verdict Id
+             * @description An enabled verdict.
+             */
+            verdict_id: string;
+        };
         /** @description ``POST /api/works/reindex-pdf-text``: the rebuild is queued; the counters are zero. */
         TextRebuildQueued: {
             /** Empty */
@@ -4349,6 +5421,20 @@ export interface components {
              * @description Accepted; asks for nothing more (only what has no current row is re-extracted).
              */
             force?: boolean;
+        };
+        /** @description An enabled verdict, in its order. */
+        Verdict: {
+            /**
+             * Enabled
+             * @constant
+             */
+            enabled: 1;
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Sort Order */
+            sort_order: number;
         };
         /** @description ``GET /api/works?projection=browse``: the compact card row. */
         WorkBrowseRow: {
@@ -5049,10 +6135,30 @@ export interface components {
     headers: never;
     pathItems: never;
 }
+export type Adopted = components['schemas']['Adopted'];
+export type AdoptRequest = components['schemas']['AdoptRequest'];
+export type AnnotationList = components['schemas']['AnnotationList'];
+export type AnnotationRevision = components['schemas']['AnnotationRevision'];
+export type AnnotationsReplaced = components['schemas']['AnnotationsReplaced'];
+export type AnnotationsReplaceRequest = components['schemas']['AnnotationsReplaceRequest'];
+export type AnnotationsSnapshot = components['schemas']['AnnotationsSnapshot'];
+export type AnnotationsState = components['schemas']['AnnotationsState'];
 export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
 export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
+export type ArgumentCard = components['schemas']['ArgumentCard'];
+export type ArgumentCreateRequest = components['schemas']['ArgumentCreateRequest'];
+export type ArgumentDetail = components['schemas']['ArgumentDetail'];
+export type ArgumentFieldRevisions = components['schemas']['ArgumentFieldRevisions'];
+export type ArgumentPatch = components['schemas']['ArgumentPatch'];
+export type ArgumentRead = components['schemas']['ArgumentRead'];
 export type ArgumentRef = components['schemas']['ArgumentRef'];
+export type ArgumentResponse = components['schemas']['ArgumentResponse'];
+export type ArgumentSource = components['schemas']['ArgumentSource'];
+export type ArgumentSourcesRequest = components['schemas']['ArgumentSourcesRequest'];
+export type ArgumentState = components['schemas']['ArgumentState'];
+export type ArgumentTarget = components['schemas']['ArgumentTarget'];
+export type ArgumentTargetsRequest = components['schemas']['ArgumentTargetsRequest'];
 export type AssignedTag = components['schemas']['AssignedTag'];
 export type BackupProgressLine = components['schemas']['BackupProgressLine'];
 export type BackupRefusal = components['schemas']['BackupRefusal'];
@@ -5073,7 +6179,19 @@ export type CitationStyleList = components['schemas']['CitationStyleList'];
 export type CitationStyleSummary = components['schemas']['CitationStyleSummary'];
 export type ClientErrorLogged = components['schemas']['ClientErrorLogged'];
 export type ClientErrorReport = components['schemas']['ClientErrorReport'];
+export type ConceptAliasesRequest = components['schemas']['ConceptAliasesRequest'];
+export type ConceptCard = components['schemas']['ConceptCard'];
+export type ConceptChip = components['schemas']['ConceptChip'];
+export type ConceptCreateRequest = components['schemas']['ConceptCreateRequest'];
+export type ConceptDetail = components['schemas']['ConceptDetail'];
+export type ConceptFieldStates = components['schemas']['ConceptFieldStates'];
+export type ConceptFieldValue = components['schemas']['ConceptFieldValue'];
+export type ConceptIdentity = components['schemas']['ConceptIdentity'];
+export type ConceptParentsRequest = components['schemas']['ConceptParentsRequest'];
+export type ConceptPatch = components['schemas']['ConceptPatch'];
+export type ConceptRead = components['schemas']['ConceptRead'];
 export type ConceptRef = components['schemas']['ConceptRef'];
+export type ConceptState = components['schemas']['ConceptState'];
 export type Created = components['schemas']['Created'];
 export type CslDate = components['schemas']['CslDate'];
 export type CslItem = components['schemas']['CslItem'];
@@ -5096,6 +6214,10 @@ export type FolderPatch = components['schemas']['FolderPatch'];
 export type FolderState = components['schemas']['FolderState'];
 export type FolderTagOptions = components['schemas']['FolderTagOptions'];
 export type FolderUpdated = components['schemas']['FolderUpdated'];
+export type GraphEdge = components['schemas']['GraphEdge'];
+export type GraphMeta = components['schemas']['GraphMeta'];
+export type GraphNode = components['schemas']['GraphNode'];
+export type GraphTooLarge = components['schemas']['GraphTooLarge'];
 export type GroupChip = components['schemas']['GroupChip'];
 export type GroupMemberRequest = components['schemas']['GroupMemberRequest'];
 export type GroupMemberScope = components['schemas']['GroupMemberScope'];
@@ -5104,9 +6226,17 @@ export type JobDiagnostics = components['schemas']['JobDiagnostics'];
 export type JobQueueDepth = components['schemas']['JobQueueDepth'];
 export type JobWorkerCounters = components['schemas']['JobWorkerCounters'];
 export type LinkedPerson = components['schemas']['LinkedPerson'];
+export type Materialization = components['schemas']['Materialization'];
+export type MaterializationStale = components['schemas']['MaterializationStale'];
+export type Mention = components['schemas']['Mention'];
+export type MentionOccurrence = components['schemas']['MentionOccurrence'];
 export type MetadataFieldRevision = components['schemas']['MetadataFieldRevision'];
 export type MetadataFieldValue = components['schemas']['MetadataFieldValue'];
 export type NotPortedEnvelope = components['schemas']['NotPortedEnvelope'];
+export type PdfAnnotation = components['schemas']['PdfAnnotation'];
+export type PdfMaterialized = components['schemas']['PdfMaterialized'];
+export type PdfReplaced = components['schemas']['PdfReplaced'];
+export type PdfWriteRequest = components['schemas']['PdfWriteRequest'];
 export type PerformanceCounters = components['schemas']['PerformanceCounters'];
 export type PerformanceDiagnosticsReset = components['schemas']['PerformanceDiagnosticsReset'];
 export type PerformanceDiagnosticsResetRequest = components['schemas']['PerformanceDiagnosticsResetRequest'];
@@ -5172,6 +6302,7 @@ export type PublisherDeleted = components['schemas']['PublisherDeleted'];
 export type PublisherInUse = components['schemas']['PublisherInUse'];
 export type RecentlyAddedWork = components['schemas']['RecentlyAddedWork'];
 export type RecentWork = components['schemas']['RecentWork'];
+export type ResearchGraph = components['schemas']['ResearchGraph'];
 export type ResearchRefs = components['schemas']['ResearchRefs'];
 export type Restored = components['schemas']['Restored'];
 export type RestoreRequest = components['schemas']['RestoreRequest'];
@@ -5187,6 +6318,8 @@ export type SavedViewDeleted = components['schemas']['SavedViewDeleted'];
 export type SavedViewSearch = components['schemas']['SavedViewSearch'];
 export type SavedViewSearchInput = components['schemas']['SavedViewSearchInput'];
 export type SavedViewUpdateRequest = components['schemas']['SavedViewUpdateRequest'];
+export type SourceAuthor = components['schemas']['SourceAuthor'];
+export type SourceInput = components['schemas']['SourceInput'];
 export type StagedSummary = components['schemas']['StagedSummary'];
 export type StorageDatabase = components['schemas']['StorageDatabase'];
 export type StorageFilesystem = components['schemas']['StorageFilesystem'];
@@ -5205,8 +6338,10 @@ export type TagInUse = components['schemas']['TagInUse'];
 export type TagLinkRequest = components['schemas']['TagLinkRequest'];
 export type TagMerged = components['schemas']['TagMerged'];
 export type TagMergeRequest = components['schemas']['TagMergeRequest'];
+export type TargetInput = components['schemas']['TargetInput'];
 export type TextRebuildQueued = components['schemas']['TextRebuildQueued'];
 export type TextRebuildRequest = components['schemas']['TextRebuildRequest'];
+export type Verdict = components['schemas']['Verdict'];
 export type WorkBrowseRow = components['schemas']['WorkBrowseRow'];
 export type WorkCreated = components['schemas']['WorkCreated'];
 export type WorkCreateRequest = components['schemas']['WorkCreateRequest'];
@@ -5236,6 +6371,435 @@ export type ResponseUnavailableOrMaintenance = components['responses']['Unavaila
 export type ResponseUnsupportedMediaType = components['responses']['UnsupportedMediaType'];
 export type $defs = Record<string, never>;
 export interface operations {
+    listArgumentVerdicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The verdicts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Verdict"][];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listArguments: {
+        parameters: {
+            query?: {
+                /** @description Only this kind; blank: every Argument. */
+                kind?: "argument" | "stance";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description By name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentCard"][];
+                };
+            };
+            /** @description An unknown kind (invalid_kind). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createArgument: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArgumentCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The new Argument. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getArgument: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Argument. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentRead"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deleteArgument: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id (not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A Research Note references it (argument_in_use), or another Argument responds to it (argument_targeted). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updateArgument: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArgumentPatch"];
+            };
+        };
+        responses: {
+            /** @description The Argument as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    setArgumentSources: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArgumentSourcesRequest"];
+            };
+        };
+        responses: {
+            /** @description The Argument as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getArgumentState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisions only. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    setArgumentTargets: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                argument_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArgumentTargetsRequest"];
+            };
+        };
+        responses: {
+            /** @description The Argument as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArgumentDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, invalid_targets, invalid_pages, invalid_verdict, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Argument with that id (not_found), or a cited Work, Version or target that is not one (work_not_found, argument_source_version_not_found, position_not_found, argument_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A target would make a response cycle (argument_cycle), or a Work's citation must name its Version (argument_source_version_required) of that Work (argument_source_version_mismatch). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
     downloadBackup: {
         parameters: {
             query: {
@@ -5668,6 +7232,391 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listConcepts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description By name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptCard"][];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createConcept: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConceptCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The new Concept. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The name is another Concept's name or alias (concept_exists). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getConcept: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Concept. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptRead"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deleteConcept: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id (not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A Research Note still references it (concept_in_use). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updateConcept: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConceptPatch"];
+            };
+        };
+        responses: {
+            /** @description The Concept as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id (not_found), or a parent that is not one (parent_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The new name is another Concept's name or alias (concept_exists, alias_conflict). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    setConceptAliases: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConceptAliasesRequest"];
+            };
+        };
+        responses: {
+            /** @description The Concept as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id (not_found), or a parent that is not one (parent_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description An alias is another Concept's name or alias (concept_exists, alias_conflict). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    setConceptParents: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConceptParentsRequest"];
+            };
+        };
+        responses: {
+            /** @description The Concept as it now stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptDetail"];
+                };
+            };
+            /** @description A refused value, with its code (invalid_name, invalid_text, invalid_aliases, invalid_parents, nothing_to_update). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id (not_found), or a parent that is not one (parent_not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A parent would make a cycle (concept_cycle). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getConceptState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                concept_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Values and revisions. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConceptState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Concept with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
             503: components["responses"]["Unavailable"];
         };
     };
@@ -7062,15 +9011,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description The Library is unavailable, or in maintenance when an editor's miss caches the portrait (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorEnvelope"];
-                };
-            };
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     listPlaylists: {
@@ -8514,15 +10455,42 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            /** @description The Library is unavailable, or in maintenance when an editor's miss saves the copy (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
-            503: {
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getResearchGraph: {
+        parameters: {
+            query?: {
+                /** @description ``1``, ``true``, ``yes`` or ``on``: also the Works' Authors. */
+                people?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Concepts, Positions, Arguments and the Works they cite or mention. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                    "application/json": components["schemas"]["ResearchGraph"];
                 };
             };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description Past the node or edge bound (graph_too_large), with the counts. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphTooLarge"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
         };
     };
     addRole: {
@@ -9590,6 +11558,249 @@ export interface operations {
             503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
+    listAnnotations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The list (``[]`` for a missing Work). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationList"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    replaceAnnotations: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnnotationsReplaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Saved; the new set revision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationsReplaced"];
+                };
+            };
+            /** @description No list or no set revision, or a malformed one (malformed_annotation_payload). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Work, or it has no managed PDF. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The set revision is not the current one (ANNOTATION_SET_STALE), or an id a deleted annotation used (ANNOTATION_ID_REUSED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getAnnotationsSnapshot: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The annotations, their revisions and the set revisions. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationsSnapshot"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getAnnotationsState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each annotation's revision and the kept tombstones. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnotationsState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    adoptAnnotations: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptRequest"];
+            };
+        };
+        responses: {
+            /** @description Adopted, with what was skipped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Adopted"];
+                };
+            };
+            /** @description A malformed list or annotation (malformed_annotation_payload). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Work, or it has no managed PDF. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The bytes are known stale (ANNOTATION_MATERIALIZATION_STALE). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
     getWorkFolderState: {
         parameters: {
             query?: never;
@@ -9786,6 +11997,101 @@ export interface operations {
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    writeWorkPdf: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PdfWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Stored; what the Asset now holds. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PdfReplaced"] | components["schemas"]["PdfMaterialized"];
+                };
+            };
+            /** @description No or invalid file_b64, or an invalid materialization revision. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Work, or it has no managed PDF. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The claimed set revision is not the current one. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaterializationStale"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPdfMaterialization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The set revisions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Materialization"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
         };
     };
     getWorkPeopleState: {

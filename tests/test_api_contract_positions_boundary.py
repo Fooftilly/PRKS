@@ -62,6 +62,7 @@ def _validate_http_against_openapi(
     if method.upper() not in ("GET", "HEAD"):  # a Library mutation names the epoch it acted on
         request_headers = {"PRKS-Library-Epoch": "1", **(request_headers or {})}
     req = MockRequest(
+        cookies={"prks_session": "token"},
         host_url="http://127.0.0.1",
         method=method.lower(),
         path=path,

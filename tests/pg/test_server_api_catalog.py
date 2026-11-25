@@ -179,7 +179,7 @@ class CitationExportTests(ServerApiTestCase):
         payload = {"work_ids": work_ids, "format": fmt}
         res = self.send("POST", "/api/citations", payload)
         api = OpenAPI.from_dict(openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method="post", path="/api/citations",
+        request = MockRequest(cookies={"prks_session": "token"}, host_url="http://127.0.0.1", method="post", path="/api/citations",
                               data=json.dumps(payload).encode())
         if schema_valid:
             api.validate_request(request)

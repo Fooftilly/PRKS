@@ -28,10 +28,14 @@ def _body(**worker):
     }
 
 
+# Every /api/ operation needs the session cookie (components.securitySchemes).
+SESSION = {"prks_session": "token"}
+
+
 class JobDiagnosticsContractTests(unittest.TestCase):
     def test_a_body_validates_against_the_document(self):
         api = OpenAPI.from_dict(openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/diagnostics/jobs")
+        request = MockRequest(host_url="http://127.0.0.1", cookies=SESSION, method="get", path="/api/diagnostics/jobs")
         api.validate_request(request)
         for body in (_body(), {"embedded_worker": None, "queue": []}, _body(state="waiting", reason="pending")):
             with self.subTest(body=body):

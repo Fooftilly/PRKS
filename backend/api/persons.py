@@ -233,7 +233,5 @@ ROUTES = (
         "getPersonProfileImage", "A Person's cached portrait, fetched and cached on a miss", _TAG,
         {200: ok(BINARY, "The portrait.", media_type=("image/webp", "image/jpeg"),
                  headers={"Cache-Control": Header("``private, max-age=<seconds>``.", required=True)}),
-         404: plain("No such Person, no image_url, or the image could not be fetched."),
-         503: error("The Library is unavailable, or in maintenance when an editor's miss caches the portrait "
-                    "(unavailable, MAINTENANCE).")})),
+         404: plain("No such Person, no image_url, or the image could not be fetched.")})),
 )

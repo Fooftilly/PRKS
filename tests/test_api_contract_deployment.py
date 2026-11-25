@@ -25,10 +25,14 @@ _ENV = {
 }
 
 
+# Every /api/ operation needs the session cookie (components.securitySchemes).
+SESSION = {"prks_session": "token"}
+
+
 class DeploymentSettingsTests(unittest.TestCase):
     def test_the_body_validates_against_the_document(self) -> None:
         api = OpenAPI.from_dict(openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/deployment-settings")
+        request = MockRequest(host_url="http://127.0.0.1", cookies=SESSION, method="get", path="/api/deployment-settings")
         api.validate_request(request)
         data = json.dumps(deployment_api.body(_ENV)).encode()
         api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json"))

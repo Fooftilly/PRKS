@@ -42,6 +42,10 @@ def _get(app: App) -> Response:
     return found.route.handler(request)
 
 
+# Every /api/ operation needs the session cookie (components.securitySchemes).
+SESSION = {"prks_session": "token"}
+
+
 class StatusTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="prks-status-")
@@ -66,7 +70,7 @@ class StatusTestCase(unittest.TestCase):
 class StorageStatusFactsTests(StatusTestCase):
     def test_the_body_validates_against_the_document(self) -> None:
         api = OpenAPI.from_dict(openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/storage-status")
+        request = MockRequest(host_url="http://127.0.0.1", cookies=SESSION, method="get", path="/api/storage-status")
         api.validate_request(request)
         data = json.dumps(self.body(conninfo="postgresql://prks:hunter2@db:5432/prks")).encode()
         api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json",

@@ -429,7 +429,7 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         from openapi_core.testing import MockRequest
 
         data = raw if raw is not None else (None if body is None else json.dumps(body).encode("utf-8"))
-        request = MockRequest(host_url=self.origin, method=method.lower(), path=path, data=data,
+        request = MockRequest(cookies={"prks_session": "token"}, host_url=self.origin, method=method.lower(), path=path, data=data,
                               headers={"PRKS-Library-Epoch": "1"}, content_type="application/json")
         try:
             self.api.validate_request(request)

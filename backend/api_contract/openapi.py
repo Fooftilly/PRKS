@@ -31,12 +31,14 @@ from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.operation import JSON, Operation, Param, Reply, RequestBody, Schema
+from backend.domain.identity.secret_tokens import SESSION_COOKIE
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
+SESSION_SCHEME = "session"
 # parse_epoch's canonical form: a positive bigint, no sign, no leading zero.
 _EPOCH_SCHEMA = {"type": "string", "pattern": "^[1-9][0-9]{0,18}$",
                  "description": "1 to 9223372036854775807, in decimal."}
@@ -129,16 +131,22 @@ def _request(components: _Components, request: RequestBody) -> dict[str, Any]:
     return out
 
 
+def _is_api(route: Any) -> bool:
+    return route.pattern == "/api" or route.pattern.startswith("/api/")
+
+
 def _shared_for(route: Any) -> dict[str, str]:
     """``status -> components.responses name`` this route can send besides its own."""
-    from backend.api.session import epoch_fenced
+    from backend.api.session import epoch_fenced, fills_derived_cache
     from backend.web.routing import Body
 
     shared: dict[str, str] = {}
-    if route.pattern == "/api" or route.pattern.startswith("/api/"):
+    if _is_api(route):
         shared.update({"401": "NotAuthenticated", "403": "Forbidden", "503": "Unavailable"})
         if epoch_fenced(route.method, route.pattern):  # library_command: the maintenance lock and epoch fence
             shared.update({"400": "EpochRequired", "409": "EpochChanged", "503": "UnavailableOrMaintenance"})
+        elif fills_derived_cache(route.method, route.pattern):  # a miss fills the cache through library_command
+            shared["503"] = "UnavailableOrMaintenance"
     if route.body_kind is Body.JSON:
         bad = "BadRequest" if shared.get("400") == "EpochRequired" else "InvalidRequest"
         shared.update({"400": bad, "413": "RequestTooLarge", "415": "UnsupportedMediaType"})
@@ -186,16 +194,13 @@ def _operation(components: _Components, route: Any, contract: Operation, shared:
             responses[status] = {"$ref": f"#/components/responses/{name}"}
             shared.add(name)
     out["responses"] = dict(sorted(responses.items()))
+    # Every /api/ route of the table admits a live session; the health probes need none.
+    out["security"] = [{SESSION_SCHEME: []}] if _is_api(route) else []
     return out
 
 
-def untyped(routes: Iterable[Any]) -> list[tuple[str, str]]:
-    """``(method, pattern)`` of each route that declares no contract yet."""
-    return [(r.method, r.pattern) for r in routes if r.contract is None]
-
-
 def build_document(routes: Iterable[Any]) -> dict[str, Any]:
-    """The OpenAPI document of ``routes`` (routes without a contract are left out)."""
+    """The OpenAPI document of ``routes``; a route without a contract is refused (``ValueError``)."""
     components = _Components()
     components.ref(ApiErrorEnvelope)
     paths: dict[str, dict[str, Any]] = {}
@@ -205,9 +210,9 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
     templates: dict[str, str] = {}
     for route in sorted(routes, key=lambda r: (openapi_path(r.pattern), r.method)):
         contract: Optional[Operation] = route.contract
-        if contract is None:
-            continue
         where = f"{route.method} {route.pattern}"
+        if contract is None:
+            raise ValueError(f"{where} declares no contract")
         if contract.id in seen_ids:
             raise ValueError(f"operationId {contract.id!r} is used by {seen_ids[contract.id]} and {where}")
         seen_ids[contract.id] = where
@@ -239,6 +244,10 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
         "paths": paths,
         "components": {
             "schemas": dict(sorted(components.schemas.items())),
+            "securitySchemes": {SESSION_SCHEME: {
+                "type": "apiKey", "in": "cookie", "name": SESSION_COOKIE,
+                "description": "The session cookie POST /api/login sets.",
+            }},
             "responses": {
                 name: {"description": text,
                        "content": {"application/json": {"schema": {"$ref": REF.format(model="ApiErrorEnvelope")}}}}

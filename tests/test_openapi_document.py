@@ -1,9 +1,8 @@
 """The one OpenAPI document, built from the route table (#1431).
 
 Every route declares its contract on its row in ``backend/api/<family>.py``
-and appears in ``docs/api/openapi.json``; ``UNTYPED`` lists the routes not
-typed yet. It only shrinks: a new route declares its contract, and a route
-that gains one leaves the list.
+and appears in ``docs/api/openapi.json``; the builder refuses a route
+without one.
 """
 
 from __future__ import annotations
@@ -16,50 +15,21 @@ from pathlib import Path
 from openapi_core import OpenAPI
 from pydantic import create_model
 
-from backend.api.session import epoch_fenced
+from backend.api.session import epoch_fenced, fills_derived_cache
 from backend.api import ROUTES
-from backend.api_contract.openapi import SchemaConflict, build_document, openapi_document, openapi_path, untyped
+from backend.api_contract.openapi import SchemaConflict, build_document, openapi_document, openapi_path
 from backend.api_contract.operation import Operation, ok
 from backend.web.routing import Body, route
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs" / "api" / "openapi.json"
 
-UNTYPED = frozenset({
-    ("GET", "/api/argument-verdicts"),
-    ("GET", "/api/arguments"),
-    ("POST", "/api/arguments"),
-    ("DELETE", "/api/arguments/{argument_id}"),
-    ("GET", "/api/arguments/{argument_id}"),
-    ("PATCH", "/api/arguments/{argument_id}"),
-    ("PUT", "/api/arguments/{argument_id}/sources"),
-    ("GET", "/api/arguments/{argument_id}/sync-state"),
-    ("PUT", "/api/arguments/{argument_id}/targets"),
-    ("GET", "/api/concepts"),
-    ("POST", "/api/concepts"),
-    ("DELETE", "/api/concepts/{concept_id}"),
-    ("GET", "/api/concepts/{concept_id}"),
-    ("PATCH", "/api/concepts/{concept_id}"),
-    ("PUT", "/api/concepts/{concept_id}/aliases"),
-    ("PUT", "/api/concepts/{concept_id}/parents"),
-    ("GET", "/api/concepts/{concept_id}/sync-state"),
-    ("GET", "/api/research-graph"),
-    ("GET", "/api/works/{work_id}/annotations"),
-    ("POST", "/api/works/{work_id}/annotations"),
-    ("GET", "/api/works/{work_id}/annotations-snapshot"),
-    ("GET", "/api/works/{work_id}/annotations-state"),
-    ("POST", "/api/works/{work_id}/annotations/adopt"),
-    ("POST", "/api/works/{work_id}/pdf"),
-    ("GET", "/api/works/{work_id}/pdf-materialization"),
-})
 
 
 #: Operations that answer only 501 until they are ported to PostgreSQL; a ported
 #: one leaves this set and documents its success.
 _NOT_PORTED = frozenset({"linearizeExistingPdfs"})
 
-#: Unfenced reads that save what they serve on a miss, through a command.
-_FILLS_ON_READ = frozenset({("GET", "/api/remote-images"), ("GET", "/api/persons/{person_id}/profile-image")})
 
 
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
@@ -79,11 +49,23 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_openapi_core_accepts_the_document(self) -> None:
         OpenAPI.from_dict(self.document)
 
-    def test_every_typed_route_is_one_operation_and_the_untyped_list_only_shrinks(self) -> None:
-        self.assertEqual(set(untyped(ROUTES)), set(UNTYPED),
-                         "a new route declares its contract; a route that gained one leaves UNTYPED")
-        typed = {(r.method, openapi_path(r.pattern)) for r in ROUTES if r.contract is not None}
-        self.assertEqual(set(_operations(self.document)), typed)
+    def test_every_route_is_one_operation(self) -> None:
+        self.assertEqual(set(_operations(self.document)), {(r.method, openapi_path(r.pattern)) for r in ROUTES})
+
+    def test_a_route_without_a_contract_is_refused(self) -> None:
+        def handler(req):  # pragma: no cover - never called
+            raise AssertionError
+
+        with self.assertRaisesRegex(ValueError, "GET /api/a declares no contract"):
+            build_document((route("GET", "/api/a", handler),))
+
+    def test_an_api_operation_needs_the_session_cookie_and_a_probe_none(self) -> None:
+        scheme = self.document["components"]["securitySchemes"]["session"]
+        self.assertEqual(scheme, {"type": "apiKey", "in": "cookie", "name": "prks_session",
+                                  "description": scheme["description"]})
+        for (method, path), op in _operations(self.document).items():
+            with self.subTest(method=method, path=path):
+                self.assertEqual(op["security"], [{"session": []}] if path.startswith("/api/") else [])
 
     def test_each_operation_names_a_success_and_its_path_parameters(self) -> None:
         for (method, path), op in _operations(self.document).items():
@@ -127,7 +109,7 @@ class OpenApiDocumentTests(unittest.TestCase):
                     if "$ref" in unavailable:
                         name = unavailable["$ref"].rsplit("/", 1)[-1]
                         unavailable = self.document["components"]["responses"][name]
-                    if (method.upper(), path) in _FILLS_ON_READ:
+                    if fills_derived_cache(method.upper(), path):
                         self.assertIn("MAINTENANCE", unavailable["description"])
                     else:
                         self.assertNotIn("MAINTENANCE", unavailable["description"])

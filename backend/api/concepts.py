@@ -22,6 +22,18 @@ from __future__ import annotations
 
 from urllib.parse import unquote
 
+from backend.api_contract.operation import Operation, body, error, ok, revalidated
+from backend.api_contract.organization import Done
+from backend.api_contract.research import (
+    ConceptAliasesRequest,
+    ConceptCard,
+    ConceptCreateRequest,
+    ConceptDetail,
+    ConceptParentsRequest,
+    ConceptPatch,
+    ConceptRead,
+    ConceptState,
+)
 from backend.domain.research.rules import ResearchError
 from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
@@ -121,13 +133,46 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, {"status": "deleted"})
 
 
+_TAG = "concepts"
+_ID = "/api/concepts/{concept_id}"
+_INVALID = error("A refused value, with its code (invalid_name, invalid_text, invalid_aliases, "
+                 "invalid_parents, nothing_to_update).")
+_NOT_FOUND = error("No Concept with that id (not_found), or a parent that is not one (parent_not_found).")
+
+
+def _write(op_id: str, summary: str, request: object, conflict: str) -> Operation:
+    return Operation(op_id, summary, _TAG,
+                     {200: ok(ConceptDetail, "The Concept as it now stands."), 400: _INVALID,
+                      404: _NOT_FOUND, 409: error(conflict)},
+                     request=body(request))
+
+
 ROUTES = (
-    route("GET", "/api/concepts", catalog),
-    route("POST", "/api/concepts", create),
-    route("GET", "/api/concepts/{concept_id}", detail),
-    route("PATCH", "/api/concepts/{concept_id}", update),
-    route("DELETE", "/api/concepts/{concept_id}", delete),
-    route("GET", "/api/concepts/{concept_id}/sync-state", sync_state),
-    route("PUT", "/api/concepts/{concept_id}/parents", replace_parents),
-    route("PUT", "/api/concepts/{concept_id}/aliases", replace_aliases),
+    route("GET", "/api/concepts", catalog, contract=Operation(
+        "listConcepts", "Every Concept with its parents, aliases and counts", _TAG,
+        {200: ok(list[ConceptCard], "By name.")})),
+    route("POST", "/api/concepts", create, contract=Operation(
+        "createConcept", "Create a Concept", _TAG,
+        {201: ok(ConceptDetail, "The new Concept."), 400: _INVALID,
+         409: error("The name is another Concept's name or alias (concept_exists).")},
+        request=body(ConceptCreateRequest))),
+    route("GET", _ID, detail, contract=Operation(
+        "getConcept", "A Concept with its hierarchy, aliases and mentions", _TAG,
+        {200: ok(ConceptRead, "The Concept."), 404: error("No Concept with that id.")})),
+    route("PATCH", _ID, update, contract=_write(
+        "updateConcept", "Rename a Concept or change its definition", ConceptPatch,
+        "The new name is another Concept's name or alias (concept_exists, alias_conflict).")),
+    route("DELETE", _ID, delete, contract=Operation(
+        "deleteConcept", "Delete a Concept", _TAG,
+        {200: ok(Done, "Deleted."), 404: error("No Concept with that id (not_found)."),
+         409: error("A Research Note still references it (concept_in_use).")})),
+    route("GET", _ID + "/sync-state", sync_state, contract=revalidated(
+        "getConceptState", "A Concept's field revisions, identity and parent set", _TAG, ConceptState,
+        "Values and revisions.", {404: error("No Concept with that id.")})),
+    route("PUT", _ID + "/parents", replace_parents, contract=_write(
+        "setConceptParents", "Replace a Concept's parent set", ConceptParentsRequest,
+        "A parent would make a cycle (concept_cycle).")),
+    route("PUT", _ID + "/aliases", replace_aliases, contract=_write(
+        "setConceptAliases", "Replace a Concept's alias set", ConceptAliasesRequest,
+        "An alias is another Concept's name or alias (concept_exists, alias_conflict).")),
 )

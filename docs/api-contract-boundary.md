@@ -63,9 +63,14 @@ JSON body gate (400 `invalid_request`, 413, 415) for a JSON route, and
 admission (401, 403, 503; for a mutation admission holds to the Library
 epoch, `backend.api.session.epoch_fenced`, also 400 `LIBRARY_EPOCH_REQUIRED`,
 409 `LIBRARY_EPOCH_CHANGED` and 503 `MAINTENANCE`, which only that path
-checks) for an `/api/` route. A route declares only
-its own answers; when it declares a status the builder would add, the shared
-refusal's description is appended to the route's own.
+checks) for an `/api/` route. A read that fills a derived cache on a miss
+(`backend.api.session.fills_derived_cache`: a Person's portrait, a saved
+remote image) runs that path too, so its 503 may also be `MAINTENANCE`. A
+route declares only its own answers; when it declares a status the builder
+would add, the shared refusal's description is appended to the route's own.
+Every `/api/` operation names the `session` security scheme (the
+`prks_session` cookie); the health probes name none. The builder refuses a
+route that declares no contract.
 
 Do **not** introduce a framework solely to obtain OpenAPI.
 
@@ -101,8 +106,8 @@ Do **not** introduce a framework solely to obtain OpenAPI.
    request body and `ok(Model, ...)` / `error(...)` replies by status.
    Document the **real** HTTP status codes the route returns (e.g.
    `position_in_use` → 409, not 400). A `HEAD` route uses the `GET`
-   contract's `.head()`. Remove the route from `UNTYPED` in
-   `tests/test_openapi_document.py`; the list only shrinks.
+   contract's `.head()`. A route without a contract fails the build of the
+   document.
 6. Regenerate and commit `docs/api/openapi.json` and the TypeScript types:
 
    ```bash
