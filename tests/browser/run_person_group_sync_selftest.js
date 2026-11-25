@@ -820,7 +820,9 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 async function serverRevisionsNeverPairWithCachedValues() {
     const previous = globalThis.prksOfflineReadEntity;
     const sources = { state: "server", record: "cache" };
-    globalThis.prksOfflineReadEntity = async (kind, id) => {
+    const recordOptions = [];
+    globalThis.prksOfflineReadEntity = async (kind, id, _path, options) => {
+        if (kind !== "person-group-state") recordOptions.push(options || {});
         if (kind === "person-group-state") {
             const fields = {};
             globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
@@ -832,8 +834,11 @@ async function serverRevisionsNeverPairWithCachedValues() {
         assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
             "server revisions never pair with cached values");
         sources.record = "server";
+        recordOptions.length = 0;
         assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
             "values read from the server after the revisions are one base");
+        assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
+            "the record read never joins a flight older than the revisions");
         sources.state = "cache"; sources.record = "cache";
         assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
             "an offline cache still holds a base");

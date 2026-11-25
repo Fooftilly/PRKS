@@ -394,15 +394,20 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
      * the newer revision would vouch for older text. */
     const known = "PL-" + "K".repeat(32);
     const sources = { state: "server", record: "cache" };
-    globalThis.prksOfflineReadEntity = async (kind, id) => {
+    const recordOptions = [];
+    globalThis.prksOfflineReadEntity = async (kind, id, _path, options) => {
         if (kind === "playlist-state") return { value: globalThis.prksNewPlaylistState(id), source: sources.state };
+        recordOptions.push(options || {});
         return { value: { id, title: "Old", description: "", original_url: "", items: [] }, source: sources.record };
     };
     assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
         "server revisions never pair with cached values");
     sources.record = "server";
+    recordOptions.length = 0;
     assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
         "values read from the server after the revisions are one base");
+    assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
+        "the record read never joins a flight older than the revisions");
     sources.state = "cache"; sources.record = "cache";
     assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
         "an offline cache still holds a base");

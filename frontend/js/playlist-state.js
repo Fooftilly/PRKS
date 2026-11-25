@@ -422,7 +422,10 @@
         let playlist = null;
         try {
             const cached = await root.prksOfflineReadEntity('playlist', playlistId,
-                '/api/playlists/' + encodeURIComponent(playlistId), {});
+                '/api/playlists/' + encodeURIComponent(playlistId),
+                /* A record read joined to an older flight would predate the
+                 * revisions while still answering from the server. */
+                stateSource === 'server' ? { requestPolicy: { dedupe: false } } : {});
             /* Revisions read from the server and values from an older cache
              * are not one snapshot: a newer revision would vouch for older
              * text, and a Save against it would replace the newer text
