@@ -26,6 +26,9 @@ from tests.pg.facade_context import provision_actor
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.jobs_fixtures import LEASE
 from tests.narrowing import require
+from backend.domain.research import argument_commands
+from backend.domain.research import concept_commands
+from tests.acting_context import current_context
 
 _MISSING_ARGUMENT = "A-" + "0" * 32
 
@@ -255,8 +258,8 @@ class ResearchAccessTests(ResearchHttpTestCase):
         """This server's Library is the session's; another Library's records answer as missing."""
         stranger = provision_actor(self.db, name="Other")
         with facade_context.acting_as(stranger.context):
-            theirs = self.facade.create_concept("Ethics")["id"]
-            claim = self.facade.create_argument(name="Claim", kind="argument")["id"]
+            theirs = concept_commands.create(self.facade.database, current_context(), "Ethics")["id"]
+            claim = argument_commands.create(self.facade.database, current_context(), name="Claim", kind="argument")["id"]
         self.assertEqual(self.ok(self.get("/api/concepts")), [])
         self.assertEqual(self.get(f"/api/concepts/{theirs}").status, 404)
         self.assertEqual(self.get(f"/api/arguments/{claim}").status, 404)
@@ -267,8 +270,8 @@ class ResearchAccessTests(ResearchHttpTestCase):
         mine = self.ok(self.send("POST", "/api/concepts", {"name": "Ethics"}), 201)["id"]
         self.assertNotEqual(mine, theirs)
         with facade_context.acting_as(stranger.context):
-            self.assertEqual(require(self.facade.get_concept(theirs))["name"], "Ethics")
-            self.assertIsNotNone(self.facade.get_argument(claim))
+            self.assertEqual(require(concept_commands.detail(self.facade.database, current_context(), theirs))["name"], "Ethics")
+            self.assertIsNotNone(argument_commands.detail(self.facade.database, current_context(), claim))
 
     def test_a_stale_epoch_is_refused_before_the_route(self) -> None:
         res = self.call("POST", "/api/concepts", body={"name": "Ethics"}, cookies=self.cookies,

@@ -14,7 +14,6 @@ import os
 import unittest
 import urllib.request
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
     CONCEPT_CHILD_NAME,
@@ -29,6 +28,7 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -184,6 +184,7 @@ class DurableConceptTests(unittest.TestCase):
     def test_a_concept_created_offline_can_become_another_concepts_parent(self):
         """The cross-family chain the generic dependency mechanism exists for --
         no Concept-specific ordering anywhere."""
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         self.prepare(page, child)
@@ -201,12 +202,13 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = self.db_for(server).get_concept(child)
+        stored = require(self.db_for(server).run(concept_commands.detail, child))
         self.assertEqual([p['name'] for p in stored['parents']], ['Offline Parent'])
 
     # ---- the definition -----------------------------------------------------
 
     def test_a_definition_edited_offline_shows_and_lands(self):
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         self.prepare(page, child)
@@ -219,7 +221,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(self.db_for(server).get_concept(child)['description'],
+        self.assertEqual(require(self.db_for(server).run(concept_commands.detail, child))['description'],
                          'Edited offline.')
 
     # Definition A→B→A cancel is owned by Node
@@ -232,6 +234,7 @@ class DurableConceptTests(unittest.TestCase):
     def test_a_rename_offline_keeps_the_old_name_as_an_alias(self):
         """The rule that makes name and aliases one decision: every note that
         already says the old name must go on resolving."""
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         self.prepare(page, child)
@@ -244,12 +247,13 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = self.db_for(server).get_concept(child)
+        stored = require(self.db_for(server).run(concept_commands.detail, child))
         self.assertEqual(stored['name'], 'Renamed Offline')
         self.assertIn(CONCEPT_CHILD_NAME, stored['aliases'],
                       'the old name stays reachable, so existing notes still resolve')
 
     def test_an_alias_set_edited_offline_survives_a_reload(self):
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         self.prepare(page, child)
@@ -266,7 +270,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(self.db_for(server).get_concept(child)['aliases'],
+        self.assertEqual(require(self.db_for(server).run(concept_commands.detail, child))['aliases'],
                          ['Offline Alias'])
 
     def test_a_rename_and_an_alias_edit_are_one_conflict_unit(self):
@@ -288,6 +292,7 @@ class DurableConceptTests(unittest.TestCase):
     # ---- hierarchy ----------------------------------------------------------
 
     def test_a_reparent_offline_shows_at_both_ends(self):
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         parent = server.ids['concept_parent']
@@ -309,7 +314,7 @@ class DurableConceptTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = self.db_for(server).get_concept(child)
+        stored = require(self.db_for(server).run(concept_commands.detail, child))
         self.assertEqual([p['id'] for p in stored['parents']], [unvisited])
 
     # Parent-set equality (order-insensitive) and A→B→A cancel are owned by
@@ -347,6 +352,7 @@ class DurableConceptTests(unittest.TestCase):
         o._wait_content_contains(page, CONCEPT_CHILD_NAME)
 
     def test_a_cycle_comes_back_as_a_named_refusal(self):
+        from backend.domain.research import concept_commands
         server, page, context = self.start()
         child = server.ids['concept_child']
         parent = server.ids['concept_parent']
@@ -361,7 +367,7 @@ class DurableConceptTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => (rows.find("
             "  o => o.operation === 'SET_CONCEPT_PARENTS') || {}).server_result)")
         self.assertEqual(state['code'], 'CONCEPT_CYCLE')
-        self.assertEqual(self.db_for(server).get_concept(parent)['parents'], [])
+        self.assertEqual(require(self.db_for(server).run(concept_commands.detail, parent))['parents'], [])
 
     # ---- deletion -----------------------------------------------------------
 

@@ -28,6 +28,8 @@ from tests.pg.test_arguments import ResearchTestCase, pinned, source, target
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
+from backend.domain.research import argument_commands
+from backend.domain.research import position_commands
 
 
 class ResearchSyncTestCase(SyncTestCase, ResearchTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
@@ -79,7 +81,7 @@ class PositionSyncTests(ResearchSyncTestCase):
         a = self.argument("A", targets=[target("position", position_id)])
         delete = self.envelope("DELETE_POSITION", position_id, {})
         self.assertEqual(self.send(delete), (409, {"position_id": position_id, "code": "POSITION_IN_USE"}))
-        self.library.replace_argument_targets(a, [])
+        argument_commands.replace_targets(self.db, self.ctx, a, [])
         self.assertEqual(self.send(self.envelope("DELETE_POSITION", position_id, {}))[1]["changed"], True)
         self.assertEqual(self.send(self.envelope("DELETE_POSITION", position_id, {}))[1]["changed"], False)
         # A base from before the delete never lands on a Position created again.
@@ -97,7 +99,7 @@ class PositionSyncTests(ResearchSyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.create_position_op("Mine", theirs))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((len(self.ledger()), self.library.list_positions()), (before, []))
+        self.assertEqual((len(self.ledger()), position_commands.catalog(self.db, self.ctx)), (before, []))
 
 
 class PositionEnvelopeTests(ResearchSyncTestCase):
@@ -124,20 +126,20 @@ class PositionEnvelopeTests(ResearchSyncTestCase):
         status, result = self.send(self.envelope("DELETE_POSITION", position_id, {"cascade": True}))
         self.assertEqual((status, result["code"]), (400, "INVALID_ENVELOPE"))
         self.assertEqual(len(self.ledger()), before)
-        self.assertEqual([(row["id"], row["name"]) for row in self.library.list_positions()],
+        self.assertEqual([(row["id"], row["name"]) for row in position_commands.catalog(self.db, self.ctx)],
                          [(position_id, "Realism is false")])
 
     def test_a_repeated_name_is_accepted(self) -> None:
         self.sent(self.create_position_op("Realism is false"))
         self.sent(self.create_position_op("Realism is false"))
-        self.assertEqual([row["name"] for row in self.library.list_positions()], ["Realism is false"] * 2)
+        self.assertEqual([row["name"] for row in position_commands.catalog(self.db, self.ctx)], ["Realism is false"] * 2)
 
     def test_both_paths_normalize_identically_and_spacing_is_no_change(self) -> None:
         data = self.envelope("CREATE_POSITION", generate("P"),
                              {"name": "  Realism   is   false  ", "description": "  A   claim.  "})
         position_id = self.sent(data)
-        ordinary = self.library.create_position("  Realism   is   false  ", "  A   claim.  ")
-        synced = self.library.get_position(position_id)
+        ordinary = position_commands.create(self.db, self.ctx, "  Realism   is   false  ", "  A   claim.  ")
+        synced = position_commands.detail(self.db, self.ctx, position_id)
         assert synced is not None
         self.assertEqual((synced["name"], synced["description"]), (ordinary["name"], ordinary["description"]))
         self.assertEqual(synced["name"], "Realism is false")
@@ -148,9 +150,9 @@ class PositionEnvelopeTests(ResearchSyncTestCase):
     def test_ordinary_edits_and_sync_share_each_fields_revision(self) -> None:
         position_id = self.sent(self.envelope("CREATE_POSITION", generate("P"),
                                               {"name": "Realism is false", "description": "A claim."}))
-        self.library.update_position(position_id, name="Realism is false")  # the same value
-        self.library.update_position(position_id, name="Renamed by the API")
-        self.assertEqual(self.library.get_position_sync_state(position_id),
+        position_commands.update(self.db, self.ctx, position_id, name="Realism is false")  # the same value
+        position_commands.update(self.db, self.ctx, position_id, name="Renamed by the API")
+        self.assertEqual(position_commands.sync_state(self.db, self.ctx, position_id),
                          {"position_id": position_id,
                           "fields": {"description": {"revision": 0}, "name": {"revision": 1}}})
         status, result = self.send(self.field_op(position_id, "name", "Renamed offline", 0))
@@ -160,10 +162,10 @@ class PositionEnvelopeTests(ResearchSyncTestCase):
         self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 1))
         self.assertTrue(result["value_omitted"])
         self.assertNotIn("value", result)
-        self.library.update_position(position_id, name="Both", description="Changed")
-        self.assertEqual(require(self.library.get_position_sync_state(position_id))["fields"],
+        position_commands.update(self.db, self.ctx, position_id, name="Both", description="Changed")
+        self.assertEqual(require(position_commands.sync_state(self.db, self.ctx, position_id))["fields"],
                          {"description": {"revision": 2}, "name": {"revision": 2}})
-        self.assertIsNone(self.library.get_position_sync_state(generate("P")))
+        self.assertIsNone(position_commands.sync_state(self.db, self.ctx, generate("P")))
 
 
 class ArgumentCreateTests(ResearchSyncTestCase):
@@ -204,7 +206,7 @@ class ArgumentCreateTests(ResearchSyncTestCase):
             lambda: self.send(self.create_argument_op("B", argument_id)), serializable=True)
         self.assertEqual(holder[1]["changed"], True)
         self.assertEqual(contender[1]["changed"], False)
-        self.assertEqual(require(self.library.get_argument(argument_id))["name"], "A")
+        self.assertEqual(require(argument_commands.detail(self.db, self.ctx, argument_id))["name"], "A")
 
     def test_one_create_sent_concurrently_applies_once(self) -> None:
         data = self.create_argument_op("Once")
@@ -220,7 +222,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         return self.envelope("SET_ARGUMENT_FIELD", argument_id, {"field": field, "value": value}, base)
 
     def targets_of(self, argument_id: str) -> list[tuple[str, str, str]]:
-        return [(row["type"], row["id"], row["verdict_id"]) for row in require(self.library.get_argument(argument_id))["targets"]]
+        return [(row["type"], row["id"], row["verdict_id"]) for row in require(argument_commands.detail(self.db, self.ctx, argument_id))["targets"]]
 
     def test_refused_envelopes_change_nothing_and_are_never_ledgered(self) -> None:
         work, claim = self.library.add_work("W"), self.position("Claim")
@@ -267,9 +269,8 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
             "name": "  Spaced   out  ", "kind": "stance", "main_text": "Body.",
             "sources": [source(work, "4")], "targets": [target("position", claim)]})
         a = self.sent(data)
-        ordinary = self.library.create_argument(name="  Spaced   out  ", kind="stance", main_text="Body.",
-                                                sources=[source(work, "4")])
-        synced = self.library.get_argument(a)
+        ordinary = argument_commands.create(self.db, self.ctx, name="  Spaced   out  ", kind="stance", main_text="Body.", sources=[source(work, "4")])
+        synced = argument_commands.detail(self.db, self.ctx, a)
         assert synced is not None
         self.assertEqual((synced["name"], synced["kind"], synced["main_text"]), ("Spaced out", "stance", "Body."))
         self.assertEqual(ordinary["name"], synced["name"])
@@ -283,7 +284,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
                              {"kind": 0, "main_text": 0, "name": 0})
         refused = self.create_argument_op(targets=[target("position", generate("P"))])
         self.assertEqual(self.send(refused), (404, {"argument_id": refused["entity_id"], "code": "POSITION_NOT_FOUND"}))
-        self.assertIsNone(self.library.get_argument(refused["entity_id"]))
+        self.assertIsNone(argument_commands.detail(self.db, self.ctx, refused["entity_id"]))
 
     def test_each_field_is_its_own_scope_and_ordinary_edits_share_it(self) -> None:
         a = self.sent(self.envelope("CREATE_ARGUMENT", generate("A"), {
@@ -295,7 +296,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
                 self.assertTrue(result["value_omitted"])
                 self.assertNotIn("value", result)
                 self.assertNotIn("current_value", result)
-        synced = self.library.get_argument(a)
+        synced = argument_commands.detail(self.db, self.ctx, a)
         assert synced is not None
         self.assertEqual((synced["name"], synced["kind"], synced["main_text"]), ("After", "stance", "x" * 5000))
         status, result = self.send(self.field_op(a, "name", "Something else", 0))
@@ -309,8 +310,8 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         self.assertEqual(self.send(self.field_op(missing, "name", "X", 0)),
                          (404, {"argument_id": missing, "field": "name", "code": "ENTITY_NOT_FOUND"}))
         # An ordinary edit moves only what it changed, so a stale sync edit of it conflicts.
-        self.library.update_argument(a, name="After")
-        self.library.update_argument(a, name="Renamed online")
+        argument_commands.update(self.db, self.ctx, a, name="After")
+        argument_commands.update(self.db, self.ctx, a, name="Renamed online")
         status, result = self.send(self.field_op(a, "name", "Renamed offline", 1))
         self.assertEqual((status, result["code"], result["current_value"]),
                          (409, "REVISION_CONFLICT", "Renamed online"))
@@ -318,7 +319,7 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         self.assertEqual({field: value["revision"] for field, value in state["fields"].items()},
                          {"kind": 1, "main_text": 1, "name": 2})
         self.assertNotIn("x" * 50, repr(state))
-        self.assertIsNone(self.library.get_argument_sync_state(generate("A")))
+        self.assertIsNone(argument_commands.sync_state(self.db, self.ctx, generate("A")))
 
     def test_the_target_list_is_one_aggregate_of_both_kinds(self) -> None:
         one, two = self.position("One"), self.position("Two")
@@ -349,9 +350,9 @@ class ArgumentEnvelopeAndFieldTests(ResearchSyncTestCase):
         work, claim = self.library.add_work("W"), self.position("Claim")
         a = self.sent(self.create_argument_op())
         rows = [target("position", claim)]
-        self.library.replace_argument_targets(a, rows)
-        self.library.replace_argument_targets(a, rows)
-        self.library.replace_argument_sources(a, [source(work, "7")])
+        argument_commands.replace_targets(self.db, self.ctx, a, rows)
+        argument_commands.replace_targets(self.db, self.ctx, a, rows)
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(work, "7")])
         self.assertEqual(self.send(self.targets_op(a, [], 0))[1]["code"], "REVISION_CONFLICT")
         self.assertEqual(self.send(self.sources_op(a, [], 0))[1]["code"], "REVISION_CONFLICT")
         state = self.argument_state(a)
@@ -571,7 +572,7 @@ class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
         self.assertEqual(self.op("SET_POSITION_FIELD", position_id, {"field": "kind", "value": "C"}, 1), invalid)
         self.assertEqual(self.op("SET_POSITION_FIELD", _MISSING_POSITION, field, 0),
                          (404, {"code": "ENTITY_NOT_FOUND", "field": "name", "position_id": "<unknown id>"}))
-        self.assertEqual(self.labels.show(self.library.get_position_sync_state(position_id)), {
+        self.assertEqual(self.labels.show(position_commands.sync_state(self.db, self.ctx, position_id)), {
             "fields": {"description": {"revision": 0}, "name": {"revision": 1}}, "position_id": "<P Claim>"})
         argument_id = self.labels.name(generate("A"), "<A Answer>")
         self.assertEqual(self.op("CREATE_ARGUMENT", argument_id, {
@@ -586,7 +587,7 @@ class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
         self.assertEqual(self.op("DELETE_POSITION", position_id, {}), (200, {**deleted, "changed": True}))
         self.assertEqual(self.op("DELETE_POSITION", position_id, {}), (200, {**deleted, "changed": False}))
         self.assertEqual(self.op("DELETE_POSITION", position_id, {"x": 1}), invalid)
-        self.assertEqual(self.library.list_positions(), [])
+        self.assertEqual(position_commands.catalog(self.db, self.ctx), [])
 
     def test_arguments(self) -> None:
         one = self.labels.name(self.library.add_work("One"), "<W One>")
@@ -642,11 +643,11 @@ class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
         self.assertEqual(self.op("SET_ARGUMENT_TARGETS", _MISSING_ARGUMENT, {"targets": []}, 0),
                          (404, {"argument_id": "<unknown id>", "code": "ENTITY_NOT_FOUND"}))
         self.assertEqual(self.op("DELETE_ARGUMENT", base, {}), (409, {"argument_id": "<A Base>", "code": "ARGUMENT_TARGETED"}))
-        self.answer(self.library.get_argument_sync_state(reply), {
+        self.answer(argument_commands.sync_state(self.db, self.ctx, reply), {
             "argument_id": "<A Reply>", "fields": {"kind": {"revision": 1}, "main_text": {"revision": 1},
                                                    "name": {"revision": 0}},
             "sources": {"revision": 1}, "targets": {"revision": 1}})
-        self.answer(self.library.get_argument(reply), {
+        self.answer(argument_commands.detail(self.db, self.ctx, reply), {
             "kind": "stance", "main_text": "Body", "name": "Reply",
             "sources": [{"order_index": 0, "pages": "", "work_id": "<W Two>"},
                         {"order_index": 1, "pages": "9", "work_id": "<W One>"}],
@@ -655,5 +656,5 @@ class AnswerTests(AnswerAssertions, ResearchSyncTestCase):
         self.assertEqual(self.op("DELETE_ARGUMENT", reply, {}), ack(changed=True))
         self.assertEqual(self.op("DELETE_ARGUMENT", base, {}), ack("<A Base>", changed=True))
         self.assertEqual(self.op("DELETE_ARGUMENT", base, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
-        self.assertEqual(self.library.list_arguments(), [])
+        self.assertEqual(argument_commands.catalog(self.db, self.ctx), [])
 

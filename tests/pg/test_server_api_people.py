@@ -31,6 +31,9 @@ from backend.domain.maintenance import backup, restore
 from backend.media.person_image import PortraitImage, decode_and_transcode
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.server_api_fixtures import ServerApiTestCase
+from backend.domain.people import person_commands
+from tests.acting_context import current_context
+from tests.narrowing import require
 
 
 def portrait_png(color: tuple[int, int, int] = (120, 80, 200)) -> bytes:
@@ -88,7 +91,7 @@ class PortraitTests(ServerApiTestCase):
     def test_a_catalogued_portrait_is_served_without_fetching(self) -> None:
         person_id = self.person("Stored", "Portrait", "https://example.invalid/s.jpg")
         with self.acting():
-            stored = self.facade._cache_person_portrait(person_id, lambda _url: self.portrait)
+            stored = person_commands.cache_portrait(self.facade.database, current_context(), LocalFilesystemStorage.for_config(require(self.facade.storage)), person_id, lambda _url: self.portrait)
         assert stored is not None
         with mock.patch("backend.api.persons.fetch_and_prepare", side_effect=AssertionError("must use the object")):
             served = self.image(person_id)

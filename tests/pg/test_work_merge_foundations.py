@@ -32,6 +32,8 @@ from tests.pg.test_works_sync import SyncTestCase, create_payload
 from tests.narrowing import require
 from backend.domain.organization import folder_commands
 from backend.domain.organization import tag_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 T = TypeVar("T")
 _PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -355,12 +357,12 @@ class PlanTests(MergeTestCase):
         shared, only_source = tag_commands.create(self.db, self.ctx, "Shared")["id"], tag_commands.create(self.db, self.ctx, "Only")["id"]
         for work_id, tag in ((source, shared), (target, shared), (source, only_source)):
             tag_commands.tag_work(self.db, self.ctx, work_id, tag)
-        same, moved, colliding = (self.library.add_person(name, "Person") for name in ("Same", "Moved", "Two"))
-        self.library.add_role(same, source, "Author", credit_name="S. Person")
-        self.library.add_role(same, target, "Author", credit_name="S. Person")
-        self.library.add_role(moved, source, "Editor")
-        self.library.add_role(colliding, source, "Author", credit_name="One spelling")
-        self.library.add_role(colliding, target, "Author", credit_name="Another spelling")
+        same, moved, colliding = (people_fixtures.add_person(self.db, self.ctx, name, "Person") for name in ("Same", "Moved", "Two"))
+        role_commands.add(self.db, self.ctx, same, source, "Author", "S. Person")
+        role_commands.add(self.db, self.ctx, same, target, "Author", "S. Person")
+        role_commands.add(self.db, self.ctx, moved, source, "Editor")
+        role_commands.add(self.db, self.ctx, colliding, source, "Author", "One spelling")
+        role_commands.add(self.db, self.ctx, colliding, target, "Author", "Another spelling")
         here, there = folder_commands.create(self.db, self.ctx, "Here"), folder_commands.create(self.db, self.ctx, "There")
         folder_commands.move_work(self.db, self.ctx, source, here)
         folder_commands.move_work(self.db, self.ctx, target, there)
@@ -625,7 +627,7 @@ class OwnershipTests(MergeTestCase):
         self.sql("INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id,"
                  " url) VALUES (%s, %s, %s, %s, 'external_stream', 'youtube', 'abcdefghijk',"
                  " 'https://www.youtube.com/watch?v=abcdefghijk')", (self.actor.library_id, asset, extra, source))
-        person = self.library.add_person("A", "Person")
+        person = people_fixtures.add_person(self.db, self.ctx, "A", "Person")
         self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index, manifestation_id)"
                  " VALUES (%s, %s, %s, 'Translator', 0, %s)", (self.actor.library_id, source, person, extra))
         self.command(lambda scope: scope.execute(

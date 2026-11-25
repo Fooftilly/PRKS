@@ -34,6 +34,8 @@ from backend.storage.objects import (NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAIT
                                      LocalFilesystemStorage, StorageKey)
 from tests.pg.test_objects_lifecycle import DAY, ObjectsTestCase
 from tests.pg.test_objects_portraits import URL, image
+from tests import people_fixtures
+from backend.domain.people import person_commands
 
 LEASE = timedelta(seconds=30)
 WAIT = 30.0
@@ -627,10 +629,10 @@ class WorkerTests(ObjectJobsTestCase):
 
     def test_a_replaced_portrait_is_removed_by_the_running_worker(self) -> None:
         self.start_worker(self.attached())
-        person_id = self.library.add_person("Ada", "Lovelace", image_url=URL)
-        first = self.library._cache_person_portrait(person_id, lambda _url: image((1, 2, 3)))
+        person_id = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace", image_url=URL)
+        first = person_commands.cache_portrait(self.db, self.ctx, self.objects, person_id, lambda _url: image((1, 2, 3)))
         old = self.sql("SELECT portrait_locator FROM prks.persons WHERE id = %s", (person_id,))[0]["portrait_locator"]
-        second = self.library._cache_person_portrait(person_id, lambda _url: image((4, 5, 6)))
+        second = person_commands.cache_portrait(self.db, self.ctx, self.objects, person_id, lambda _url: image((4, 5, 6)))
         self.assertNotEqual(first, second)
         portrait = StorageKey(NAMESPACE_PORTRAITS, old)
         self.wait_until(lambda: self.objects.stat(portrait) is None, "the old portrait to be removed")

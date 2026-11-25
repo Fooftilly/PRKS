@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from functools import partial
 from typing import Any, Optional
 
 from backend.sync import envelope
@@ -28,6 +29,8 @@ from tests.pg.answers import AnswerAssertions
 from tests.pg.test_concepts import ConceptTestCase, concept_state
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
+from backend.domain.research import concept_commands
+from backend.domain.research import note_commands
 
 
 class ConceptSyncTestCase(SyncTestCase, ConceptTestCase):  # pyright: ignore[reportIncompatibleMethodOverride]  # MRO picks the first base
@@ -84,7 +87,7 @@ class CreateTests(ConceptSyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.create("Mine", theirs))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((len(self.ledger()), self.library.list_concepts()), (before, []))
+        self.assertEqual((len(self.ledger()), concept_commands.catalog(self.db, self.ctx)), (before, []))
         # The id is decided before the name: a name this Library holds does
         # not turn the foreign id into a ledgered CONCEPT_EXISTS.
         self.create_concept("Taken")
@@ -235,14 +238,14 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
         self.assertEqual((len(self.ledger()), self.state(emergence)), before)
 
     def test_both_construction_paths_share_identity_normalization_and_shape(self) -> None:
-        industry = self.library.create_concept("  Culture   Industry  ", "  A definition.  ")
+        industry = concept_commands.create(self.db, self.ctx, "  Culture   Industry  ", "  A definition.  ")
         self.assertEqual((industry["name"], industry["aliases"], industry["parents"], industry["children"]),
                          ("Culture Industry", [], [], []))
         self.assertTrue(is_generated(industry["id"], "C"))
-        self.library.replace_concept_aliases(industry["id"], ["Holism"])
+        concept_commands.replace_aliases(self.db, self.ctx, industry["id"], ["Holism"])
         for name in ("  culture   INDUSTRY  ", "holism"):
             with self.subTest(name=name):
-                self.refused("concept_exists", self.library.create_concept, name)
+                self.refused("concept_exists", partial(concept_commands.create, self.db, self.ctx), name)
                 data = self.create(name)
                 self.assertEqual(self.send(data), (409, {"concept_id": data["entity_id"], "code": "CONCEPT_EXISTS"}))
         data = self.create("  Mass   Culture  ", description="  A definition.  ")
@@ -250,20 +253,20 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
         self.assertTrue(is_distributed(data["entity_id"], "C"))
         self.assertEqual((created["name"], created["description"]), ("Mass Culture", industry["description"]))
         with self.assertRaises(ResearchError) as caught:
-            self.library.create_concept("x" * (CONCEPT_NAME_MAX + 1))
+            concept_commands.create(self.db, self.ctx, "x" * (CONCEPT_NAME_MAX + 1))
         self.assertEqual(caught.exception.code, "invalid_name")
 
     def test_a_note_never_carries_a_name_the_create_would_refuse(self) -> None:
-        emergence = self.library.create_concept("Emergence")["id"]
-        self.library.replace_concept_aliases(emergence, ["Self-organization"])
+        emergence = concept_commands.create(self.db, self.ctx, "Emergence")["id"]
+        concept_commands.replace_aliases(self.db, self.ctx, emergence, ["Self-organization"])
         work = self.library.add_work("A paper")
         with self.assertRaises(ResearchError) as caught:
-            self.library.save_work_notes(work, "See [[concept:Bell\x07 Curve]].")
+            note_commands.save(self.db, self.ctx, work, "See [[concept:Bell\x07 Curve]].")
         self.assertEqual(caught.exception.code, "invalid_text")
         self.assertLessEqual(CONCEPT_REF_MAX, CONCEPT_NAME_MAX)
-        self.library.save_work_notes(work, "See [[concept:%s]]." % ("x" * (CONCEPT_REF_MAX + 1)))
-        self.library.save_work_notes(work, "See [[concept:emergence]] and [[concept:self-organization]].")
-        self.assertEqual([row["id"] for row in self.library.list_concepts()], [emergence])
+        note_commands.save(self.db, self.ctx, work, "See [[concept:%s]]." % ("x" * (CONCEPT_REF_MAX + 1)))
+        note_commands.save(self.db, self.ctx, work, "See [[concept:emergence]] and [[concept:self-organization]].")
+        self.assertEqual([row["id"] for row in concept_commands.catalog(self.db, self.ctx)], [emergence])
 
     def test_the_definition_is_its_own_scope_shared_with_the_ordinary_edit(self) -> None:
         emergence = self.create_concept("Emergence")
@@ -271,7 +274,7 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
         self.assertEqual((result["server_revision"], result["value_omitted"]), (1, True))
         self.assertEqual(self.send(self.field_op(emergence, "Second", 0))[1]["current_value"], "First")
         self.assertEqual(self.acknowledged(self.field_op(emergence, "First", 0))["changed"], False)
-        self.library.update_concept(emergence, description="Changed elsewhere")
+        concept_commands.update(self.db, self.ctx, emergence, description="Changed elsewhere")
         self.assertEqual(self.send(self.field_op(emergence, "Mine", 1))[0], 409)
         state = self.state(emergence)
         self.assertEqual((state["fields"]["description"], state["identity_revision"]),
@@ -297,13 +300,13 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
         self.assertEqual(self.send(self.identity_op(emergence, "Emergent behaviour", ["holism"], 2)),
                          (409, {"concept_id": emergence, "code": "ALIAS_CONFLICT"}))
         # The ordinary rename and alias replacement advance the same revision.
-        self.library.update_concept(holism, name="Whole")
+        concept_commands.update(self.db, self.ctx, holism, name="Whole")
         self.assertEqual(self.state(holism)["identity"], {"name": "Whole", "aliases": ["Holism"]})
-        self.library.replace_concept_aliases(holism, ["Zeta", "Alpha"])
+        concept_commands.replace_aliases(self.db, self.ctx, holism, ["Zeta", "Alpha"])
         self.assertEqual(self.send(self.identity_op(holism, "Mine", [], 1))[1]["code"], "REVISION_CONFLICT")
         state = self.state(holism)
         self.assertEqual((state["identity_revision"], state["identity"]["aliases"],
-                          require(self.library.get_concept(holism))["aliases"]), (2, ["Alpha", "Zeta"], ["Alpha", "Zeta"]))
+                          require(concept_commands.detail(self.db, self.ctx, holism))["aliases"]), (2, ["Alpha", "Zeta"], ["Alpha", "Zeta"]))
 
     def test_the_parents_are_one_set_and_a_delete_advances_what_it_drops(self) -> None:
         child, first, second = self.create_concept("Emergence"), self.create_concept("Systems"), \
@@ -321,12 +324,12 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
                          (409, {"concept_id": first, "code": "CONCEPT_CYCLE"}))
         self.assertEqual((self.state(child)["identity_revision"], self.revisions("concept-parents")),
                          (0, {child: 1, first: 1, second: 1}))
-        self.library.replace_concept_parents(child, [first])
+        concept_commands.replace_parents(self.db, self.ctx, child, [first])
         self.assertEqual(self.send(self.parents_op(child, [], 1))[1]["code"], "REVISION_CONFLICT")
         self.assertEqual(self.acknowledged(self.envelope("DELETE_CONCEPT", first, {}))["changed"], True)
         state = self.state(child)
         self.assertEqual((state["parent_ids"], state["parents_revision"]), ([], 3))
-        self.assertIsNone(self.library.get_concept_sync_state(first))
+        self.assertIsNone(concept_commands.sync_state(self.db, self.ctx, first))
 
     def test_the_sync_state_carries_each_aggregate_with_its_revision(self) -> None:
         child, parent = self.create_concept("Emergence"), self.create_concept("Systems")
@@ -338,7 +341,7 @@ class RetiredSqliteCoverageTests(ConceptSyncTestCase):
                           state["parent_ids"], state["parents_revision"]),
                          ({"value": "Changed.", "revision": 1}, {"name": "Emergence", "aliases": ["Self-organization"]},
                           1, [parent], 1))
-        self.assertIsNone(self.library.get_concept_sync_state(generate("C")))
+        self.assertIsNone(concept_commands.sync_state(self.db, self.ctx, generate("C")))
 
 
 class AccessTests(ConceptSyncTestCase):
@@ -358,7 +361,7 @@ class AccessTests(ConceptSyncTestCase):
                                  "ENTITY_NOT_FOUND")
         self.assertEqual(self.send(self.envelope("DELETE_CONCEPT", ethics, {}) | {"device_id": device},
                                    other.context)[1]["changed"], False)
-        self.assertEqual(require(self.library.get_concept(ethics))["name"], "Ethics")
+        self.assertEqual(require(concept_commands.detail(self.db, self.ctx, ethics))["name"], "Ethics")
 
 
 _MISSING_CONCEPT = "C-" + "0" * 32
@@ -377,7 +380,7 @@ class AnswerTests(AnswerAssertions, ConceptSyncTestCase):
         return self.labels.name(self.create_concept(name), f"<C {name}>")
 
     def sync_state(self, concept_id: str) -> Any:
-        return self.labels.show(self.library.get_concept_sync_state(concept_id))
+        return self.labels.show(concept_commands.sync_state(self.db, self.ctx, concept_id))
 
     def test_create(self) -> None:
         concept_id = self.labels.name(generate("C"), "<C Ethics>")
@@ -397,7 +400,7 @@ class AnswerTests(AnswerAssertions, ConceptSyncTestCase):
         self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), {"name": "  ", "description": ""}), _INVALID)
         self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), {**payload, "x": 1}), _INVALID)
         self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), payload, 0), _NO_BASE)
-        self.answer(self.library.list_concepts(), [{"description": "About", "id": "<C Ethics>", "name": "Ethics"}])
+        self.answer(concept_commands.catalog(self.db, self.ctx), [{"description": "About", "id": "<C Ethics>", "name": "Ethics"}])
 
     def test_field(self) -> None:
         concept_id = self.made("Ethics")
@@ -489,5 +492,5 @@ class AnswerTests(AnswerAssertions, ConceptSyncTestCase):
         self.assertEqual(self.op("DELETE_CONCEPT", b, {"x": 1}), _INVALID)
         self.assertEqual(self.op("DELETE_CONCEPT", b, {}, 0), _NO_BASE)
         self.assertEqual(self.sync_state(b), concept_state("<C B>", "B", parents_revision=2))
-        self.answer(self.library.list_concepts(), [{"id": "<C B>", "parents": [], "subconcept_count": 0}])
+        self.answer(concept_commands.catalog(self.db, self.ctx), [{"id": "<C B>", "parents": [], "subconcept_count": 0}])
 

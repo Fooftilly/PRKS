@@ -79,6 +79,9 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     it: on PostgreSQL the Work's create adopts the bytes as an immutable
     Asset, so they must be final by then.
     """
+    from backend.domain.research import note_commands
+    from backend.domain.people import role_commands
+    from tests import people_fixtures
     if not MINIMAL_PDF.is_file():
         raise RuntimeError("missing fixture PDF: %s" % MINIMAL_PDF)
     cfg = StorageConfig.for_testing(storage_root)
@@ -105,18 +108,11 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
         doc_type="article",
         status="Not Started",
     )
-    person_id = db.add_person(
-        first_name=PERSON_FIRST,
-        last_name=PERSON_LAST,
-        about="E2E fixture author used for People profile and graph focus.",
-        link_wikipedia="https://example.com/wiki/e2e-author",
-        birth_date="1903",
-        death_date="1969",
-    )
-    db.add_role(person_id, work_a, "Author")
+    person_id = people_fixtures.add_person(db.database, current_context(), PERSON_FIRST, PERSON_LAST, about="E2E fixture author used for People profile and graph focus.", link_wikipedia="https://example.com/wiki/e2e-author", birth_date="1903", death_date="1969")
+    role_commands.add(db.database, current_context(), person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
-    db.save_work_notes(work_a, seed_notes)
+    note_commands.save(db.database, current_context(), work_a, seed_notes)
     _sync_research(cfg, work_a, seed_notes, db)
     # Each managed PDF's create queued its text.extract job, which the
     # server's embedded worker runs (backend/domain/search/text.py).
@@ -145,11 +141,12 @@ def seed_work_people_library(storage_root: str) -> dict:
     test about one branch cannot pass because another happened to supply the
     same string.
     """
+    from tests import people_fixtures
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    jane = db.add_person(first_name="Jane", last_name="Doe")
-    ed = db.add_person(first_name="Ed", last_name="Smith")
+    jane = people_fixtures.add_person(db.database, current_context(), "Jane", "Doe")
+    ed = people_fixtures.add_person(db.database, current_context(), "Ed", "Smith")
 
     # No linked Author: `author_text` is what the credit shows today.
     people_work = db.add_work(
@@ -159,14 +156,14 @@ def seed_work_people_library(storage_root: str) -> dict:
     credited = db.add_work(
         title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
         file_path=_managed_pdf(cfg, "e2e-credited.pdf"))
-    db.insert_initial_role(credited, jane, "Author", order_index=0)
+    people_fixtures.insert_initial_role(db.database, current_context(), credited, jane, "Author", order_index=0)
     # An Author and an Editor with NO `author_text`, so removing the Author
     # must fall through to the Editor rather than to an empty credit.
     editor_work = db.add_work(
         title=PEOPLE_EDITOR_TITLE, doc_type="article",
         file_path=_managed_pdf(cfg, "e2e-editor.pdf"))
-    db.insert_initial_role(editor_work, jane, "Author", order_index=0)
-    db.insert_initial_role(editor_work, ed, "Editor", order_index=1)
+    people_fixtures.insert_initial_role(db.database, current_context(), editor_work, jane, "Author", order_index=0)
+    people_fixtures.insert_initial_role(db.database, current_context(), editor_work, ed, "Editor", order_index=1)
 
     ids.update({
         "jane": jane, "ed": ed, "people_work": people_work,
@@ -177,29 +174,19 @@ def seed_work_people_library(storage_root: str) -> dict:
 
 def seed_person_profile_draft_library(storage_root: str) -> dict:
     """Two independently editable Persons and four deterministic Groups."""
+    from backend.domain.people import group_commands
+    from tests import people_fixtures
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    person_a = db.add_person(
-        first_name="Ada",
-        last_name="Alpha",
-        aliases="A. Alpha",
-        about="Saved biography A",
-        birth_date="1972-03-12",
-    )
-    person_b = db.add_person(
-        first_name="Bea",
-        last_name="Beta",
-        aliases="B. Beta",
-        about="Saved biography B",
-        birth_date="1980",
-    )
-    group_alpha = db.add_person_group_with_parent_options("Group Alpha")
-    group_beta = db.add_person_group_with_parent_options("Group Beta")
-    group_gamma = db.add_person_group_with_parent_options("Group Gamma")
-    group_delta = db.add_person_group_with_parent_options("Group Delta")
-    db.add_person_to_group(person_a, group_alpha)
-    db.add_person_to_group(person_b, group_beta)
+    person_a = people_fixtures.add_person(db.database, current_context(), "Ada", "Alpha", aliases="A. Alpha", about="Saved biography A", birth_date="1972-03-12")
+    person_b = people_fixtures.add_person(db.database, current_context(), "Bea", "Beta", aliases="B. Beta", about="Saved biography B", birth_date="1980")
+    group_alpha = group_commands.create(db.database, current_context(), "Group Alpha")
+    group_beta = group_commands.create(db.database, current_context(), "Group Beta")
+    group_gamma = group_commands.create(db.database, current_context(), "Group Gamma")
+    group_delta = group_commands.create(db.database, current_context(), "Group Delta")
+    group_commands.add_member(db.database, current_context(), group_alpha, person_a)
+    group_commands.add_member(db.database, current_context(), group_beta, person_b)
     ids.update(
         {
             "person_a": person_a,
@@ -254,23 +241,22 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
 
 
 def seed_graph_context_library(storage_root: str) -> dict:
+    from backend.domain.research import argument_commands
+    from backend.domain.research import note_commands
+    from backend.domain.research import position_commands
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
     notes = "[[concept:%s]]\n\n[[concept:%s]]\n" % (GRAPH_CONCEPT_A, GRAPH_CONCEPT_B)
-    db.save_work_notes(ids["work_a"], notes)
+    note_commands.save(db.database, current_context(), ids["work_a"], notes)
     _sync_research(cfg, ids["work_a"], notes, db)
-    pos = db.create_position(GRAPH_UNRELATED_POSITION)
-    arg = db.create_argument(name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
+    pos = position_commands.create(db.database, current_context(), GRAPH_UNRELATED_POSITION)
+    arg = argument_commands.create(db.database, current_context(), name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
     # Deliberately separate from GRAPH_UNRELATED_ARGUMENT and sourced to work_b (not work_a):
     # this gives tests a deterministic argument_source edge (e.g. relation-filter selection
     # regressions) without perturbing edge counts incident to work_a, which other graph tests
     # (e.g. the node-selection dimming test) assert exactly.
-    sourced_arg = db.create_argument(
-        name=GRAPH_SOURCED_ARGUMENT,
-        kind="argument",
-        sources=[{"work_id": ids["work_b"], "pages": "1-2"}],
-    )
+    sourced_arg = argument_commands.create(db.database, current_context(), name=GRAPH_SOURCED_ARGUMENT, kind="argument", sources=[{"work_id": ids["work_b"], "pages": "1-2"}])
     ids["position"] = pos["id"]
     ids["argument"] = arg["id"]
     ids["sourced_argument"] = sourced_arg["id"]
@@ -294,16 +280,18 @@ def seed_concepts_library(storage_root: str) -> dict:
     is testable), and a child Concept that is mentioned by Work A's research
     notes so a Concept -> Work mention link can be followed offline.
     """
+    from backend.domain.research import concept_commands
+    from backend.domain.research import note_commands
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    parent = db.create_concept(CONCEPT_PARENT_NAME, "Parent concept definition.")
-    child = db.create_concept(CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
-    unvisited = db.create_concept(CONCEPT_UNVISITED_NAME, "Never opened while online.")
-    db.replace_concept_parents(child["id"], [parent["id"]])
-    db.replace_concept_aliases(child["id"], [CONCEPT_CHILD_ALIAS])
+    parent = concept_commands.create(db.database, current_context(), CONCEPT_PARENT_NAME, "Parent concept definition.")
+    child = concept_commands.create(db.database, current_context(), CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
+    unvisited = concept_commands.create(db.database, current_context(), CONCEPT_UNVISITED_NAME, "Never opened while online.")
+    concept_commands.replace_parents(db.database, current_context(), child["id"], [parent["id"]])
+    concept_commands.replace_aliases(db.database, current_context(), child["id"], [CONCEPT_CHILD_ALIAS])
     notes = "Initial research notes.\n\n[[concept:%s]]\n" % CONCEPT_CHILD_NAME
-    db.save_work_notes(ids["work_a"], notes)
+    note_commands.save(db.database, current_context(), ids["work_a"], notes)
     _sync_research(cfg, ids["work_a"], notes, db)
     ids.update(
         {
@@ -335,16 +323,14 @@ def seed_positions_library(storage_root: str) -> dict:
     Concept fixtures alongside them so domain independence can be observed with
     two live domains at once.
     """
+    from backend.domain.research import argument_commands
+    from backend.domain.research import position_commands
     ids = seed_concepts_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    position_a = db.create_position(POSITION_A_NAME, POSITION_A_DESCRIPTION)
-    position_b = db.create_position(POSITION_B_NAME, "Never opened while online.")
-    argument = db.create_argument(
-        name=POSITION_ARGUMENT_NAME,
-        kind="argument",
-        targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}],
-    )
+    position_a = position_commands.create(db.database, current_context(), POSITION_A_NAME, POSITION_A_DESCRIPTION)
+    position_b = position_commands.create(db.database, current_context(), POSITION_B_NAME, "Never opened while online.")
+    argument = argument_commands.create(db.database, current_context(), name=POSITION_ARGUMENT_NAME, kind="argument", targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}])
     ids.update(
         {
             "position_a": position_a["id"],
@@ -377,35 +363,22 @@ def seed_arguments_library(storage_root: str) -> dict:
     single record therefore depends on five different canonical record families,
     which is exactly the coherence surface this milestone has to get right.
     """
+    from backend.domain.research import argument_commands
+    from backend.domain.research import note_commands
     ids = seed_positions_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    target = db.create_argument(name=ARGUMENT_B_NAME, kind="argument")
-    stance = db.create_argument(
-        name=STANCE_NAME,
-        kind="stance",
-        main_text=STANCE_TEXT,
-        targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}],
-    )
-    unvisited = db.create_argument(name=ARGUMENT_UNVISITED_NAME, kind="argument")
-    argument_a = db.create_argument(
-        name=ARGUMENT_A_NAME,
-        kind="argument",
-        main_text=ARGUMENT_A_TEXT,
-        sources=[{"work_id": ids["work_a"], "pages": ARGUMENT_SOURCE_PAGES}],
-        targets=[
+    target = argument_commands.create(db.database, current_context(), name=ARGUMENT_B_NAME, kind="argument")
+    stance = argument_commands.create(db.database, current_context(), name=STANCE_NAME, kind="stance", main_text=STANCE_TEXT, targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}])
+    unvisited = argument_commands.create(db.database, current_context(), name=ARGUMENT_UNVISITED_NAME, kind="argument")
+    argument_a = argument_commands.create(db.database, current_context(), name=ARGUMENT_A_NAME, kind="argument", main_text=ARGUMENT_A_TEXT, sources=[{"work_id": ids["work_a"], "pages": ARGUMENT_SOURCE_PAGES}], targets=[
             {"type": "position", "id": ids["position_a"], "verdict_id": "supports"},
             {"type": "argument", "id": target["id"], "verdict_id": "opposes"},
-        ],
-    )
-    response = db.create_argument(
-        name=ARGUMENT_C_NAME,
-        kind="argument",
-        targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}],
-    )
+        ])
+    response = argument_commands.create(db.database, current_context(), name=ARGUMENT_C_NAME, kind="argument", targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}])
     # Work B's research notes mention Argument A, giving it a mention backlink.
     notes = "Related notes.\n\n[[argument:%s|%s]]\n" % (argument_a["id"], ARGUMENT_A_NAME)
-    db.save_work_notes(ids["work_b"], notes)
+    note_commands.save(db.database, current_context(), ids["work_b"], notes)
     _sync_research(cfg, ids["work_b"], notes, db)
     ids.update(
         {
@@ -442,26 +415,25 @@ def seed_people_library(storage_root: str) -> dict:
     role so the People-vs-Arguments coherence boundary is observable; Person C is
     deliberately never opened so "cached index, uncached detail" is testable.
     """
+    from backend.domain.people import group_commands
+    from backend.domain.people import person_commands
+    from backend.domain.people import role_commands
+    from tests import people_fixtures
     ids = seed_arguments_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    db.update_person_profile(
-        ids["person"],
-        {
+    person_commands.update_profile(db.database, current_context(), ids["person"], {
             "about": PERSON_A_ABOUT,
             "aliases": PERSON_A_ALIASES,
             "birth_date": PERSON_A_BIRTH,
             "death_date": PERSON_A_DEATH,
             "link_wikipedia": "https://example.com/wiki/e2e-author",
-        },
-    )
-    group_id = db.add_person_group_with_parent_options(PERSON_GROUP_NAME)
-    db.add_person_to_group(ids["person"], group_id)
-    person_b = db.add_person(first_name=PERSON_B_FIRST, last_name=PERSON_B_LAST)
-    db.add_role(person_b, ids["work_b"], "Reviewer")
-    person_unvisited = db.add_person(
-        first_name=PERSON_UNVISITED_FIRST, last_name=PERSON_UNVISITED_LAST
-    )
+        })
+    group_id = group_commands.create(db.database, current_context(), PERSON_GROUP_NAME)
+    group_commands.add_member(db.database, current_context(), group_id, ids["person"])
+    person_b = people_fixtures.add_person(db.database, current_context(), PERSON_B_FIRST, PERSON_B_LAST)
+    role_commands.add(db.database, current_context(), person_b, ids["work_b"], "Reviewer")
+    person_unvisited = people_fixtures.add_person(db.database, current_context(), PERSON_UNVISITED_FIRST, PERSON_UNVISITED_LAST)
     ids.update(
         {
             "person_a": ids["person"],

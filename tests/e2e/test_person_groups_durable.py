@@ -15,7 +15,6 @@ import json
 import os
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (PERSON_B_LAST, PERSON_DISPLAY, PERSON_GROUP_NAME,
                                 seed_people_library)
@@ -114,7 +113,8 @@ class DurablePersonGroupTests(unittest.TestCase):
         return existing
 
     def groups_in_db(self, server):
-        return {row['name']: row for row in self.db_for(server).get_all_person_groups()}
+        from backend.domain.people import group_commands
+        return {row['name']: row for row in self.db_for(server).run(group_commands.catalog)}
 
     def create_group(self, page, name, description=''):
         """Through the real New Group modal."""
@@ -201,6 +201,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         o._wait_content_contains(page, 'Made with no server', timeout=60000)
 
     def test_reconnecting_creates_the_group_once_with_no_rollback(self):
+        from backend.domain.people import group_commands
         server, page, context = self.start()
         self.offline(page, context)
         group = self.create_group(page, 'Offline Circle')
@@ -214,7 +215,7 @@ class DurablePersonGroupTests(unittest.TestCase):
         self.index(page)
         o._wait_content_contains(page, 'Offline Circle', timeout=60000)
         self.assertEqual(
-            len([g for g in self.db_for(server).get_all_person_groups()
+            len([g for g in self.db_for(server).run(group_commands.catalog)
                  if g['name'] == 'Offline Circle']), 1, 'created once, not twice')
 
     def test_a_name_the_server_already_has_comes_back_as_a_named_refusal(self):

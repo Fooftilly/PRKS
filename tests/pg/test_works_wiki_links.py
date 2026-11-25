@@ -21,6 +21,7 @@ from tests import acting_context as facade_context
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from tests.narrowing import require
+from tests import people_fixtures
 
 _LINK = '<a href="#/{kind}/{id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{name}</a>'
 _UNRESOLVED = '<span class="wiki-link-unresolved" style="color:#ef4444;">[[{raw}]]</span>'
@@ -74,7 +75,7 @@ class IsolationTests(WikiLinkTestCase):
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = self.library.add_work("Theirs")
-            their_person = self.library.add_person("Their", "Person")
+            their_person = people_fixtures.add_person(self.db, self.ctx, "Their", "Person")
             self.library.add_work("Mine")  # the same title, in their Library
         text = f"[[Theirs]] [[{theirs}]] [[Person]] [[{their_person}]] [[Mine]]"
         self.assertEqual(self.library.resolve_wiki_links(text), " ".join((
@@ -111,8 +112,8 @@ class OrderingTests(WikiLinkTestCase):
         self.assertEqual(self.library.resolve_wiki_links("[[Twin]]"), link("works", high, "Twin"))
 
     def test_people_follow_the_same_rule(self) -> None:
-        first = self.library.add_person("A", "Kant")
-        second = self.library.add_person("B", "Kant")
+        first = people_fixtures.add_person(self.db, self.ctx, "A", "Kant")
+        second = people_fixtures.add_person(self.db, self.ctx, "B", "Kant")
         self.assertEqual(self.library.resolve_wiki_links("[[Kant]]"), link("people", first, "A Kant"))
         self.sql("UPDATE prks.persons SET created_at = '2000-01-01' WHERE id = %s", (second,))
         self.assertEqual(self.library.resolve_wiki_links("[[Kant]]"), link("people", second, "B Kant"))
@@ -130,10 +131,10 @@ class OrderingTests(WikiLinkTestCase):
         two = self.library.add_work(one)  # its title is the first Work's id
         alpha = self.library.add_work("Alpha")
         self.library.add_work("Alpha")
-        kant = self.library.add_person("Immanuel", "Kant")
-        self.library.add_person("Other", "Kant")
-        self.library.add_person("Pat", "SharedTitle")
-        self.library.add_person("", "Solo")
+        kant = people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
+        people_fixtures.add_person(self.db, self.ctx, "Other", "Kant")
+        people_fixtures.add_person(self.db, self.ctx, "Pat", "SharedTitle")
+        people_fixtures.add_person(self.db, self.ctx, "", "Solo")
         text = f"[[{one}]] [[SharedTitle]] [[Alpha]] [[{two}]] [[Kant]] [[Solo]] [[nobody]] [[{alpha}]]"
         expected = self.library.resolve_wiki_links(text)
         self.assertIn(link("works", one, "SharedTitle"), expected)
@@ -184,7 +185,7 @@ class BatchingTests(WikiLinkTestCase):
 
     def test_repeated_markers_cost_one_lookup_per_table(self) -> None:
         self.library.add_work("Alpha")
-        self.library.add_person("Immanuel", "Kant")
+        people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
         text = " ".join(["[[Alpha]]"] * 100 + ["[[Kant]]"] * 100 + ["[[nobody]]"] * 100)
         _, seen = self.lookups(lambda: self.library.resolve_wiki_links(text))
         self.assertEqual(seen, ["works", "persons"])
@@ -193,7 +194,7 @@ class BatchingTests(WikiLinkTestCase):
 
     def test_more_occurrences_of_the_same_markers_add_no_lookups(self) -> None:
         self.library.add_work("Alpha")
-        self.library.add_person("Immanuel", "Kant")
+        people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
         for repeat in (1, 10, 500):
             with self.subTest(repeat=repeat):
                 out, seen = self.lookups(
@@ -252,7 +253,7 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
         return self.ids[label]
 
     def person(self, label: str, last_name: str, first_name: str = "") -> str:
-        self.ids[label] = self.labels.name(self.library.add_person(first_name, last_name), f"<P {label}>")
+        self.ids[label] = self.labels.name(people_fixtures.add_person(self.db, self.ctx, first_name, last_name), f"<P {label}>")
         return self.ids[label]
 
     def render(self, template: str) -> str:

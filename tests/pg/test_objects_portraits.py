@@ -30,11 +30,13 @@ from backend.domain.objects import lifecycle, portraits
 from backend.domain.objects.lifecycle import ObjectMissing, Settled, StoredObject
 from backend.domain.people import persons
 from backend.media.person_image import PortraitImage, decode_and_transcode
-from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_PORTRAITS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
+from backend.domain.people import person_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 URL = "https://example.org/ada.png"
 OTHER_URL = "https://example.org/ada-2.png"
@@ -60,7 +62,7 @@ class PortraitTestCase(MutationTestCase):
     # -- state ------------------------------------------------------------------
 
     def person(self, url: str = URL) -> str:
-        return self.library.add_person("Ada", "Lovelace", image_url=url)
+        return people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace", image_url=url)
 
     def row(self, person_id: str) -> dict[str, Any]:
         (row,) = self.sql("SELECT image_url, portrait_locator, portrait_sha256, portrait_byte_size,"
@@ -102,7 +104,7 @@ class PortraitTestCase(MutationTestCase):
         return prepare
 
     def cache(self, person_id: str, picture: Optional[PortraitImage] = None, before: Any = None) -> Any:
-        return self.library._cache_person_portrait(person_id, self.preparing(picture, before))
+        return person_commands.cache_portrait(self.db, self.ctx, self.objects, person_id, self.preparing(picture, before))
 
     def stored(self, picture: Optional[PortraitImage] = None) -> StoredObject:
         return portraits.store(self.objects, picture or image())
@@ -162,9 +164,9 @@ class SuccessTests(PortraitTestCase):
         self.assertEqual(self.names(), {row["portrait_locator"]})
         self.assertEqual(self.read(row["portrait_locator"]), picture.body)
         self.assertIs(self.objects.verify(StorageKey(NAMESPACE_PORTRAITS, row["portrait_locator"]), digest), True)
-        self.assertEqual(self.library._person_portrait(person_id), done)
+        self.assertEqual(person_commands.portrait(self.db, self.ctx, self.objects, person_id), done)
         # The profile is unchanged: the locator is not a profile field.
-        person = self.library.get_person(person_id)
+        person = person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir)
         assert person is not None
         self.assertEqual(person["image_url"], URL)
         self.assertNotIn("portrait_locator", person)
@@ -185,7 +187,7 @@ class SuccessTests(PortraitTestCase):
         person_id = self.person(url="")
         self.assertIsNone(self.cache(person_id))
         self.assertEqual((self.fetched, self.names()), ([], set()))
-        self.assertIsNone(self.library._person_portrait(person_id))
+        self.assertIsNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
 
 
 class ReplacementTests(PortraitTestCase):
@@ -203,7 +205,7 @@ class ReplacementTests(PortraitTestCase):
         self.assertEqual(self.claims(), {old})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 1})
         self.assertEqual(self.names(), {new})
-        self.assertEqual(require(self.library._person_portrait(person_id))["body"], second.body)
+        self.assertEqual(require(person_commands.portrait(self.db, self.ctx, self.objects, person_id))["body"], second.body)
 
     def test_four_concurrent_replacements_leave_one_key_named(self) -> None:
         person_id = self.person()
@@ -222,11 +224,11 @@ class PersonChangeTests(PortraitTestCase):
         person_id = self.person()
         self.cache(person_id)
         old = self.locator(person_id)
-        self.library.update_person_profile(person_id, {"image_url": OTHER_URL})
+        person_commands.update_profile(self.db, self.ctx, person_id, {"image_url": OTHER_URL})
         self.assertEqual(self.row(person_id)["image_url"], OTHER_URL)
         self.assertIsNone(self.locator(person_id))
         self.assertEqual(self.claims(), {old})
-        self.assertIsNone(self.library._person_portrait(person_id))
+        self.assertIsNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
         self.cache(person_id)
         self.assertEqual(self.fetched, [URL, OTHER_URL])
         self.assertEqual(self.row(person_id)["portrait_source_url"], OTHER_URL)
@@ -235,22 +237,22 @@ class PersonChangeTests(PortraitTestCase):
         person_id = self.person()
         self.cache(person_id)
         named = self.locator(person_id)
-        self.library.update_person_profile(person_id, {"image_url": f"  {URL} ", "about": "x"})
+        person_commands.update_profile(self.db, self.ctx, person_id, {"image_url": f"  {URL} ", "about": "x"})
         self.assertEqual((self.locator(person_id), self.claims()), (named, set()))
 
     def test_clearing_the_image_url_claims_the_portrait(self) -> None:
         person_id = self.person()
         self.cache(person_id)
         old = self.locator(person_id)
-        self.library.update_person_profile(person_id, {"image_url": ""})
+        person_commands.update_profile(self.db, self.ctx, person_id, {"image_url": ""})
         self.assertEqual((self.locator(person_id), self.claims()), (None, {old}))
 
     def test_clearing_the_portrait_keeps_the_image_url(self) -> None:
         person_id = self.person()
         self.cache(person_id)
         old = self.locator(person_id)
-        self.assertTrue(self.library._clear_person_portrait(person_id))
-        self.assertFalse(self.library._clear_person_portrait(person_id))
+        self.assertTrue(person_commands.clear_portrait(self.db, self.ctx, person_id))
+        self.assertFalse(person_commands.clear_portrait(self.db, self.ctx, person_id))
         self.assertEqual((self.row(person_id)["image_url"], self.locator(person_id)), (URL, None))
         self.assertEqual(self.claims(), {old})
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 1})
@@ -259,14 +261,14 @@ class PersonChangeTests(PortraitTestCase):
         person_id = self.person()
         self.cache(person_id)
         old = self.locator(person_id)
-        self.library.delete_person_if_unlinked(person_id)
+        person_commands.delete_if_unlinked(self.db, self.ctx, person_id)
         self.assertEqual(self.count("persons"), 0)
         self.assertEqual(self.claims(), {old})
         self.assertTrue(old in self.names(), "a command never deletes bytes")
         self.assertEqual(self.settle_all(), {Settled.REMOVED: 1})
         self.assertEqual(self.names(), set())
-        for call in (lambda: self.library._person_portrait(person_id), lambda: self.cache(person_id),
-                     lambda: self.library._clear_person_portrait(person_id)):
+        for call in (lambda: person_commands.portrait(self.db, self.ctx, self.objects, person_id), lambda: self.cache(person_id),
+                     lambda: person_commands.clear_portrait(self.db, self.ctx, person_id)):
             with self.assertRaises(LookupError):
                 call()
 
@@ -275,9 +277,9 @@ class PersonChangeTests(PortraitTestCase):
         self.cache(person_id)
         named = self.locator(person_id)
         work_id = self.library.add_work("Paper")
-        self.library.add_role(person_id, work_id, "Author")
+        role_commands.add(self.db, self.ctx, person_id, work_id, "Author")
         with self.assertRaises(ValueError):
-            self.library.delete_person_if_unlinked(person_id)
+            person_commands.delete_if_unlinked(self.db, self.ctx, person_id)
         self.assertEqual((self.locator(person_id), self.claims()), (named, set()))
 
     def test_the_schema_refuses_a_partial_or_stale_reference(self) -> None:
@@ -311,7 +313,7 @@ class SharedReferenceTests(PortraitTestCase):
                  (shared.key.name, self.actor.library_id))
         self.assertIs(lifecycle.settle(self.db, self.objects, shared.key), Settled.REFERENCED)
         self.assertIn(shared.key.name, self.names())
-        self.library.delete_person_if_unlinked(second)
+        person_commands.delete_if_unlinked(self.db, self.ctx, second)
         self.assertEqual(self.claims(), {shared.key.name})
         self.assertIs(lifecycle.settle(self.db, self.objects, shared.key), Settled.REMOVED)
 
@@ -323,14 +325,14 @@ class AccessTests(PortraitTestCase):
         named, names = self.locator(person_id), self.names()
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            for call in (lambda: self.library._person_portrait(person_id), lambda: self.cache(person_id),
-                         lambda: self.library._clear_person_portrait(person_id)):
+            for call in (lambda: person_commands.portrait(self.db, self.ctx, self.objects, person_id), lambda: self.cache(person_id),
+                         lambda: person_commands.clear_portrait(self.db, self.ctx, person_id)):
                 with self.assertRaises(LookupError):
                     call()
         self.assertEqual((self.fetched, self.names(), self.locator(person_id)), ([URL], names, named))
         # Its own Person cannot adopt this Library's key either.
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_person("Ada", "Lovelace", image_url=URL)
+            theirs = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace", image_url=URL)
         obj = self.stored()
         self.assertIsInstance(self.commit(person_id, obj), portraits.Portrait)
         with self.assertRaises(ObjectMissing):
@@ -343,8 +345,8 @@ class AccessTests(PortraitTestCase):
         named, names = self.locator(person_id), self.names()
         self.fetched.clear()
         with facade_context.acting_as(self.reader_context()):
-            self.assertIsNotNone(self.library._person_portrait(person_id))
-            for call in (lambda: self.cache(person_id), lambda: self.library._clear_person_portrait(person_id)):
+            self.assertIsNotNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
+            for call in (lambda: self.cache(person_id), lambda: person_commands.clear_portrait(self.db, self.ctx, person_id)):
                 with self.assertRaises(AccessRefused) as caught:
                     call()
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -357,7 +359,7 @@ class ConcurrencyTests(PortraitTestCase):
         obj = self.stored()
         done, deleted = self.hold_then(
             lambda scope: portraits.commit(scope, self.objects, person_id, URL, obj),
-            lambda: self.library.delete_person_if_unlinked(person_id))
+            lambda: person_commands.delete_if_unlinked(self.db, self.ctx, person_id))
         self.assertIsInstance(done, portraits.Portrait)
         self.assertIsNone(deleted)
         self.assertEqual((self.count("persons"), self.claims()), (0, {obj.key.name}))
@@ -387,14 +389,14 @@ class ConcurrencyTests(PortraitTestCase):
     def test_a_person_deleted_while_fetching(self) -> None:
         person_id = self.person()
         with self.assertRaises(LookupError):
-            self.cache(person_id, before=lambda: self.library.delete_person_if_unlinked(person_id))
+            self.cache(person_id, before=lambda: person_commands.delete_if_unlinked(self.db, self.ctx, person_id))
         self.assertEqual(self.claims(), self.names())
         self.assertEqual(len(self.names()), 1)
 
     def test_a_url_changed_while_fetching_caches_nothing(self) -> None:
         person_id = self.person()
         self.assertIsNone(self.cache(
-            person_id, before=lambda: self.library.update_person_profile(person_id, {"image_url": OTHER_URL})))
+            person_id, before=lambda: person_commands.update_profile(self.db, self.ctx, person_id, {"image_url": OTHER_URL})))
         self.assertIsNone(self.locator(person_id))
         self.assertEqual(self.claims(), self.names())
 
@@ -402,9 +404,9 @@ class ConcurrencyTests(PortraitTestCase):
 class FailureTests(PortraitTestCase):
     def test_a_failed_fetch_or_transcode_writes_nothing(self) -> None:
         person_id = self.person()
-        self.assertIsNone(self.library._cache_person_portrait(person_id, lambda url: None))
+        self.assertIsNone(person_commands.cache_portrait(self.db, self.ctx, self.objects, person_id, lambda url: None))
         with self.assertRaises(RuntimeError):
-            self.library._cache_person_portrait(person_id, mock.Mock(side_effect=RuntimeError("fetch")))
+            person_commands.cache_portrait(self.db, self.ctx, self.objects, person_id, mock.Mock(side_effect=RuntimeError("fetch")))
         # Bytes that are not the WebP or JPEG they claim are refused before a write.
         with self.assertRaises(ValueError):
             self.cache(person_id, PortraitImage(b"<html>", "webp"))
@@ -473,11 +475,11 @@ class FailureTests(PortraitTestCase):
         body = self.read(key.name)
         self.objects.replace(key, lambda stream: stream.write(body[:-1] + bytes([body[-1] ^ 1])))
         self.assertEqual(len(self.read(key.name)), size)
-        self.assertIsNone(self.library._person_portrait(person_id))
+        self.assertIsNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
         self.objects.replace(key, lambda stream: stream.write(b"RIFF"))
-        self.assertIsNone(self.library._person_portrait(person_id))
+        self.assertIsNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
         self.objects.delete(key)
-        self.assertIsNone(self.library._person_portrait(person_id))
+        self.assertIsNone(person_commands.portrait(self.db, self.ctx, self.objects, person_id))
 
 
 class ReferenceTests(PortraitTestCase):
@@ -520,8 +522,7 @@ class RestartTests(PortraitTestCase):
         self.cache(person_id, second)
         db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(db.close)
-        library = TestLibrary(db, storage=self.storage)
-        self.assertEqual(require(library._person_portrait(person_id))["body"], second.body)
+        self.assertEqual(require(person_commands.portrait(db, self.ctx, self.objects, person_id))["body"], second.body)
         self.assertEqual(self.claims(), {old})
         self.assertEqual(lifecycle.retry_claims(db, self.objects), {Settled.REMOVED: 1})
         self.assertEqual(lifecycle.retry_claims(db, self.objects), {})

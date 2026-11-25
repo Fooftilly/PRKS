@@ -31,6 +31,7 @@ from backend.storage.objects import NAMESPACE_REMOTE_IMAGES, LocalFilesystemStor
 from tests import acting_context as facade_context
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_works_mutations import MutationTestCase
+from backend.domain.research import concept_commands
 
 THUMB = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 FIGURE = "https://example.org/figures/graph.png"
@@ -119,7 +120,7 @@ class SaveTests(RemoteImageTestCase):
         lib = self.actor.library_id
         concept = "https://example.org/concepts.png"
         self.assertIsNone(self.save(concept))
-        self.library.create_concept("Graph", f"![x]({concept})")
+        concept_commands.create(self.db, self.ctx, "Graph", f"![x]({concept})")
         self.assertIsNotNone(self.save(concept))
         for table, column, extra in (
                 ("positions", "description", {"id": "P-" + "A" * 32, "name": "Graphs help"}),

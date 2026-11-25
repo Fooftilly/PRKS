@@ -25,6 +25,8 @@ from backend.jobs.runner import Outcome
 from tests import acting_context as facade_context
 from backend.pdf.pdf_text import PDFTextExtractorUnavailable
 from tests.pg.test_search_text import TextTestCase
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class RebuildTestCase(TextTestCase):
@@ -41,9 +43,9 @@ class RebuildTestCase(TextTestCase):
         return self.run_jobs()
 
     def library_with_everything(self) -> list[str]:
-        person = self.library.add_person("Ada", "Lovelace")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         first = self.pdf_work("Analytical engine", "notes on the engine", "a.pdf")
-        self.library.add_role(person, first, "Author")
+        role_commands.add(self.db, self.ctx, person, first, "Author")
         second = self.pdf_work("Second paper", "bernoulli numbers", "b.pdf")
         third = self.library.add_work("Plain record", abstract="An understatement")
         self.command(lambda scope: notes.set_note(scope, third, notes.RESEARCH, "[[concept:Engines]]"))

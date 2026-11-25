@@ -31,6 +31,14 @@ from backend.domain.organization import tag_commands
 from backend.domain.saved_views import commands as saved_view_commands
 from backend.domain.settings import commands as settings_commands
 from tests.acting_context import current_context
+from backend.domain.people import group_commands
+from backend.domain.people import publisher_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
+from backend.domain.research import argument_commands
+from backend.domain.research import concept_commands
+from backend.domain.research import note_commands
+from backend.domain.research import position_commands
 
 # Identity columns the restore renumbers from the live sequence (see the staging tests).
 _RENUMBERED = {"seq"}
@@ -71,14 +79,14 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.sql("INSERT INTO prks.sync_work_lifecycle (library_id, work_id, state) VALUES (%s, %s, 'deleted')",
                  (self.actor.library_id, gone))
         # People.
-        ada = lib.add_person("Ada", "Lovelace", image_url="https://example.org/ada.png")
+        ada = people_fixtures.add_person(lib.database, current_context(), "Ada", "Lovelace", image_url="https://example.org/ada.png")
         self.sql("INSERT INTO prks.person_aliases (library_id, person_id, position, alias) "
                  "VALUES (%s, %s, 0, 'A. Lovelace')", (self.actor.library_id, ada))
-        lib.add_role(ada, first, "Author")
-        group = lib.add_person_group_with_parent_options("Analysts")
-        lib.add_person_to_group(ada, group)
-        publisher = lib.add_publisher("Penguin")["id"]
-        lib.add_publisher_alias(publisher, "Penguin Books")
+        role_commands.add(lib.database, current_context(), ada, first, "Author")
+        group = group_commands.create(lib.database, current_context(), "Analysts")
+        group_commands.add_member(lib.database, current_context(), group, ada)
+        publisher = publisher_commands.create(lib.database, current_context(), "Penguin")["id"]
+        publisher_commands.add_alias(lib.database, current_context(), publisher, "Penguin Books")
         portrait = portraits.store(self.objects, image())
         self.edit_command(lambda scope: portraits.commit(scope, self.objects, ada, "https://example.org/ada.png",
                                                     portrait))
@@ -98,18 +106,16 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.sql("INSERT INTO prks.citation_styles (library_id, id, title, csl) VALUES (%s, %s, 'House', '<style/>')",
                  (self.actor.library_id, "custom-" + "a" * 32))
         # Research.
-        engines = lib.create_concept("Engines")["id"]
-        lib.save_work_notes(first, "On [[concept:Engines]] ![figure](https://example.org/figure.png)")
+        engines = concept_commands.create(lib.database, current_context(), "Engines")["id"]
+        note_commands.save(lib.database, current_context(), first, "On [[concept:Engines]] ![figure](https://example.org/figure.png)")
         figure = remote_images.store(self.objects, image())
         self.edit_command(lambda scope: remote_images.commit(scope, self.objects, "https://example.org/figure.png",
                                                              figure))
-        lib.replace_concept_aliases(engines, ["Machines"])
-        lib.replace_concept_parents(engines, [lib.create_concept("Mechanism")["id"]])
-        claim = lib.create_position("Engines compute")["id"]
-        base = lib.create_argument(name="Base", kind="argument", sources=[{"work_id": first, "manifestation_id": revision, "pages": "1"}],
-                                   targets=[{"type": "position", "id": claim, "verdict_id": "supports"}])["id"]
-        lib.create_argument(name="Reply", kind="argument",
-                            targets=[{"type": "argument", "id": base, "verdict_id": "opposes"}])
+        concept_commands.replace_aliases(lib.database, current_context(), engines, ["Machines"])
+        concept_commands.replace_parents(lib.database, current_context(), engines, [concept_commands.create(lib.database, current_context(), "Mechanism")["id"]])
+        claim = position_commands.create(lib.database, current_context(), "Engines compute")["id"]
+        base = argument_commands.create(lib.database, current_context(), name="Base", kind="argument", sources=[{"work_id": first, "manifestation_id": revision, "pages": "1"}], targets=[{"type": "position", "id": claim, "verdict_id": "supports"}])["id"]
+        argument_commands.create(lib.database, current_context(), name="Reply", kind="argument", targets=[{"type": "argument", "id": base, "verdict_id": "opposes"}])
         lib.save_work_annotations(first, json.dumps([HIGHLIGHT]), base_set_revision=0)
         # Processing: a ready item whose draft has roles and tags.
         data = b"%PDF-1.4\n% queued\n%%EOF\n"
@@ -151,7 +157,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.library.delete_work_record(ids["second"])
         self.library.update_work_metadata(ids["first"], {"title": "Changed"})
         tag_commands.delete(self.db, self.ctx, ids["tag"])
-        self.library.add_person("Later", "Person")
+        people_fixtures.add_person(self.db, self.ctx, "Later", "Person")
         self.sql("DELETE FROM prks.library_settings")
         self.sql("DELETE FROM prks.citation_styles")
         self.sql("DELETE FROM prks.sync_operations")

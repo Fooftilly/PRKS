@@ -16,6 +16,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from typing import Any
 from unittest import mock
 
@@ -31,6 +32,9 @@ from backend.domain.research.rules import ResearchError
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_arguments_sync import ResearchSyncTestCase
 from tests.narrowing import require
+from backend.domain.research import argument_commands
+from backend.domain.research import concept_commands
+from backend.domain.research import note_commands
 
 
 class ResearchIndexTestCase(ResearchSyncTestCase):
@@ -69,7 +73,7 @@ class ResearchIndexTestCase(ResearchSyncTestCase):
                              lambda scope: reindex.research_refs(scope, work_id))
 
     def concept_ids(self) -> dict[str, str]:
-        return {row["name"]: row["id"] for row in self.library.list_concepts()}
+        return {row["name"]: row["id"] for row in concept_commands.catalog(self.db, self.ctx)}
 
     @contextmanager
     def paused_reindex(self, work_id: str) -> Iterator[None]:
@@ -119,7 +123,7 @@ class ResearchIndexTestCase(ResearchSyncTestCase):
 class MentionTests(ResearchIndexTestCase):
     def test_concept_and_argument_references_become_mentions(self) -> None:
         ethics = self.concept("Ethics")
-        self.library.replace_concept_aliases(ethics, ["Morals"])
+        concept_commands.replace_aliases(self.db, self.ctx, ethics, ["Morals"])
         argument = self.argument("Claim")
         work = self.library.add_work("W")
         text = (f"On [[concept:ethics]] and [[concept:MORALS]], see [[argument:{argument}|the claim]];"
@@ -164,7 +168,7 @@ class MentionTests(ResearchIndexTestCase):
 
     def test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index(self) -> None:
         work = self.library.add_work("W")
-        self.library.save_work_notes(work, "See [[concept:Culture Industry]].")
+        note_commands.save(self.db, self.ctx, work, "See [[concept:Culture Industry]].")
         self.assertEqual(require(self.library.get_work_notes_state(work))["research_note_revision"], 1)
         status, result = self.send(self.envelope("SET_WORK_RESEARCH_NOTE", work,
                                                  {"text": "Also [[concept:Mass Culture]]."}, 1,
@@ -361,7 +365,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def delete_concept_as_actor(self, concept_id: str) -> Any:
         with facade_context.acting_as(self.actor.context):
-            return self.library.delete_concept(concept_id)
+            return concept_commands.delete(self.db, self.ctx, concept_id)
 
     def test_a_concept_delete_after_a_note_write_holds_it_is_refused(self) -> None:
         topic = self.concept("Topic")
@@ -384,7 +388,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
         work = self.library.add_work("W")
         with self.note_paused_at_its_hold(work, "[[concept:Topic]]", before=True) as written:
             # The note has parsed its references but holds nothing yet: the delete commits.
-            self.library.delete_concept(topic)
+            concept_commands.delete(self.db, self.ctx, topic)
             self.assertEqual(written, [])
         self.assertEqual(written, [None])
         recreated = self.concept_ids()["Topic"]
@@ -498,7 +502,9 @@ class EncodedReferenceTests(ResearchIndexTestCase):
         self.assertEqual([row["id"] for row in self.refs(work)["concepts"]], [concepts["Category]] Theory"]])
 
     def test_the_content_hash_names_the_text(self) -> None:
-        self.assertEqual(reindex.content_hash("abc"), reindex.content_hash("abc"))
+        # SHA-256 of the UTF-8 text, so the stored hash is stable across processes.
+        self.assertEqual(reindex.content_hash("abc"),
+                         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         self.assertNotEqual(reindex.content_hash("abc"), reindex.content_hash("abd"))
 
 
@@ -512,10 +518,10 @@ class ResearchNetworkTests(ResearchIndexTestCase):
     def test_a_note_creates_its_concept_once_whatever_the_spelling(self) -> None:
         work = self.library.add_work("Dialectic")
         self.research_note(work, "Adorno's account of [[concept:Culture Industry]] depends upon standardization.")
-        (concept,) = self.library.list_concepts()
+        (concept,) = concept_commands.catalog(self.db, self.ctx)
         self.assertEqual((concept["name"], concept["description"]), ("Culture Industry", ""))
         self.research_note(work, "Same idea as [[concept:culture industry]] and [[concept:  Culture   Industry  ]].")
-        self.assertEqual([item["id"] for item in self.library.list_concepts()], [concept["id"]])
+        self.assertEqual([item["id"] for item in concept_commands.catalog(self.db, self.ctx)], [concept["id"]])
         self.assertIn("[[concept:culture industry]]", require(self.library.get_work(work))["text_content"])
 
     def test_the_last_reference_going_keeps_the_concept(self) -> None:
@@ -523,7 +529,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.research_note(a, "See [[concept:Culture Industry]].")
         self.research_note(b, "Also [[concept:Culture Industry]].")
         self.run_jobs()
-        (concept,) = self.library.list_concepts()
+        (concept,) = concept_commands.catalog(self.db, self.ctx)
         self.assertEqual(self.mention_count(concept["id"]), 2)
         self.research_note(a, "No concept here.")
         self.run_jobs()
@@ -531,97 +537,92 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.research_note(b, "Gone.")
         self.run_jobs()
         self.assertEqual(self.mention_count(concept["id"]), 0)
-        self.assertIsNotNone(self.library.get_concept(concept["id"]))
+        self.assertIsNotNone(concept_commands.detail(self.db, self.ctx, concept["id"]))
 
     def test_renames_aliases_and_collisions(self) -> None:
         work = self.library.add_work("W")
         self.research_note(work, "[[concept:Culture Industry]]")
-        (concept,) = self.library.list_concepts()
-        self.library.update_concept(concept["id"], name="Cultural Industry")
-        item = self.library.get_concept(concept["id"])
+        (concept,) = concept_commands.catalog(self.db, self.ctx)
+        concept_commands.update(self.db, self.ctx, concept["id"], name="Cultural Industry")
+        item = concept_commands.detail(self.db, self.ctx, concept["id"])
         assert item is not None
         self.assertEqual((item["name"], item["aliases"]), ("Cultural Industry", ["Culture Industry"]))
         self.research_note(work, "still [[concept:Culture Industry]]")
-        self.assertEqual(len(self.library.list_concepts()), 1)
+        self.assertEqual(len(concept_commands.catalog(self.db, self.ctx)), 1)
         # A capitalization-only rename changes the display name and adds no alias.
         other = self.concept("Mass Culture")
-        self.library.update_concept(other, name="MASS CULTURE")
-        self.assertEqual((require(self.library.get_concept(other))["name"], require(self.library.get_concept(other))["aliases"]),
+        concept_commands.update(self.db, self.ctx, other, name="MASS CULTURE")
+        self.assertEqual((require(concept_commands.detail(self.db, self.ctx, other))["name"], require(concept_commands.detail(self.db, self.ctx, other))["aliases"]),
                          ("MASS CULTURE", []))
-        self.refused("concept_exists", self.library.update_concept, other, name="Cultural Industry")
-        self.assertEqual(require(self.library.get_concept(other))["name"], "MASS CULTURE")
+        self.refused("concept_exists", partial(concept_commands.update, self.db, self.ctx), other, name="Cultural Industry")
+        self.assertEqual(require(concept_commands.detail(self.db, self.ctx, other))["name"], "MASS CULTURE")
         # An alias resolves a note to its Concept.
-        self.library.replace_concept_aliases(other, ["Kulturindustrie"])
+        concept_commands.replace_aliases(self.db, self.ctx, other, ["Kulturindustrie"])
         self.research_note(work, "[[concept:Kulturindustrie]]")
-        self.assertEqual(len(self.library.list_concepts()), 2)
+        self.assertEqual(len(concept_commands.catalog(self.db, self.ctx)), 2)
 
     def test_parents_and_cycles(self) -> None:
         a, b, c = self.concept("Critical Theory"), self.concept("Mass Culture"), self.concept("Culture Industry")
-        self.library.replace_concept_parents(c, [a, b])
-        self.assertEqual({p["id"] for p in require(self.library.get_concept(c))["parents"]}, {a, b})
-        self.library.replace_concept_parents(b, [a])
-        self.refused("concept_cycle", self.library.replace_concept_parents, a, [c])
-        self.refused("concept_cycle", self.library.replace_concept_parents, a, [a])
+        concept_commands.replace_parents(self.db, self.ctx, c, [a, b])
+        self.assertEqual({p["id"] for p in require(concept_commands.detail(self.db, self.ctx, c))["parents"]}, {a, b})
+        concept_commands.replace_parents(self.db, self.ctx, b, [a])
+        self.refused("concept_cycle", partial(concept_commands.replace_parents, self.db, self.ctx), a, [c])
+        self.refused("concept_cycle", partial(concept_commands.replace_parents, self.db, self.ctx), a, [a])
 
     def test_a_referenced_concept_refuses_its_delete_whatever_the_index_says(self) -> None:
         work = self.library.add_work("W")
         self.research_note(work, "[[concept:Culture Industry]]")
-        (concept,) = self.library.list_concepts()
+        (concept,) = concept_commands.catalog(self.db, self.ctx)
         # The reindex job has not run: the canonical note is the guard, not the index.
         self.assertEqual(self.mention_count(concept["id"]), 0)
-        error = self.refused("concept_in_use", self.library.delete_concept, concept["id"])
+        error = self.refused("concept_in_use", partial(concept_commands.delete, self.db, self.ctx), concept["id"])
         self.assertEqual(error.http_status, 409)
         self.run_jobs()
-        self.refused("concept_in_use", self.library.delete_concept, concept["id"])
-        self.assertIsNotNone(self.library.get_concept(concept["id"]))
+        self.refused("concept_in_use", partial(concept_commands.delete, self.db, self.ctx), concept["id"])
+        self.assertIsNotNone(concept_commands.detail(self.db, self.ctx, concept["id"]))
 
     def test_code_escapes_private_notes_and_unknown_arguments_create_nothing(self) -> None:
         work = self.library.add_work("W")
         self.research_note(work, "code `[[concept:Culture Industry]]` and \\[[concept:Mass Culture]] [[argument:A-MISSING]]")
         self.library.update_work_metadata(work, {"private_notes": "[[concept:Secret Idea]]"})
         self.research_note(work, "public prose only")
-        self.assertEqual((self.library.list_concepts(), self.library.list_arguments()), ([], []))
+        self.assertEqual((concept_commands.catalog(self.db, self.ctx), argument_commands.catalog(self.db, self.ctx)), ([], []))
 
     def test_argument_sources_targets_responses_and_cycles(self) -> None:
         w1, w2 = self.library.add_work("Work One"), self.library.add_work("Work Two")
         pos = self.position("Mass-produced culture necessarily standardizes experience.")
-        a = self.library.create_argument(
-            name="Standardization argument", kind="argument",
-            main_text="Adorno argues cultural commodities become standardized.",
-            sources=[{"work_id": w1, "pages": "94–136"}, {"work_id": w2, "pages": "§3"}],
-            targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
+        a = argument_commands.create(self.db, self.ctx, name="Standardization argument", kind="argument", main_text="Adorno argues cultural commodities become standardized.", sources=[{"work_id": w1, "pages": "94–136"}, {"work_id": w2, "pages": "§3"}], targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
         self.assertEqual((a["kind"], len(a["sources"]), a["sources"][0]["pages"], a["targets"][0]["verdict_id"]),
                          ("argument", 2, "94–136", "supports"))
-        stance = self.library.create_argument(name="Holds the position", kind="stance",
-                                              targets=[{"type": "position", "id": pos, "verdict_id": "holds"}])
+        stance = argument_commands.create(self.db, self.ctx, name="Holds the position", kind="stance", targets=[{"type": "position", "id": pos, "verdict_id": "holds"}])
         self.assertEqual(stance["kind"], "stance")
         b = self.argument("Habermas response", targets=[{"type": "argument", "id": a["id"], "verdict_id": "opposes"}])
-        self.assertEqual(require(self.library.get_argument(a["id"]))["responses"][0]["id"], b)
-        self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],
+        self.assertEqual(require(argument_commands.detail(self.db, self.ctx, a["id"]))["responses"][0]["id"], b)
+        self.refused("argument_cycle", partial(argument_commands.replace_targets, self.db, self.ctx), a["id"],
                      [{"type": "argument", "id": a["id"], "verdict_id": "supports"}])
-        self.refused("argument_cycle", self.library.replace_argument_targets, a["id"],
+        self.refused("argument_cycle", partial(argument_commands.replace_targets, self.db, self.ctx), a["id"],
                      [{"type": "argument", "id": b, "verdict_id": "supports"}])
         c = self.argument("C")
-        self.library.replace_argument_targets(b, [{"type": "argument", "id": c, "verdict_id": "qualifies"}])
-        self.library.replace_argument_targets(a["id"], [{"type": "argument", "id": b, "verdict_id": "qualifies"}])
-        self.refused("argument_cycle", self.library.replace_argument_targets, c,
+        argument_commands.replace_targets(self.db, self.ctx, b, [{"type": "argument", "id": c, "verdict_id": "qualifies"}])
+        argument_commands.replace_targets(self.db, self.ctx, a["id"], [{"type": "argument", "id": b, "verdict_id": "qualifies"}])
+        self.refused("argument_cycle", partial(argument_commands.replace_targets, self.db, self.ctx), c,
                      [{"type": "argument", "id": a["id"], "verdict_id": "supports"}])
         with self.assertRaises(ResearchError) as caught:
-            self.library.create_argument(name="No verdict", kind="argument", targets=[{"type": "position", "id": pos}])
+            argument_commands.create(self.db, self.ctx, name="No verdict", kind="argument", targets=[{"type": "position", "id": pos}])
         self.assertIn("verdict", caught.exception.code)
 
     def test_a_noted_or_answered_argument_refuses_its_delete_whatever_the_index_says(self) -> None:
         work = self.library.add_work("W")
         argument = self.argument("Linked")
         self.research_note(work, "See [[argument:%s|label]]." % argument)
-        self.refused("argument_in_use", self.library.delete_argument, argument)  # before the reindex
+        self.refused("argument_in_use", partial(argument_commands.delete, self.db, self.ctx), argument)  # before the reindex
         self.run_jobs()
-        self.refused("argument_in_use", self.library.delete_argument, argument)
+        self.refused("argument_in_use", partial(argument_commands.delete, self.db, self.ctx), argument)
         self.research_note(work, "")
         self.run_jobs()
         other = self.argument("Response", targets=[{"type": "argument", "id": argument, "verdict_id": "opposes"}])
-        self.refused("argument_targeted", self.library.delete_argument, argument)
-        self.assertIsNotNone(self.library.get_argument(other))
+        self.refused("argument_targeted", partial(argument_commands.delete, self.db, self.ctx), argument)
+        self.assertIsNotNone(argument_commands.detail(self.db, self.ctx, other))
 
     def test_logs_never_carry_a_concept_name(self) -> None:
         records: list[logging.LogRecord] = []

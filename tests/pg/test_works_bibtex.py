@@ -22,6 +22,8 @@ from backend.domain.works.metadata_rules import DOC_TYPES
 from tests.bibtex_entry import assert_one_bibtex_entry
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from backend.domain.settings import commands as settings_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 _ENTRY = ("@book{Lovelace1843,\n"
           "  title = {Notes},\n"
@@ -34,7 +36,7 @@ _ENTRY = ("@book{Lovelace1843,\n"
 class BibtexTestCase(WorksFacadeTestCase):
     def book(self) -> str:
         work_id = self.library.add_work("Notes", doc_type="book", year="1843", publisher="Taylor")
-        self.library.add_role(self.library.add_person("Ada", "Lovelace"), work_id, "Author")
+        role_commands.add(self.db, self.ctx, people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace"), work_id, "Author")
         return work_id
 
 
@@ -156,7 +158,7 @@ class AuthorTextTests(BibtexTestCase):
 class SnapshotTests(BibtexTestCase):
     def test_the_record_credits_and_profile_are_one_snapshot(self) -> None:
         work_id = self.book()
-        person_id = self.library.add_person("Charles", "Babbage")
+        person_id = people_fixtures.add_person(self.db, self.ctx, "Charles", "Babbage")
         original = citation.citation_target
         changed: list[bool] = []
 
@@ -165,7 +167,7 @@ class SnapshotTests(BibtexTestCase):
             if not changed:
                 # Committed by another transaction after this read's first
                 # statement, before the record, profile and credits are read.
-                self.library.add_role(person_id, work_id, "Editor")
+                role_commands.add(self.db, self.ctx, person_id, work_id, "Editor")
                 self.library.update_work_metadata(work_id, {"title": "Renamed"})
                 settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"publisher": False}})
                 changed.append(True)
@@ -220,10 +222,10 @@ class AnswerTests(BibtexTestCase):
 
     def person(self, label: str, first_name: str = "", last_name: str = "") -> str:
         del label  # names the Person in the test only
-        return self.library.add_person(first_name, last_name)
+        return people_fixtures.add_person(self.db, self.ctx, first_name, last_name)
 
     def credit(self, work: str, person: str, role_type: str, credit_name: str = "") -> None:
-        self.library.add_role(person, work, role_type, credit_name=credit_name)
+        role_commands.add(self.db, self.ctx, person, work, role_type, credit_name)
 
     def manifestation(self, work: str, *, kind: str = "edition", title: Optional[str] = None,
                       doc_type: Optional[str] = None, year: Optional[str] = None, publisher: Optional[str] = None,

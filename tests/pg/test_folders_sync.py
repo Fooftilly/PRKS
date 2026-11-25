@@ -28,6 +28,9 @@ from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_pa
 from tests.narrowing import require
 from backend.domain.organization import folder_commands
 from backend.domain.organization import tag_commands
+from backend.domain.identity.library_scope import library_query
+from backend.domain.people import roles
+from tests import people_fixtures
 
 _FOLDER_OPERATIONS = frozenset({"CREATE_FOLDER", "SET_FOLDER_FIELD", "DELETE_FOLDER"})
 
@@ -327,13 +330,13 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         self.assertEqual((self.count("works"), self.filed()), (1, [(result["work_id"], folder_id)]))
 
     def test_roles_are_filed_with_the_folder(self) -> None:
-        person = self.library.add_person("Ann", "Lee")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
         folder_id = self.create_folder("Talks")
         data = self.create_work(folder_id=folder_id, roles=[{"person_id": person, "role_type": "Author",
                                                              "credit_name": "A. Lee"}])
         status, result = self.send(data)
         self.assertEqual((status, result["role_count"], result["aliases_revisions"]), (200, 1, {person: 1}))
-        self.assertEqual([row["id"] for row in self.library.get_work_roles(data["entity_id"])], [person])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, data["entity_id"]))], [person])
         self.assertEqual(folder_commands.related(self.db, self.ctx, data["entity_id"]), [])
 
     def test_a_missing_playlist_refuses_the_create_before_the_work_exists(self) -> None:

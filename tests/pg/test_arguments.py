@@ -12,6 +12,7 @@ the merge race waits on events, never on time).
 from __future__ import annotations
 
 import threading
+from functools import partial
 from typing import Any, Optional
 
 from backend.db.errors import DatabaseError
@@ -25,14 +26,18 @@ from backend.domain.research.rules import ResearchError
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_concepts import ConceptTestCase
 from tests.narrowing import require
+from backend.domain.people import role_commands
+from tests import people_fixtures
+from backend.domain.research import argument_commands
+from backend.domain.research import position_commands
 
 
 class ResearchTestCase(ConceptTestCase):
     def position(self, name: str, description: str = "") -> str:
-        return self.library.create_position(name, description)["id"]
+        return position_commands.create(self.db, self.ctx, name, description)["id"]
 
     def argument(self, name: str, kind: str = "argument", **lists: Any) -> str:
-        return self.library.create_argument(name=name, kind=kind, **lists)["id"]
+        return argument_commands.create(self.db, self.ctx, name=name, kind=kind, **lists)["id"]
 
     def primary(self, work_id: str) -> str:
         return self.sql("SELECT primary_manifestation_id AS id FROM prks.works WHERE id = %s", (work_id,))[0]["id"]
@@ -55,7 +60,7 @@ class ResearchTestCase(ConceptTestCase):
                  (self.actor.library_id, argument_id, order, work_id, manifestation_id, pages))
 
     def argument_state(self, argument_id: str) -> dict[str, Any]:
-        state = self.library.get_argument_sync_state(argument_id)
+        state = argument_commands.sync_state(self.db, self.ctx, argument_id)
         assert state is not None
         return state
 
@@ -75,44 +80,44 @@ def pinned(work_id: str, manifestation_id: Any, pages: Any = "") -> dict[str, An
 
 class PositionTests(ResearchTestCase):
     def test_create_read_update_and_list(self) -> None:
-        claim = self.library.create_position("  A   claim ", "About")
+        claim = position_commands.create(self.db, self.ctx, "  A   claim ", "About")
         self.assertEqual((claim["name"], claim["description"], claim["arguments"]), ("A claim", "About", []))
         self.position("b claim")
         self.position("C claim")
-        self.assertEqual([row["name"] for row in self.library.list_positions()], ["A claim", "b claim", "C claim"])
-        self.library.update_position(claim["id"], name="A claim", description="About")
+        self.assertEqual([row["name"] for row in position_commands.catalog(self.db, self.ctx)], ["A claim", "b claim", "C claim"])
+        position_commands.update(self.db, self.ctx, claim["id"], name="A claim", description="About")
         self.assertEqual(self.revisions("position-field"), {})
-        self.library.update_position(claim["id"], name="Renamed")
-        self.assertEqual(self.library.get_position_sync_state(claim["id"]),
+        position_commands.update(self.db, self.ctx, claim["id"], name="Renamed")
+        self.assertEqual(position_commands.sync_state(self.db, self.ctx, claim["id"]),
                          {"position_id": claim["id"],
                           "fields": {"description": {"revision": 0}, "name": {"revision": 1}}})
         for code, call, args, kwargs in (
-                ("invalid_name", self.library.create_position, ("  ",), {}),
-                ("invalid_name", self.library.create_position, ("a\x00b",), {}),
-                ("invalid_name", self.library.create_position, ("x" * 241,), {}),
-                ("invalid_text", self.library.create_position, ("Ok", "\x07"), {}),
-                ("nothing_to_update", self.library.update_position, (claim["id"],), {}),
-                ("not_found", self.library.update_position, (generate("P"),), {"name": "X"}),
-                ("not_found", self.library.update_position, ("P-\x00",), {"name": "X"}),
-                ("not_found", self.library.delete_position, ("P-\x00",), {})):
+                ("invalid_name", partial(position_commands.create, self.db, self.ctx), ("  ",), {}),
+                ("invalid_name", partial(position_commands.create, self.db, self.ctx), ("a\x00b",), {}),
+                ("invalid_name", partial(position_commands.create, self.db, self.ctx), ("x" * 241,), {}),
+                ("invalid_text", partial(position_commands.create, self.db, self.ctx), ("Ok", "\x07"), {}),
+                ("nothing_to_update", partial(position_commands.update, self.db, self.ctx), (claim["id"],), {}),
+                ("not_found", partial(position_commands.update, self.db, self.ctx), (generate("P"),), {"name": "X"}),
+                ("not_found", partial(position_commands.update, self.db, self.ctx), ("P-\x00",), {"name": "X"}),
+                ("not_found", partial(position_commands.delete, self.db, self.ctx), ("P-\x00",), {})):
             with self.subTest(code=code, args=[str(arg)[:8] for arg in args]):
                 self.refused(code, call, *args, **kwargs)
-        self.assertIsNone(self.library.get_position("P-\x00"))
+        self.assertIsNone(position_commands.detail(self.db, self.ctx, "P-\x00"))
         self.assertEqual(self.count("positions"), 3)
 
     def test_a_targeted_position_refuses_its_delete_and_a_delete_moves_every_scope_on(self) -> None:
         claim = self.position("Claim")
         answer = self.argument("Answer", targets=[target("position", claim, "opposes")])
-        self.assertEqual(require(self.library.get_position(claim))["arguments"],
+        self.assertEqual(require(position_commands.detail(self.db, self.ctx, claim))["arguments"],
                          [{"id": answer, "name": "Answer", "kind": "argument", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}])
-        self.assertEqual(self.refused("position_in_use", self.library.delete_position, claim).http_status, 409)
-        self.library.replace_argument_targets(answer, [])
-        self.library.delete_position(claim)
-        self.assertIsNone(self.library.get_position(claim))
+        self.assertEqual(self.refused("position_in_use", partial(position_commands.delete, self.db, self.ctx), claim).http_status, 409)
+        argument_commands.replace_targets(self.db, self.ctx, answer, [])
+        position_commands.delete(self.db, self.ctx, claim)
+        self.assertIsNone(position_commands.detail(self.db, self.ctx, claim))
         # Never edited, and still each moved on, so no base outlives the delete.
         self.assertEqual(sorted(self.revisions("position-field").values()), [1, 1])
-        self.refused("not_found", self.library.delete_position, claim)
+        self.refused("not_found", partial(position_commands.delete, self.db, self.ctx), claim)
 
 
 class ArgumentTests(ResearchTestCase):
@@ -120,23 +125,20 @@ class ArgumentTests(ResearchTestCase):
         work = self.library.add_work("Republic")
         claim = self.position("Claim")
         base = self.argument("Base", "stance")
-        reply = self.library.create_argument(
-            name=" Reply ", kind="argument", main_text="Body",
-            sources=[source(f" {work} ", " 514a ")],
-            targets=[target("argument", base, "opposes"), target("position", claim)])
+        reply = argument_commands.create(self.db, self.ctx, name=" Reply ", kind="argument", main_text="Body", sources=[source(f" {work} ", " 514a ")], targets=[target("argument", base, "opposes"), target("position", claim)])
         self.assertEqual(reply["sources"], [{"work_id": work, "manifestation_id": self.primary(work), "pages": "514a",
                                              "order_index": 0, "work_title": "Republic", "authors": []}])
         self.assertEqual([(t["type"], t["id"], t["order_index"]) for t in reply["targets"]],
                          [("argument", base, 0), ("position", claim, 1)])
-        self.assertEqual(require(self.library.get_argument(base))["responses"],
+        self.assertEqual(require(argument_commands.detail(self.db, self.ctx, base))["responses"],
                          [{"id": reply["id"], "name": "Reply", "kind": "argument", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}])
-        self.assertEqual([row["id"] for row in self.library.list_arguments("stance")], [base])
-        listed = {row["id"]: row for row in self.library.list_arguments()}
+        self.assertEqual([row["id"] for row in argument_commands.catalog(self.db, self.ctx, "stance")], [base])
+        listed = {row["id"]: row for row in argument_commands.catalog(self.db, self.ctx)}
         self.assertEqual((listed[base]["response_count"], listed[reply["id"]]["sources"]),
                          (1, reply["sources"]))
-        self.refused("invalid_kind", self.library.list_arguments, "essay")
-        self.assertEqual(self.library.list_verdicts()[0], {"id": "supports", "label": "Supports",
+        self.refused("invalid_kind", partial(argument_commands.catalog, self.db, self.ctx), "essay")
+        self.assertEqual(argument_commands.verdicts(self.db, self.ctx)[0], {"id": "supports", "label": "Supports",
                                                            "sort_order": 1, "enabled": 1})
         # Construction is not mutation.
         for scope_type in ("argument-field", "argument-sources", "argument-targets"):
@@ -154,58 +156,58 @@ class ArgumentTests(ResearchTestCase):
                             ("invalid_targets", {"targets": [target("position", claim)] * 2}),
                             ("invalid_targets", {"sources": [], "targets": "none"})):
             with self.subTest(code=code):
-                self.refused(code, self.library.create_argument, name="X", kind="argument", **lists)
+                self.refused(code, partial(argument_commands.create, self.db, self.ctx), name="X", kind="argument", **lists)
         self.assertEqual((self.count("arguments"), self.count("argument_sources")), (0, 0))
 
     def test_a_cycle_is_refused_at_any_depth(self) -> None:
         a = self.argument("A")
         b = self.argument("B", targets=[target("argument", a)])
         c = self.argument("C", targets=[target("argument", b)])
-        self.refused("argument_cycle", self.library.replace_argument_targets, a, [target("argument", c)])
-        self.refused("argument_cycle", self.library.replace_argument_targets, a, [target("argument", a)])
-        self.refused("invalid_targets", self.library.replace_argument_targets, a, [target("argument", "A-x!")])
+        self.refused("argument_cycle", partial(argument_commands.replace_targets, self.db, self.ctx), a, [target("argument", c)])
+        self.refused("argument_cycle", partial(argument_commands.replace_targets, self.db, self.ctx), a, [target("argument", a)])
+        self.refused("invalid_targets", partial(argument_commands.replace_targets, self.db, self.ctx), a, [target("argument", "A-x!")])
         # A diamond is no cycle.
-        self.library.replace_argument_targets(c, [target("argument", b), target("argument", a, "qualifies")])
-        self.assertEqual(require(self.library.get_argument(a))["responses"][0]["verdict_id"], "supports")
+        argument_commands.replace_targets(self.db, self.ctx, c, [target("argument", b), target("argument", a, "qualifies")])
+        self.assertEqual(require(argument_commands.detail(self.db, self.ctx, a))["responses"][0]["verdict_id"], "supports")
         self.assertEqual(self.count("argument_target_arguments"), 3)
 
     def test_only_a_change_advances_a_scope(self) -> None:
         w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
         claim = self.position("Claim")
         a = self.argument("A", sources=[source(w1), source(w2, "3")], targets=[target("position", claim)])
-        self.library.replace_argument_sources(a, [source(w1), source(w2, " 3 ")])
-        self.library.replace_argument_targets(a, [target("position", claim, " supports ")])
-        self.library.update_argument(a, name="A", kind="argument", main_text="")
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(w1), source(w2, " 3 ")])
+        argument_commands.replace_targets(self.db, self.ctx, a, [target("position", claim, " supports ")])
+        argument_commands.update(self.db, self.ctx, a, name="A", kind="argument", main_text="")
         self.assertEqual((self.revisions("argument-sources"), self.revisions("argument-targets"),
                           self.revisions("argument-field")), ({}, {}, {}))
-        self.library.replace_argument_sources(a, [source(w2, "3"), source(w1)])  # order is the value
-        self.library.replace_argument_targets(a, [target("position", claim, "holds")])
-        self.library.update_argument(a, kind="stance")
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(w2, "3"), source(w1)])  # order is the value
+        argument_commands.replace_targets(self.db, self.ctx, a, [target("position", claim, "holds")])
+        argument_commands.update(self.db, self.ctx, a, kind="stance")
         state = self.argument_state(a)
         self.assertEqual((state["sources"], state["targets"], state["fields"]["kind"], state["fields"]["name"]),
                          ({"revision": 1}, {"revision": 1}, {"revision": 1}, {"revision": 0}))
 
     def test_a_refused_field_rolls_back_every_field(self) -> None:
         a = self.argument("A")
-        self.refused("invalid_kind", self.library.update_argument, a, name="New", kind="essay")
-        self.assertEqual((require(self.library.get_argument(a))["name"], self.revisions("argument-field")), ("A", {}))
-        self.refused("nothing_to_update", self.library.update_argument, a)
-        self.refused("not_found", self.library.update_argument, generate("A"))
+        self.refused("invalid_kind", partial(argument_commands.update, self.db, self.ctx), a, name="New", kind="essay")
+        self.assertEqual((require(argument_commands.detail(self.db, self.ctx, a))["name"], self.revisions("argument-field")), ("A", {}))
+        self.refused("nothing_to_update", partial(argument_commands.update, self.db, self.ctx), a)
+        self.refused("not_found", partial(argument_commands.update, self.db, self.ctx), generate("A"))
 
     def test_an_answered_or_noted_argument_refuses_its_delete(self) -> None:
         a = self.argument("A")
         b = self.argument("B", targets=[target("argument", a)])
         work = self.library.add_work("W")
-        self.assertEqual(self.refused("argument_targeted", self.library.delete_argument, a).http_status, 409)
-        self.library.replace_argument_targets(b, [])
+        self.assertEqual(self.refused("argument_targeted", partial(argument_commands.delete, self.db, self.ctx), a).http_status, 409)
+        argument_commands.replace_targets(self.db, self.ctx, b, [])
         self.research_note(work, f"Against [[argument:{a}|A]].")
-        self.refused("argument_in_use", self.library.delete_argument, a)
+        self.refused("argument_in_use", partial(argument_commands.delete, self.db, self.ctx), a)
         # Markup in code does not count; nor does a Private Note.
         self.research_note(work, f"`[[argument:{a}]]`")
         self.run_command(lambda scope: notes.set_note(scope, work, notes.PRIVATE, f"[[argument:{a}]]"))
-        self.library.delete_argument(a)
-        self.assertIsNone(self.library.get_argument(a))
-        self.refused("not_found", self.library.delete_argument, a)
+        argument_commands.delete(self.db, self.ctx, a)
+        self.assertIsNone(argument_commands.detail(self.db, self.ctx, a))
+        self.refused("not_found", partial(argument_commands.delete, self.db, self.ctx), a)
         # Every scope it owned moved on, never-edited ones too.
         self.assertEqual(self.revisions("argument-sources")[a], 1)
         self.assertEqual(self.revisions("argument-targets"), {a: 1, b: 1})
@@ -219,20 +221,20 @@ class CitationTests(ResearchTestCase):
         # and the primary Version's, never another Version's.
         work = self.library.add_work("W")
         other = self.add_manifestation(work)
-        ada, bea = self.library.add_person("Ada", "A"), self.library.add_person("Bea", "B")
+        ada, bea = people_fixtures.add_person(self.db, self.ctx, "Ada", "A"), people_fixtures.add_person(self.db, self.ctx, "Bea", "B")
         for order, (person, manifestation) in enumerate(((ada, self.primary(work)), (bea, other))):
             self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index,"
                      " manifestation_id) VALUES (%s, %s, %s, 'Author', %s, %s)",
                      (self.actor.library_id, work, person, order, manifestation))
         a = self.argument("A", sources=[source(work)])
-        self.assertEqual([author["id"] for author in require(self.library.get_argument(a))["sources"][0]["authors"]],
+        self.assertEqual([author["id"] for author in require(argument_commands.detail(self.db, self.ctx, a))["sources"][0]["authors"]],
                          [ada])
 
     def test_a_pinpoint_pins_the_only_version_and_a_bare_entry_cites_the_work(self) -> None:
         work = self.library.add_work("W")
         a = self.argument("A", sources=[source(work, "12")])
         self.assertEqual(self.citations(a), [(0, work, self.primary(work), "12")])
-        self.library.replace_argument_sources(a, [source(work)])
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(work)])
         self.assertEqual(self.citations(a), [(0, work, None, "")])
 
     def test_a_replaced_entry_keeps_its_version(self) -> None:
@@ -240,28 +242,28 @@ class CitationTests(ResearchTestCase):
         second = self.add_manifestation(w1)
         a = self.argument("A")
         self.cite(a, 0, w1, second, "12")
-        self.library.replace_argument_sources(a, [source(w1, "12")])  # unchanged: nothing written
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(w1, "12")])  # unchanged: nothing written
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([(0, w1, second, "12")], {}))
-        self.library.replace_argument_sources(a, [source(w2, "4"), source(w1, "12")])
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(w2, "4"), source(w1, "12")])
         self.assertEqual(self.citations(a), [(0, w2, self.primary(w2), "4"), (1, w1, second, "12")])
 
     def test_a_version_the_legacy_list_cannot_name_refuses_the_list(self) -> None:
         work = self.library.add_work("W")
         second = self.add_manifestation(work)
         a = self.argument("A", sources=[source(work)])  # Work-level: no Version to name
-        error = self.refused("argument_source_version_required", self.library.replace_argument_sources, a,
+        error = self.refused("argument_source_version_required", partial(argument_commands.replace_sources, self.db, self.ctx), a,
                              [source(work, "5")])
         self.assertEqual(error.http_status, 409)
-        self.refused("argument_source_version_required", self.library.create_argument, name="B", kind="argument",
+        self.refused("argument_source_version_required", partial(argument_commands.create, self.db, self.ctx), name="B", kind="argument",
                      sources=[source(work, "5")])
         # Two stored rows the legacy shape cannot tell apart.
         b = self.argument("B")
         self.cite(b, 0, work, self.primary(work), "5")
         self.cite(b, 1, work, second, "5")
-        self.refused("argument_source_version_required", self.library.replace_argument_sources, b,
+        self.refused("argument_source_version_required", partial(argument_commands.replace_sources, self.db, self.ctx), b,
                      [source(work, "5")])
         self.assertEqual(len(self.citations(b)), 2)
-        self.library.replace_argument_sources(b, [])
+        argument_commands.replace_sources(self.db, self.ctx, b, [])
         self.assertEqual(self.citations(b), [])
 
     def test_a_pinned_citation_follows_its_version_to_another_work(self) -> None:
@@ -272,7 +274,7 @@ class CitationTests(ResearchTestCase):
         self.sql("UPDATE prks.manifestations SET work_id = %s WHERE id = %s", (other, moved))
         self.assertEqual(self.citations(a), [(0, other, moved, "7")])
         # The legacy list names it by its new Work, and keeps the pin.
-        self.library.replace_argument_sources(a, [source(other, "7"), source(origin)])
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(other, "7"), source(origin)])
         self.assertEqual(self.citations(a), [(0, other, moved, "7"), (1, origin, None, "")])
 
     def test_a_work_delete_removes_its_citations_and_advances_each_list(self) -> None:
@@ -284,7 +286,7 @@ class CitationTests(ResearchTestCase):
         self.assertEqual(self.citations(a), [(1, kept, None, "")])
         self.assertEqual(self.citations(b), [])
         self.assertEqual(self.revisions("argument-sources"), {a: 1, b: 1})
-        self.assertEqual(require(self.library.get_argument(a))["sources"][0]["work_id"], kept)
+        self.assertEqual(require(argument_commands.detail(self.db, self.ctx, a))["sources"][0]["work_id"], kept)
         self.assertEqual(self.citations(c), [(0, kept, None, "")])
 
     def test_malformed_lists_are_refused_in_sqlites_order(self) -> None:
@@ -296,8 +298,8 @@ class CitationTests(ResearchTestCase):
                               ("work_not_found", [source(generate("W"), "\x07")]),
                               ("invalid_pages", [source(work, "\x07")])):
             with self.subTest(code=code, sources=str(sources)[:20]):
-                self.refused(code, self.library.replace_argument_sources, a, sources)
-        self.refused("not_found", self.library.replace_argument_sources, generate("A"), "W")
+                self.refused(code, partial(argument_commands.replace_sources, self.db, self.ctx), a, sources)
+        self.refused("not_found", partial(argument_commands.replace_sources, self.db, self.ctx), generate("A"), "W")
 
 
 class VersionAwareCitationTests(ResearchTestCase):
@@ -305,7 +307,7 @@ class VersionAwareCitationTests(ResearchTestCase):
 
     def read_back(self, argument_id: str) -> list[tuple[str, Optional[str], str]]:
         return [(row["work_id"], row["manifestation_id"], row["pages"])
-                for row in require(self.library.get_argument(argument_id))["sources"]]
+                for row in require(argument_commands.detail(self.db, self.ctx, argument_id))["sources"]]
 
     def test_a_work_with_one_version(self) -> None:
         work = self.library.add_work("W")
@@ -323,14 +325,14 @@ class VersionAwareCitationTests(ResearchTestCase):
         first, second = self.primary(work), self.add_manifestation(work)
         a = self.argument("A")
         wanted = [pinned(work, None), pinned(work, second, "5"), pinned(work, first, "5"), pinned(work, second, "9")]
-        detail = self.library.replace_argument_sources(a, wanted)
+        detail = argument_commands.replace_sources(self.db, self.ctx, a, wanted)
         expected = [(work, None, ""), (work, second, "5"), (work, first, "5"), (work, second, "9")]
         self.assertEqual([(row["work_id"], row["manifestation_id"], row["pages"]) for row in detail["sources"]],
                          expected)
         self.assertEqual([row["order_index"] for row in detail["sources"]], [0, 1, 2, 3])
         self.assertEqual(self.revisions("argument-sources"), {a: 1})
         # The same list again changes nothing.
-        self.library.replace_argument_sources(a, wanted)
+        argument_commands.replace_sources(self.db, self.ctx, a, wanted)
         self.assertEqual(self.revisions("argument-sources"), {a: 1})
         self.assertEqual(self.read_back(a), expected)
 
@@ -338,14 +340,14 @@ class VersionAwareCitationTests(ResearchTestCase):
         w1, w2 = self.library.add_work("One"), self.library.add_work("Two")
         second = self.add_manifestation(w1)
         a = self.argument("A", sources=[pinned(w1, second, "5"), pinned(w2, None)])
-        self.library.replace_argument_sources(a, [pinned(w2, None), pinned(w1, second, "6-7")])
+        argument_commands.replace_sources(self.db, self.ctx, a, [pinned(w2, None), pinned(w1, second, "6-7")])
         self.assertEqual(self.citations(a), [(0, w2, None, ""), (1, w1, second, "6-7")])
         self.assertEqual(self.revisions("argument-sources"), {a: 1})
         # A legacy edit of the same list keeps the pin too.
-        self.library.replace_argument_sources(a, [source(w1, "6-7"), source(w2)])
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(w1, "6-7"), source(w2)])
         self.assertEqual(self.citations(a), [(0, w1, second, "6-7"), (1, w2, None, "")])
         # Only the pin changing is a change.
-        self.library.replace_argument_sources(a, [pinned(w1, self.primary(w1), "6-7"), pinned(w2, None)])
+        argument_commands.replace_sources(self.db, self.ctx, a, [pinned(w1, self.primary(w1), "6-7"), pinned(w2, None)])
         self.assertEqual(self.citations(a), [(0, w1, self.primary(w1), "6-7"), (1, w2, None, "")])
         self.assertEqual(self.revisions("argument-sources"), {a: 3})
 
@@ -362,9 +364,9 @@ class VersionAwareCitationTests(ResearchTestCase):
                  ("work_not_found", 404, [pinned(foreign_work, foreign)]))
         for code, status, sources in cases:
             with self.subTest(code=code, sources=len(sources)):
-                self.assertEqual(self.refused(code, self.library.replace_argument_sources, a, sources).http_status,
+                self.assertEqual(self.refused(code, partial(argument_commands.replace_sources, self.db, self.ctx), a, sources).http_status,
                                  status)
-                self.refused(code, self.library.create_argument, name="B", kind="argument", sources=sources)
+                self.refused(code, partial(argument_commands.create, self.db, self.ctx), name="B", kind="argument", sources=sources)
         # Nothing changed, nothing was left behind.
         self.assertEqual((self.citations(a), self.revisions("argument-sources")), ([(0, w1, None, "1")], {}))
         self.assertEqual(self.count("arguments"), 1)
@@ -380,22 +382,22 @@ class VersionAwareCitationTests(ResearchTestCase):
                 ("Duplicate citation.", [pinned(work, only, "2"), pinned(work, only, " 2 ")]),
                 ("Duplicate citation.", [pinned(work, None), pinned(work, None)])):
             with self.subTest(message=message):
-                self.assertEqual(str(self.refused("invalid_sources", self.library.replace_argument_sources, a,
+                self.assertEqual(str(self.refused("invalid_sources", partial(argument_commands.replace_sources, self.db, self.ctx), a,
                                                   sources)), message)
-        self.refused("invalid_pages", self.library.replace_argument_sources, a, [pinned(work, only, "\x07")])
+        self.refused("invalid_pages", partial(argument_commands.replace_sources, self.db, self.ctx), a, [pinned(work, only, "\x07")])
         self.assertEqual(self.citations(a), [])
 
     def test_a_legacy_list_cannot_rewrite_a_list_citing_one_work_twice(self) -> None:
         work = self.library.add_work("W")
         second = self.add_manifestation(work)
         a = self.argument("A", sources=[pinned(work, None), pinned(work, second, "3")])
-        self.refused("invalid_sources", self.library.replace_argument_sources, a, [source(work), source(work, "3")])
+        self.refused("invalid_sources", partial(argument_commands.replace_sources, self.db, self.ctx), a, [source(work), source(work, "3")])
         # The unambiguous legacy entry still resolves: the stored row it matches keeps its pin.
-        self.library.replace_argument_sources(a, [source(work, "3")])
+        argument_commands.replace_sources(self.db, self.ctx, a, [source(work, "3")])
         self.assertEqual(self.citations(a), [(0, work, second, "3")])
-        self.refused("argument_source_version_required", self.library.replace_argument_sources, a,
+        self.refused("argument_source_version_required", partial(argument_commands.replace_sources, self.db, self.ctx), a,
                      [source(work, "4")])
-        self.library.replace_argument_sources(a, [])
+        argument_commands.replace_sources(self.db, self.ctx, a, [])
         self.assertEqual(self.citations(a), [])
 
     def test_a_pinned_version_cannot_be_deleted_and_follows_a_move(self) -> None:
@@ -409,9 +411,9 @@ class VersionAwareCitationTests(ResearchTestCase):
         self.sql("UPDATE prks.manifestations SET work_id = %s WHERE id = %s", (other, moved))
         self.assertEqual(self.read_back(a), [(other, moved, "7")])
         # A list naming the Version under its old Work is refused; under its new one it is unchanged.
-        self.refused("argument_source_version_mismatch", self.library.replace_argument_sources, a,
+        self.refused("argument_source_version_mismatch", partial(argument_commands.replace_sources, self.db, self.ctx), a,
                      [pinned(origin, moved, "7")])
-        self.library.replace_argument_sources(a, [pinned(other, moved, "7")])
+        argument_commands.replace_sources(self.db, self.ctx, a, [pinned(other, moved, "7")])
         self.assertEqual(self.revisions("argument-sources"), {})
 
 
@@ -421,36 +423,36 @@ class IsolationTests(ResearchTestCase):
         claim = self.position("Claim")
         a = self.argument("A", sources=[source(work)], targets=[target("position", claim)])
         with facade_context.acting_as(self.other_actor().context):
-            self.assertEqual((self.library.list_positions(), self.library.list_arguments()), ([], []))
-            self.assertIsNone(self.library.get_argument(a))
-            self.assertIsNone(self.library.get_position_sync_state(claim))
-            self.refused("work_not_found", self.library.create_argument, name="B", kind="argument",
+            self.assertEqual((position_commands.catalog(self.db, self.ctx), argument_commands.catalog(self.db, self.ctx)), ([], []))
+            self.assertIsNone(argument_commands.detail(self.db, self.ctx, a))
+            self.assertIsNone(position_commands.sync_state(self.db, self.ctx, claim))
+            self.refused("work_not_found", partial(argument_commands.create, self.db, self.ctx), name="B", kind="argument",
                          sources=[source(work)])
-            self.refused("position_not_found", self.library.create_argument, name="B", kind="argument",
+            self.refused("position_not_found", partial(argument_commands.create, self.db, self.ctx), name="B", kind="argument",
                          targets=[target("position", claim)])
-            self.refused("argument_not_found", self.library.create_argument, name="B", kind="argument",
+            self.refused("argument_not_found", partial(argument_commands.create, self.db, self.ctx), name="B", kind="argument",
                          targets=[target("argument", a)])
-            for call, args in (("delete_argument", (a,)), ("delete_position", (claim,)),
-                               ("replace_argument_sources", (a, [])), ("replace_argument_targets", (a, []))):
-                with self.subTest(call=call):
-                    self.refused("not_found", getattr(self.library, call), *args)
-        self.assertEqual(len(require(self.library.get_argument(a))["targets"]), 1)
+            for call, args in ((argument_commands.delete, (a,)), (position_commands.delete, (claim,)),
+                               (argument_commands.replace_sources, (a, [])), (argument_commands.replace_targets, (a, []))):
+                with self.subTest(call=f"{call.__module__}.{call.__name__}"):
+                    self.refused("not_found", partial(call, self.db, self.ctx), *args)
+        self.assertEqual(len(require(argument_commands.detail(self.db, self.ctx, a))["targets"]), 1)
 
     def test_a_reader_reads_but_cannot_change(self) -> None:
         a = self.argument("A")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(len(self.library.list_arguments()), 1)
-            for call, args, kwargs in (("create_position", ("P",), {}), ("delete_argument", (a,), {}),
-                                       ("create_argument", (), {"name": "B", "kind": "stance"})):
-                with self.subTest(call=call), self.assertRaises(AccessRefused):
-                    getattr(self.library, call)(*args, **kwargs)
+            self.assertEqual(len(argument_commands.catalog(self.db, self.ctx)), 1)
+            for call, args, kwargs in ((position_commands.create, ("P",), {}), (argument_commands.delete, (a,), {}),
+                                       (argument_commands.create, (), {"name": "B", "kind": "stance"})):
+                with self.subTest(call=f"{call.__module__}.{call.__name__}"), self.assertRaises(AccessRefused):
+                    call(self.db, self.ctx, *args, **kwargs)
 
 
 class ConcurrencyTests(ResearchTestCase):
     def test_two_target_changes_that_together_close_a_cycle(self) -> None:
         a, b = self.argument("A"), self.argument("B")
         holder, contender = self.race(lambda scope: arguments.replace_targets(scope, a, [target("argument", b)]),
-                                      lambda: self.library.replace_argument_targets(b, [target("argument", a)]))
+                                      lambda: argument_commands.replace_targets(self.db, self.ctx, b, [target("argument", a)]))
         self.assertEqual(len(holder["targets"]), 1)
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "argument_cycle")
@@ -459,7 +461,7 @@ class ConcurrencyTests(ResearchTestCase):
     def test_a_position_delete_racing_a_target_naming_it(self) -> None:
         claim, a = self.position("Claim"), self.argument("A")
         holder, contender = self.race(lambda scope: positions.remove(scope, claim),
-                                      lambda: self.library.replace_argument_targets(a, [target("position", claim)]))
+                                      lambda: argument_commands.replace_targets(self.db, self.ctx, a, [target("position", claim)]))
         self.assertIsNone(holder)
         self.assertEqual(contender.code, "position_not_found")
 
@@ -467,25 +469,25 @@ class ConcurrencyTests(ResearchTestCase):
         claim, a = self.position("Claim"), self.argument("A")
         holder, contender = self.race(
             lambda scope: arguments.replace_targets(scope, a, [target("position", claim)]),
-            lambda: self.library.delete_position(claim))
+            lambda: position_commands.delete(self.db, self.ctx, claim))
         self.assertEqual(len(holder["targets"]), 1)
         self.assertEqual(contender.code, "position_in_use")
 
     def test_an_argument_delete_and_a_target_naming_it(self) -> None:
         a, b = self.argument("A"), self.argument("B")
         holder, contender = self.race(lambda scope: arguments.replace_targets(scope, b, [target("argument", a)]),
-                                      lambda: self.library.delete_argument(a))
+                                      lambda: argument_commands.delete(self.db, self.ctx, a))
         self.assertEqual(contender.code, "argument_targeted")
         c = self.argument("C")
         holder, contender = self.race(lambda scope: arguments.remove(scope, c),
-                                      lambda: self.library.replace_argument_targets(b, [target("argument", c)]))
+                                      lambda: argument_commands.replace_targets(self.db, self.ctx, b, [target("argument", c)]))
         self.assertIsNone(holder)
         self.assertEqual(contender.code, "argument_not_found")
 
     def test_a_work_delete_racing_a_citation_of_it(self) -> None:
         work, a = self.library.add_work("W"), self.argument("A")
         holder, contender = self.race(lambda scope: commands.delete_work(scope, work),
-                                      lambda: self.library.replace_argument_sources(a, [source(work)]))
+                                      lambda: argument_commands.replace_sources(self.db, self.ctx, a, [source(work)]))
         self.assertIsNotNone(holder)
         self.assertEqual(contender.code, "work_not_found")
         self.assertEqual(self.citations(a), [])
@@ -529,7 +531,7 @@ class ConcurrencyTests(ResearchTestCase):
             lambda scope: scope.execute("UPDATE prks.manifestations SET work_id = %(other)s"
                                         " WHERE library_id = %(library_id)s AND id = %(moved)s",
                                         {"other": other, "moved": moved}),
-            lambda: self.library.replace_argument_sources(a, [pinned(origin, moved, "7")]))
+            lambda: argument_commands.replace_sources(self.db, self.ctx, a, [pinned(origin, moved, "7")]))
         self.assertIsNotNone(holder)
         self.assertIsInstance(contender, ResearchError)
         self.assertEqual(contender.code, "argument_source_version_mismatch")
@@ -554,7 +556,7 @@ class ConcurrencyTests(ResearchTestCase):
         a = self.argument("A")
         holder, contender = self.race(
             lambda scope: arguments.replace_sources(scope, a, [pinned(work, second, "1")]),
-            lambda: self.library.replace_argument_sources(a, [pinned(work, None), pinned(work, second, "1")]),
+            lambda: argument_commands.replace_sources(self.db, self.ctx, a, [pinned(work, None), pinned(work, second, "1")]),
             serializable=True)
         self.assertEqual(len(holder["sources"]), 1)
         self.assertEqual(len(contender["sources"]), 2)
@@ -581,7 +583,7 @@ class ConcurrencyTests(ResearchTestCase):
         thread.start()
         try:
             self.assertTrue(snapshot_taken.wait(30))
-            self.library.replace_argument_sources(a, [pinned(source_work, second, "3")])
+            argument_commands.replace_sources(self.db, self.ctx, a, [pinned(source_work, second, "3")])
         finally:
             cited.set()
             thread.join(60)
@@ -592,7 +594,7 @@ class ConcurrencyTests(ResearchTestCase):
         a, work = self.argument("A"), self.library.add_work("W")
         holder, contender = self.race(
             lambda scope: notes.set_note(scope, work, notes.RESEARCH, f"[[argument:{a}]]"),
-            lambda: self.library.delete_argument(a))
+            lambda: argument_commands.delete(self.db, self.ctx, a))
         self.assertEqual(holder, (True, 1))
         self.assertEqual(contender.code, "argument_in_use")
         b = self.argument("B")
@@ -604,7 +606,7 @@ class ConcurrencyTests(ResearchTestCase):
         # The note waited for the delete; whether it may name a gone
         # Argument is the notes slice's rule.
         self.assertEqual(contender, (True, 2))
-        self.assertIsNone(self.library.get_argument(b))
+        self.assertIsNone(argument_commands.detail(self.db, self.ctx, b))
 
 
 _MISSING_POSITION = "P-" + "0" * 32
@@ -631,11 +633,11 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
                                (("x" * 241,), ("invalid_name", "Name is too long.", 400)),
                                (("Ok", "\x07"), ("invalid_text", "Text contains invalid characters.", 400))):
             with self.subTest(args=[arg[:8] for arg in args]):
-                self.assertEqual(self.refusal(self.library.create_position, *args), expected)
-        self.answer(self.library.update_position(claim, name="Renamed"), {
+                self.assertEqual(self.refusal(partial(position_commands.create, self.db, self.ctx), *args), expected)
+        self.answer(position_commands.update(self.db, self.ctx, claim, name="Renamed"), {
             "arguments": [], "created_at": "<s>", "description": "About", "id": "<P claim>", "name": "Renamed",
             "updated_at": "<s>"})
-        self.answer(self.library.update_position(claim, name="Renamed", description="New"),
+        self.answer(position_commands.update(self.db, self.ctx, claim, name="Renamed", description="New"),
                     {"description": "New", "name": "Renamed"})
         not_found = ("not_found", "Position not found.", 404)
         for position_id, kwargs, expected in (
@@ -644,32 +646,32 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
                 (claim, {"name": ""}, ("invalid_name", "Name is required.", 400)),
                 (claim, {"description": 3}, ("invalid_text", "Text must be a string.", 400))):
             with self.subTest(kwargs=kwargs):
-                self.assertEqual(self.refusal(self.library.update_position, position_id, **kwargs), expected)
+                self.assertEqual(self.refusal(partial(position_commands.update, self.db, self.ctx), position_id, **kwargs), expected)
         answer = self.named(self.argument("Answer", targets=[target("position", claim, "opposes")]), "<A Answer>")
-        self.answer(self.library.get_position(claim), {
+        self.answer(position_commands.detail(self.db, self.ctx, claim), {
             "arguments": [{"id": "<A Answer>", "kind": "argument", "name": "Answer", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}],
             "description": "New", "id": "<P claim>", "name": "Renamed"})
-        self.assertIsNone(self.library.get_position(_MISSING_POSITION))
-        self.answer(self.library.get_position_sync_state(claim), {
+        self.assertIsNone(position_commands.detail(self.db, self.ctx, _MISSING_POSITION))
+        self.answer(position_commands.sync_state(self.db, self.ctx, claim), {
             "fields": {"description": {"revision": 1}, "name": {"revision": 1}}, "position_id": "<P claim>"})
-        self.answer(self.library.list_positions(), [
+        self.answer(position_commands.catalog(self.db, self.ctx), [
             {"created_at": "<s>", "description": "", "id": "<P b>", "name": "b claim", "updated_at": "<s>"},
             {"created_at": "<s>", "description": "New", "id": "<P claim>", "name": "Renamed", "updated_at": "<s>"}])
-        self.assertEqual(self.refusal(self.library.delete_position, claim), (
+        self.assertEqual(self.refusal(partial(position_commands.delete, self.db, self.ctx), claim), (
             "position_in_use", "This Position is still targeted by an Argument or Stance.", 409))
-        self.answer(self.library.replace_argument_targets(answer, []), {
+        self.answer(argument_commands.replace_targets(self.db, self.ctx, answer, []), {
             "created_at": "<s>", "id": "<A Answer>", "kind": "argument", "main_text": "", "name": "Answer",
             "responses": [], "sources": [], "targets": [], "updated_at": "<s>"})
-        self.assertIsNone(self.library.delete_position(claim))
-        self.assertEqual(self.refusal(self.library.delete_position, claim), not_found)
-        self.answer(self.library.list_positions(), [{"id": "<P b>", "name": "b claim"}])
+        self.assertIsNone(position_commands.delete(self.db, self.ctx, claim))
+        self.assertEqual(self.refusal(partial(position_commands.delete, self.db, self.ctx), claim), not_found)
+        self.answer(position_commands.catalog(self.db, self.ctx), [{"id": "<P b>", "name": "b claim"}])
 
     def test_arguments_and_their_lists(self) -> None:
         one = self.named(self.library.add_work("One"), "<W One>")
         two = self.named(self.library.add_work("Two"), "<W Two>")
-        plato = self.named(self.library.add_person("", "Plato"), "<PE Plato>")
-        self.library.add_role(plato, one, "Author")
+        plato = self.named(people_fixtures.add_person(self.db, self.ctx, "", "Plato"), "<PE Plato>")
+        role_commands.add(self.db, self.ctx, plato, one, "Author")
         claim = self.named(self.position("Claim"), "<P Claim>")
         base = self.named(self.argument("Base", "stance"), "<A Base>")
         reply = self.named(self.argument("Reply", sources=[source(one, " 514a "), source(two)],
@@ -682,7 +684,7 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
         base_target = {"id": "<A Base>", "kind": "stance", "name": "Base", "type": "argument", "verdict_id": "opposes",
                        "verdict_label": "Opposes"}
         claim_target = {"id": "<P Claim>", "name": "Claim", "type": "position"}
-        self.answer(self.library.get_argument(base), {
+        self.answer(argument_commands.detail(self.db, self.ctx, base), {
             "created_at": "<s>", "id": "<A Base>", "kind": "stance", "main_text": "", "name": "Base",
             "responses": [{"id": "<A Reply>", "kind": "argument", "name": "Reply", "verdict_id": "opposes",
                            "verdict_label": "Opposes"}], "sources": [], "targets": [], "updated_at": "<s>"})
@@ -692,36 +694,36 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
             "sources": [{**plato_cited, "order_index": 0}, {**two_cited, "order_index": 1}],
             "targets": [{**base_target, "order_index": 0},
                         {**claim_target, "order_index": 1, "verdict_id": "supports", "verdict_label": "Supports"}]}
-        self.answer(self.library.get_argument(reply), reply_read)
+        self.answer(argument_commands.detail(self.db, self.ctx, reply), reply_read)
         unchanged = {"fields": {"kind": {"revision": 0}, "main_text": {"revision": 0}, "name": {"revision": 0}},
                      "sources": {"revision": 0}, "targets": {"revision": 0}}
-        self.answer(self.library.get_argument_sync_state(reply), {**unchanged, "argument_id": "<A Reply>"})
-        self.assertIsNone(self.library.get_argument(_MISSING_ARGUMENT))
-        self.answer(self.library.get_position(claim), {"arguments": [
+        self.answer(argument_commands.sync_state(self.db, self.ctx, reply), {**unchanged, "argument_id": "<A Reply>"})
+        self.assertIsNone(argument_commands.detail(self.db, self.ctx, _MISSING_ARGUMENT))
+        self.answer(position_commands.detail(self.db, self.ctx, claim), {"arguments": [
             {"id": "<A Reply>", "kind": "argument", "name": "Reply", "verdict_id": "supports",
              "verdict_label": "Supports"}]})
         base_row = {"created_at": "<s>", "id": "<A Base>", "kind": "stance", "name": "Base", "response_count": 1,
                     "sources": [], "targets": [], "updated_at": "<s>"}
-        self.answer(self.library.list_arguments(), [
+        self.answer(argument_commands.catalog(self.db, self.ctx), [
             base_row, {"id": "<A Reply>", "response_count": 0, "sources": reply_read["sources"],
                        "targets": reply_read["targets"]}])
-        self.answer(self.library.list_arguments("stance"), [base_row])
-        self.assertEqual(self.library.list_verdicts(), [
+        self.answer(argument_commands.catalog(self.db, self.ctx, "stance"), [base_row])
+        self.assertEqual(argument_commands.verdicts(self.db, self.ctx), [
             {"enabled": 1, "id": "supports", "label": "Supports", "sort_order": 1},
             {"enabled": 1, "id": "opposes", "label": "Opposes", "sort_order": 2},
             {"enabled": 1, "id": "qualifies", "label": "Qualifies", "sort_order": 3},
             {"enabled": 1, "id": "holds", "label": "Holds", "sort_order": 4}])
-        self.assertEqual(self.refusal(self.library.list_arguments, "essay"),
+        self.assertEqual(self.refusal(partial(argument_commands.catalog, self.db, self.ctx), "essay"),
                          ("invalid_kind", "Invalid Argument kind.", 400))
-        self.answer(self.library.update_argument(reply, name="Reply 2", kind="stance", main_text="Body"),
+        self.answer(argument_commands.update(self.db, self.ctx, reply, name="Reply 2", kind="stance", main_text="Body"),
                     {"name": "Reply 2", "kind": "stance", "main_text": "Body"})
         for argument_id, kwargs, expected in (
                 (reply, {"name": "X", "kind": "essay"}, ("invalid_kind", "Kind must be argument or stance.", 400)),
                 (reply, {}, ("nothing_to_update", "Nothing to update.", 400)),
                 (_MISSING_ARGUMENT, {"name": "X"}, ("not_found", "Argument not found.", 404))):
             with self.subTest(kwargs=kwargs):
-                self.assertEqual(self.refusal(self.library.update_argument, argument_id, **kwargs), expected)
-        self.answer(self.library.replace_argument_sources(reply, [source(two, "3"), source(one, "514a")]), {
+                self.assertEqual(self.refusal(partial(argument_commands.update, self.db, self.ctx), argument_id, **kwargs), expected)
+        self.answer(argument_commands.replace_sources(self.db, self.ctx, reply, [source(two, "3"), source(one, "514a")]), {
             "sources": [{**two_cited, "pages": "3", "order_index": 0}, {**plato_cited, "order_index": 1}]})
         for listed, expected in (
                 ("x", ("invalid_sources", "Sources must be a JSON array.", 400)),
@@ -731,9 +733,8 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
                 ([source(one, "x" * 101)], ("invalid_pages", "Pages is too long.", 400)),
                 ([source(_MISSING_WORK)], ("work_not_found", "Source Work not found.", 404))):
             with self.subTest(sources=str(listed)[:30]):
-                self.assertEqual(self.refusal(self.library.replace_argument_sources, reply, listed), expected)
-        self.answer(self.library.replace_argument_targets(
-            reply, [target("position", claim, "holds"), target("argument", base, "opposes")]), {
+                self.assertEqual(self.refusal(partial(argument_commands.replace_sources, self.db, self.ctx), reply, listed), expected)
+        self.answer(argument_commands.replace_targets(self.db, self.ctx, reply, [target("position", claim, "holds"), target("argument", base, "opposes")]), {
             "targets": [{**claim_target, "order_index": 0, "verdict_id": "holds", "verdict_label": "Holds"},
                         {**base_target, "order_index": 1}]})
         cycle = ("argument_cycle", "That target would create an Argument response cycle.", 409)
@@ -753,15 +754,15 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
                  ("argument_not_found", "Target Argument not found.", 404)),
                 ([target("argument", reply, "holds")], cycle)):
             with self.subTest(targets=str(listed)[:40]):
-                self.assertEqual(self.refusal(self.library.replace_argument_targets, reply, listed), expected)
-        self.assertEqual(self.refusal(self.library.replace_argument_targets, base,
+                self.assertEqual(self.refusal(partial(argument_commands.replace_targets, self.db, self.ctx), reply, listed), expected)
+        self.assertEqual(self.refusal(partial(argument_commands.replace_targets, self.db, self.ctx), base,
                                       [target("argument", reply, "holds")]), cycle)
-        self.answer(self.library.get_argument_sync_state(reply), {
+        self.answer(argument_commands.sync_state(self.db, self.ctx, reply), {
             "argument_id": "<A Reply>", "fields": {"kind": {"revision": 1}, "main_text": {"revision": 1},
                                                    "name": {"revision": 1}},
             "sources": {"revision": 1}, "targets": {"revision": 1}})
-        self.answer(self.library.get_argument_sync_state(base), {**unchanged, "argument_id": "<A Base>"})
-        self.answer(self.library.get_argument(base), {"responses": [
+        self.answer(argument_commands.sync_state(self.db, self.ctx, base), {**unchanged, "argument_id": "<A Base>"})
+        self.answer(argument_commands.detail(self.db, self.ctx, base), {"responses": [
             {"id": "<A Reply>", "kind": "stance", "name": "Reply 2", "verdict_id": "opposes",
              "verdict_label": "Opposes"}]})
 
@@ -778,26 +779,26 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
                 ({"sources": [source(one)], "targets": [target("argument", _MISSING_ARGUMENT, "holds")]},
                  ("argument_not_found", "Target Argument not found.", 404))):
             with self.subTest(lists=sorted(lists)):
-                self.assertEqual(self.refusal(self.library.create_argument, **{"name": "X", "kind": "argument",
+                self.assertEqual(self.refusal(partial(argument_commands.create, self.db, self.ctx), **{"name": "X", "kind": "argument",
                                                                                **lists}), expected)
-        self.assertEqual(self.library.list_arguments(), [])
+        self.assertEqual(argument_commands.catalog(self.db, self.ctx), [])
 
     def test_delete(self) -> None:
         a = self.named(self.argument("A"), "<A A>")
         b = self.named(self.argument("B", targets=[target("argument", a, "supports")]), "<A B>")
-        self.assertEqual(self.refusal(self.library.delete_argument, a), (
+        self.assertEqual(self.refusal(partial(argument_commands.delete, self.db, self.ctx), a), (
             "argument_targeted", "Another Argument or Stance still responds to this record.", 409))
-        self.library.replace_argument_targets(b, [])
+        argument_commands.replace_targets(self.db, self.ctx, b, [])
         work = self.library.add_work("W")
         self.research_note(work, f"[[argument:{a}]]")
-        self.assertEqual(self.refusal(self.library.delete_argument, a), (
+        self.assertEqual(self.refusal(partial(argument_commands.delete, self.db, self.ctx), a), (
             "argument_in_use", "This Argument is still referenced in research notes.", 409))
         self.research_note(work, f"`[[argument:{a}]]`")  # code, not a reference
-        self.assertIsNone(self.library.delete_argument(a))
+        self.assertIsNone(argument_commands.delete(self.db, self.ctx, a))
         for argument_id in (a, " "):
-            self.assertEqual(self.refusal(self.library.delete_argument, argument_id),
+            self.assertEqual(self.refusal(partial(argument_commands.delete, self.db, self.ctx), argument_id),
                              ("not_found", "Argument not found.", 404))
-        self.answer(self.library.list_arguments(), [
+        self.answer(argument_commands.catalog(self.db, self.ctx), [
             {"created_at": "<s>", "id": "<A B>", "kind": "argument", "name": "B", "response_count": 0, "sources": [],
              "targets": [], "updated_at": "<s>"}])
 
@@ -807,6 +808,6 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
         a = self.argument("A", sources=[source(one, "1"), source(two)])
         self.library.delete_work_record(one)
         remaining = [{"authors": [], "order_index": 1, "pages": "", "work_id": "<W Two>", "work_title": "Two"}]
-        self.answer(self.library.get_argument(a), {"sources": remaining})
-        self.answer(self.library.list_arguments(), [{"sources": remaining}])
+        self.answer(argument_commands.detail(self.db, self.ctx, a), {"sources": remaining})
+        self.answer(argument_commands.catalog(self.db, self.ctx), [{"sources": remaining}])
 

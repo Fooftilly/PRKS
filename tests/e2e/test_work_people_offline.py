@@ -8,7 +8,6 @@ the right helper is exactly the failure a unit test cannot see.
 import os
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
     ED_DISPLAY,
@@ -25,6 +24,7 @@ from tests.e2e.harness import (
     wait_for_async,
 )
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -223,7 +223,9 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         return library_for(server)
 
     def roles(self, server, work_id):
-        return {(r['id'], r['role_type']) for r in self.db_for(server).get_work_roles(work_id)}
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.people import roles
+        return {(r['id'], r['role_type']) for r in self.db_for(server).run(library_query, lambda scope: roles.work_roles(scope, work_id))}
 
     # ---- 1: offline add Author ---------------------------------------------
 
@@ -359,6 +361,9 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         """"The name on this file" travels with the link rather than needing a
         second operation -- otherwise linking with a custom credit would show
         the profile name first and correct itself."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.people import person_commands
+        from backend.domain.people import roles
         server, page, context = self.start()
         work = server.ids['people_work']
         self.manage_people(page, work)
@@ -378,9 +383,9 @@ class OfflineWorkPeopleTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        roles = self.db_for(server).get_work_roles(work)
-        self.assertEqual(roles[0]['credit_name'], 'Mark Twain')
-        self.assertIn('Mark Twain', self.db_for(server).get_person(server.ids['jane'])['aliases'],
+        stored = self.db_for(server).run(library_query, lambda scope: roles.work_roles(scope, work))
+        self.assertEqual(stored[0]['credit_name'], 'Mark Twain')
+        self.assertIn('Mark Twain', require(self.db_for(server).run(person_commands.detail, server.ids['jane'], self.db_for(server).pdfs_dir))['aliases'],
                       'and the override became a Person alias, as it always has')
 
     # ---- 6: Research Graph --------------------------------------------------
@@ -449,6 +454,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         """Two devices that both linked Jane as Author have agreed, however
         many revisions apart they started. Producing a conflict merely because
         the revisions differ would ask the user to resolve an agreement."""
+        from backend.domain.people import role_commands
         server, page, context = self.start()
         work = server.ids['people_work']
         self.manage_people(page, work)
@@ -457,7 +463,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.pending(page, 1)
 
         # Another device makes exactly the same decision while this one is away.
-        self.db_for(server).add_role(server.ids['jane'], work, 'Author')
+        self.db_for(server).run(role_commands.add, server.ids['jane'], work, 'Author')
 
         self.reconnect(page, context)
         self.pending(page, 0)

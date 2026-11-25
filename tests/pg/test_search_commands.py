@@ -17,6 +17,9 @@ from backend.domain.people import persons, roles
 from backend.domain.search import refresh
 from backend.domain.works import metadata
 from tests.pg.test_search_refresh import SearchTestCase
+from backend.domain.people import person_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class CommandRefreshTests(SearchTestCase):
@@ -33,8 +36,8 @@ class CommandRefreshTests(SearchTestCase):
 
     def test_initial_roles_are_in_the_row(self) -> None:
         work = self.library.add_work("With people")
-        person = self.library.add_person("Ana", "Initial")
-        self.library.insert_initial_roles(work, [{"person_id": person, "role_type": "Author"}])
+        person = people_fixtures.add_person(self.db, self.ctx, "Ana", "Initial")
+        role_commands.insert_initial(self.db, self.ctx, work, [{"person_id": person, "role_type": "Author"}])
         self.assertEqual(self.norm(work, "people_norm"), "ana initial")
 
     def test_title_abstract_and_author_text_changes_refresh_the_row(self) -> None:
@@ -64,21 +67,21 @@ class CommandRefreshTests(SearchTestCase):
 
     def test_role_link_and_unlink_refresh_the_row(self) -> None:
         work = self.library.add_work("Linked")
-        person = self.library.add_person("Λόγος", "Writer")
-        self.library.add_role(person, work, "Author")
+        person = people_fixtures.add_person(self.db, self.ctx, "Λόγος", "Writer")
+        role_commands.add(self.db, self.ctx, person, work, "Author")
         self.assertEqual(self.norm(work, "people_norm"), "λογοσ writer")
         self.assertTrue(self.matches(work, "λογ"))
-        self.library.delete_work_role(work, person, "Author")
+        role_commands.remove(self.db, self.ctx, work, person, "Author")
         self.assertEqual(self.norm(work, "people_norm"), "")
 
     def test_a_person_rename_or_alias_change_refreshes_every_credited_work(self) -> None:
         first = self.library.add_work("First")
         second = self.library.add_work("Second")
         unrelated = self.library.add_work("Unrelated")
-        person = self.library.add_person("Old", "Name")
-        self.library.add_role(person, first, "Author")
-        self.library.add_role(person, second, "Editor")
-        self.library.update_person_profile(person, {"first_name": "Ćiril", "aliases": "Kyrill"})
+        person = people_fixtures.add_person(self.db, self.ctx, "Old", "Name")
+        role_commands.add(self.db, self.ctx, person, first, "Author")
+        role_commands.add(self.db, self.ctx, person, second, "Editor")
+        person_commands.update_profile(self.db, self.ctx, person, {"first_name": "Ćiril", "aliases": "Kyrill"})
         for work in (first, second):
             self.assertEqual(self.norm(work, "people_norm"), "kyrill\nciril name")
         self.assertEqual(self.norm(unrelated, "people_norm"), "")
@@ -86,9 +89,9 @@ class CommandRefreshTests(SearchTestCase):
     def test_a_credit_promoted_into_an_alias_reaches_every_credited_work(self) -> None:
         first = self.library.add_work("First")
         second = self.library.add_work("Second")
-        person = self.library.add_person("Fyodor", "Dostoevsky")
-        self.library.add_role(person, first, "Author")
-        self.library.add_role(person, second, "Author", credit_name="Ф. М. Достоевский")
+        person = people_fixtures.add_person(self.db, self.ctx, "Fyodor", "Dostoevsky")
+        role_commands.add(self.db, self.ctx, person, first, "Author")
+        role_commands.add(self.db, self.ctx, person, second, "Author", "Ф. М. Достоевский")
         # й is a letter of its own and is kept (§8.7).
         promoted = "ф. м. достоевский"
         self.assertIn(promoted, self.norm(first, "people_norm").split("\n"))
@@ -107,8 +110,8 @@ class FanOutRaceTests(SearchTestCase):
         super().setUp()
         self.first = self.library.add_work("First")
         self.second = self.library.add_work("Second")
-        self.person = self.library.add_person("Before", "Rename")
-        self.library.add_role(self.person, self.first, "Author")
+        self.person = people_fixtures.add_person(self.db, self.ctx, "Before", "Rename")
+        role_commands.add(self.db, self.ctx, self.person, self.first, "Author")
 
     def rename(self, scope: LibraryScope) -> None:
         self.assertTrue(persons.lock(scope, self.person))

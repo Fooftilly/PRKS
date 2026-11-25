@@ -37,6 +37,11 @@ from backend.sync.handlers.work_role import RoleFiling
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 from tests.pg.test_works_sync import StandInFiling, SyncTestCase, create_payload
 from tests.narrowing import require
+from backend.domain.identity.library_scope import library_query
+from backend.domain.people import group_commands
+from backend.domain.people import person_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 _ENTITY_TYPES = {"CREATE_PERSON": "person", "DELETE_PERSON": "person",
                  "SET_PERSON_METADATA_FIELD": "person"}
@@ -153,7 +158,7 @@ class LedgerTests(PeopleSyncTestCase):
         person_id = "P-" + uuid.uuid4().hex.upper()
         data = self.envelope("CREATE_PERSON", person_id, person_payload())
         first = self.send(data)
-        self.library.update_person_profile(person_id, {"last_name": "Leigh"})
+        person_commands.update_profile(self.db, self.ctx, person_id, {"last_name": "Leigh"})
         self.assertEqual(self.send(data), first)  # the stored body, not today's row
         self.assertEqual(self.send(dict(data, payload=person_payload(first_name="Bo"))),
                          (409, {"code": "OP_ID_REUSE"}))
@@ -176,11 +181,11 @@ class LedgerTests(PeopleSyncTestCase):
                 results = self.concurrently([lambda data=data: self.send(data) for _ in range(4)])
                 self.assertTrue(all(result == results[0] for result in results), results)
                 self.assertEqual(results[0][1]["code"], "ACKNOWLEDGED")
-        self.assertEqual(require(self.library.get_person_groups_state(person_id))["groups"],
+        self.assertEqual(require(group_commands.person_state(self.db, self.ctx, person_id))["groups"],
                          [{"group_id": group_id, "revision": 1, "present": True}])
-        self.assertEqual(require(self.library.get_work_roles_state(work_id))["scopes"],
+        self.assertEqual(require(role_commands.work_state(self.db, self.ctx, work_id))["scopes"],
                          [{"person_id": person_id, "role_type": "Author", "revision": 1, "present": True}])
-        self.assertEqual(require(self.library.get_person_metadata_state(person_id))["fields"]["aliases"]["revision"], 1)
+        self.assertEqual(require(person_commands.metadata_state(self.db, self.ctx, person_id))["fields"]["aliases"]["revision"], 1)
 
     def test_nul_is_refused_before_the_ledger(self) -> None:
         person_id = self.create_person()
@@ -227,7 +232,7 @@ class EnvelopeAndBoundTests(PeopleSyncTestCase):
         status, result = self.send(self.person_field(person_id, "about", "x" * 20000, 0))
         self.assertEqual((status, result["value_omitted"], "value" in result), (200, True, False))
         self.assertLessEqual(results.serialized_result_bytes(result), results.MAX_DURABLE_RESULT_BYTES)
-        self.assertEqual(require(self.library.get_person(person_id))["about"], "x" * 20000)
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "x" * 20000)
         self.send(self.person_field(person_id, "about", "A" * 40000, 1))
         status, result = self.send(self.person_field(person_id, "about", "B" * 40000, 0))
         self.assertEqual((status, "current_preview" in result, "current_value" in result), (409, True, False))
@@ -242,19 +247,19 @@ class EnvelopeAndBoundTests(PeopleSyncTestCase):
         create = self.envelope("CREATE_PERSON", person_id, person_payload())
         role = self.role("ADD_WORK_PERSON_ROLE", work_id, person_id, 0, credit="") | {"depends_on": [create["op_id"]]}
         self.assertEqual(self.send(role), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
-        self.assertEqual((self.library.get_person(person_id), self.library.get_work_roles(work_id)), (None, []))
+        self.assertEqual((person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir), library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))), (None, []))
         self.assertEqual(self.send(create)[1]["code"], "ACKNOWLEDGED")
         status, result = self.send(role)
         self.assertEqual((status, result["code"], result["present"]), (200, "ACKNOWLEDGED", True))
-        self.assertEqual([(row["id"], row["role_type"]) for row in self.library.get_work_roles(work_id)],
+        self.assertEqual([(row["id"], row["role_type"]) for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))],
                          [(person_id, "Author")])
-        self.assertTrue(is_distributed(self.library.add_person("Online", "Person"), "P"))
+        self.assertTrue(is_distributed(people_fixtures.add_person(self.db, self.ctx, "Online", "Person"), "P"))
 
     def test_a_membership_row_without_a_revision_reads_as_revision_0(self) -> None:
         person_id, group_id = self.create_person(), self.create_group("Analysts")
         self.sql("INSERT INTO prks.person_group_members (library_id, person_id, group_id) VALUES (%s, %s, %s)",
                  (self.actor.library_id, person_id, group_id))
-        self.assertEqual(require(self.library.get_person_group_sync_state(group_id))["members"],
+        self.assertEqual(require(group_commands.sync_state(self.db, self.ctx, group_id))["members"],
                          [{"person_id": person_id, "revision": 0, "present": True}])
 
 
@@ -303,7 +308,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertTrue(holder)
         self.assertEqual(contender, (409, {"code": "PERSON_HAS_LINKS", "person_id": self.person_id,
                                            "current_revision": 1}))
-        self.assertIsNotNone(self.library.get_person(self.person_id))
+        self.assertIsNotNone(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))
         self.assertEqual(self.ledger()[-1]["status"], "PERSON_HAS_LINKS")
 
     def test_a_link_waiting_for_a_delete_finds_no_person(self) -> None:
@@ -349,7 +354,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertEqual((contender[0], contender[1]["server_revision"], contender[1]["last_name"]),
                          (200, 2, "Leigh"))
-        self.assertEqual(require(self.library.get_person(self.person_id))["aliases"], "A. Lee")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))["aliases"], "A. Lee")
 
     def test_a_repeated_create_waiting_for_a_delete_creates_the_person_again(self) -> None:
         holder, contender = self.race(
@@ -358,7 +363,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual(holder, (True, 0))
         self.assertEqual((contender[0], contender[1]["changed"], contender[1]["person"]["last_name"]),
                          (200, True, "Again"))
-        self.assertEqual(require(self.library.get_person(self.person_id))["last_name"], "Again")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))["last_name"], "Again")
 
     def test_a_delete_waiting_for_a_repeated_create_follows_its_acknowledgement(self) -> None:
         holder, contender = self.race(
@@ -368,7 +373,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual((holder[0], holder[1]["changed"], holder[1]["person"]["last_name"]), (200, False, "Lee"))
         self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "person_id": self.person_id,
                                            "changed": True}))
-        self.assertIsNone(self.library.get_person(self.person_id))
+        self.assertIsNone(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))
 
     def test_creates_of_one_id_queue_and_the_second_converges(self) -> None:
         person_id = "P-" + uuid.uuid4().hex.upper()
@@ -390,7 +395,7 @@ class GroupRaceTests(PeopleSyncTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertEqual((contender[0], contender[1]["code"]), (409, "NAME_TAKEN"))
         self.assertEqual(self.ledger()[-1]["status"], "NAME_TAKEN")
-        self.assertEqual(require(self.library.get_person_group(second))["name"], "Two")
+        self.assertEqual(require(group_commands.detail(self.db, self.ctx, second))["name"], "Two")
 
     def test_a_create_that_loses_the_name_is_ledgered_name_taken(self) -> None:
         group_id = "PG-" + uuid.uuid4().hex.upper()
@@ -414,7 +419,7 @@ class GroupRaceTests(PeopleSyncTestCase):
                 self.assertEqual(holder, group_id)
                 self.assertEqual((contender[0], contender[1]["changed"], contender[1]["group"]["name"]),
                                  (200, False, "Circle"))
-                self.library.delete_person_group(group_id)
+                group_commands.delete(self.db, self.ctx, group_id)
 
     def test_a_repeated_create_waiting_for_a_delete_creates_the_group_again(self) -> None:
         group_id = self.create_group("Readers")
@@ -438,7 +443,7 @@ class GroupRaceTests(PeopleSyncTestCase):
         self.assertEqual((holder[1]["changed"], group["name"], group["member_count"], group["child_count"]),
                          (False, "Readers", 1, 1))
         self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "group_id": group_id, "changed": True}))
-        self.assertIsNone(self.library.get_person_group(group_id))
+        self.assertIsNone(group_commands.detail(self.db, self.ctx, group_id))
 
     def test_a_membership_waiting_for_a_group_delete_finds_no_group(self) -> None:
         group_id = self.create_group("Readers")
@@ -458,7 +463,7 @@ class GroupRaceTests(PeopleSyncTestCase):
                                       lambda: self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {})))
         self.assertTrue(holder)
         self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "group_id": group_id, "changed": True}))
-        self.assertEqual(require(self.library.get_person_groups_state(person_id))["groups"],
+        self.assertEqual(require(group_commands.person_state(self.db, self.ctx, person_id))["groups"],
                          [{"group_id": group_id, "revision": 2, "present": False}])
 
 
@@ -483,8 +488,8 @@ class RecreationTests(PeopleSyncTestCase):
         for name, (status, result) in stale.items():
             with self.subTest(base=name):
                 self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), result)
-        self.assertEqual(require(self.library.get_person(person_id))["about"], "")
-        self.assertEqual(self.library.get_work_roles(work_id), [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "")
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id)), [])
 
     def test_a_recreated_group_refuses_every_base_from_before_its_delete(self) -> None:
         group_id = self.create_group("Readers")
@@ -496,7 +501,7 @@ class RecreationTests(PeopleSyncTestCase):
                      self.member("ADD_PERSON_GROUP_MEMBER", group_id, person_id, 1)):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data)[0], 409)
-        self.assertEqual(require(self.library.get_person_group(group_id))["members"], [])
+        self.assertEqual(require(group_commands.detail(self.db, self.ctx, group_id))["members"], [])
 
 
 class IsolationTests(PeopleSyncTestCase):
@@ -521,13 +526,13 @@ class IsolationTests(PeopleSyncTestCase):
                 with self.assertRaises(AccessRefused) as caught:
                     self.send(dict(data, device_id=device), other.context)
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual(require(self.library.get_person(person_id))["about"], "")
-        self.assertEqual(require(self.library.get_person_group(group_id))["members"], [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(group_commands.detail(self.db, self.ctx, group_id))["members"], [])
         self.assertEqual(self.revisions("person-field"), {})
         self.assertEqual({row["library_id"] for row in self.ledger()} - {self.actor.library_id},
                          {other.library_id})
         with facade_context.acting_as(other.context):
-            self.assertEqual(self.library.get_all_persons(), [])
+            self.assertEqual(person_commands.catalog(self.db, self.ctx), [])
 
     def test_a_reader_cannot_send_people_operations(self) -> None:
         person_id = self.create_person()
@@ -566,10 +571,10 @@ class CreateWorkRoleFilingTests(PeopleSyncTestCase):
         self.assertEqual((result["changed"], result["role_count"], result["aliases_revisions"]),
                          (True, 2, {ann: 1}))
         self.assertEqual([(row["id"], row["role_type"], row["order_index"])
-                          for row in self.library.get_work_roles(work_id)],
+                          for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))],
                          [(bo, "Editor", 0), (ann, "Author", 1)])
         # Construction: the roles read at revision 0.
-        self.assertEqual([scope["revision"] for scope in require(self.library.get_work_roles_state(work_id))["scopes"]],
+        self.assertEqual([scope["revision"] for scope in require(role_commands.work_state(self.db, self.ctx, work_id))["scopes"]],
                          [0, 0])
         again = self.send(self.envelope("CREATE_WORK", work_id, create_payload(roles=roles_payload)))
         self.assertEqual((again[1]["changed"], again[1]["role_count"], "aliases_revisions" in again[1]),
@@ -582,8 +587,8 @@ class CreateWorkRoleFilingTests(PeopleSyncTestCase):
         status, result = self.send(self.envelope("CREATE_WORK", work_id, create_payload(
             roles=[{"person_id": smith, "role_type": "Author", "credit_name": "Smith, John"}])))
         self.assertEqual((status, result["role_count"], "aliases_revisions" in result), (200, 1, False))
-        self.assertEqual(require(self.library.get_person(smith))["aliases"] or "", "")
-        self.assertEqual([row["credit_name"] for row in self.library.get_work_roles(work_id)], ["Smith, John"])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, smith, self.pdfs_dir))["aliases"] or "", "")
+        self.assertEqual([row["credit_name"] for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))], ["Smith, John"])
 
     def test_a_missing_person_refuses_the_create_after_the_folder(self) -> None:
         ann = self.create_person()
@@ -616,8 +621,8 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.work = self.library.add_work("Paper")
-        self.jane = self.library.add_person("Jane", "Doe")
-        self.ed = self.library.add_person("Ed", "Smith")
+        self.jane = people_fixtures.add_person(self.db, self.ctx, "Jane", "Doe")
+        self.ed = people_fixtures.add_person(self.db, self.ctx, "Ed", "Smith")
 
     def link(self, present: bool, base: Optional[int] = 0, person: Optional[str] = None, role: Any = "Author",
              credit: Optional[str] = "", work_id: Optional[str] = None) -> Result:
@@ -630,7 +635,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
                                    credit=credit))
 
     def scopes(self, work_id: Optional[str] = None) -> dict[tuple[str, str], dict[str, Any]]:
-        state = self.library.get_work_roles_state(work_id or self.work)
+        state = role_commands.work_state(self.db, self.ctx, work_id or self.work)
         assert state is not None
         return {(s["person_id"], s["role_type"]): s for s in state["scopes"]}
 
@@ -639,13 +644,13 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         return scope["revision"] if scope else 0
 
     def linked(self) -> set[tuple[str, str]]:
-        return {(row["id"], row["role_type"]) for row in self.library.get_work_roles(self.work)}
+        return {(row["id"], row["role_type"]) for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work))}
 
     def row(self) -> dict[str, Any]:
         return next(work for work in self.library.get_all_works() if work["id"] == self.work)
 
     def aliases_revision(self, person: Optional[str] = None) -> int:
-        return require(self.library.get_person_metadata_state(person or self.jane))["fields"]["aliases"]["revision"]
+        return require(person_commands.metadata_state(self.db, self.ctx, person or self.jane))["fields"]["aliases"]["revision"]
 
     def test_the_revision_outlives_the_relationship(self) -> None:
         self.link(True)
@@ -665,14 +670,14 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertEqual((self.revision(self.jane), self.revision(self.ed), self.revision(self.jane, "Translator"),
                           self.revision(self.jane, "Editor")), (1, 1, 1, 0))
         self.assertEqual((self.row()["linked_authors"], self.row()["primary_author"]), ("Jane Doe, Ed Smith", "Jane Doe"))
-        indexes = [row["order_index"] for row in self.library.get_work_roles(self.work)]
+        indexes = [row["order_index"] for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work))]
         self.assertEqual(indexes, sorted(indexes))
         self.link(False, 1, person=self.jane, role="Author")
         self.assertEqual(self.linked(), {(self.ed, "Author"), (self.jane, "Translator")})
         other = self.library.add_work("Other")
         self.link(True, person=self.ed, work_id=other)
-        self.assertEqual([s["person_id"] for s in require(self.library.get_work_roles_state(other))["scopes"]], [self.ed])
-        self.assertIsNone(self.library.get_work_roles_state(generate("W")))
+        self.assertEqual([s["person_id"] for s in require(role_commands.work_state(self.db, self.ctx, other))["scopes"]], [self.ed])
+        self.assertIsNone(role_commands.work_state(self.db, self.ctx, generate("W")))
 
     def test_the_role_vocabulary_and_the_envelope_are_closed_on_every_path(self) -> None:
         for bad in ("author", "Auther", "", "Producer", None, 7):
@@ -689,36 +694,36 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         too_long = "x" * (role_rules.MAX_CREDIT_NAME_BYTES + 1)
         self.assertEqual(self.link(True, credit=too_long), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual((self.linked(), self.ledger()), (set(), []))
-        for call in (lambda: self.library.add_role(self.jane, self.work, "Producer"),
-                     lambda: self.library.insert_initial_role(self.work, self.jane, "Producer"),
-                     lambda: self.library.add_role(self.jane, self.work, "Author", credit_name=too_long),
-                     lambda: self.library.insert_initial_role(self.work, self.jane, "Author", credit_name=too_long)):
+        for call in (lambda: role_commands.add(self.db, self.ctx, self.jane, self.work, "Producer"),
+                     lambda: people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.jane, "Producer"),
+                     lambda: role_commands.add(self.db, self.ctx, self.jane, self.work, "Author", too_long),
+                     lambda: people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.jane, "Author", credit_name=too_long)):
             with self.assertRaises(ValueError):
                 call()
         self.assertEqual((self.linked(), self.revision()), (set(), 0))
-        self.library.add_role(self.jane, self.work, "Author")
+        role_commands.add(self.db, self.ctx, self.jane, self.work, "Author")
         with self.assertRaises(ValueError):
-            self.library.update_role_credit_name(self.work, self.jane, "Author", 0, too_long)
-        self.library.add_role(self.ed, self.work, "Editor", credit_name="x" * role_rules.MAX_CREDIT_NAME_BYTES)
-        self.assertEqual((self.revision(), len(self.library.get_work_roles(self.work))), (1, 2))
-        ann = self.library.add_person("Ann", "Lee")
+            role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Author", too_long)
+        role_commands.add(self.db, self.ctx, self.ed, self.work, "Editor", "x" * role_rules.MAX_CREDIT_NAME_BYTES)
+        self.assertEqual((self.revision(), len(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work)))), (1, 2))
+        ann = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
         for good in role_rules.ROLE_TYPES:
             with self.subTest(role=good):
                 self.assertEqual(self.link(True, person=ann, role=good)[0], 200)
 
     def test_the_ordinary_endpoints_share_the_revision_whatever_order_index_they_hold(self) -> None:
-        self.library.add_role(self.jane, self.work, "Author")
-        self.library.add_role(self.ed, self.work, "Author", order_index=0)
+        role_commands.add(self.db, self.ctx, self.jane, self.work, "Author")
+        role_commands.add(self.db, self.ctx, self.ed, self.work, "Author")
         self.assertEqual(self.row()["linked_authors"], "Jane Doe, Ed Smith")  # appended, never placed
-        self.assertTrue(self.library.update_role_credit_name(self.work, self.ed, "Author", 0, "E. Smith"))
+        self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.ed, "Author", "E. Smith"))
         self.assertEqual((self.revision(self.ed), self.revision()), (2, 1))
-        self.assertTrue(self.library.update_role_credit_name(self.work, self.jane, "Author", 7, "Jane D."))
-        self.assertIn("Jane D.", require(self.library.get_person(self.jane))["aliases"])
-        self.assertTrue(self.library.update_role_credit_name(self.work, self.jane, "Author", 0, ""))
-        self.assertTrue(self.library.delete_work_role(self.work, self.jane, "Author", 5))
+        self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Author", "Jane D."))
+        self.assertIn("Jane D.", require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"])
+        self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Author", ""))
+        self.assertTrue(role_commands.remove(self.db, self.ctx, self.work, self.jane, "Author"))
         self.assertEqual((self.revision(), self.linked()), (4, {(self.ed, "Author")}))
         self.assertEqual(self.link(True, 4)[1]["server_revision"], 5)
-        self.assertFalse(self.library.update_role_credit_name(self.work, self.jane, "Editor", 0, "X"))
+        self.assertFalse(role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Editor", "X"))
         self.assertEqual(self.revision(self.jane, "Editor"), 0)
         self.assertNotIn((self.jane, "Editor"), self.linked())
 
@@ -726,7 +731,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         status, result = self.link(True, credit="Mark Twain")
         self.assertEqual((status, result["credit_name"], result["aliases_revision"], result["server_revision"]),
                          (200, "Mark Twain", 1, 1))
-        self.assertEqual((require(self.library.get_person(self.jane))["aliases"], self.row()["linked_authors"]),
+        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"], self.row()["linked_authors"]),
                          ("Mark Twain", "Mark Twain"))
         link = self.row()["linked_people"][0]
         self.assertEqual((link["person_id"], link["role_type"], link["credit_name"], link["display_name"],
@@ -748,31 +753,31 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertEqual(self.credit("X", 0, self.ed)[1]["code"], "ROLE_NOT_PRESENT")
 
     def test_which_credits_become_aliases(self) -> None:
-        self.library.update_person_profile(self.jane, {"aliases": "Samuel Clemens, Mark Twain"})
+        person_commands.update_profile(self.db, self.ctx, self.jane, {"aliases": "Samuel Clemens, Mark Twain"})
         self.assertEqual(self.aliases_revision(), 1)
         self.assertNotIn("aliases_revision", self.link(True, credit="Mark Twain")[1])  # already known
         self.assertEqual(self.aliases_revision(), 1)
         self.assertEqual(self.credit("S. L. Clemens", 1)[1]["aliases_revision"], 2)
-        self.assertEqual(role_rules.parse_person_aliases(require(self.library.get_person(self.jane))["aliases"]),
+        self.assertEqual(role_rules.parse_person_aliases(require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"]),
                          ["Samuel Clemens", "Mark Twain", "S. L. Clemens"])
         # A comma-bearing credit stays on the role on every path.
         status, result = self.link(True, person=self.ed, credit="Smith, John")
         self.assertEqual((status, "aliases_revision" in result), (200, False))
-        self.library.add_role(self.ed, self.work, "Editor")
-        self.assertTrue(self.library.update_role_credit_name(self.work, self.ed, "Editor", 0, "Smith, John"))
+        role_commands.add(self.db, self.ctx, self.ed, self.work, "Editor")
+        self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.ed, "Editor", "Smith, John"))
         born = self.library.add_work("Born inverted")
-        self.library.insert_initial_role(born, self.ed, "Author", 0, credit_name="Smith, John")
-        self.assertEqual((require(self.library.get_person(self.ed))["aliases"] or "", self.aliases_revision(self.ed)), ("", 0))
+        people_fixtures.insert_initial_role(self.db, self.ctx, born, self.ed, "Author", order_index=0, credit_name="Smith, John")
+        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.ed, self.pdfs_dir))["aliases"] or "", self.aliases_revision(self.ed)), ("", 0))
         self.assertIn("Smith, John", self.row()["linked_authors"])
         # Construction is no role revision, but a promoted credit is a Person change.
-        other = self.library.add_person("Ann", "Lee")
+        other = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
         born = self.library.add_work("Born with credit")
-        self.library.insert_initial_role(born, other, "Author", 0, credit_name="A. Lee")
+        people_fixtures.insert_initial_role(self.db, self.ctx, born, other, "Author", order_index=0, credit_name="A. Lee")
         self.assertEqual((self.scopes(born)[(other, "Author")]["revision"], self.aliases_revision(other)), (0, 1))
 
     def test_construction_keeps_the_callers_order_and_mutation_moves_one_scope(self) -> None:
-        self.library.insert_initial_role(self.work, self.ed, "Author", 1)
-        self.library.insert_initial_role(self.work, self.jane, "Author", 0)
+        people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.ed, "Author", order_index=1)
+        people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.jane, "Author", order_index=0)
         row = self.row()
         self.assertEqual((row["linked_authors"], row["primary_author"]), ("Jane Doe, Ed Smith", "Jane Doe"))
         names = [link["display_name"] for link in row["linked_people"] if link["role_type"] == "Author"]
@@ -837,7 +842,7 @@ class AnswerTests(PeopleSyncTestCase):
         missing = generate("P")
         self.assertEqual(self.send(self.person_field(missing, "about", "x", 0)),
                          (404, {"code": "ENTITY_NOT_FOUND", "person_id": missing, "field": "about"}))
-        self.assertEqual(require(self.library.get_person(person_id))["image_url"], "https://example.org/a.png")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["image_url"], "https://example.org/a.png")
 
     def test_delete_person(self) -> None:
         person_id, group_id = self.create_person(last_name="Lee"), self.create_group("Readers")
@@ -852,7 +857,7 @@ class AnswerTests(PeopleSyncTestCase):
         self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {}))[1]["changed"], False)
         self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {"x": 1})), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {}, 0)), (400, {"code": "INVALID_BASE_REVISION"}))
-        self.assertEqual(require(self.library.get_person_group(group_id))["members"], [])
+        self.assertEqual(require(group_commands.detail(self.db, self.ctx, group_id))["members"], [])
 
     def test_create_person_group(self) -> None:
         parent = self.create_group("Parent")
@@ -958,8 +963,8 @@ class AnswerTests(PeopleSyncTestCase):
         self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {}))[1]["changed"], False)
         self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {}, 0)),
                          (400, {"code": "INVALID_BASE_REVISION"}))
-        self.assertEqual(require(self.library.get_person_group(child))["parent_id"], parent)
-        self.assertEqual(require(self.library.get_person(ann))["groups"], [])
+        self.assertEqual(require(group_commands.detail(self.db, self.ctx, child))["parent_id"], parent)
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, ann, self.pdfs_dir))["groups"], [])
 
     def test_role_decision_table(self) -> None:
         ann = self.create_person(first_name="Ann", last_name="Lee")

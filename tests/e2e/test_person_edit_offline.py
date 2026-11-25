@@ -8,14 +8,13 @@ anything private to Person editing.
 """
 import json
 import os
-import time
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -389,6 +388,7 @@ class OfflinePersonEditTests(unittest.TestCase):
     def test_the_online_save_takes_the_same_durable_path(self):
         """One path or two features. An online save that bypassed the queue
         would be a second mutation boundary for the same decision."""
+        from backend.domain.people import person_commands
         server, page, context = self.start()
         person = server.ids['person']
         self.prepare_person(page, person)
@@ -405,7 +405,7 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.assertEqual(self.stored(server, person, 'about'), 'Saved while connected')
         # The revision moved, which is what an offline device needs in order to
         # discover it was overtaken.
-        state = self.db_for(server).get_person_metadata_state(person)
+        state = require(self.db_for(server).run(person_commands.metadata_state, person))
         self.assertEqual(state['fields']['about']['revision'], 1)
 
     # ---- composition with a Person created offline ---------------------------
@@ -432,6 +432,7 @@ class OfflinePersonEditTests(unittest.TestCase):
         into the other: the edit is a separate operation carrying a dependency
         on the creation, through the same generic mechanism a role link uses.
         """
+        from backend.domain.people import person_commands
         server, page, context = self.start()
         self.offline(page, context)
         person = self.create_person(page, 'Ada', 'Offline')
@@ -462,7 +463,7 @@ class OfflinePersonEditTests(unittest.TestCase):
         self.reconnect(page, context)
         self.settled(page)
         db = self.db_for(server)
-        rows = [p for p in db.get_all_persons() if p['id'] == person]
+        rows = [p for p in db.run(person_commands.catalog) if p['id'] == person]
         self.assertEqual(len(rows), 1, 'created once, not twice')
         self.assertEqual(rows[0]['about'], 'Edited before it ever synchronized')
         self.assertEqual(rows[0]['first_name'], 'Ada')
@@ -477,6 +478,7 @@ class OfflinePersonEditTests(unittest.TestCase):
         families it knows nothing about, and one prerequisite can carry several
         dependants that were never told about one another.
         """
+        from backend.domain.people import person_commands
         with profile_e2e_phase("person_edit_setup"):
             server, page, context = self.start()
             work = server.ids['work_a']
@@ -551,7 +553,7 @@ class OfflinePersonEditTests(unittest.TestCase):
             self.settled(page)
         with profile_e2e_phase("person_edit_server_verify"):
             db = self.db_for(server)
-            created = [p for p in db.get_all_persons() if p['id'] == person]
+            created = [p for p in db.run(person_commands.catalog) if p['id'] == person]
             self.assertEqual(len(created), 1)
             self.assertEqual(created[0]['about'], 'Third in the chain')
             roles = db.query(

@@ -2,18 +2,16 @@
 import os
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
     ARGUMENT_A_NAME,
     ARGUMENT_B_NAME,
-    ARGUMENT_C_NAME,
-    POSITION_ARGUMENT_NAME,
     seed_arguments_library,
 )
 from tests.e2e.harness import (AppServer, open_app_page, profile_e2e_phase,
                                record_e2e_phase_seconds, require_chromium, wait_for_async)
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -203,6 +201,7 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual(len(rows), 2, "one canonical row per construction")
 
     def test_scalar_edits_compose_move_tabs_and_cancel(self):
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         argument = server.ids["argument_a"]
         other = server.ids["argument_target"]
@@ -231,11 +230,12 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual(remaining, 0)
 
         self.reconnect(page, context); self.drained(page)
-        stored = self.db_for(server).get_argument(argument)
+        stored = require(self.db_for(server).run(argument_commands.detail, argument))
         self.assertEqual((stored["name"], stored["kind"], stored["main_text"]),
                          ("Offline Rename", "stance", "Offline body"))
 
     def test_ordered_source_and_target_replacements_survive_reload(self):
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         argument = server.ids["argument_a"]
         self.prepare(page, argument); self.offline(page, context)
@@ -254,18 +254,18 @@ class DurableArgumentTests(unittest.TestCase):
         o._wait_content_contains(page, "pp. 1")
 
         self.reconnect(page, context); self.drained(page)
-        stored = self.db_for(server).get_argument(argument)
+        stored = require(self.db_for(server).run(argument_commands.detail, argument))
         self.assertEqual([row["work_id"] for row in stored["sources"]], works)
         self.assertEqual([(row["type"], row["id"], row["verdict_id"])
                           for row in stored["targets"]],
                          [(row["type"], row["id"], row["verdict_id"]) for row in targets])
 
     def test_stale_aggregate_conflicts_instead_of_merging(self):
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         argument = server.ids["argument_a"]
         self.prepare(page, argument)
-        self.db_for(server).replace_argument_sources(argument,
-                                 [{"work_id": server.ids["work_b"], "pages": "server"}])
+        self.db_for(server).run(argument_commands.replace_sources, argument, [{"work_id": server.ids["work_b"], "pages": "server"}])
         self.offline(page, context)
         page.evaluate("([id,work]) => putArgumentSources(id,[{work_id:work,pages:'device'}])",
                       [argument, server.ids["work_a"]])
@@ -273,9 +273,10 @@ class DurableArgumentTests(unittest.TestCase):
         conflict = page.evaluate("() => prksSync.store.listOperations().then(rows => rows.find("
             "op => op.operation === 'SET_ARGUMENT_SOURCES').server_result)")
         self.assertEqual(conflict["code"], "REVISION_CONFLICT")
-        self.assertEqual(self.db_for(server).get_argument(argument)["sources"][0]["pages"], "server")
+        self.assertEqual(require(self.db_for(server).run(argument_commands.detail, argument))["sources"][0]["pages"], "server")
 
     def test_response_and_create_from_work_are_atomic_constructions(self):
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         parent = server.ids["argument_a"]
         self.prepare(page, parent); self.offline(page, context)
@@ -292,12 +293,13 @@ class DurableArgumentTests(unittest.TestCase):
                          [{"work_id": server.ids["work_a"], "pages": "44"}])
         self.assertIsNotNone(response); self.assertIsNotNone(from_work)
         self.reconnect(page, context); self.drained(page)
-        self.assertEqual(self.db_for(server).get_argument(response["id"])["targets"][0]["id"], parent)
-        self.assertEqual(self.db_for(server).get_argument(from_work["id"])["sources"][0]["work_id"],
+        self.assertEqual(require(self.db_for(server).run(argument_commands.detail, response["id"]))["targets"][0]["id"], parent)
+        self.assertEqual(require(self.db_for(server).run(argument_commands.detail, from_work["id"]))["sources"][0]["work_id"],
                          server.ids["work_a"])
 
     def test_deleting_work_offline_keeps_unsent_stance_and_edited_body(self):
         """A Work deletion must remove its citation, not another entity's draft."""
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         deleted_work = server.ids["work_b"]
         remaining_work = server.ids["work_a"]
@@ -338,7 +340,7 @@ class DurableArgumentTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        saved = self.db_for(server).get_argument(draft["id"])
+        saved = require(self.db_for(server).run(argument_commands.detail, draft["id"]))
         self.assertIsNotNone(saved, "independently authored Stance reached PostgreSQL")
         self.assertEqual(saved["kind"], "stance")
         self.assertEqual(saved["name"], "Independent offline stance")
@@ -393,6 +395,7 @@ class DurableArgumentTests(unittest.TestCase):
         self.assertEqual(rows, [], "refused construction rolls INSERT back")
 
     def test_delete_tombstone_ack_and_both_refusals(self):
+        from backend.domain.research import argument_commands
         server, page, context = self.start()
         safe = server.ids["argument_unvisited"]
         self.prepare(page, safe); self.offline(page, context)
@@ -405,7 +408,7 @@ class DurableArgumentTests(unittest.TestCase):
         page.wait_for_function("name => !document.body.innerText.includes(name)",
                                arg="E2E Unvisited Argument")
         self.reconnect(page, context); self.drained(page)
-        self.assertIsNone(self.db_for(server).get_argument(safe))
+        self.assertIsNone(self.db_for(server).run(argument_commands.detail, safe))
 
         for entity_id, code, name in (
             (server.ids["argument_a"], "ARGUMENT_IN_USE", ARGUMENT_A_NAME),

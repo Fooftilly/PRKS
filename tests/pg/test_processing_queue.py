@@ -37,6 +37,7 @@ from backend.domain.identity.library_scope import library_query
 from backend.domain.organization import folder_commands
 from backend.domain.organization import links
 from backend.domain.organization import tag_commands
+from tests import people_fixtures
 
 CAP = 10 * 1024 * 1024
 
@@ -394,8 +395,8 @@ class UploadRaceTests(QueueTestCase):
 class EditTests(QueueTestCase):
     def test_an_edit_writes_the_draft_roles_and_tags_and_advances_the_revision(self) -> None:
         item = self.ready()
-        ada = self.library.add_person("Ada", "Lovelace")
-        alan = self.library.add_person("Alan", "Turing")
+        ada = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
+        alan = people_fixtures.add_person(self.db, self.ctx, "Alan", "Turing")
         tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
         folder = folder_commands.create(self.db, self.ctx, "Reading")
         after = self.edit(item["id"], 0, {
@@ -444,7 +445,7 @@ class EditTests(QueueTestCase):
 
     def test_deleting_a_folder_person_or_tag_updates_the_draft(self) -> None:
         item = self.ready()
-        ada = self.library.add_person("Ada", "Lovelace")
+        ada = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
         folder = folder_commands.create(self.db, self.ctx, "Reading")
         self.edit(item["id"], 0, {"target_folder_id": folder, "roles": [{"person_id": ada, "role_type": "Author"}],
@@ -486,7 +487,7 @@ class EditTests(QueueTestCase):
 class ImportTests(QueueTestCase):
     def test_an_import_creates_the_work_from_the_draft_and_moves_the_key_to_its_asset(self) -> None:
         item = self.ready(filename="turing.pdf")
-        alan = self.library.add_person("Alan", "Turing")
+        alan = people_fixtures.add_person(self.db, self.ctx, "Alan", "Turing")
         tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
         folder = folder_commands.create(self.db, self.ctx, "Reading")
         self.edit(item["id"], 0, {
