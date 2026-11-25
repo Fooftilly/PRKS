@@ -13065,8 +13065,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             else:
                 route.fulfill(status=200, content_type="text/html", body="<html></html>")
 
+        # Keep the stub for the page's whole life: the last Work's embed
+        # iframe can still load after the loop, and an unrouted request
+        # would reach the context's external-network block.
         page.route("https://www.youtube.com/**", _stub_youtube)
-        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
 
         for url, title in (
             ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Video Watch URL Work"),
@@ -13433,8 +13435,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             else:
                 route.fulfill(status=200, content_type="text/html", body="<html></html>")
 
+        # Keep the stub for the page's whole life: the last Work's embed
+        # iframe can still load after the loop, and an unrouted request
+        # would reach the context's external-network block.
         page.route("https://www.youtube.com/**", _stub_youtube)
-        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
         self._open_new_file_ready(page)
         page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
         page.locator("#work-video-url").wait_for(state="visible")
