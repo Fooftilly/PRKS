@@ -5241,10 +5241,12 @@
       "BulkMoveFolder": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -5276,10 +5278,12 @@
       "BulkSetStatus": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -5304,10 +5308,12 @@
       "BulkTags": {
         "properties": {
           "work_ids": {
-            "description": "1 to 500 Work ids; repeats count once.",
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Work Ids",
             "type": "array"
           },
@@ -5320,10 +5326,12 @@
             "type": "string"
           },
           "tag_ids": {
-            "description": "The Tags to add or remove; at least one.",
+            "description": "The Tags to add or remove: 1 to 500 entries; the limit counts repeats.",
             "items": {
               "type": "string"
             },
+            "maxItems": 500,
+            "minItems": 1,
             "title": "Tag Ids",
             "type": "array"
           }
