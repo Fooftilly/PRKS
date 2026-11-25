@@ -97,7 +97,8 @@ def _content(components: _Components, media_type: str | tuple[str, ...], spec: S
 def _reply(components: _Components, reply: Reply) -> dict[str, Any]:
     out: dict[str, Any] = {"description": reply.description}
     if reply.headers:
-        out["headers"] = {name: {"description": h.description, "schema": dict(h.schema)}
+        out["headers"] = {name: {"description": h.description, "schema": dict(h.schema),
+                                 **({"required": True} if h.required else {})}
                           for name, h in reply.headers.items()}
     if reply.schema is not None:
         out["content"] = _content(components, reply.media_type, reply.schema)
@@ -143,6 +144,9 @@ def _operation(components: _Components, route: Any, contract: Operation, shared:
     responses = {str(status): _reply(components, reply) for status, reply in contract.responses.items()}
     for status, name in _shared_for(route).items():
         if status in responses:
+            own = responses[status]
+            if "$ref" not in own and route.method != "HEAD":  # the route's own answer, and the shared one
+                own["description"] = f"{own['description']} Also: {_SHARED[name]}"
             continue
         if route.method == "HEAD":
             responses[status] = {"description": _SHARED[name]}  # a HEAD answer has no body
@@ -166,6 +170,7 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
     seen_ids: dict[str, str] = {}
     tags: set[str] = set()
     shared: set[str] = set()
+    templates: dict[str, str] = {}
     for route in sorted(routes, key=lambda r: (openapi_path(r.pattern), r.method)):
         contract: Optional[Operation] = route.contract
         if contract is None:
@@ -176,7 +181,12 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
         seen_ids[contract.id] = where
         tags.add(contract.tag)
         path = openapi_path(route.pattern)
+        template = _PATH_PARAMETER.sub("{}", route.pattern)
+        if templates.setdefault(template, path) != path:
+            raise ValueError(f"{where} uses {path!r}, a template equivalent to {templates[template]!r}")
         item = paths.setdefault(path, {})
+        if route.method.lower() in item:
+            raise ValueError(f"{where} duplicates an operation at {path!r}")
         names = _PATH_PARAMETER.findall(route.pattern)
         if names and "parameters" not in item:
             item["parameters"] = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}

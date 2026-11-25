@@ -116,13 +116,7 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
         self.assertEqual(entry["scope"], "build")
         self.assertEqual(
             entry["generated_assets"],
-            [
-                "frontend-app/src/api/generated/publishers.ts",
-                "frontend-app/src/api/generated/saved-views.ts",
-                "frontend-app/src/api/generated/performance-diagnostics.ts",
-                "frontend-app/src/api/generated/positions.ts",
-                "frontend-app/src/api/generated/citations.ts",
-            ],
+            ["frontend-app/src/api/generated/openapi.ts"],
         )
         workflow = _WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("npm run openapi:check --prefix frontend-app", workflow)

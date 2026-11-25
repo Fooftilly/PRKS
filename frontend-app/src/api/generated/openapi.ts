@@ -1661,7 +1661,7 @@ export interface operations {
                     "application/json": components["schemas"]["CitationsCslJson"] | components["schemas"]["CitationsBibtex"];
                 };
             };
-            /** @description Domain refusal: not an object, unknown format, or an empty, malformed or too large selection. */
+            /** @description Domain refusal: not an object, unknown format, or an empty, malformed or too large selection. Also: The body is not one JSON object, or not JSON (invalid_request). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1729,7 +1729,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description The database cannot be read (unavailable). */
+            /** @description The database cannot be read (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1786,7 +1786,7 @@ export interface operations {
                     "application/json": components["schemas"]["PerformanceDiagnosticsReset"];
                 };
             };
-            /** @description No body, or a body that is not an empty object. */
+            /** @description No body, or a body that is not an empty object. Also: The body is not one JSON object, or not JSON (invalid_request). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1870,7 +1870,7 @@ export interface operations {
                     "application/json": components["schemas"]["PositionDetail"];
                 };
             };
-            /** @description Validation or domain refusal. */
+            /** @description Validation or domain refusal. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1953,7 +1953,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            /** @description Position is still targeted by an Argument or Stance (position_in_use). */
+            /** @description Position is still targeted by an Argument or Stance (position_in_use). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1989,7 +1989,7 @@ export interface operations {
                     "application/json": components["schemas"]["PositionDetail"];
                 };
             };
-            /** @description Validation or domain refusal. */
+            /** @description Validation or domain refusal. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2136,7 +2136,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemUploaded"];
                 };
             };
-            /** @description A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE). */
+            /** @description A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE). Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2156,7 +2156,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED). */
+            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2261,7 +2261,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description The item was imported (PROCESSING_ITEM_IMPORTED). */
+            /** @description The item was imported (PROCESSING_ITEM_IMPORTED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2297,7 +2297,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItem"];
                 };
             };
-            /** @description No or a bad revision, or a refused draft value, folder, person, tag or role type (VALIDATION_ERROR). */
+            /** @description No or a bad revision, or a refused draft value, folder, person, tag or role type (VALIDATION_ERROR). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2317,7 +2317,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, PROCESSING_ITEM_DELETED); `item` is the item as it now is. */
+            /** @description A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, PROCESSING_ITEM_DELETED); `item` is the item as it now is. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2365,7 +2365,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemImported"];
                 };
             };
-            /** @description A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object (invalid_request). */
+            /** @description A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object (invalid_request). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2385,7 +2385,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING). */
+            /** @description A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2402,7 +2402,10 @@ export interface operations {
     getProcessingItemPdf: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One byte range, `bytes=<first>-[<last>]`. */
+                Range?: string;
+            };
             path: {
                 item_id: string;
             };
@@ -2422,6 +2425,8 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -2452,7 +2457,10 @@ export interface operations {
     getProcessingItemPdfHead: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description One byte range, `bytes=<first>-[<last>]`. */
+                Range?: string;
+            };
             path: {
                 item_id: string;
             };
@@ -2470,6 +2478,8 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -2533,7 +2543,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingImportResults"];
                 };
             };
-            /** @description item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR). */
+            /** @description item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2598,7 +2608,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublisherCreated"];
                 };
             };
-            /** @description Schema or domain refusal (empty name). */
+            /** @description Schema or domain refusal (empty name). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2666,7 +2676,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublisherAliasAdded"];
                 };
             };
-            /** @description Schema or domain refusal (empty, unknown Publisher, canonical name, or used elsewhere). */
+            /** @description Schema or domain refusal (empty, unknown Publisher, canonical name, or used elsewhere). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2705,7 +2715,7 @@ export interface operations {
                     "application/json": components["schemas"]["PublisherDeleted"];
                 };
             };
-            /** @description Missing alias. */
+            /** @description Missing alias. Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2774,7 +2784,7 @@ export interface operations {
                     "application/json": components["schemas"]["SavedView"];
                 };
             };
-            /** @description Domain refusal: wrong type, empty or too long name, or an incomplete or invalid search definition. */
+            /** @description Domain refusal: wrong type, empty or too long name, or an incomplete or invalid search definition. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2785,7 +2795,7 @@ export interface operations {
             };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Name already used, or the library has the maximum number of Saved Views. */
+            /** @description Name already used, or the library has the maximum number of Saved Views. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2893,7 +2903,7 @@ export interface operations {
                     "application/json": components["schemas"]["SavedView"];
                 };
             };
-            /** @description Nothing to update, or a domain refusal of the name or search definition. */
+            /** @description Nothing to update, or a domain refusal of the name or search definition. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -2913,7 +2923,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            /** @description Name already used by another Saved View. */
+            /** @description Name already used by another Saved View. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -2940,7 +2950,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Always no-store. */
-                    "Cache-Control"?: "no-store";
+                    "Cache-Control": "no-store";
                     [name: string]: unknown;
                 };
                 content: {
@@ -2949,7 +2959,7 @@ export interface operations {
             };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Storage is not bound (unavailable). */
+            /** @description Storage is not bound (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
             503: {
                 headers: {
                     [name: string]: unknown;
