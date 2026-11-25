@@ -5,7 +5,7 @@
  * prksOfflineNoteRequestSuccess / prksOfflineNoteRequestFailure)
  * is transport-health only: a resolved Response means PRKS answered; a
  * non-abort transport rejection after retries are exhausted means it did not.
- * Managed PDF GETs (/api/pdfs/...) are excluded: the service worker may
+ * Managed PDF GETs (/api/assets/<id>/content) are excluded: the service worker may
  * resolve those from Cache Storage without the PRKS server answering.
  *
  * Library epoch (docs/postgresql-architecture.md §10.4, §11.4): every Library
@@ -294,7 +294,7 @@
 
     function isManagedPdfHref(href) {
         const path = String(href || '').split('?')[0];
-        return /^\/api\/pdfs\/[^/]+$/.test(path);
+        return /^\/api\/assets\/[^/]+\/content$/.test(path);
     }
 
     function classifyRequest(method, parsed) {

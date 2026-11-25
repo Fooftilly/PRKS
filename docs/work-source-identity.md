@@ -22,7 +22,7 @@ All columns on `works`. "Canonical identity" means a reader uses it to decide
 | Field | Type | Null | User-editable today | Derived at ingest | Canonical identity | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | `source_kind` | TEXT | yes | no (API only) | yes — from the create request | **yes** — first term of every inference | `pdf` \| `video`; nullable for old rows |
-| `file_path` | TEXT | yes | no (API only) | yes — upload/import | **yes** for PDFs | `/api/pdfs/...` |
+| `file_path` | TEXT | yes | no (API only) | yes — upload/import | **yes** for PDFs | `/api/assets/<AS-id>/content?v=<hash>` |
 | `source_url` | TEXT | **yes, for non-video Works only** | partly | yes for video | **context-dependent** — see §7 | labelled "Original URL (optional)" |
 | `provider` | TEXT | no | no | yes — host detection | **yes** for video | only `youtube` exists |
 | `provider_id` | TEXT | no | no | yes — extracted from URL | **yes** for video, and it *outranks* the URL | never recomputed after creation |

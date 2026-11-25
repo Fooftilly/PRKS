@@ -36,7 +36,7 @@ from tests import acting_context as facade_context
 from backend.sync import protocol
 from backend.sync.families import Environment, FamilyHandler, Result
 from backend.sync.handlers import work_lifecycle, work_metadata
-from tests.pg.test_works_facade import WorksAnswerTestCase
+from tests.pg.test_works_facade import _PDF_BYTES, WorksAnswerTestCase
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
 from backend.domain.research import concept_commands
@@ -204,9 +204,10 @@ class LedgerTests(SyncTestCase):
 
     def test_the_ledger_row(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
+        url = require(work_commands.detail(self.db, self.ctx, work_id))["file_path"]
         data = self.envelope("DELETE_WORK", work_id, {})
         status, result = self.send(data)
-        self.assertEqual((status, result["file_path"]), (200, "/api/pdfs/p.pdf"))
+        self.assertEqual((status, result["file_path"]), (200, url))
         (row,) = self.ledger()
         self.assertEqual(row, {"op_id": data["op_id"], "library_id": self.actor.library_id,
                                "user_id": self.actor.user_id, "status": "ACKNOWLEDGED", "http_status": 200,
@@ -940,7 +941,8 @@ class SourceSyncTests(SyncTestCase):
         self.assertEqual(self.send(self.source_op(_WATCH % "BBB", 0, pdf))[1]["code"],
                          "UNSUPPORTED_SOURCE_TRANSITION")
         self.assertEqual((self.columns(pdf)["source_kind"], require(work_commands.detail(self.db, self.ctx, pdf))["file_path"]),
-                         ("pdf", "/api/pdfs/refused.pdf"))
+                         ("pdf", works_fixtures.content_url(
+                             require(work_commands.detail(self.db, self.ctx, pdf))["primary_asset_id"], b"%PDF-1.4\n")))
 
     def test_a_patch_never_writes_the_identity(self) -> None:
         for column, value in (("provider_id", "CCC"), ("provider", "vimeo"), ("source_kind", "pdf"),
@@ -1096,14 +1098,15 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
         self.answer(work_commands.detail(self.db, self.ctx, video), {"source_url": _OTHER_VIDEO, "provider_id": "9bZkp7q19f0",
                                                    "thumb_url": None})
         self.answer(work_commands.detail(self.db, self.ctx, plain), {"source_kind": None, "source_url": None})
-        self.answer(work_commands.detail(self.db, self.ctx, pdf), {"source_kind": "pdf", "file_path": "/api/pdfs/a.pdf"})
+        self.answer(work_commands.detail(self.db, self.ctx, pdf), {"source_kind": "pdf", "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES)})
 
     def test_deletes(self) -> None:
         plain = self.add("plain", title="Plain")
         pdf = self.add_pdf("pdf", "d.pdf", title="Pdf")
         op_id = str(uuid.uuid4())
         self.answer(self.op("DELETE_WORK", pdf, {}, op_id=op_id), (200, {
-            **_ACK, "changed": True, "file_path": "/api/pdfs/d.pdf", "work_id": "<W pdf>"}))
+            **_ACK, "changed": True, "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES),
+            "work_id": "<W pdf>"}))
         # The replay is what the ledger kept: no path.
         replay = self.op("DELETE_WORK", pdf, {}, op_id=op_id)
         self.assertEqual(replay, (200, {**_ACK, "changed": True, "work_id": "<W pdf>"}))

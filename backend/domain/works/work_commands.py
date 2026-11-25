@@ -221,21 +221,21 @@ def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
     return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
 
 
-def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
-    """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
+def asset_object(db: Database, ctx: RequestContext, asset_id: str) -> Optional[str]:
+    """The storage key name the acting Library's managed Asset ``asset_id`` names now.
 
-    One data root serves every Library, so ``/api/pdfs/<name>`` serves a file
-    only to a member of a Library that references it: a name from another
-    Library reads as missing.
+    One data root serves every Library, so the content route serves bytes
+    only through an Asset of the acting Library: an id from another Library,
+    a stream or an unknown id reads as missing (``None``).
     """
 
-    def read(scope: LibraryScope) -> bool:
+    def read(scope: LibraryScope) -> Optional[str]:
         row = scope.execute(
-            "SELECT 1 FROM prks.assets WHERE library_id = %(library_id)s"
-            " AND (storage_locator = %(name)s OR source_locator = %(name)s) LIMIT 1",
-            {"name": name},
+            "SELECT storage_locator FROM prks.assets WHERE library_id = %(library_id)s"
+            " AND id = %(asset_id)s AND kind = 'managed_file'",
+            {"asset_id": asset_id},
         ).fetchone()
-        return row is not None
+        return None if row is None else str(row["storage_locator"])
 
     return library_query(db, ctx, read)
 
@@ -245,7 +245,7 @@ def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
 #: The fields of a new Work and their defaults (SQLite's ``add_work`` arguments).
 NEW_WORK_DEFAULTS: dict[str, Any] = {
     "title": "", "status": "Not Started", "abstract": "", "text_content": "", "published_date": "",
-    "file_path": "", "author_text": "", "year": "", "publisher": "", "location": "", "edition": "",
+    "stored_key": "", "author_text": "", "year": "", "publisher": "", "location": "", "edition": "",
     "journal": "", "volume": "", "issue": "", "pages": "", "isbn": "", "doi": "", "doc_type": "article",
     "source_kind": "", "source_url": "", "source_mime": "", "thumb_url": "", "provider": "",
     "provider_id": "", "urldate": "", "thumb_page": None, "private_notes": "",
@@ -289,12 +289,13 @@ def create(db: Database, ctx: RequestContext, objects: StorageBackend,
     rules (``_canonical_new_source``): a contradictory or unsupported source
     raises ``ValueError``. Then:
 
-    - a managed ``file_path`` must name an existing object in ``objects``,
-      whose SHA-256 and size the Asset records (a missing or non-managed path
-      raises ``ValueError``);
+    - a ``stored_key`` is the name of an existing object in ``objects``
+      asset namespace (an Asset of this Library already names it: the route
+      finds it from the Asset's content URL), whose SHA-256 and size the new
+      Asset records; an invalid or missing key raises ``ValueError``;
     - ``upload`` (file name, writer) is a new PDF: ``objects.ingest.store_pdf``
       writes the source key (and a linearized working key) and the create
-      adopts them; with ``upload``, ``file_path`` must be empty. Bytes a
+      adopts them; with ``upload``, ``stored_key`` must be empty. Bytes a
       refused or failed create leaves behind are the orphan sweep's (§11.2);
     - a video becomes an ``external_stream`` Asset, and a video with a file
       is refused (a stream stores no bytes);
@@ -309,20 +310,20 @@ def create(db: Database, ctx: RequestContext, objects: StorageBackend,
     from backend.domain.works.rules import _canonical_new_source, normalize_doc_type
     from backend.domain.entity_ids import generate
 
-    file_path = fields["file_path"]
-    if upload is not None and file_path:
+    stored_key = fields["stored_key"]
+    if upload is not None and stored_key:
         raise TypeError("the uploaded PDF is the Work's file")
     _authorize_edit(db, ctx)
     # An upload has a file before it has a key: classified as one.
     kind, url, provider, provider_id = _canonical_new_source(
         fields["source_kind"], fields["source_url"], fields["provider"], fields["provider_id"],
-        upload[0] if upload is not None else file_path)
+        upload[0] if upload is not None else stored_key)
     managed: Optional[commands.ManagedFile] = None
     if upload is not None:
         if kind == "video":
             raise ValueError("a video Work has no managed file")
         managed = ingest.store_pdf(objects, *upload).managed_file()
-    asset = _new_asset(objects, kind, file_path, url, provider, provider_id, fields["source_mime"],
+    asset = _new_asset(objects, kind, stored_key, url, provider, provider_id, fields["source_mime"],
                        fields["thumb_url"], fields["thumb_page"], managed)
     bibliographic = {name: fields[name] for name in (
         "year", "published_date", "edition", "publisher", "location", "journal", "volume",
@@ -351,7 +352,7 @@ def create(db: Database, ctx: RequestContext, objects: StorageBackend,
     return created
 
 
-def _new_asset(objects: StorageBackend, kind: Optional[str], file_path: str, url: Optional[str],
+def _new_asset(objects: StorageBackend, kind: Optional[str], stored_key: str, url: Optional[str],
                provider: Optional[str], provider_id: Optional[str], source_mime: str,
                thumb_url: str, thumb_page: Any, managed: Any = None) -> Any:
     from backend.domain.works import commands
@@ -361,7 +362,7 @@ def _new_asset(objects: StorageBackend, kind: Optional[str], file_path: str, url
         "thumb_url": (thumb_url or "").strip() or None,
         "thumb_page": _thumb_page(thumb_page),
     }
-    has_file = managed is not None or bool((file_path or "").strip())
+    has_file = managed is not None or bool((stored_key or "").strip())
     if kind == "video":
         if has_file:
             raise ValueError("a video Work has no managed file")
@@ -371,22 +372,20 @@ def _new_asset(objects: StorageBackend, kind: Optional[str], file_path: str, url
         )
     if not has_file:
         return None
-    return commands.NewAsset(source=managed or _managed_file(objects, file_path), **presentation)
+    return commands.NewAsset(source=managed or _managed_file(objects, stored_key), **presentation)
 
 
-def _managed_file(objects: StorageBackend, file_path: str) -> Any:
+def _managed_file(objects: StorageBackend, name: str) -> Any:
     from backend.domain.works import commands
-    from backend.pdf.managed_pdf_names import managed_pdf_filename
     from backend.storage.objects import (
         NAMESPACE_ASSET_OBJECTS, InvalidStorageKey, ObjectIntegrityError, ObjectNotFound, StorageKey,
     )
 
-    name = managed_pdf_filename(file_path)
     try:
         key = StorageKey(NAMESPACE_ASSET_OBJECTS, name) if name else None
     except InvalidStorageKey:
         key = None
-    if name is None or key is None:
+    if key is None:
         raise ValueError("file_path is not a managed PDF")
     digest = hashlib.sha256()
     size = 0

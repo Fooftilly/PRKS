@@ -4,7 +4,7 @@ Coordinates filesystem write, linearization, text-index sync, Mentioned-role
 extraction, and materialization claim/mark. HTTP adapters parse the request and
 map the returned status/body; they do not own this workflow.
 
-Shared ``/api/pdfs/<file>`` references are copy-on-write: before overwriting
+Shared stored objects are copy-on-write: before overwriting
 bytes that another Work still points at, this Work is retargeted to an exclusive
 managed filename so siblings keep their prior bytes and materialization marks.
 

@@ -12,8 +12,9 @@ same rules:
   Manifestation's.
 - ``source_url``: the stream's URL for a video, else the Manifestation's
   citation URL (a PDF's provenance).
-- ``file_path``: ``/api/pdfs/<storage key>`` for a managed file, else ``""``
-  (what a Work created without a file stores on SQLite).
+- ``file_path``: the primary Asset's content URL for a managed file
+  (``/api/assets/<asset id>/content?v=<sha256 head>``, #1427), else ``""``.
+  It is a projection: the Asset id is the identity, never the storage key.
 - ``source_kind``: ``"video"`` for a stream, ``"pdf"`` for a managed file,
   else ``None``.
 - ``source_mime``, ``provider``, ``provider_id``, ``thumb_*`` and the two
@@ -48,6 +49,8 @@ The detail's ``html_content`` comes from the wiki-link resolver.
 from __future__ import annotations
 
 from typing import Any, LiteralString, Mapping, Optional
+
+from backend.domain.objects.content_url import asset_content_url
 
 # The key lists of the Work JSON the clients read (SQLite's representation).
 WORK_SUMMARY_COLUMNS: tuple[str, ...] = (
@@ -118,6 +121,7 @@ SELECT
   m.primary_asset_id,
   a.kind AS asset_kind,
   a.storage_locator,
+  a.content_sha256,
   a.byte_size,
   a.url AS asset_url,
   a.media_type,
@@ -210,7 +214,7 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
         "author_text": row["author_text"],
         "text_content": research if research is not None else "",
         "private_notes": row["private_note"],
-        "file_path": "/api/pdfs/" + str(row["storage_locator"]) if managed else "",
+        "file_path": asset_content_url(row["primary_asset_id"], row["content_sha256"]) if managed else "",
         "file_size_bytes": int(row["byte_size"]) if managed and row["byte_size"] is not None else None,
         "source_kind": "video" if stream else "pdf" if managed else None,
         "source_url": row["asset_url"] if stream else row["manifestation_url"],
@@ -232,6 +236,8 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
         "updated_at": row["updated_at"],
         "primary_manifestation_id": row["primary_manifestation_id"],
         "primary_asset_id": row["primary_asset_id"],
+        # The storage key, for the routes that read the bytes; no Work shape picks it.
+        "storage_locator": row["storage_locator"] if managed else None,
         "manifestation_count": int(row["manifestation_count"]),
         "asset_count": int(row["asset_count"]),
         "folder_id": row["folder_id"],
@@ -359,4 +365,4 @@ def thumbnail_fields(core: Optional[Mapping[str, Any]]) -> Optional[dict[str, An
     if core is None:
         return None
     return {"file_path": core["file_path"], "thumb_page": core["thumb_page"],
-            "primary_asset_id": core["primary_asset_id"]}
+            "primary_asset_id": core["primary_asset_id"], "storage_locator": core["storage_locator"]}

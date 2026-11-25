@@ -52,7 +52,7 @@ function installGlobals(opts) {
 async function onlineAwaitingBaseIsPreview() {
     installGlobals({ state: 'online', durable: true });
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {}
     );
     assert.equal(cap.mode, 'preview');
@@ -67,7 +67,7 @@ async function onlineAwaitingBridgeIsPreview() {
         entities: { 'work-annotations-snapshot:W1': coherentSnap('W1') },
     });
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         { annotationBaseReady: true, annotationState: coherentSnap('W1'),
           annotationCache: { items: [] } }
     );
@@ -90,7 +90,7 @@ async function onlineDurableWithBridge() {
         annotationCache: { items: [] },
     };
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         runtime
     );
     assert.equal(cap.mode, 'work');
@@ -101,7 +101,7 @@ async function onlineDurableWithBridge() {
 async function onlineLegacyWithoutDurable() {
     installGlobals({ state: 'online', durable: false });
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {}
     );
     assert.equal(cap.mode, 'work');
@@ -117,15 +117,15 @@ async function offlineNeedsPdfAndBase() {
     });
     fakeCaches.set('prks-pdf-v3:test:1', new Map());
     let cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {}
     );
     assert.equal(cap.mode, 'preview');
     assert.equal(cap.reason, 'pdf_bytes_unavailable');
 
-    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/assets/AS-a-pdf/content', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {}
     );
     assert.equal(cap.reason, 'annotation_base_unavailable');
@@ -136,9 +136,9 @@ async function offlineNeedsPdfAndBase() {
         durable: true,
         entities: { 'work-annotations-snapshot:W1': [] },
     });
-    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/assets/AS-a-pdf/content', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {}
     );
     assert.equal(cap.reason, 'annotation_base_unavailable');
@@ -148,9 +148,9 @@ async function offlineNeedsPdfAndBase() {
         durable: true,
         entities: { 'work-annotations-snapshot:W1': coherentSnap('W1') },
     });
-    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/assets/AS-a-pdf/content', true]]));
     cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         {
             annotationBaseReady: true,
             annotationDurableBridgeReady: true,
@@ -170,9 +170,9 @@ async function pendingDeleteBlocks() {
         pendingDelete: new Set(['W1']),
         entities: { 'work-annotations-snapshot:W1': coherentSnap('W1') },
     });
-    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/pdfs/a.pdf', true]]));
+    fakeCaches.set('prks-pdf-v3:test:1', new Map([['/api/assets/AS-a-pdf/content', true]]));
     const cap = await globalThis.prksResolvePdfAnnotationMutationCapability(
-        { id: 'W1', file_path: '/api/pdfs/a.pdf' },
+        { id: 'W1', file_path: '/api/assets/AS-a-pdf/content' },
         { annotationDurableBridgeReady: true }
     );
     assert.equal(cap.mode, 'preview');

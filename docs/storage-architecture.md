@@ -146,10 +146,11 @@ where bytes live.
 1. Treat `storage_locator` and `source_locator` as **key names in the
    `asset-objects` namespace**, obtained only from the storage layer's name
    minting, never composed by a feature.
-2. Serve Asset bytes by Asset ID in the typed API (#60 Slice G, for example
-   `/api/assets/{AS-id}/content`). `/api/pdfs/<basename>` stays a legacy
-   projection (#60 D10). This keeps browser and offline caches independent of
-   key changes.
+2. Serve Asset bytes by Asset ID: `GET /api/assets/{AS-id}/content?v=<hash>`
+   (#1427), where `v` is the first 16 hex digits of `content_sha256`. A Work's
+   `file_path` is that URL. The `/api/pdfs/<basename>` route is gone. Browser
+   and offline caches key on the versioned URL, so a storage key change alone
+   never invalidates them, and new bytes are always a new cache entry.
 3. Put every byte operation on an Asset slot through the backend once Phase B
    lands: ingest, replace, materialization, linearization, copy-on-write,
    delete, and the fingerprint pass.
@@ -881,15 +882,14 @@ has written `active`, revert is no longer offered.
 
 ### 8.4 Identity survives
 
-- Asset IDs, storage keys, `works.file_path` (`/api/pdfs/<basename>`) and
-  `pending_pdf_cleanup` names are all root-relative, so relocation rewrites
+- Asset IDs, storage keys and `pending_pdf_cleanup` names are all root-relative, so relocation rewrites
   **no** database row.
 - `processing_files.abs_path` is the exception until Phase B makes it derived.
   Until then relocation must reuse the restore rewrite
   (`_rewrite_processing_abs_paths`) on the destination copy, before P4. Phase
   E must not ship before that fix or that reuse.
-- Browser and offline caches key on `/api/pdfs/<basename>` or, later, the Asset
-  ID, so they stay valid.
+- Browser and offline caches key on the Asset content URL
+  (`/api/assets/{AS-id}/content?v=<hash>`), so they stay valid.
 
 ### 8.5 Why copy, not rename
 
@@ -1283,9 +1283,9 @@ These are **not** part of the generic contract:
 - **Immutable-object mode.** A future option, not a requirement. In it, every
   rewrite of a working slot mints a new key and swaps `storage_locator` in the
   catalogue transaction, and the old key gets a cleanup claim. That makes
-  `replace` unnecessary, and it suits object storage and CDNs. It changes
-  `/api/pdfs/<basename>` on every annotation save, so it only makes sense after
-  #60 Slice G serves by Asset ID. It is recorded as the preferred direction for
+  `replace` unnecessary, and it suits object storage and CDNs. Since #1427
+  serves bytes by Asset ID, a new key per save no longer changes the URL a
+  client holds, only its content version. It is recorded as the preferred direction for
   a future object-storage backend, not adopted now.
 
 ### 10.5 Object storage later

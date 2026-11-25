@@ -1087,7 +1087,7 @@ class OfflineFoundationTests(unittest.TestCase):
         the same Work re-renders that same PDF from the service worker's cache."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -1320,7 +1320,7 @@ class OfflineFoundationTests(unittest.TestCase):
         hydrate/event bridge installs (legacy full-list flush stays paused)."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -1367,8 +1367,8 @@ class OfflineFoundationTests(unittest.TestCase):
         """Annotation materialization puts the accepted bytes in the scoped PDF cache.
 
         Opening a PDF primes the whole-file cache. A later exclusive POST /pdf
-        keeps the same /api/pdfs/ path on SQLite (no COW); on PostgreSQL the
-        bytes land under a fresh immutable key for the same document. Either
+        stores the bytes under a fresh immutable key for the same document,
+        so the Asset content URL names a new content version. Either
         way the open viewer stays mounted, and the cache entry for the
         canonical path holds the bytes just accepted by the server (range
         loads never write it). Offline reopen then serves that generation,
@@ -1376,7 +1376,7 @@ class OfflineFoundationTests(unittest.TestCase):
         """
         server, page, context, collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -1402,12 +1402,12 @@ class OfflineFoundationTests(unittest.TestCase):
         collector.wait_pdf_handshake(page, since_ms=since)
         _wait_pdf_materialized(page, work_a)
         canonical = page.evaluate(
-            "() => { const pdf = %s; return pdf ? String(pdf.filePath || '').split('?')[0] : ''; }"
+            "() => { const pdf = %s; return pdf ? String(pdf.filePath || '') : ''; }"
             % _FOCUSED_PDF
         )
-        # A fresh immutable key for the same document, never the old one.
+        # A new content version of the same Asset, never the old one.
         self.assertNotEqual(canonical, pdf_path)
-        self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
+        self.assertEqual(canonical.split("?")[0], pdf_path.split("?")[0])
         # The save kept the open viewer: no reload for an annotation-only save.
         self.assertTrue(page.evaluate(
             "() => (%s).viewer === window.__prksViewerBeforeSave" % _FOCUSED_PDF))
@@ -1597,7 +1597,7 @@ class OfflineFoundationTests(unittest.TestCase):
         bytes + base are present; reconnect drains the durable queue."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -1713,7 +1713,7 @@ class OfflineFoundationTests(unittest.TestCase):
         mount, never a leftover preview when prerequisites still hold."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -1753,7 +1753,7 @@ class OfflineFoundationTests(unittest.TestCase):
         def hold_reachability_gets(route):
             req = route.request
             path = urlparse(req.url).path
-            if req.method == "GET" and path.startswith("/api/") and not path.startswith("/api/pdfs/"):
+            if req.method == "GET" and path.startswith("/api/") and not path.startswith("/api/assets/"):
                 held_probe.append(route)
                 return
             route.fallback()
@@ -1827,7 +1827,7 @@ class OfflineFoundationTests(unittest.TestCase):
         preview. Exactly one PDF viewer container remains mounted."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -2078,7 +2078,7 @@ class OfflineFoundationTests(unittest.TestCase):
         enqueues durable intent (no canonical HTTP while offline)."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)
@@ -2452,7 +2452,7 @@ class OfflineFoundationTests(unittest.TestCase):
         work-capable when bytes + annotation base are already local."""
         server, page, context, _collector = self._start()
         work_a = server.ids["work_a"]
-        pdf_path = "/api/pdfs/%s" % server.ids["pdf_name"]
+        pdf_path = server.ids["pdf_path"]
 
         _wait_sw_active(page)
         _open_work_from_home(page, WORK_A_TITLE)

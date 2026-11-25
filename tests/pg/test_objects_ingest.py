@@ -270,7 +270,7 @@ class FacadeTests(IngestTestCase):
         assert work is not None
         self.assertEqual((work["title"], work["year"]), ("Uploaded", "2024"))
         asset = self.asset(work_id)
-        self.assertEqual(work["file_path"], "/api/pdfs/" + asset["storage_locator"])
+        self.assertEqual(work["file_path"], works_fixtures.content_url(work["primary_asset_id"], LINEARIZED))
         self.assertEqual((self.read(asset["storage_locator"]), self.read(asset["source_locator"])),
                          (LINEARIZED, RAW))
 

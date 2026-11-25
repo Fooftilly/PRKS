@@ -87,8 +87,8 @@ for a non-object body. A known path asked with a method it does not serve is
 405 with `Allow`, where some families answered 404.
 
 **Paths.** The route table sees the path as sent: `;params` are no longer
-stripped, so `;x` stays part of the segment. `/api/pdfs/<name>;x` names
-another file (404), and a frontend path such as `/index.html;x` falls back to
+stripped, so `;x` stays part of the segment. `/api/assets/<id>;x/content` names
+another Asset (404), and a frontend path such as `/index.html;x` falls back to
 the app shell. A path segment is percent-decoded by the route that reads it,
 once. The most specific pattern that takes a path owns it: a wrong method on
 a literal endpoint such as `/api/works/bulk` is 405 with that endpoint's own

@@ -26,11 +26,38 @@ def objects(storage: Optional[StorageConfig]) -> LocalFilesystemStorage:
     return LocalFilesystemStorage.for_config(storage)
 
 
-def add_work(database: Database, ctx: RequestContext, storage: Optional[StorageConfig], title: str,
-             **fields: Any) -> str:
-    """A new Work's id: an existing managed PDF (``file_path``), a stream, or no file."""
+STORED_PREFIX = "/api/pdfs/"
+
+
+def stored_key(database: Database, ctx: RequestContext, file_path: Any) -> str:
+    """The storage key a test's ``file_path`` names.
+
+    ``/api/pdfs/<name>`` is test notation for an object a test put in the
+    asset namespace itself (no Asset names it yet); a content URL is another
+    Asset's bytes, as ``POST /api/works`` adopts them (#1427).
+    """
+    from backend.domain.objects.content_url import asset_id_from_url
     from backend.domain.works import work_commands
 
+    text = str(file_path or "")
+    if not text:
+        return ""
+    if text.startswith(STORED_PREFIX):
+        return text[len(STORED_PREFIX):]
+    asset_id = asset_id_from_url(text)
+    found = work_commands.asset_object(database, ctx, asset_id) if asset_id else None
+    if not found:
+        raise ValueError("file_path is not a managed PDF")
+    return found
+
+
+def add_work(database: Database, ctx: RequestContext, storage: Optional[StorageConfig], title: str,
+             **fields: Any) -> str:
+    """A new Work's id: a stored object or another Asset's bytes (``file_path``), a stream, or no file."""
+    from backend.domain.works import work_commands
+
+    if "file_path" in fields:
+        fields["stored_key"] = stored_key(database, ctx, fields.pop("file_path"))
     return work_commands.create(database, ctx, objects(storage),
                                 work_commands.new_work_fields(title=title, **fields))
 
@@ -40,7 +67,7 @@ def add_work_with_pdf(database: Database, ctx: RequestContext, storage: Optional
     """A new Work's id, from an uploaded PDF as ``POST /api/works`` with ``file_b64`` creates it."""
     from backend.domain.works import work_commands
 
-    if "file_path" in fields:
+    if "file_path" in fields or "stored_key" in fields:
         raise TypeError("the uploaded PDF is the Work's file")
     return work_commands.create(database, ctx, objects(storage),
                                 work_commands.new_work_fields(**fields), (file_name, write))
@@ -136,3 +163,10 @@ def etag_recently_added(database: Database, ctx: RequestContext) -> str:
 
     count, newest = library_query(database, ctx, queries.recently_added_etag_parts)
     return f'W/"prks-recently-added-{count}-{newest}"'
+
+
+def content_url(asset: str, data: bytes) -> str:
+    """The content URL a Work reports for Asset ``asset`` (an id or an answer label) holding ``data``."""
+    import hashlib
+
+    return f"/api/assets/{asset}/content?v={hashlib.sha256(data).hexdigest()[:16]}"

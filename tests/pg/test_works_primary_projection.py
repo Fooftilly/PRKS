@@ -155,11 +155,12 @@ class PrimaryProjectionTests(SearchTestCase):
         self.make_primary(work_id, mf)
         fields = work_commands.thumbnail_fields(self.db, self.ctx, work_id)
         assert fields is not None
-        self.assertEqual((fields["file_path"], fields["thumb_page"], fields["primary_asset_id"]),
-                         ("/api/pdfs/secondary.pdf", 7, asset))
+        self.assertEqual((fields["file_path"].split("?")[0], fields["storage_locator"], fields["thumb_page"],
+                          fields["primary_asset_id"]),
+                         (f"/api/assets/{asset}/content", "secondary.pdf", 7, asset))
         work = work_commands.detail(self.db, self.ctx, work_id)
         assert work is not None
-        self.assertEqual((work["file_path"], work["thumb_page"]), ("/api/pdfs/secondary.pdf", 7))
+        self.assertEqual((work["file_path"], work["thumb_page"]), (fields["file_path"], 7))
 
     def test_the_browse_catalog_orders_by_the_displayed_title(self) -> None:
         early = works_fixtures.add_work(self.db, self.ctx, self.storage, "AAA Legacy")

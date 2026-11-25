@@ -211,14 +211,17 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine again", file_path=path)
 
     def test_a_managed_pdf_is_served_only_to_its_library(self) -> None:
-        # /api/pdfs/<name> on the shared root asks this before reading bytes.
+        # The content route asks this before reading bytes: the data root is shared.
         path = self.store_pdf("served.pdf", b"%PDF-1.4\nserved\n%%EOF\n")
-        self.store_pdf("loose.pdf", b"%PDF-1.4\nloose\n%%EOF\n")
-        works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", file_path=path)
-        self.assertTrue(work_commands.holds_managed_pdf(self.db, self.ctx, "served.pdf"))
-        self.assertFalse(work_commands.holds_managed_pdf(self.db, self.ctx, "loose.pdf"))
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", file_path=path)
+        stream = works_fixtures.add_work(self.db, self.ctx, self.storage, "Stream", source_url=_VIDEO)
+        asset = require(work_commands.detail(self.db, self.ctx, mine))["primary_asset_id"]
+        streamed = require(work_commands.detail(self.db, self.ctx, stream))["primary_asset_id"]
+        self.assertEqual(work_commands.asset_object(self.db, self.ctx, asset), "served.pdf")
+        self.assertIsNone(work_commands.asset_object(self.db, self.ctx, streamed))
+        self.assertIsNone(work_commands.asset_object(self.db, self.ctx, "AS-" + "0" * 32))
         with facade_context.acting_as(self.other_actor().context):
-            self.assertFalse(work_commands.holds_managed_pdf(self.db, self.ctx, "served.pdf"))
+            self.assertIsNone(work_commands.asset_object(self.db, self.ctx, asset))
 
     def test_two_libraries_racing_for_one_pdf_leave_it_with_one(self) -> None:
         # Whatever the interleaving (one after the other, or both checks before
@@ -455,10 +458,11 @@ class AnswerTests(WorksAnswerTestCase):
         work_id = self.add_pdf("pdf", "paper.pdf", title="Paper", source_url="https://example.org/p",
                                thumb_page=3, source_mime="application/pdf", thumb_url="https://t")
         self.answer(work_commands.detail(self.db, self.ctx, work_id), {
-            "file_path": "/api/pdfs/paper.pdf", "file_size_bytes": len(_PDF_BYTES), "asset_count": 1,
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "file_size_bytes": len(_PDF_BYTES), "asset_count": 1,
             "source_kind": "pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
         self.answer(work_commands.thumbnail_fields(self.db, self.ctx, work_id), {
-            "file_path": "/api/pdfs/paper.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "primary_asset_id": "<AS pdf>",
+            "storage_locator": "paper.pdf", "thumb_page": 3})
 
     def test_a_video_is_a_stream(self) -> None:
         video = self.add("video", title="Video", source_kind="video", source_url=_VIDEO,
@@ -497,7 +501,7 @@ class AnswerTests(WorksAnswerTestCase):
                   "primary_author": None, "primary_editor": None, "status": "Not Started",
                   "doc_type": "article", "author_text": "", "year": "", "published_date": "",
                   "thumb_page": None, "thumb_url": None}
-        file_row = {**common, "id": "<W file>", "title": "file", "file_path": "/api/pdfs/f.pdf",
+        file_row = {**common, "id": "<W file>", "title": "file", "file_path": works_fixtures.content_url("<AS file>", _PDF_BYTES),
                     "file_size_bytes": 32, "primary_asset_id": "<AS file>", "primary_manifestation_id": "<MF file>",
                     "provider": None, "provider_id": None, "source_kind": "pdf", "source_url": None}
         stream_row = {**common, "id": "<W stream>", "title": "stream", "file_path": "",
@@ -527,8 +531,8 @@ class AnswerTests(WorksAnswerTestCase):
         # A file size is the Asset's byte_size (#1427): no catalogue read touches the data root,
         # and a file gone from the disk still reports the size the database holds.
         self.catalog()
-        opened = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
-        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened))
+        opened_id = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened_id))
         os.remove(os.path.join(self.storage.pdfs_dir, "f.pdf"))
         root = os.path.realpath(self.storage.root)
         touched: list[str] = []

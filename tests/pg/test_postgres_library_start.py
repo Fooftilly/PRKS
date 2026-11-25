@@ -149,7 +149,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, refused, _headers = self.call(port, "POST", "/api/backups/restore",
                                                   {"token": "0" * 32, "confirm": "RESTORE"}, origin)
             self.assertEqual((status, refused["reason"]), (400, "unknown_token"))
-            # A file on the shared root that no Asset of this Library names is not served.
+            # A file on the shared root is never addressed by its name: the retired route is gone.
             pdfs = StorageConfig.for_testing(root).pdfs_dir
             os.makedirs(pdfs, exist_ok=True)
             with open(os.path.join(pdfs, "loose.pdf"), "wb") as handle:
@@ -287,7 +287,8 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             work_id = created["id"]
             status, work, _headers = self.call(port, "GET", f"/api/works/{work_id}")
             self.assertEqual(status, 200, work)
-            self.assertTrue(work["file_path"].startswith("/api/pdfs/"), work["file_path"])
+            self.assertTrue(work["file_path"].startswith(f"/api/assets/{work['primary_asset_id']}/content?v="),
+                            work["file_path"])
             self.assertEqual(self.pdf(port, work["file_path"]), first)
             second = b"%PDF-1.7\n% replaced\n%%EOF\n"
             status, replaced, _headers = self.call(port, "POST", f"/api/works/{work_id}/pdf", {

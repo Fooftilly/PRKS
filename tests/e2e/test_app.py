@@ -5545,7 +5545,7 @@ class WorkspaceTabsTests(_BrowserE2E):
             path = urlparse(req.url).path
             if req.method == "GET" and path in (
                 "/api/works/" + work_id,
-                "/api/pdfs/" + server.ids["pdf_name"],
+                server.ids["pdf_path"].split("?")[0],
             ):
                 requests.append(path)
 
@@ -10978,7 +10978,7 @@ class MainSecondaryDividerTests(_BrowserE2E):
         def relevant(req):
             path = urlparse(req.url).path
             return req.method == "GET" and (
-                path.startswith("/api/works/") or path.startswith("/api/pdfs/")
+                path.startswith("/api/works/") or path.startswith("/api/assets/")
             )
 
         def on_request(req):
@@ -11965,7 +11965,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         def _on_get(req):
             if req.method != "GET":
                 return
-            # Byte-range PDF streaming reuses `/api/pdfs/<file>` and is not a
+            # Byte-range PDF streaming reuses `/api/assets/<id>/content` and is not a
             # remount; only non-Range GETs count toward the network assert.
             headers = req.headers or {}
             if any(k.lower() == "range" for k in headers):
@@ -12030,10 +12030,10 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertTrue(identity["dNotesSame"], "moving a pane must not remount its notes editor")
         self.assertEqual(identity["mounted"], 4, "moving a visible pane must not mount/unmount anything")
         # Entity / PDF detail GETs only — not `/annotations-snapshot`, `/opened`,
-        # or Range PDF streaming. Broad `/api/works/` / `/api/pdfs/` substring
+        # or Range PDF streaming. Broad `/api/works/` / `/api/assets/` substring
         # matches race late catch-up from tree build.
-        pdf_a = "/api/pdfs/" + server.ids["pdf_name"]
-        pdf_b = "/api/pdfs/e2e-related.pdf"
+        pdf_a = server.ids["pdf_path"].split("?")[0]
+        pdf_b = server.ids["pdf_b_path"].split("?")[0]
         for path in (
             "/api/works/" + tree["work_a"],
             "/api/works/" + tree["work_b"],

@@ -237,7 +237,7 @@ describe('Folder Library preview lifecycle (#170)', () => {
       props: {
         folders: [],
         filterQuery: '',
-        works: [{ id: 'W1', title: 'One', file_path: '/api/pdfs/w1.pdf', thumb_page: 1 }],
+        works: [{ id: 'W1', title: 'One', file_path: '/api/assets/AS-w1-pdf/content', thumb_page: 1 }],
         offlineCached: false,
         unavailable: false,
         loading: false,

@@ -23,9 +23,14 @@ from backend.media.derived_caches import (
     prks_thumb_cache_stem,
 )
 from backend.runtime.log_safety import safe_error_type, safe_log_id
-from backend.pdf.managed_pdf_names import managed_pdf_filename, managed_pdf_key
 from backend.runtime.performance import clock_ns, record_counter, record_span
-from backend.storage.objects import StorageObjectError, readable_path
+from backend.storage.objects import (
+    NAMESPACE_ASSET_OBJECTS,
+    InvalidStorageKey,
+    StorageKey,
+    StorageObjectError,
+    readable_path,
+)
 from backend.web.http import Request, Response, bytes_response, error_response
 from backend.web.routing import route
 
@@ -261,11 +266,12 @@ def thumbnail(req: Request) -> Response:
     thumb = works_api.thumbnail_fields(req, w_id)
     if not thumb:
         return error_response(404, "Work not found")
-    # Ownership identity, not the last '/'-separated piece: a stored path
-    # that is not exactly /api/pdfs/<filename> does not own a managed PDF
-    # and must not resolve to some other one.
-    pdf_filename = managed_pdf_filename(str(thumb.get("file_path") or ""))
-    key = managed_pdf_key(pdf_filename) if pdf_filename else None
+    # The primary Asset's storage key, read in the same snapshot as the Work.
+    pdf_filename = thumb.get("storage_locator")
+    try:
+        key = StorageKey(NAMESPACE_ASSET_OBJECTS, pdf_filename) if pdf_filename else None
+    except InvalidStorageKey:
+        key = None
     if key is None:
         return error_response(404, "PDF not found")
     store = objects(req)

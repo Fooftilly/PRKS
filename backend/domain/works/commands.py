@@ -21,6 +21,7 @@ so create writes no revision rows (as on SQLite).
 
 from __future__ import annotations
 
+from backend.domain.objects.content_url import asset_content_url
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import LiteralString, Optional
@@ -271,7 +272,7 @@ _LOCK_FOR_DELETE: LiteralString = (
 # Read after the lock, in its own statement, so the Asset is the committed one
 # (see ``metadata.target``).
 _PRIMARY_ASSET: LiteralString = """
-SELECT a.kind AS asset_kind, a.storage_locator
+SELECT a.kind AS asset_kind, a.id AS asset_id, a.storage_locator, a.content_sha256
 FROM prks.works w
 JOIN prks.manifestations m
   ON m.library_id = w.library_id AND m.id = w.primary_manifestation_id AND m.work_id = w.id
@@ -358,7 +359,7 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
     removed later, by a settle that finds nothing naming them.
     ``claim_files=False`` (undoing a create that adopted existing bytes,
     ``work_deletion.delete_work(keep_managed_pdf=True)``) records none. The
-    record reports the Work's ``/api/pdfs/`` path and whether another Asset
+    record reports the Work's content URL and whether another Asset
     of the Library still names the same storage key.
     """
     if scope.execute(_LOCK_FOR_DELETE, {"work_id": work_id}).fetchone() is None:
@@ -405,5 +406,5 @@ def delete_work(scope: LibraryScope, work_id: str, *, claim_files: bool = True) 
         for name in stored:
             lifecycle.release(scope, StorageKey(NAMESPACE_ASSET_OBJECTS, name))
     return DeletedWork(work_id=work_id,
-                       file_path="/api/pdfs/" + str(locator) if locator else "",
+                       file_path=asset_content_url(row["asset_id"], row["content_sha256"]) if locator else "",
                        managed_pdf_still_referenced=still_used)

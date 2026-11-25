@@ -21,8 +21,8 @@ const assert = new Proxy(function (...args) { checks += 1; return strict(...args
 });
 
 function managedPdfApiPath(filePath) {
-    const raw = String(filePath || '').split('?')[0].trim();
-    return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+    const raw = String(filePath || '').split('#')[0].trim();
+    return /^\/api\/assets\/AS-[0-9A-Za-z-]+\/content(?:\?v=[0-9a-f]{1,64})?$/.test(raw) ? raw : '';
 }
 
 function viewerBoundToManagedPath(runtime, path) {
@@ -155,8 +155,8 @@ function sleep(ms) {
 }
 
 async function firstFailThenSucceedRetry() {
-    const shared = '/api/pdfs/shared.pdf';
-    const exclusive = '/api/pdfs/exclusive.pdf';
+    const shared = '/api/assets/AS-shared-pdf/content';
+    const exclusive = '/api/assets/AS-exclusive-pdf/content';
     const oldViewer = makeViewer('shared');
     oldViewer.setMutationEnabled(true);
 
@@ -240,8 +240,8 @@ async function firstFailThenSucceedRetry() {
 
 async function oldBugWouldBailOnLiveViewer() {
     // Document the regression: mere-presence bail never retries.
-    const shared = '/api/pdfs/shared.pdf';
-    const exclusive = '/api/pdfs/exclusive.pdf';
+    const shared = '/api/assets/AS-shared-pdf/content';
+    const exclusive = '/api/assets/AS-exclusive-pdf/content';
     const oldViewer = makeViewer('shared');
     const runtime = {
         viewer: oldViewer,
@@ -280,8 +280,8 @@ async function oldBugWouldBailOnLiveViewer() {
 }
 
 async function applyCowEarlyReturnRequiresBinding() {
-    const shared = '/api/pdfs/shared.pdf';
-    const exclusive = '/api/pdfs/exclusive.pdf';
+    const shared = '/api/assets/AS-shared-pdf/content';
+    const exclusive = '/api/assets/AS-exclusive-pdf/content';
     const runtime = {
         viewer: makeViewer('shared'),
         viewerFilePath: shared,

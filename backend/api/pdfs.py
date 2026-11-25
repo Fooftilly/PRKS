@@ -1,4 +1,4 @@
-"""Managed PDF bytes: ``GET``/``HEAD /api/pdfs/<filename>`` (#1424).
+"""Managed Asset bytes: ``GET``/``HEAD /api/assets/<asset id>/content`` (#1427).
 
 The PDF viewer reads a Work's managed PDF with ``Range`` requests (required
 for HTTP/1.1 WASM PDF engines), so :func:`pdf_response` answers ``206`` for
@@ -6,11 +6,11 @@ one satisfiable range, ``416`` for an unsatisfiable one and ``200`` for the
 whole file; the Processing queue's preview uses it too. PDF answers are
 never stored (``no-store``).
 
-The whole ``<filename>`` is one storage key (``managed_pdf_key``), not just
-its last ``/``-separated piece: ``/api/pdfs/nested/victim.pdf`` is 404,
-never ``victim.pdf``. The data root is shared by every Library, so the
-object must also be one of the acting Library's Assets; the bytes and their
-size come from the Library's ``StorageBackend`` (#1427).
+The Asset id is the identity: the route finds the storage key the acting
+Library's Asset names (an id from another Library reads as missing) and
+streams the bytes from the Library's ``StorageBackend``. The URL a Work
+reports carries ``?v=<sha256 head>`` so it changes with the bytes
+(``backend/domain/objects/content_url.py``).
 """
 
 from __future__ import annotations
@@ -20,8 +20,13 @@ import logging
 from typing import BinaryIO
 
 from backend.web.byte_range import parse_byte_range
-from backend.pdf.managed_pdf_names import managed_pdf_key
-from backend.storage.objects import ObjectNotFound, StorageObjectError
+from backend.storage.objects import (
+    NAMESPACE_ASSET_OBJECTS,
+    InvalidStorageKey,
+    ObjectNotFound,
+    StorageKey,
+    StorageObjectError,
+)
 from backend.web.http import Request, Response, Write, error_response
 from backend.web.routing import route
 
@@ -98,13 +103,21 @@ def _object_size(stream: BinaryIO) -> int:
     return end
 
 
-def managed_pdf(req: Request) -> Response:
-    """``GET``/``HEAD /api/pdfs/<filename>``: a managed PDF of the acting Library."""
-    from backend.api import works as works_api
-    from backend.api.common import objects
+def asset_content(req: Request) -> Response:
+    """``GET``/``HEAD /api/assets/<asset id>/content``: a managed Asset's bytes in the acting Library.
 
-    key = managed_pdf_key(req.params["filename"])
-    if key is None or not works_api.holds_managed_pdf(req, key.name):
+    ``?v=`` only versions the URL for caches; the bytes are always what the
+    Asset names now.
+    """
+    from backend.api.common import objects
+    from backend.domain.works import work_commands
+
+    name = work_commands.asset_object(*req.actor, req.params["asset_id"])
+    try:
+        key = StorageKey(NAMESPACE_ASSET_OBJECTS, name) if name else None
+    except InvalidStorageKey:
+        key = None
+    if key is None:
         return error_response(404, "PDF not found")
     store = objects(req)
     try:
@@ -125,6 +138,6 @@ def managed_pdf(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", "/api/pdfs/{filename:path}", managed_pdf),
-    route("HEAD", "/api/pdfs/{filename:path}", managed_pdf),
+    route("GET", "/api/assets/{asset_id}/content", asset_content),
+    route("HEAD", "/api/assets/{asset_id}/content", asset_content),
 )

@@ -1,156 +1,50 @@
-"""The managed-PDF name rules (``backend/pdf/managed_pdf_names.py``).
+"""Managed PDF object names and the Asset content URL (#1427).
 
-Pure rules with no database: which ``/api/pdfs/`` spellings name a managed
-file, which basename a row owns or protects, and the storage key a route name gives.
-Moved out of ``tests/test_work_deletion.py`` and ``tests/test_db_manager.py``
-when PG-C2 (#641) retired their SQLite tests; the rules stay in use on PostgreSQL.
+Pure rules with no database: a minted name is a valid, bounded storage key,
+and a Work's bytes are addressed by its Asset id, never by that name.
 """
 
 import unittest
 
-from backend.pdf.managed_pdf_names import (
-    managed_basenames_protected_by,
-    managed_pdf_filename,
-    owned_managed_pdf_basename,
-    referenced_managed_pdf_filename,
-    row_references_managed_pdf,
-    row_strongly_references_managed_pdf,
-    managed_pdf_key,
-)
-from backend.storage.objects import NAMESPACE_ASSET_OBJECTS
+from backend.domain.objects.content_url import asset_content_url, asset_id_from_url
+from backend.pdf.managed_pdf_names import bound_managed_pdf_basename, mint_managed_pdf_filename
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
+
+_ASSET = "AS-" + "0123456789ABCDEF" * 2
+_SHA = "ab" * 32
 
 
-class TestManagedPdfPathHelpers(unittest.TestCase):
-    def test_managed_pdf_filename_canonical_success(self):
-        self.assertEqual(managed_pdf_filename("/api/pdfs/example.pdf"), "example.pdf")
+class MintedNameTests(unittest.TestCase):
+    def test_a_minted_name_is_a_storage_key(self):
+        for original in ("paper.pdf", "../../etc/passwd", "C:evil.pdf", "", "a" * 400 + ".pdf", "é" * 300):
+            with self.subTest(original=original[:20]):
+                name = mint_managed_pdf_filename(original)
+                self.assertEqual(StorageKey(NAMESPACE_ASSET_OBJECTS, name).name, name)
+                self.assertTrue(name.endswith(".pdf"))
+                self.assertLessEqual(len(name.encode("utf-8")), 255)
 
-    def test_managed_pdf_filename_rejects_noncanonical(self):
-        rejected = (
-            "/api/pdfs/../example.pdf",
-            "/api/pdfs/sub/example.pdf",
-            "/api/pdfs/foo%2Fexample.pdf",
-            "/api/pdfs/foo%5Cexample.pdf",
-            "/api/pdfs/..",
-            "/api/pdfs/%2e%2e",
-            " /api/pdfs/victim.pdf ",
-            "/api/pdfs/bad\x00name.pdf",
-            # urlparse strips these before the HTTP PDF route sees the path.
-            "/api/pdfs/example.pdf?x",
-            "/api/pdfs/example.pdf;bar",
-            "/api/pdfs/example.pdf#frag",
-            "/api/pdfs/foo.pdf?x=1#y",
-        )
-        for path in rejected:
-            with self.subTest(path=path):
-                self.assertIsNone(managed_pdf_filename(path))
+    def test_two_mints_of_one_name_differ(self):
+        self.assertNotEqual(mint_managed_pdf_filename("same.pdf"), mint_managed_pdf_filename("same.pdf"))
 
-    def test_owned_managed_pdf_basename_keeps_legacy_delimiters(self):
-        """Physical cleanup ownership still names delimiter-bearing basenames."""
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf?x"),
-            "legacy.pdf?x",
-        )
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf;bar"),
-            "legacy.pdf;bar",
-        )
-        self.assertEqual(
-            owned_managed_pdf_basename("/api/pdfs/legacy.pdf#frag"),
-            "legacy.pdf#frag",
-        )
-        # Route-addressable rules still refuse the same spellings.
-        self.assertIsNone(managed_pdf_filename("/api/pdfs/legacy.pdf?x"))
-        # Traversal / encoding still refused for physical ownership too.
-        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/../x.pdf"))
-        self.assertIsNone(owned_managed_pdf_basename("/api/pdfs/foo%2Fx.pdf"))
+    def test_a_re_prefixed_name_stays_bounded(self):
+        name = mint_managed_pdf_filename("x" * 250)
+        self.assertLessEqual(len(bound_managed_pdf_basename("1700000000_W-1_", name).encode("utf-8")), 255)
 
-    def test_referenced_managed_pdf_filename_pins(self):
-        pinned = (
-            ("/api/pdfs/victim.pdf", "victim.pdf"),
-            ("/api/pdfs/subdir/victim.pdf", "victim.pdf"),
-            ("/api/pdfs/../victim.pdf", "victim.pdf"),
-            ("/api/pdfs/foo%2Fvictim.pdf", "victim.pdf"),
-            (" /api/pdfs/victim.pdf ", "victim.pdf"),
-            ("\t/api/pdfs/victim.pdf\n", "victim.pdf"),
-            # Serving identity: urlparse strips delimiters like the PDF route.
-            ("/api/pdfs/victim.pdf?q", "victim.pdf"),
-            ("/api/pdfs/victim.pdf;bar", "victim.pdf"),
-            ("/api/pdfs/victim.pdf#frag", "victim.pdf"),
-        )
-        for path, expected in pinned:
-            with self.subTest(path=path):
-                self.assertEqual(referenced_managed_pdf_filename(path), expected)
 
-    def test_row_references_protects_serving_and_physical_identities(self):
-        # Surviving delimiter spelling protects the stem the route would serve.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
-        )
-        # Physical legacy ownership protects the on-disk delimiter basename.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/legacy.pdf?x", "legacy.pdf?x")
-        )
-        self.assertFalse(
-            row_references_managed_pdf("/api/pdfs/other.pdf", "x.pdf")
-        )
-        # Weak aliases fail-closed-block but are not strong ownership.
-        self.assertTrue(
-            row_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
-        )
-        self.assertFalse(
-            row_strongly_references_managed_pdf("/api/pdfs/foo%2Fx.pdf", "x.pdf")
-        )
-        self.assertTrue(
-            row_strongly_references_managed_pdf("/api/pdfs/x.pdf?q", "x.pdf")
-        )
+class ContentUrlTests(unittest.TestCase):
+    def test_the_url_names_the_asset_and_versions_the_bytes(self):
+        url = asset_content_url(_ASSET, _SHA)
+        self.assertEqual(url, f"/api/assets/{_ASSET}/content?v={_SHA[:16]}")
+        self.assertEqual(asset_id_from_url(url), _ASSET)
+        self.assertEqual(asset_id_from_url(asset_content_url(_ASSET, None)), _ASSET)
 
-    def test_managed_basenames_protected_by_lists_physical_and_serving(self):
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf"),
-            ("foo.pdf",),
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf?x"),
-            ("foo.pdf?x", "foo.pdf"),
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo.pdf;bar"),
-            ("foo.pdf;bar", "foo.pdf"),
-        )
-        # Weak aliases are never positive deletion authority.
-        self.assertEqual(managed_basenames_protected_by("/api/pdfs/../x.pdf"), ())
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/subdir/x.pdf"), ()
-        )
-        self.assertEqual(
-            managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"), ()
-        )
-
-    def test_managed_pdf_key_names_one_asset_object(self):
-        key = managed_pdf_key("keep.pdf")
-        self.assertEqual((key.namespace, key.name) if key else None, (NAMESPACE_ASSET_OBJECTS, "keep.pdf"))
-        decoded = managed_pdf_key("a%20b.pdf")
-        self.assertEqual(decoded.name if decoded else None, "a b.pdf")
-
-    def test_managed_pdf_key_refuses_path_shaped_input(self):
-        for unsafe in (
-            "",
-            "..",
-            "%2e%2e",
-            "../keep.pdf",
-            "%2e%2e%2fkeep.pdf",
-            "nested/keep.pdf",
-            "nested%2Fkeep.pdf",
-            r"nested\\keep.pdf",
-            "bad\x00name.pdf",
-            "bad%00name.pdf",
-            " victim.pdf",
-            "victim.pdf ",
-            "%20victim.pdf",
-            ".prks-write-x.tmp",
-        ):
-            with self.subTest(unsafe=unsafe):
-                self.assertIsNone(managed_pdf_key(unsafe))
+    def test_other_spellings_name_no_asset(self):
+        for url in ("", None, "/api/pdfs/paper.pdf", f"/api/assets/{_ASSET}", f"/api/assets/{_ASSET}/content/",
+                    f"/api/assets/{_ASSET}/content?v=XYZ", f"/api/assets/{_ASSET}/content?w=ab",
+                    "/api/assets/W-1/content", f"/api/assets/{_ASSET}%2F..%2Fx/content",
+                    f"https://example.org/api/assets/{_ASSET}/content"):
+            with self.subTest(url=url):
+                self.assertIsNone(asset_id_from_url(url))
 
 
 if __name__ == "__main__":

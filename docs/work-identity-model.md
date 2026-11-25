@@ -917,7 +917,7 @@ the Asset side of that seam.
 | `origin_work_id` | The legacy Work whose row this Asset was backfilled or mirrored from. It is immutable, and it maps legacy Work-keyed operations (§11.2, §14.2). NULL for Assets created by new commands. |
 | `kind` | `managed_file` \| `external_stream` (D8: no `external_link`). |
 | `role` | `document` \| `snapshot` \| `readable_text` \| `attachment` \| `other`. It describes what the content is for the user. PRKS's own materialized export is **not** a role (D3, §9.4). |
-| `storage_locator` | For `managed_file`: the managed **basename** of the **working bytes**, the bytes PRKS serves and may rewrite (linearization, annotation materialization). **Never an absolute path**, the same reasoning as `pending_pdf_cleanup`. The legacy `/api/pdfs/<basename>` form stays in the Work projection. |
+| `storage_locator` | For `managed_file`: the managed **basename** of the **working bytes**, the bytes PRKS serves and may rewrite (linearization, annotation materialization). **Never an absolute path**, the same reasoning as `pending_pdf_cleanup`. The Work projection serves it as `/api/assets/<AS-id>/content?v=<hash>` (#1427); the basename never leaves the backend. |
 | `source_locator` | Optional managed basename of the **pristine source bytes**, exactly as ingested and never rewritten. NULL when no original is preserved, which is true of every legacy Asset. |
 | `provider`, `provider_id`, `url` | For `external_stream`. The `SET_WORK_SOURCE` aggregate moves here unchanged (I3). |
 | `media_type` | `application/pdf`, `text/html`, `video/*` hint, … |
@@ -1549,7 +1549,7 @@ PATCH/DELETE /api/manifestations/:id
 POST /api/manifestations/:id/assets           add a File (online; binary)
 PATCH/DELETE /api/assets/:id
 POST /api/works/:id/primary-manifestation     set primary
-GET  /api/assets/:id/content                  serves bytes (the /api/pdfs route stays)
+GET  /api/assets/:id/content                  serves bytes (the /api/pdfs route is gone, #1427)
 ```
 
 Nothing here is implemented in this PR.

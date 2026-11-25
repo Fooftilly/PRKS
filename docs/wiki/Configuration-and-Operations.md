@@ -120,7 +120,7 @@ Logs may include:
 
 - event names
 - request IDs
-- safe endpoint templates (`/api/search`, `/api/pdfs/:pdf`, `/api/works/:id`)
+- safe endpoint templates (`/api/search`, `/api/assets/:id/content`, `/api/works/:id`)
 - HTTP status
 - internal opaque IDs (`work_id`, `processing_file_id`)
 - counts, page numbers, byte ranges, file sizes

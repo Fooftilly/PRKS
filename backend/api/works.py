@@ -8,8 +8,8 @@ from an upload, an existing managed PDF, a video URL or no file),
 (with ETags), ``GET /api/recent``, ``GET /api/recently-added`` and
 ``GET /api/bibtex/:id``; ``PATCH`` and ``DELETE /api/works/:id``,
 ``POST /api/works/bulk``, ``POST /api/citations`` and
-``POST /api/works/:id/opened``. :func:`thumbnail_fields` and
-:func:`holds_managed_pdf` serve the thumbnail, PDF and Folder routes.
+``POST /api/works/:id/opened``. :func:`thumbnail_fields` serves the
+thumbnail route.
 
 The calls go to ``backend/domain/works/work_commands`` for the admitted
 request's context on the served Library's database, so authorization stays
@@ -34,6 +34,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
+from backend.domain.objects.content_url import asset_id_from_url
 from backend.domain.works import source_rules
 from backend.api.common import objects, revalidated, text_field
 from backend.domain.people.errors import MissingPersonError
@@ -56,13 +57,6 @@ def thumbnail_fields(req: Request, work_id: str) -> Optional[dict[str, Any]]:
     from backend.domain.works import work_commands
 
     return work_commands.thumbnail_fields(*req.actor, work_id)
-
-
-def holds_managed_pdf(req: Request, name: str) -> bool:
-    """Whether the acting Library names the managed PDF ``name`` (the data root is shared)."""
-    from backend.domain.works import work_commands
-
-    return work_commands.holds_managed_pdf(*req.actor, name)
 
 
 # -- reads --------------------------------------------------------------------------
@@ -186,7 +180,7 @@ def fetch_youtube_oembed(url: str) -> Optional[dict[str, Any]]:
 
 
 def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]], fields: dict[str, Any]) -> str:
-    """Create a Work from an upload, an existing managed PDF, a stream or no file; its id.
+    """Create a Work from an upload, another Asset's managed PDF, a stream or no file; its id.
 
     ``fields`` are the create's other fields (``work_commands.NEW_WORK_DEFAULTS``).
     No adoption lock: the command checks an existing file for an actor who
@@ -212,10 +206,17 @@ def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]],
             out.write(data)
 
         writing = (name, write)
-    # An upload is the Work's file: a path echoed beside it is not read.
-    stored_path = "" if upload is not None else file_path
+    # An upload is the Work's file: a content URL echoed beside it is not read.
+    stored_key = ""
+    if upload is None and file_path:
+        # Adopting a file is sharing the bytes of an Asset of this Library,
+        # named by its content URL (#1427); nothing else names a file.
+        asset_id = asset_id_from_url(file_path)
+        stored_key = (work_commands.asset_object(*req.actor, asset_id) if asset_id else None) or ""
+        if not stored_key:
+            raise ValueError("file_path is not a managed PDF")
     return work_commands.create(*req.actor, objects(req),
-                                work_commands.new_work_fields(file_path=stored_path, **fields), writing)
+                                work_commands.new_work_fields(stored_key=stored_key, **fields), writing)
 
 
 def create(req: Request) -> Response:

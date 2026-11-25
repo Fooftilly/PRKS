@@ -39,6 +39,7 @@ from backend.sync import protocol
 from backend.sync.families import Environment
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from backend.domain.works import work_commands
+from tests.narrowing import require
 from tests import works_fixtures
 
 DAY = 24 * 60 * 60
@@ -483,8 +484,9 @@ class SyncDeleteReplayTests(ObjectsTestCase):
     def test_a_replay_after_a_failed_cleanup_records_no_second_claim(self) -> None:
         obj = self.put()
         work_id = self.work_with(obj)
+        url = require(work_commands.detail(self.db, self.ctx, work_id))["file_path"]
         first = self.delete(work_id)
-        self.assertEqual((first["changed"], first["file_path"]), (True, f"/api/pdfs/{obj.key.name}"))
+        self.assertEqual((first["changed"], first["file_path"]), (True, url))
         self.assertEqual([row["name"] for row in self.claim_rows()], [obj.key.name])
         enqueued = self.cleanup_jobs()
 

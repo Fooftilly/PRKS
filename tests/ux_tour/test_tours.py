@@ -319,7 +319,7 @@ class WorkspaceTourTest(_UXTour):
 
             def _work_or_pdf_fetch_count():
                 """Both GET families a warm resume must never repeat: the Work JSON itself
-                (`GET /api/works/:id`) and its PDF bytes (`/api/pdfs/`). Sub-resources under
+                (`GET /api/works/:id`) and its PDF bytes (`/api/assets/:id/content`). Sub-resources under
                 `/api/works/:id/...` (metadata-state, notes-state, tag-options) are panel
                 hydration and are allowed when focus moves between already-mounted panes.
                 """
@@ -327,7 +327,7 @@ class WorkspaceTourTest(_UXTour):
                 count = 0
                 for url in names:
                     path = urlparse(url).path
-                    if path.startswith("/api/pdfs/"):
+                    if path.startswith("/api/assets/") and path.endswith("/content"):
                         count += 1
                         continue
                     parts = [p for p in path.split("/") if p]

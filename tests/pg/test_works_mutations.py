@@ -20,7 +20,7 @@ from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, metadata, notes, revisions, source
 from tests import acting_context as facade_context
-from tests.pg.test_works_facade import WorksAnswerTestCase, WorksFacadeTestCase
+from tests.pg.test_works_facade import _PDF_BYTES, WorksAnswerTestCase, WorksFacadeTestCase
 from tests.narrowing import require
 from backend.domain.works import work_commands
 from tests import works_fixtures
@@ -400,6 +400,7 @@ class DeleteTests(MutationTestCase):
     def test_a_shared_file_stays_referenced_only_within_the_library(self) -> None:
         path = self.store_pdf("shared.pdf", b"%PDF-1.4\n")
         first = works_fixtures.add_work(self.db, self.ctx, self.storage, "First", file_path=path)
+        url = require(work_commands.detail(self.db, self.ctx, first))["file_path"]
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", file_path=self.store_pdf("theirs.pdf", b"%PDF-1.4\n"))
@@ -408,7 +409,7 @@ class DeleteTests(MutationTestCase):
         self.sql("UPDATE prks.assets SET storage_locator = 'shared.pdf' WHERE work_id = %s", (theirs,))
         deleted = work_commands.delete(self.db, self.ctx, first)
         assert deleted is not None
-        self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), (path, False))
+        self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), (url, False))
         with facade_context.acting_as(other.context):
             self.assertIsNotNone(work_commands.detail(self.db, self.ctx, theirs))
 
@@ -531,12 +532,12 @@ class AnswerTests(WorksAnswerTestCase):
         work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b"})
         self.answer(work_commands.detail(self.db, self.ctx, work_id), {
             "thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b",
-            "file_path": "/api/pdfs/a.pdf", "source_kind": "pdf"})
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "source_kind": "pdf"})
         self.answer(self.state(work_id), (
             _state("<W pdf>", source_url={"revision": 1}, thumb_page={"revision": 1, "value": "4"}),
             _notes("<W pdf>")))
         self.answer(work_commands.thumbnail_fields(self.db, self.ctx, work_id), {
-            "file_path": "/api/pdfs/a.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 4})
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "primary_asset_id": "<AS pdf>", "thumb_page": 4})
         # The same page as text is no change.
         work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": "4"})
         self.answer(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["thumb_page"],
@@ -606,9 +607,9 @@ class AnswerTests(WorksAnswerTestCase):
         first = self.add_pdf("first", "shared.pdf", title="First")
         second = self.add("second", title="Second", file_path="/api/pdfs/shared.pdf")
         self.answer(require(work_commands.delete(self.db, self.ctx, first)).__dict__, {
-            "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": True, "work_id": "<W first>"})
+            "file_path": works_fixtures.content_url("<AS first>", _PDF_BYTES), "managed_pdf_still_referenced": True, "work_id": "<W first>"})
         self.answer(work_commands.detail(self.db, self.ctx, second), {
-            "file_path": "/api/pdfs/shared.pdf", "file_size_bytes": 32, "asset_count": 1,
+            "file_path": works_fixtures.content_url("<AS second>", _PDF_BYTES), "file_size_bytes": 32, "asset_count": 1,
             "primary_asset_id": "<AS second>", "source_kind": "pdf"})
         self.answer(require(work_commands.delete(self.db, self.ctx, second, claim_pdf=False)).__dict__, {
-            "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": False, "work_id": "<W second>"})
+            "file_path": works_fixtures.content_url("<AS second>", _PDF_BYTES), "managed_pdf_still_referenced": False, "work_id": "<W second>"})

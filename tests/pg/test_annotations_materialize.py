@@ -137,7 +137,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual((after["content_sha256"], after["byte_size"], after["canonical"], after["materialized"]),
                          (digest, len(RENDERED), canonical, canonical))
         self.assertEqual(self.read(after["storage_locator"]), RENDERED)
-        self.assertEqual(done, {"work_id": work_id, "file_path": "/api/pdfs/" + after["storage_locator"],
+        self.assertEqual(done, {"work_id": work_id, "file_path": works_fixtures.content_url(after["id"], RENDERED),
                                 "content_sha256": digest, "byte_size": len(RENDERED),
                                 "export_sha256": digest, "export_byte_size": len(RENDERED),
                                 "materialized_pdf_annotation_revision": canonical,
@@ -283,8 +283,8 @@ class ConcurrencyTests(MaterializeTestCase):
             for n in range(4)
         ])
         named = self.asset(work_id)["storage_locator"]
-        self.assertIn("/api/pdfs/" + named, [result["file_path"] for result in results])
-        written = {result["file_path"][len("/api/pdfs/"):] for result in results}
+        self.assertIn(self.asset(work_id)["content_sha256"], [result["content_sha256"] for result in results])
+        written = self.names() - {old}
         self.assertEqual(len(written), 4)
         # Every other write, and the old object, is claimed; only the named one survives settle.
         self.assertEqual(self.claims(), (written - {named}) | {old})
@@ -566,7 +566,7 @@ class RestartTests(MaterializeTestCase):
         self.assertEqual((status["canonical_annotation_set_revision"], status["materialized_pdf_annotation_revision"],
                           status["stale"]), (canonical + 1, canonical, True))
         self.assertEqual(require(work_commands.detail(library.database, current_context(), work_id))["file_path"], done["file_path"])
-        self.assertEqual(self.read(done["file_path"][len("/api/pdfs/"):]), RENDERED)
+        self.assertEqual(self.read(self.asset(work_id)["storage_locator"]), RENDERED)
         self.assertEqual(self.claims(), {"p.pdf"})
         annotation_commands.materialize_pdf(library.database, current_context(), works_fixtures.objects(library.storage), work_id, writing(RENDERED + b"later"), canonical + 1)
         self.assertEqual(works_fixtures.mark_materialized_if_claim_current(library.database, current_context(), library.storage, work_id, canonical + 1), canonical + 1)

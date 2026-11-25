@@ -28,9 +28,7 @@ PDF = b"%PDF-1.4\n%%EOF\n"
 class UploadTests(ServerApiTestCase):
     def upload(self, title: str, file_name: str, body: bytes = PDF) -> str:
         created = self.create_work(title, file_name=file_name, file_b64=base64.b64encode(body).decode("ascii"))
-        path = self.ok(self.get(f"/api/works/{created['id']}"))["file_path"]
-        self.assertTrue(path.startswith("/api/pdfs/"), path)
-        return path[len("/api/pdfs/"):]
+        return self.stored_name(self.ok(self.get(f"/api/works/{created['id']}"))["file_path"])
 
     def stored(self, name: str) -> bytes:
         assert self.storage is not None
@@ -55,10 +53,10 @@ class UploadTests(ServerApiTestCase):
 
     def test_an_upload_wins_over_a_path_sent_beside_it(self) -> None:
         old = self.upload("Old Upload", "old.pdf", b"%PDF-1.4\n%% OLD-CONTENT\n%%EOF\n")
-        created = self.create_work("New Upload", file_path=f"/api/pdfs/{old}", file_name="new.pdf",
+        old_url = self.ok(self.get("/api/works"))[0]["file_path"]
+        created = self.create_work("New Upload", file_path=old_url, file_name="new.pdf",
                                    file_b64=base64.b64encode(b"%PDF-1.4\n%% NEW-CONTENT\n%%EOF\n").decode("ascii"))
-        path = self.ok(self.get(f"/api/works/{created['id']}"))["file_path"]
-        name = path[len("/api/pdfs/"):]
+        name = self.stored_name(self.ok(self.get(f"/api/works/{created['id']}"))["file_path"])
         self.assertNotEqual(name, old)
         self.assertIn(b"NEW-CONTENT", self.stored(name))
         self.assertIn(b"OLD-CONTENT", self.stored(old))
