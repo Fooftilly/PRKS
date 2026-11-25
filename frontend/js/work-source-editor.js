@@ -183,6 +183,9 @@
                      * change rather than as a cancellation. */
                     state.observed = baseOf(op.server_result.current_revision,
                         root.prksWorkSourceConflictIdentity(op.server_result));
+                    /* The result names the server's video by identity and a
+                     * bounded preview only: no columns to show. */
+                    state.acknowledged = null;
                 }
             }
         } catch (_) {
@@ -250,8 +253,9 @@
          * An unproven Work is patched, then the whole base is re-read. */
         const plan = applySourceAck(ctx, ack, op, state.observed ? state.observed.revision : null);
         if (plan === 'superseded') return;
+        state.acknowledged = root.prksAcknowledgedWorkSource(ack);
         state.observed = baseOf(ack.server_revision,
-            root.prksWorkSourceIdentity(root.prksAcknowledgedWorkSource(ack)));
+            root.prksWorkSourceIdentity(state.acknowledged));
         /* Only the owner of the shared panel may write the panel, and only
          * inside it: this Work's acknowledgement must never be published into
          * whichever Work's editor happens to be on screen. */
@@ -328,6 +332,25 @@
      * identity was re-read from the tab's Work every time -- correct until a
      * resolution moved the server somewhere that Work had never been.
      */
+    /* The source this device means right now: its queued replacement, or
+     * with none queued the identity of the base. */
+    function currentIdentity(workId, state) {
+        const stub = { id: workId };
+        const view = root.prksEffectiveWorkSource(stub);
+        return view !== stub
+            ? root.prksWorkSourceIdentity(root.prksWorkSourceOf(view))
+            : state.observed.identity;
+    }
+
+    /* After a save the tab shows what the Work route would: the acknowledged
+     * columns with the queue over them. A save that cancelled a queued
+     * replacement otherwise left that replacement on screen. */
+    function showAcknowledgedWithQueue(ctx, state) {
+        const held = ctx.getEntity('work');
+        if (!state.acknowledged || !held || held.id !== state.workId) return;
+        ctx.setEntity('work', root.prksEffectiveWorkSource(Object.assign({}, held, state.acknowledged)));
+    }
+
     function baseOf(revision, identity) {
         return { revision, identity: identity || '' };
     }
@@ -392,6 +415,7 @@
                 return true;
             }
             const source = root.prksAcknowledgedWorkSource(stateResult.value);
+            state.acknowledged = source;
             const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(source));
             /* The tab shows the source its base belongs to. After "Use server"
              * the tab's copy is the source the user just decided AGAINST, and
@@ -535,9 +559,12 @@
                 if (error) error.textContent = message;
                 return;
             }
-            const work = ctx.getEntity('work');
-            const current = root.prksWorkSourceOf(root.prksEffectiveWorkSource(work));
-            if (root.prksWorkSourceIdentity(current) === root.prksWorkSourceIdentity(source)) {
+            /* Measured against the base and the queue, never against the
+             * tab's Work: that Work shows a queued replacement over the
+             * acknowledged columns, and a save that cancelled the
+             * replacement leaves it naming a video nothing will send. */
+            await root.prksRefreshPendingWorkSources();
+            if (currentIdentity(workId, state) === root.prksWorkSourceIdentity(source)) {
                 // The same video the user is already looking at, however it is
                 // spelled. Nothing to record. (Returning to the ACKNOWLEDGED
                 // video over a pending change is a different case and is the
@@ -561,8 +588,10 @@
                 identity: root.prksWorkSourceIdentity(source),
             }, state.observed);
             root.prksSync.changed();
+            await root.prksRefreshPendingWorkSources();
             if (!still()) return;
             if (!live(ctx, state)) return;
+            showAcknowledgedWithQueue(ctx, state);
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
             }
