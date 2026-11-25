@@ -256,6 +256,27 @@ async function failuresAndReplays() {
         assert.equal(await cache.getList('person-groups:index'), null,
             'with no membership projection to remember the ACK, the count is dropped, not patched');
     }
+    /* A replay after the catalogue was dropped: the chip takes its name from
+     * the Group detail, or is not written at all. */
+    for (const named of [true, false]) {
+        const { cache, offline } = setup();
+        const person = { id: 'P', name: 'Ada', groups: [] };
+        await cache.putList('people:index', [{ ...person }], '');
+        await cache.putEntity('person', 'P', { ...person });
+        if (named) await cache.putEntity('person-group', 'G', { id: 'G', name: 'Group', members: [], member_count: 0 });
+        await later();
+        const op = createdNow();
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+        if (named) {
+            assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Group' }],
+                'the chip is named from the Group detail');
+            assert.deepEqual((await cache.getList('people:index')).value[0].groups, [{ id: 'G', name: 'Group' }]);
+        } else {
+            assert.equal(await cache.getEntity('person', 'P'), null, 'no blank chip: the Person is dropped');
+            assert.equal(await cache.getList('people:index'), null, 'and so is the People index');
+        }
+    }
 }
 
 async function main() {
