@@ -130,6 +130,14 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.reconnect(page, context); self.pending(page, 0)
         db = library_for(server)
         self.assertEqual([t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a']))], [server.ids['tag']], self.tag_ledger(server))
+        # An ACK that cannot prove the cached Work drops it and re-reads it;
+        # going offline before that read lands would test the race, not sync.
+        wait_for_async(page,
+            """([id, added, removed]) => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!(row && row.value && Array.isArray(row.value.tags) &&
+                    row.value.tags.some(t => t.id === added) &&
+                    !row.value.tags.some(t => t.id === removed)))""",
+            arg=[server.ids['work_a'], server.ids['tag'], server.ids['assigned']], timeout=8000, message="the synced Work was never cached")
         self.offline(page, context); page.reload()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
