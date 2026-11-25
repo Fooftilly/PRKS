@@ -22,6 +22,8 @@ from backend.domain.works import work_commands
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from backend.domain.organization import folder_commands
 from tests.acting_context import current_context
+from backend.domain.identity.library_scope import library_query
+from backend.domain.people import roles
 
 
 class RequestIdTests(ServerApiTestCase):
@@ -243,16 +245,16 @@ class InitialRoleTests(ServerApiTestCase):
             {"person_id": a, "role_type": "not-a-role"},
         ])
         with self.acting():
-            roles = self.facade.get_work_roles(work["id"])
-        self.assertEqual([(r["id"], r["role_type"]) for r in roles], [(a, "Author"), (b, "Author")])
-        self.assertEqual(roles[0]["credit_name"], "O. First")
+            stored = library_query(self.facade.database, current_context(), lambda scope: roles.work_roles(scope, work["id"]))
+        self.assertEqual([(r["id"], r["role_type"]) for r in stored], [(a, "Author"), (b, "Author")])
+        self.assertEqual(stored[0]["credit_name"], "O. First")
         self.assertIn("O. First", self.ok(self.get(f"/api/persons/{a}")).get("aliases") or "")
 
     def test_roles_the_create_would_skip_do_not_block_it(self) -> None:
         work = self.create_work("Skipped Roles Work", roles=[
             {"person_id": "P-unknown-untyped"}, {"person_id": "P-unknown-bad-type", "role_type": "not-a-role"}])
         with self.acting():
-            self.assertEqual(self.facade.get_work_roles(work["id"]), [])
+            self.assertEqual(library_query(self.facade.database, current_context(), lambda scope: roles.work_roles(scope, work["id"])), [])
 
 
 class PersonRouteTests(ServerApiTestCase):

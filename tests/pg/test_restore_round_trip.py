@@ -31,6 +31,10 @@ from backend.domain.organization import tag_commands
 from backend.domain.saved_views import commands as saved_view_commands
 from backend.domain.settings import commands as settings_commands
 from tests.acting_context import current_context
+from backend.domain.people import group_commands
+from backend.domain.people import publisher_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 # Identity columns the restore renumbers from the live sequence (see the staging tests).
 _RENUMBERED = {"seq"}
@@ -71,14 +75,14 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.sql("INSERT INTO prks.sync_work_lifecycle (library_id, work_id, state) VALUES (%s, %s, 'deleted')",
                  (self.actor.library_id, gone))
         # People.
-        ada = lib.add_person("Ada", "Lovelace", image_url="https://example.org/ada.png")
+        ada = people_fixtures.add_person(lib.database, current_context(), "Ada", "Lovelace", image_url="https://example.org/ada.png")
         self.sql("INSERT INTO prks.person_aliases (library_id, person_id, position, alias) "
                  "VALUES (%s, %s, 0, 'A. Lovelace')", (self.actor.library_id, ada))
-        lib.add_role(ada, first, "Author")
-        group = lib.add_person_group_with_parent_options("Analysts")
-        lib.add_person_to_group(ada, group)
-        publisher = lib.add_publisher("Penguin")["id"]
-        lib.add_publisher_alias(publisher, "Penguin Books")
+        role_commands.add(lib.database, current_context(), ada, first, "Author")
+        group = group_commands.create(lib.database, current_context(), "Analysts")
+        group_commands.add_member(lib.database, current_context(), group, ada)
+        publisher = publisher_commands.create(lib.database, current_context(), "Penguin")["id"]
+        publisher_commands.add_alias(lib.database, current_context(), publisher, "Penguin Books")
         portrait = portraits.store(self.objects, image())
         self.edit_command(lambda scope: portraits.commit(scope, self.objects, ada, "https://example.org/ada.png",
                                                     portrait))
@@ -151,7 +155,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.library.delete_work_record(ids["second"])
         self.library.update_work_metadata(ids["first"], {"title": "Changed"})
         tag_commands.delete(self.db, self.ctx, ids["tag"])
-        self.library.add_person("Later", "Person")
+        people_fixtures.add_person(self.db, self.ctx, "Later", "Person")
         self.sql("DELETE FROM prks.library_settings")
         self.sql("DELETE FROM prks.citation_styles")
         self.sql("DELETE FROM prks.sync_operations")

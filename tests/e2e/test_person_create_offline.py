@@ -7,7 +7,6 @@ operations reach the server in an order that can succeed.
 import os
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, profile_e2e_phase, require_chromium, wait_for_async
@@ -91,7 +90,8 @@ class OfflinePersonCreateTests(unittest.TestCase):
         return library_for(server)
 
     def people(self, server):
-        return {(p['first_name'], p['last_name']) for p in self.db_for(server).get_all_persons()}
+        from backend.domain.people import person_commands
+        return {(p['first_name'], p['last_name']) for p in self.db_for(server).run(person_commands.catalog)}
 
     def link_as_author(self, page, work_title, person_display):
         # Nested diagnosis inside person_create_role_link. These timings
@@ -134,6 +134,9 @@ class OfflinePersonCreateTests(unittest.TestCase):
         may be built on it at once. The two operations must then arrive in an
         order the server can accept: the creation first.
         """
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.people import person_commands
+        from backend.domain.people import roles
         with profile_e2e_phase("person_create_setup"):
             server, page, context = self.start()
         with profile_e2e_phase("person_create_warm_work"):
@@ -183,8 +186,8 @@ class OfflinePersonCreateTests(unittest.TestCase):
 
         with profile_e2e_phase("person_create_server_verify"):
             self.assertIn(('Ada', 'Offline'), self.people(server))
-            roles = self.db_for(server).get_work_roles(work)
-            self.assertIn((person, 'Author'), {(r['id'], r['role_type']) for r in roles})
+            stored = self.db_for(server).run(library_query, lambda scope: roles.work_roles(scope, work))
+            self.assertIn((person, 'Author'), {(r['id'], r['role_type']) for r in stored})
 
         with profile_e2e_phase("person_create_final_reload"):
             # And no duplicate or rollback once everything is acknowledged.
@@ -193,7 +196,7 @@ class OfflinePersonCreateTests(unittest.TestCase):
             o._open_people_index(page)
             o._wait_content_contains(page, 'Ada Offline')
             self.assertEqual(
-                len([p for p in self.db_for(server).get_all_persons()
+                len([p for p in self.db_for(server).run(person_commands.catalog)
                      if p['last_name'] == 'Offline']), 1)
 
     def test_reconnecting_immediately_after_creation_synchronizes_it(self):
@@ -209,6 +212,8 @@ class OfflinePersonCreateTests(unittest.TestCase):
         """The picker's own create path. It was the last surface still posting
         directly, which meant the dependency it exists to produce was never
         formed."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.people import roles
         server, page, context = self.start()
         work = server.ids['work_a']
         o._open_work_from_home(page, WORK_A_TITLE)
@@ -247,4 +252,4 @@ class OfflinePersonCreateTests(unittest.TestCase):
         self.settled(page, 0)
         self.assertIn(('Quick', 'Created'), self.people(server))
         self.assertTrue(any(r['last_name'] == 'Created'
-                            for r in self.db_for(server).get_work_roles(work)))
+                            for r in self.db_for(server).run(library_query, lambda scope: roles.work_roles(scope, work))))

@@ -79,6 +79,8 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     it: on PostgreSQL the Work's create adopts the bytes as an immutable
     Asset, so they must be final by then.
     """
+    from backend.domain.people import role_commands
+    from tests import people_fixtures
     if not MINIMAL_PDF.is_file():
         raise RuntimeError("missing fixture PDF: %s" % MINIMAL_PDF)
     cfg = StorageConfig.for_testing(storage_root)
@@ -105,15 +107,8 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
         doc_type="article",
         status="Not Started",
     )
-    person_id = db.add_person(
-        first_name=PERSON_FIRST,
-        last_name=PERSON_LAST,
-        about="E2E fixture author used for People profile and graph focus.",
-        link_wikipedia="https://example.com/wiki/e2e-author",
-        birth_date="1903",
-        death_date="1969",
-    )
-    db.add_role(person_id, work_a, "Author")
+    person_id = people_fixtures.add_person(db.database, current_context(), PERSON_FIRST, PERSON_LAST, about="E2E fixture author used for People profile and graph focus.", link_wikipedia="https://example.com/wiki/e2e-author", birth_date="1903", death_date="1969")
+    role_commands.add(db.database, current_context(), person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
     db.save_work_notes(work_a, seed_notes)
@@ -145,11 +140,12 @@ def seed_work_people_library(storage_root: str) -> dict:
     test about one branch cannot pass because another happened to supply the
     same string.
     """
+    from tests import people_fixtures
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    jane = db.add_person(first_name="Jane", last_name="Doe")
-    ed = db.add_person(first_name="Ed", last_name="Smith")
+    jane = people_fixtures.add_person(db.database, current_context(), "Jane", "Doe")
+    ed = people_fixtures.add_person(db.database, current_context(), "Ed", "Smith")
 
     # No linked Author: `author_text` is what the credit shows today.
     people_work = db.add_work(
@@ -159,14 +155,14 @@ def seed_work_people_library(storage_root: str) -> dict:
     credited = db.add_work(
         title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
         file_path=_managed_pdf(cfg, "e2e-credited.pdf"))
-    db.insert_initial_role(credited, jane, "Author", order_index=0)
+    people_fixtures.insert_initial_role(db.database, current_context(), credited, jane, "Author", order_index=0)
     # An Author and an Editor with NO `author_text`, so removing the Author
     # must fall through to the Editor rather than to an empty credit.
     editor_work = db.add_work(
         title=PEOPLE_EDITOR_TITLE, doc_type="article",
         file_path=_managed_pdf(cfg, "e2e-editor.pdf"))
-    db.insert_initial_role(editor_work, jane, "Author", order_index=0)
-    db.insert_initial_role(editor_work, ed, "Editor", order_index=1)
+    people_fixtures.insert_initial_role(db.database, current_context(), editor_work, jane, "Author", order_index=0)
+    people_fixtures.insert_initial_role(db.database, current_context(), editor_work, ed, "Editor", order_index=1)
 
     ids.update({
         "jane": jane, "ed": ed, "people_work": people_work,
@@ -177,29 +173,19 @@ def seed_work_people_library(storage_root: str) -> dict:
 
 def seed_person_profile_draft_library(storage_root: str) -> dict:
     """Two independently editable Persons and four deterministic Groups."""
+    from backend.domain.people import group_commands
+    from tests import people_fixtures
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    person_a = db.add_person(
-        first_name="Ada",
-        last_name="Alpha",
-        aliases="A. Alpha",
-        about="Saved biography A",
-        birth_date="1972-03-12",
-    )
-    person_b = db.add_person(
-        first_name="Bea",
-        last_name="Beta",
-        aliases="B. Beta",
-        about="Saved biography B",
-        birth_date="1980",
-    )
-    group_alpha = db.add_person_group_with_parent_options("Group Alpha")
-    group_beta = db.add_person_group_with_parent_options("Group Beta")
-    group_gamma = db.add_person_group_with_parent_options("Group Gamma")
-    group_delta = db.add_person_group_with_parent_options("Group Delta")
-    db.add_person_to_group(person_a, group_alpha)
-    db.add_person_to_group(person_b, group_beta)
+    person_a = people_fixtures.add_person(db.database, current_context(), "Ada", "Alpha", aliases="A. Alpha", about="Saved biography A", birth_date="1972-03-12")
+    person_b = people_fixtures.add_person(db.database, current_context(), "Bea", "Beta", aliases="B. Beta", about="Saved biography B", birth_date="1980")
+    group_alpha = group_commands.create(db.database, current_context(), "Group Alpha")
+    group_beta = group_commands.create(db.database, current_context(), "Group Beta")
+    group_gamma = group_commands.create(db.database, current_context(), "Group Gamma")
+    group_delta = group_commands.create(db.database, current_context(), "Group Delta")
+    group_commands.add_member(db.database, current_context(), group_alpha, person_a)
+    group_commands.add_member(db.database, current_context(), group_beta, person_b)
     ids.update(
         {
             "person_a": person_a,
@@ -442,26 +428,25 @@ def seed_people_library(storage_root: str) -> dict:
     role so the People-vs-Arguments coherence boundary is observable; Person C is
     deliberately never opened so "cached index, uncached detail" is testable.
     """
+    from backend.domain.people import group_commands
+    from backend.domain.people import person_commands
+    from backend.domain.people import role_commands
+    from tests import people_fixtures
     ids = seed_arguments_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    db.update_person_profile(
-        ids["person"],
-        {
+    person_commands.update_profile(db.database, current_context(), ids["person"], {
             "about": PERSON_A_ABOUT,
             "aliases": PERSON_A_ALIASES,
             "birth_date": PERSON_A_BIRTH,
             "death_date": PERSON_A_DEATH,
             "link_wikipedia": "https://example.com/wiki/e2e-author",
-        },
-    )
-    group_id = db.add_person_group_with_parent_options(PERSON_GROUP_NAME)
-    db.add_person_to_group(ids["person"], group_id)
-    person_b = db.add_person(first_name=PERSON_B_FIRST, last_name=PERSON_B_LAST)
-    db.add_role(person_b, ids["work_b"], "Reviewer")
-    person_unvisited = db.add_person(
-        first_name=PERSON_UNVISITED_FIRST, last_name=PERSON_UNVISITED_LAST
-    )
+        })
+    group_id = group_commands.create(db.database, current_context(), PERSON_GROUP_NAME)
+    group_commands.add_member(db.database, current_context(), group_id, ids["person"])
+    person_b = people_fixtures.add_person(db.database, current_context(), PERSON_B_FIRST, PERSON_B_LAST)
+    role_commands.add(db.database, current_context(), person_b, ids["work_b"], "Reviewer")
+    person_unvisited = people_fixtures.add_person(db.database, current_context(), PERSON_UNVISITED_FIRST, PERSON_UNVISITED_LAST)
     ids.update(
         {
             "person_a": ids["person"],

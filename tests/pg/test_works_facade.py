@@ -67,7 +67,6 @@ class WorksFacadeTestCase(unittest.TestCase):
     def pdfs_dir(self) -> str:
         """Where this test's Library keeps its PDFs (a Folder or Playlist detail lists them)."""
         return self.storage.pdfs_dir
-
     def bind(self, ctx: RequestContext) -> None:
         self.addCleanup(facade_context.unbind, facade_context.bind(ctx))
 

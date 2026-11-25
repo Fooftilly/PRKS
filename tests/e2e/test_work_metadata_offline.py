@@ -4,7 +4,6 @@ import os
 import unittest
 from urllib.parse import quote
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PERSON_DISPLAY, WORK_A_TITLE, WORK_B_TITLE, seed_library
 from tests.e2e.harness import (
@@ -1202,11 +1201,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         """The fallback runs in the other direction too -- which is why the
         overlay has to happen BEFORE the credit is composed. Patching a
         rendered credit could never reveal a different person."""
+        from backend.domain.people import role_commands
         server, page, context = self.start()
         work, person = server.ids['work_b'], server.ids['person']
         db = self.db_for(server)
         db.update_work_metadata(work, {'author_text': 'Text Author'})
-        db.add_role(person, work, 'Editor')
+        db.run(role_commands.add, person, work, 'Editor')
         page.reload()
         page.wait_for_selector('#sidebar')
         self.warm_all_catalogs(page, work, status='Not Started', open_title=WORK_B_TITLE)

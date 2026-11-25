@@ -9,7 +9,9 @@ from tests.e2e.fixtures import StorageConfig, seed_people_library
 from tests.e2e.harness import (AppServer, open_app_page, require_chromium,
                                wait_for_async)
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 from tests.e2e.fixtures import open_library
+from tests.acting_context import current_context
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -27,14 +29,15 @@ def tearDownModule():
 
 
 def seed_groups(root):
+    from backend.domain.people import group_commands
     ids = seed_people_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    parent = db.add_person_group_with_parent_options('Parent Branch', description='Parent description')
+    parent = group_commands.create(db.database, current_context(), 'Parent Branch', None, None, 'Parent description')
     group = ids['person_group']
-    db.update_person_group(group, {'parent_id': parent, 'description': 'Group description'})
-    child = db.add_person_group_with_parent_options('Child Branch', parent_id=group, description='Child description')
-    unseen = db.add_person_group_with_parent_options('Unvisited Branch', parent_id=parent)
-    db.add_person_to_group(ids['person_unvisited'], group)
+    group_commands.update(db.database, current_context(), group, {'parent_id': parent, 'description': 'Group description'})
+    child = group_commands.create(db.database, current_context(), 'Child Branch', group, None, 'Child description')
+    unseen = group_commands.create(db.database, current_context(), 'Unvisited Branch', parent)
+    group_commands.add_member(db.database, current_context(), group, ids['person_unvisited'])
     ids.update(group_parent=parent, group_child=child, group_unvisited=unseen)
     return ids
 
@@ -138,10 +141,11 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.assertIn('Group not available offline', o._content_text(page))
 
     def test_empty_index_and_missing_cache_are_distinct(self):
+        from backend.domain.people import group_commands
         def empty(root):
             ids = seed_people_library(root)
             db = open_library(StorageConfig.for_testing(root))
-            db.delete_person_group(ids['person_group'])
+            group_commands.delete(db.database, current_context(), ids['person_group'])
             return ids
         server, page, context = self.start(empty)
         self.index(page)
@@ -418,6 +422,7 @@ class PersonGroupsOfflineTests(unittest.TestCase):
 
     def test_cancelling_unsent_parent_preserves_child_across_reconnect(self):
         """Offline parent cancellation must not orphan a child's dependency."""
+        from backend.domain.people import group_commands
         server, page, context = self.start()
         self.index(page)
         o._wait_list_cached(page, 'person-groups:index')
@@ -469,15 +474,15 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=50000, message='reparented Group operations did not drain')
         db = library_for(server)
-        saved = db.get_person_group(draft['child'])
-        self.assertIsNotNone(saved)
+        saved = require(db.run(group_commands.detail, draft['child']))
         self.assertEqual(saved['name'], 'Offline Kept Child')
         self.assertEqual(saved['description'], 'Must survive deletion')
         self.assertEqual(saved['parent_id'], draft['grandparent'])
-        self.assertIsNone(db.get_person_group(draft['parent']))
+        self.assertIsNone(db.run(group_commands.detail, draft['parent']))
 
     def test_cancelled_child_move_does_not_strand_parent_delete_on_reconnect(self):
         """The parent deletion survives a cancelled offline move and reload."""
+        from backend.domain.people import group_commands
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
@@ -520,12 +525,13 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=50000, message='parent deletion stalled after child move cancellation')
         db = library_for(server)
-        self.assertIsNone(db.get_person_group(ids['group_unvisited']))
-        self.assertEqual(db.get_person_group(ids['person_group'])['parent_id'],
+        self.assertIsNone(db.run(group_commands.detail, ids['group_unvisited']))
+        self.assertEqual(require(db.run(group_commands.detail, ids['person_group']))['parent_id'],
                          ids['group_parent'])
 
     def test_rejected_child_does_not_block_existing_parent_deletion(self):
         """A rejected child remains a conflict, but parent deletion can finish."""
+        from backend.domain.people import group_commands
         server, page, context = self.start()
         ids = server.ids
         self.index(page)
@@ -554,8 +560,8 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             arg=[draft['child'], draft['removal']], timeout=50000,
             message='rejected child kept parent deletion permanently pending')
         db = library_for(server)
-        self.assertIsNone(db.get_person_group(ids['group_unvisited']))
-        self.assertIsNone(db.get_person_group(draft['child']))
+        self.assertIsNone(db.run(group_commands.detail, ids['group_unvisited']))
+        self.assertIsNone(db.run(group_commands.detail, draft['child']))
 
     def test_a_delete_confirmed_after_a_disconnect_records_a_tombstone(self):
         """The connection can drop while the confirmation dialog is open. The

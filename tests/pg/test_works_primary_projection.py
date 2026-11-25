@@ -20,6 +20,9 @@ from tests.pg.test_search_refresh import SearchTestCase
 from tests.narrowing import require
 from backend.domain.organization import folder_commands
 from backend.domain.organization import playlist_commands
+from backend.domain.people import person_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -114,15 +117,15 @@ class PrimaryProjectionTests(SearchTestCase):
         self.stream(work_id, self.manifestation(work_id))
         folder_id = folder_commands.create(self.db, self.ctx, "Projection Folder")
         folder_commands.file_work(self.db, self.ctx, folder_id, work_id)
-        person_id = self.library.add_person("Ada", "Lovelace")
-        self.library.add_role(person_id, work_id, "Author")
+        person_id = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
+        role_commands.add(self.db, self.ctx, person_id, work_id, "Author")
         playlist_id = playlist_commands.create(self.db, self.ctx, "Projection Playlist")
         playlist_commands.add_item(self.db, self.ctx, playlist_id, work_id)
         self.library.mark_work_opened(work_id)
 
         expected = self.identity(require(self.library.get_work(work_id)))
         self.assertEqual((expected["manifestation_count"], expected["asset_count"]), (2, 2))
-        folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir), self.library.get_person(person_id),
+        folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir), person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir),
                                     playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
         assert folder is not None and person is not None and playlist is not None
         families = {
@@ -166,9 +169,9 @@ class PrimaryProjectionTests(SearchTestCase):
 
     def test_credits_of_a_manifestation_that_is_no_longer_primary_reach_no_reader(self) -> None:
         work_id = self.library.add_work("Credit Work")
-        ada = self.library.add_person("Ada", "Lovelace")
-        charles = self.library.add_person("Charles", "Babbage")
-        self.library.add_role(ada, work_id, "Author")  # Work scope: holds for every Manifestation
+        ada = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
+        charles = people_fixtures.add_person(self.db, self.ctx, "Charles", "Babbage")
+        role_commands.add(self.db, self.ctx, ada, work_id, "Author")  # Work scope: holds for every Manifestation
         origin = self.origin(work_id)
         mf = self.manifestation(work_id, title="Secondary Edition")
         self.credit(work_id, charles, "Editor", origin, 1)
@@ -182,7 +185,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertEqual((row["primary_author"], row.get("primary_editor")), ("Ada Lovelace", None))
         self.assertEqual([person["display_name"] for person in row["linked_people"]], ["Ada Lovelace"])
         self.assertNotIn("Babbage", row.get("linked_authors") or "")
-        charles_page, ada_page = self.library.get_person(charles), self.library.get_person(ada)
+        charles_page, ada_page = person_commands.detail(self.db, self.ctx, charles, self.pdfs_dir), person_commands.detail(self.db, self.ctx, ada, self.pdfs_dir)
         assert charles_page is not None and ada_page is not None
         self.assertNotIn(work_id, self.ids(charles_page["works"]))
         self.assertIn(work_id, self.ids(ada_page["works"]))
@@ -199,7 +202,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertEqual(credits(), {("Author", "Lovelace"), ("Translator", "Babbage")})
         self.assertEqual([person["role_type"] for person in self.browse_row(work_id)["linked_people"]],
                          ["Author", "Translator"])
-        charles_page = self.library.get_person(charles)
+        charles_page = person_commands.detail(self.db, self.ctx, charles, self.pdfs_dir)
         assert charles_page is not None
         self.assertEqual([(w["id"], w["role_type"]) for w in charles_page["works"]], [(work_id, "Translator")])
 

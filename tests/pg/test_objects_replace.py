@@ -31,10 +31,13 @@ from backend.domain.entity_ids import generate
 from backend.pdf.pdf_materialization import STALE_CODE
 from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
-from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
+from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, annotation
 from tests.pg.test_annotations_materialize import RENDERED, MaterializeTestCase, writing
 from tests.narrowing import require
+from backend.domain.identity.library_scope import library_query
+from backend.domain.people import roles
+from tests import people_fixtures
 
 NEW = b"%PDF-1.7\n% another document\n" + b"n" * 300 + b"\n%%EOF\n"
 LINEARIZED = b"%PDF-1.7\n/Linearized 1\n% qpdf output\n" + b"l" * 200 + b"\n%%EOF\n"
@@ -167,18 +170,18 @@ class SuccessTests(ReplaceTestCase):
         self.assertEqual(adopted["adopted"], ["ann-from-bytes"])
 
     def test_mentioned_people_are_linked(self) -> None:
-        person = self.library.add_person("Ada", "Lovelace")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         work_id = self.add_pdf_work()
         self.replace(work_id, NEW + b"\n% see [[Ada Lovelace]] and [[Nobody Known]]\n")
-        self.assertTrue(self.library.has_work_role(person, work_id, "Mentioned"))
+        self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, work_id, person, "Mentioned")))
         # Again: the role is not duplicated.
         self.replace(work_id, NEW + b"\n% [[Lovelace]]\n")
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.roles WHERE work_id = %s AND role_type = 'Mentioned'",
                                   (work_id,))[0]["n"], 1)
 
     def test_a_shared_surname_links_the_oldest_person_not_the_lowest_id(self) -> None:
-        first = self.library.add_person("Ada", "Smith")
-        second = self.library.add_person("Bob", "Smith")
+        first = people_fixtures.add_person(self.db, self.ctx, "Ada", "Smith")
+        second = people_fixtures.add_person(self.db, self.ctx, "Bob", "Smith")
         # Make the higher ID the older Person, so ID order would pick the other one.
         low_id, high_id = sorted((first, second))
         self.sql("UPDATE prks.persons SET created_at = now() - interval '1 day' WHERE id = %s",
@@ -186,11 +189,11 @@ class SuccessTests(ReplaceTestCase):
         self.sql("UPDATE prks.persons SET created_at = now() WHERE id = %s", (low_id,))
         work_id = self.add_pdf_work()
         self.replace(work_id, NEW + b"\n% [[Smith]]\n")
-        self.assertTrue(self.library.has_work_role(high_id, work_id, "Mentioned"))
-        self.assertFalse(self.library.has_work_role(low_id, work_id, "Mentioned"))
+        self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, work_id, high_id, "Mentioned")))
+        self.assertFalse(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, work_id, low_id, "Mentioned")))
 
     def test_mentions_are_scanned_in_bounded_reads(self) -> None:
-        person = self.library.add_person("Ada", "Lovelace")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         work_id = self.add_pdf_work()
         handles: list[BoundedReads] = []
         real = LocalFilesystemStorage.open_read
@@ -204,7 +207,7 @@ class SuccessTests(ReplaceTestCase):
         with mock.patch.object(replace, "READ_CHUNK", 7), \
                 mock.patch.object(LocalFilesystemStorage, "open_read", bounded):
             self.replace(work_id, data)
-        self.assertTrue(self.library.has_work_role(person, work_id, "Mentioned"))
+        self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, work_id, person, "Mentioned")))
         self.assertTrue(handles)
         self.assertGreater(len(handles[0].sizes), len(data) // 7)
 
@@ -214,11 +217,11 @@ class SuccessTests(ReplaceTestCase):
             self.assertEqual(replace.stored_labels(self.objects, key), ["Ada", "Bob", "Cy"])
 
     def test_a_materialization_links_mentioned_people_too(self) -> None:
-        person = self.library.add_person("Grace", "Hopper")
+        person = people_fixtures.add_person(self.db, self.ctx, "Grace", "Hopper")
         work_id = self.add_pdf_work()
         canonical = self.edited(work_id)
         self.materialize(work_id, canonical, RENDERED + b"\n% [[Grace Hopper]]\n")
-        self.assertTrue(self.library.has_work_role(person, work_id, "Mentioned"))
+        self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, work_id, person, "Mentioned")))
 
 
 class LinearizedTests(LinearizingTestCase):

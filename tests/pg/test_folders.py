@@ -29,6 +29,8 @@ from backend.web.etags import etag_for_representation
 from tests.narrowing import require
 from tests.pg.answers import AnswerAssertions
 from backend.domain.organization import tag_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class FolderTestCase(OrganizationTestCase):
@@ -718,9 +720,9 @@ class AnswerTests(AnswerAssertions, FolderTestCase):
         self.assertEqual(self.catalog(), [])  # hidden while empty
         talks = self.named("Talks")
         first, second = self.named_work("First"), self.named_work("Second")
-        person = self.library.add_person("", "Lee")
+        person = people_fixtures.add_person(self.db, self.ctx, "", "Lee")
         for work in (first, second):
-            self.library.add_role(person, work, "Author")
+            role_commands.add(self.db, self.ctx, person, work, "Author")
         folder_commands.move_work(db, ctx, first, uncategorized)
         folder_commands.move_work(db, ctx, second, talks)
         self.answer(self.catalog(), [self.row("<F Talks>", "Talks", work_count=1),

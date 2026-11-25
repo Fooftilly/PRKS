@@ -49,6 +49,10 @@ UX_PDF_NAME = "e2e-ux-tour.pdf"
 
 
 def seed_ux_tour_library(storage_root: str) -> dict:
+    from backend.domain.people import group_commands
+    from backend.domain.people import publisher_commands
+    from backend.domain.people import role_commands
+    from tests import people_fixtures
     from backend.domain.organization import folder_commands
     from backend.domain.organization import playlist_commands
     from backend.domain.organization import tag_commands
@@ -80,7 +84,7 @@ def seed_ux_tour_library(storage_root: str) -> dict:
         status="Completed",
         publisher=PUBLISHER_NAME,
     )
-    db.add_publisher(PUBLISHER_NAME)
+    publisher_commands.create(db.database, current_context(), PUBLISHER_NAME)
     work_d = db.add_work(title=WORK_D_TITLE, doc_type="article", status="Planned")
     ids["work_c"] = work_c
     ids["work_d"] = work_d
@@ -102,20 +106,16 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     ids["playlist"] = playlist_id
 
     # --- A second Person with a role, plus a second role for the first Person. ---
-    db.add_role(ids["person"], work_c, "Editor")
-    person2 = db.add_person(
-        first_name=PERSON2_FIRST,
-        last_name=PERSON2_LAST,
-        about="Second Person fixture for the UX tour.",
-    )
-    db.add_role(person2, ids["work_b"], "Author")
+    role_commands.add(db.database, current_context(), ids["person"], work_c, "Editor")
+    person2 = people_fixtures.add_person(db.database, current_context(), PERSON2_FIRST, PERSON2_LAST, about="Second Person fixture for the UX tour.")
+    role_commands.add(db.database, current_context(), person2, ids["work_b"], "Author")
     ids["person2"] = person2
 
     # --- Person Group with a subgroup and cross-group memberships. ---
-    group_parent = db.add_person_group_with_parent_options(GROUP_PARENT_NAME, description="Outer circle for the UX tour.")
-    group_child = db.add_person_group_with_parent_options(GROUP_CHILD_NAME, parent_id=group_parent, description="Inner circle.")
-    db.add_person_to_group(ids["person"], group_parent)
-    db.add_person_to_group(person2, group_child)
+    group_parent = group_commands.create(db.database, current_context(), GROUP_PARENT_NAME, None, None, "Outer circle for the UX tour.")
+    group_child = group_commands.create(db.database, current_context(), GROUP_CHILD_NAME, group_parent, None, "Inner circle.")
+    group_commands.add_member(db.database, current_context(), group_parent, ids["person"])
+    group_commands.add_member(db.database, current_context(), group_child, person2)
     ids["group_parent"] = group_parent
     ids["group_child"] = group_child
 

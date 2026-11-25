@@ -24,6 +24,8 @@ from backend.domain.research.research_graph import graph_node_id
 from backend.domain.research.research_graph import GraphTooLargeError
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_research_index import ResearchIndexTestCase
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class GraphReadTestCase(ResearchIndexTestCase):
@@ -256,10 +258,10 @@ class ProjectionTests(GraphReadTestCase):
 
     def test_people_are_optional_and_authors_only(self) -> None:
         n = self.network()
-        author = self.library.add_person("Max", "Horkheimer")
-        editor = self.library.add_person("Ed", "Itor")
-        self.library.add_role(author, n["work_x"], "Author")
-        self.library.add_role(editor, n["work_x"], "Editor")
+        author = people_fixtures.add_person(self.db, self.ctx, "Max", "Horkheimer")
+        editor = people_fixtures.add_person(self.db, self.ctx, "Ed", "Itor")
+        role_commands.add(self.db, self.ctx, author, n["work_x"], "Author")
+        role_commands.add(self.db, self.ctx, editor, n["work_x"], "Editor")
         off = self.graph(include_people=False)
         self.assertFalse(off["meta"]["people_included"])
         self.assertFalse(any(item["type"] == "person" for item in off["nodes"]))
@@ -271,14 +273,14 @@ class ProjectionTests(GraphReadTestCase):
                          (graph_node_id("person", author), graph_node_id("work", n["work_x"])))
 
     def test_a_person_and_a_position_of_one_id_are_two_nodes(self) -> None:
-        person = self.library.add_person("Ada", "Lovelace")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         position = self.position("Collision Position")
         self.sql("UPDATE prks.positions SET id = %s WHERE id = %s", (person, position))
         work = self.library.add_work("Linked")
         self.concept(PRIVATE_CONCEPT)
         self.research_note(work, "[[concept:%s]]" % PRIVATE_CONCEPT)
         self.run_jobs()
-        self.library.add_role(person, work, "Author")
+        role_commands.add(self.db, self.ctx, person, work, "Author")
         nodes = {node["id"]: node for node in self.graph(include_people=True)["nodes"]}
         for kind in ("person", "position"):
             node = nodes[kind + ":" + person]
@@ -367,8 +369,8 @@ class AnswerTests(AnswerAssertions, GraphReadTestCase):
         reply = name(self.library.create_argument(
             name="Reply", kind="stance", targets=[{"type": "argument", "id": claim, "verdict_id": "opposes"}])["id"],
             "<A Reply>")
-        adorno = name(self.library.add_person("Theodor", "Adorno"), "<PE Adorno>")
-        self.library.add_role(adorno, source, "Author")
+        adorno = name(people_fixtures.add_person(self.db, self.ctx, "Theodor", "Adorno"), "<PE Adorno>")
+        role_commands.add(self.db, self.ctx, adorno, source, "Author")
         self.research_note(source, "On [[concept:Theory]], [[concept:morals]] and [[concept:ETHICS]]; "
                                    f"see [[argument:{claim}|the claim]]. `[[concept:Code]]` is no reference.")
         self.research_note(commentary, f"Again [[concept:Ethics]], against [[argument:{reply}]]"

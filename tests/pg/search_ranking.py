@@ -34,6 +34,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, LiteralString
 
 from tests.pg.search_corpus import QUERIES, WORKS, JudgedQuery
+from backend.domain.people import role_commands
+from tests import people_fixtures
+from tests.acting_context import current_context
 
 BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "search_ranking_baseline.json")
 
@@ -55,8 +58,8 @@ def load(library: Any, sql: Callable[[LiteralString, dict[str, Any]], Any]) -> d
                                    author_text=work.author_text)
         for name in work.people:
             if name not in people:
-                people[name] = library.add_person(*name)
-            library.add_role(people[name], work_id, "Author")
+                people[name] = people_fixtures.add_person(library.database, current_context(), *name)
+            role_commands.add(library.database, current_context(), people[name], work_id, "Author")
         sql(_EDITED, {"minute": minute, "work_id": work_id})
         ids[work.key] = work_id
     return ids

@@ -42,6 +42,10 @@ from tests.pg.test_http_processing import ProcessingHttpTestCase
 from tests.pg.test_search_text import pdf_bytes
 from backend.domain.organization import tag_commands
 from tests.acting_context import current_context
+from tests import people_fixtures
+from backend.domain.people import person_commands
+from backend.storage.objects import LocalFilesystemStorage
+from tests.narrowing import require
 
 _API_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend", "api")
 
@@ -176,9 +180,9 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
                 "work": self.facade.add_work("Matrix Work", file_path=f"/api/pdfs/{name}"),
                 "pdf": name,
                 "tag": tag_commands.create(self.facade.database, current_context(), "Seeded tag")["id"],
-                "person": self.facade.add_person("Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),
+                "person": people_fixtures.add_person(self.facade.database, current_context(), "Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),
             }
-            cached = self.facade._cache_person_portrait(
+            cached = person_commands.cache_portrait(self.facade.database, current_context(), LocalFilesystemStorage.for_config(require(self.facade.storage)), 
                 self.ids["person"], lambda _url: PortraitImage(portrait.getvalue(), "jpeg"))
             assert cached is not None, "the portrait was not cached"
         self.cookies = cookie

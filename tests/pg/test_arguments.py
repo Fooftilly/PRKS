@@ -25,6 +25,8 @@ from backend.domain.research.rules import ResearchError
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_concepts import ConceptTestCase
 from tests.narrowing import require
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class ResearchTestCase(ConceptTestCase):
@@ -219,7 +221,7 @@ class CitationTests(ResearchTestCase):
         # and the primary Version's, never another Version's.
         work = self.library.add_work("W")
         other = self.add_manifestation(work)
-        ada, bea = self.library.add_person("Ada", "A"), self.library.add_person("Bea", "B")
+        ada, bea = people_fixtures.add_person(self.db, self.ctx, "Ada", "A"), people_fixtures.add_person(self.db, self.ctx, "Bea", "B")
         for order, (person, manifestation) in enumerate(((ada, self.primary(work)), (bea, other))):
             self.sql("INSERT INTO prks.roles (library_id, work_id, person_id, role_type, order_index,"
                      " manifestation_id) VALUES (%s, %s, %s, 'Author', %s, %s)",
@@ -668,8 +670,8 @@ class AnswerTests(AnswerAssertions, ResearchTestCase):
     def test_arguments_and_their_lists(self) -> None:
         one = self.named(self.library.add_work("One"), "<W One>")
         two = self.named(self.library.add_work("Two"), "<W Two>")
-        plato = self.named(self.library.add_person("", "Plato"), "<PE Plato>")
-        self.library.add_role(plato, one, "Author")
+        plato = self.named(people_fixtures.add_person(self.db, self.ctx, "", "Plato"), "<PE Plato>")
+        role_commands.add(self.db, self.ctx, plato, one, "Author")
         claim = self.named(self.position("Claim"), "<P Claim>")
         base = self.named(self.argument("Base", "stance"), "<A Base>")
         reply = self.named(self.argument("Reply", sources=[source(one, " 514a "), source(two)],

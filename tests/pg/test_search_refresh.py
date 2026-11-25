@@ -26,6 +26,8 @@ from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.search import refresh
 from backend.domain.works import commands
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class SearchTestCase(WorksFacadeTestCase):
@@ -169,8 +171,8 @@ class RefreshTests(SearchTestCase):
     def test_a_row_holds_the_displayed_metadata_people_and_research_note(self) -> None:
         work = self.library.add_work("Republic", abstract="On understatement", author_text="Plato, trans.",
                                      text_content="Notes on Trešnja", private_notes="secret plans")
-        person = self.library.add_person("Σωκράτης", "Athenaios", aliases="Socrates, Sokrat")
-        self.library.add_role(person, work, "Author")
+        person = people_fixtures.add_person(self.db, self.ctx, "Σωκράτης", "Athenaios", aliases="Socrates, Sokrat")
+        role_commands.add(self.db, self.ctx, person, work, "Author")
         self.assertEqual(self.refresh(work), [work])
         row = self.row(work)
         assert row is not None
@@ -225,10 +227,10 @@ class RefreshTests(SearchTestCase):
     def test_people_are_the_works_credits(self) -> None:
         work = self.library.add_work("Credits")
         other = self.library.add_work("Elsewhere")
-        credited = self.library.add_person("Ana", "Author")
-        uncredited = self.library.add_person("Uma", "Unlinked")
-        self.library.add_role(credited, work, "Translator")
-        self.library.add_role(uncredited, other, "Author")
+        credited = people_fixtures.add_person(self.db, self.ctx, "Ana", "Author")
+        uncredited = people_fixtures.add_person(self.db, self.ctx, "Uma", "Unlinked")
+        role_commands.add(self.db, self.ctx, credited, work, "Translator")
+        role_commands.add(self.db, self.ctx, uncredited, other, "Author")
         self.refresh(work)
         row = self.row(work)
         assert row is not None

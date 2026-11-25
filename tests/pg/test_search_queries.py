@@ -16,6 +16,9 @@ from backend.domain.search import queries
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_search_refresh import SearchTestCase
 from backend.domain.organization import tag_commands
+from backend.domain.people import publisher_commands
+from backend.domain.people import role_commands
+from tests import people_fixtures
 
 
 class SearchQueryTestCase(SearchTestCase):
@@ -109,8 +112,8 @@ class OrderTests(SearchQueryTestCase):
         # (1.0), a substring of a linked person (0.6), then two infix-only
         # matches (0.15), the more recently updated first.
         by_person = self.library.add_work("Fourth")
-        person = self.library.add_person("Malphan", "Quill")
-        self.library.add_role(person, by_person, "Author")
+        person = people_fixtures.add_person(self.db, self.ctx, "Malphan", "Quill")
+        role_commands.add(self.db, self.ctx, person, by_person, "Author")
         by_override = self.library.add_work("Second")
         self.sql("UPDATE prks.manifestations SET abstract = 'xalphax'"
                  " WHERE id = (SELECT primary_manifestation_id FROM prks.works WHERE id = %s)", (by_override,))
@@ -137,8 +140,8 @@ class OrderTests(SearchQueryTestCase):
     def test_each_token_scores_its_best_field(self) -> None:
         # Title and credited person together beat both tokens in a note.
         credited = self.library.add_work("Republic")
-        person = self.library.add_person("Aristocles", "Platonides")
-        self.library.add_role(person, credited, "Author")
+        person = people_fixtures.add_person(self.db, self.ctx, "Aristocles", "Platonides")
+        role_commands.add(self.db, self.ctx, person, credited, "Author")
         noted = self.library.add_work("Log", text_content="republic platonides")
         self.assertEqual(self.found("republic platonides"), [credited, noted])
 
@@ -160,8 +163,8 @@ class OrderTests(SearchQueryTestCase):
     def test_a_linked_person_outranks_an_abstract_mention(self) -> None:
         mention = self.library.add_work("Essays", abstract="Quillon is cited once")
         credited = self.library.add_work("Collected papers")
-        person = self.library.add_person("Ann", "Quillon")
-        self.library.add_role(person, credited, "Author")
+        person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Quillon")
+        role_commands.add(self.db, self.ctx, person, credited, "Author")
         self.assertEqual(self.found("quillon"), [credited, mention])
 
     def test_an_abstract_of_the_work_itself_is_an_infix_hit(self) -> None:
@@ -200,8 +203,8 @@ class OrderTests(SearchQueryTestCase):
 
 class PublisherRecordTests(SearchQueryTestCase):
     def test_a_matching_record_brings_in_every_label(self) -> None:
-        publisher = self.library.add_publisher("Oxford University Press")
-        self.library.add_publisher_alias(publisher["id"], "OUP")
+        publisher = publisher_commands.create(self.db, self.ctx, "Oxford University Press")
+        publisher_commands.add_alias(self.db, self.ctx, publisher["id"], "OUP")
         by_alias = self.library.add_work("Short", publisher="oup")
         by_name = self.library.add_work("Long", publisher="Oxford University Press")
         self.library.add_work("Other", publisher="Cambridge")
@@ -256,7 +259,7 @@ class AnswerTests(AnswerAssertions, SearchTestCase):
         return work_id
 
     def credit(self, work_id: str, first_name: str, last_name: str, aliases: str = "") -> None:
-        self.library.add_role(self.library.add_person(first_name, last_name, aliases=aliases), work_id, "Author")
+        role_commands.add(self.db, self.ctx, people_fixtures.add_person(self.db, self.ctx, first_name, last_name, aliases=aliases), work_id, "Author")
 
     def listed(self, rows: list[dict[str, Any]]) -> list[str]:
         return [self.labels.show(row["id"]) for row in rows]
@@ -315,8 +318,8 @@ class AnswerTests(AnswerAssertions, SearchTestCase):
         self.assertEqual(self.library.work_ids_matching_author("  "), [])
 
     def test_a_publisher_record_brings_in_its_names_and_aliases(self) -> None:
-        record = self.library.add_publisher("Oxford University Press")
-        self.library.add_publisher_alias(record["id"], "OUP")
+        record = publisher_commands.create(self.db, self.ctx, "Oxford University Press")
+        publisher_commands.add_alias(self.db, self.ctx, record["id"], "OUP")
         self.work("Short", publisher="oup")
         self.work("Long", publisher="Oxford University Press")
         self.work("Other", publisher="Cambridge")
