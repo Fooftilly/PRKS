@@ -314,6 +314,21 @@ async function conflictResolution() {
         { kind: 'video', url: SHORT('CCC'), identity: identity(SHORT('CCC')) }, serverBase), null);
     assert.equal((await store.listOperations()).filter(r => r.entity_id === 'W-2').length, 0);
 
+    /* A draft kept on an older revision is paired with the identity the
+     * editor last read (#1450 review). Typing the older video A back over a
+     * queued B, after the server moved to D, cancels B and queues A against
+     * the older revision: it conflicts with D instead of vanishing. */
+    await store.saveWorkSource('W-3',
+        { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+    const back = await store.saveWorkSource('W-3',
+        { kind: 'video', url: WATCH('AAA'), identity: identity(WATCH('AAA')) },
+        { identity: identity(WATCH('DDD')), revision: 0 });
+    assert(back, 'returning to the older video is queued, not cancelled');
+    assert.equal(back.payload.source.url, WATCH('AAA'));
+    assert.equal(back.base_revision, 0, 'against the revision the draft was typed over');
+    assert.equal((await store.listOperations()).filter(r => r.entity_id === 'W-3').length, 1);
+
     /* Codes that name no revision to overwrite are NOT reappliable: there is
      * nothing to apply against, and offering it would loop forever. */
     for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION']) {
