@@ -406,6 +406,9 @@ window.prksRefreshResearchNotesRecovery = function (ctx, workId) {
 window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
 window.prksResearchNotesAdoptBody = prksResearchNotesAdoptBody;
+/* work-notes-state.js writes a corrective body through it; named here, not
+ * left to classic-script globals. */
+window.prksResearchNotesApplyText = prksResearchNotesApplyText;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
 window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
