@@ -228,6 +228,16 @@
             String(draft.source_url) !== String(url == null ? '' : url);
     }
 
+    /* True when the draft's baseline is the source `identity` names: the
+     * draft was typed over that source, so its revision is the draft's base. */
+    function typedOver(ctx, state, identity) {
+        const ui = ctx && ctx.ui;
+        const baseline = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaBaseline;
+        if (!baseline || typeof root.prksCanonicalWorkSource !== 'function') return false;
+        const source = root.prksCanonicalWorkSource(baseline.source_url == null ? '' : String(baseline.source_url));
+        return !!source && root.prksWorkSourceIdentity(source) === identity;
+    }
+
     /* `resolved` is the user's explicit "Use server": that choice replaces an
      * unsaved draft, which otherwise stays after the field loses focus too. */
     function writeInput(ctx, state, url, resolved) {
@@ -235,8 +245,10 @@
         const typing = !!focused && typeof focused.matches === 'function' &&
             focused.matches('[data-prks-work-field="source_url"], #meta-video-url') &&
             focused.value !== String(url == null ? '' : url);
-        const unsaved = !resolved && unsavedSource(ctx, state, url);
-        if ((typing || unsaved) && owns(ctx, state)) return false;
+        if (typing && owns(ctx, state)) return false;
+        /* An unsaved draft is kept whether or not this pane shows it now: a
+         * hidden pane remounts the same draft when the user returns. */
+        if (!resolved && unsavedSource(ctx, state, url)) return false;
         if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
             typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
             root.prksVueWorkMetadataEditorOwns(ctx)) {
@@ -467,7 +479,7 @@
             if (adopt || differs) {
                 if (shown) ctx.setEntity('work', effective);
                 if (!writeInput(ctx, state, effective.source_url || '', !!(options && options.resolved))) {
-                    state.observed = adopt && state.observed ? baseOf(state.observed.revision, identity) : null;
+                    state.observed = state.observed ? baseOf(state.observed.revision, identity) : null;
                     return true;
                 }
             }
@@ -476,8 +488,8 @@
              * to the newer source while keeping that draft; taking the newer
              * revision here would let its Save replace a source the user
              * never saw instead of conflicting with it. */
-            if (!adopt && !(options && options.reopened) && state.observed &&
-                unsavedSource(ctx, state, effective.source_url || '')) {
+            if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '') &&
+                !typedOver(ctx, state, identityOf(effective))) {
                 return true;
             }
             state.observed = baseOf(stateResult.value.revision, identity);
@@ -491,13 +503,7 @@
     }
 
     async function prepare(ctx, state) {
-        /* A base kept for a draft belongs to the metadata session it was
-         * typed in. The first prepare of a new session (the editor reopened)
-         * starts from what it reads, whatever is typed meanwhile. */
-        const session = ctx.ui ? ctx.ui.workMetaEditSession : undefined;
-        const reopened = 'preparedSession' in state && state.preparedSession !== session;
-        state.preparedSession = session;
-        if (!(await readBase(ctx, state, { reopened }))) return;
+        if (!(await readBase(ctx, state))) return;
         await safePaint(ctx, state);
     }
 
