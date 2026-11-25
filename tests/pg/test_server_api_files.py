@@ -81,16 +81,18 @@ class ManagedPdfTests(ManagedPdfTestCase):
             whole = self.get(work["file_path"])
             part = self.get(work["file_path"], headers=[("Range", "bytes=2-6")])
             beyond = self.get(work["file_path"], headers=[("Range", f"bytes={len(data)}-")])
-            thumb = self.get(f"/api/works/{work['id']}/thumbnail?page=1")
             missing = self.get("/api/pdfs/not-stored.pdf")
+            served, reads[:] = list(reads), []
+            thumb = self.get(f"/api/works/{work['id']}/thumbnail?page=1")
         self.assertEqual((whole.status, whole.raw), (200, data))
         self.assertEqual((part.status, part.raw, part.header("Content-Range")), (206, data[2:7], [f"bytes 2-6/{len(data)}"]))
         self.assertEqual(beyond.status, 416)
         self.assertEqual(thumb.status, 200, thumb.raw[:300])
         self.assertEqual(missing.status, 404)
         name = work["file_path"].rsplit("/", 1)[1]
-        self.assertIn(f"open asset-objects/{name}", reads)
-        self.assertIn(f"stat asset-objects/{name}", reads)
+        self.assertIn(f"open asset-objects/{name}", served)
+        # The render itself reads through the backend: with no local path, a temporary copy.
+        self.assertEqual(reads, [f"stat asset-objects/{name}", f"open asset-objects/{name}"])
 
     def test_pdf_text_is_found_by_any_mode_only_once_extracted(self) -> None:
         term = "UniqPdfSearchTermAlpha"
