@@ -223,6 +223,21 @@ describe('SettingsExport BibTeX toggles', () => {
     wrapper.unmount()
   })
 
+  it('shows what PRKS holds after the last toggle patch fails', async () => {
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    win.prksPatchAppSettings = vi.fn(async () => { throw new Error('offline') }) as StyleWindow['prksPatchAppSettings']
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    expect(isOn(wrapper, 'url')).toBe(false)
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(isOn(wrapper, 'url')).toBe(true) // the failed toggle is not shown as saved
+    expect(bib.__prksBibtexExportFields?.url).toBe(true)
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
   it('waits for a pending toggle before restoring, and shows the restored defaults', async () => {
     const held = holdPatches()
     const wrapper = mount(SettingsExport)

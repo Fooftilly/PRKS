@@ -95,6 +95,19 @@ let inFlight = 0
 let queue: Promise<void> = Promise.resolve()
 /* Patches sent or queued whose answer has not come back. */
 const waiting: Array<Record<string, boolean>> = []
+/* What PRKS last answered. A failed patch leaves the cache holding the
+ * toggles it carried, so the switches and Copy BibTeX return to this. */
+let confirmed: Record<string, boolean> | null = null
+let failed = false
+
+function storedMap(): Record<string, boolean> | null {
+  const stored = window.__prksBibtexExportFields
+  return stored && typeof stored === 'object' ? { ...stored } : null
+}
+
+function idle(): boolean {
+  return !inFlight && !timer && !Object.keys(changed).length
+}
 
 /* Every write of the toggles -- a debounced patch or Restore defaults -- runs
  * after the one before it, so an older patch can never land after a newer
@@ -104,7 +117,10 @@ function send(patch: Record<string, boolean>): Promise<void> {
   inFlight += 1
   waiting.push(patch)
   const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
-    .then(() => undefined, (error: unknown) => {
+    .then(() => {
+      confirmed = storedMap()
+    }, (error: unknown) => {
+      failed = true
       console.warn(error)
     })
   queue = run
@@ -112,12 +128,20 @@ function send(patch: Record<string, boolean>): Promise<void> {
     inFlight -= 1
     waiting.splice(waiting.indexOf(patch), 1)
     const stored = window.__prksBibtexExportFields
-    if (inFlight || timer || Object.keys(changed).length) {
+    if (!idle()) {
       /* The answer is PRKS before our later toggles. Copy BibTeX reads this
        * cache, so it keeps the toggles the page shows until they are saved. */
       const ours = Object.assign({}, ...waiting, changed)
       window.prksSetBibtexExportFieldsCache?.({ ...(stored && typeof stored === 'object' ? stored : {}), ...ours })
       return
+    }
+    if (failed) {
+      failed = false
+      if (confirmed) {
+        window.prksSetBibtexExportFieldsCache?.(confirmed)
+        applyMap(confirmed)
+        return
+      }
     }
     if (stored && typeof stored === 'object') applyMap(stored)
   })
@@ -172,6 +196,7 @@ onMounted(async () => {
     style.value = libraryCitationStyle()
     styleSave.reset(style.value)
   }
+  if (!confirmed && !inFlight) confirmed = storedMap()
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
