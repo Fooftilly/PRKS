@@ -271,6 +271,33 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(queued[0].payload.value, "Talks");
         assert.equal(queued[0].base_revision, 3, "measured against the base the empty title was");
     }
+    /* A title and URL saved with surrounding spaces show trimmed: reopening
+     * Edit still pins them, keeping the raw pending text as the base. */
+    {
+        const store = newStore();
+        await store.savePlaylistFields(id, { title: "  Seminars  ", original_url: " https://example.org/x " }, read);
+        const state = { playlist_id: id, order_revision: 0, fields: Object.fromEntries(
+            globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name, { revision: name === "title" ? 3 : 0 }])) };
+        const previous = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async kind => (kind === "playlist-state"
+            ? { value: state, source: "server" }
+            : { value: { id, title: "Lectures", description: "", original_url: "" }, source: "server" });
+        const ops = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        const trimmed = { title: "Seminars", description: "", original_url: "https://example.org/x" };
+        const pinned = await globalThis.prksPinPlaylistEditBase(id, trimmed, ops);
+        globalThis.prksOfflineReadEntity = previous;
+        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "  Seminars  " },
+            "the trimmed title stands for the raw pending one");
+        assert.deepEqual(pinned.original_url, { value: "", revision: 0, pending: " https://example.org/x " },
+            "and the trimmed URL for its raw pending value");
+        const edits = core.pinnedEdits(trimmed, Object.assign({}, trimmed, { title: "Talks" }), pinned);
+        assert.deepEqual(edits.unknown || [], [], "a new title is not refused as changed elsewhere");
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const titles = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.payload.field === "title");
+        assert.equal(titles.length, 1, "the new title replaces the queued padded one");
+        assert.equal(titles[0].payload.value, "Talks");
+        assert.equal(titles[0].base_revision, 3);
+    }
 }
 
 /* ---- membership ---- */
