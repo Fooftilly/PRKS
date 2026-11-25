@@ -17,7 +17,7 @@ on:
       - tests/e2e/run.py
       - tests/e2e/policy.py
       - tests/test_e2e_classic_sw_transitions.py
-      - scripts/benchmark_classic_script_bundle.py
+      - scripts/classic_script_bundle.py
       - tests/test_classic_distribution.py
       - .github/workflows/e2e-classic-distribution-gate.yml
   workflow_dispatch:
