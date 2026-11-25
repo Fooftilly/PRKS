@@ -649,6 +649,26 @@ async function failedDeletions() {
     }
 }
 
+/* A reconcile that starts a new domain generation while a sweep for the old
+ * one is still deleting must not leave the domain blocked once it finishes. */
+async function sweepSurvivesReconcile() {
+    const { cache, offline } = setup();
+    await cache.putList('recent:index', [{ id: 'OLD' }], '');
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const deleteList = cache.deleteList.bind(cache);
+    cache.deleteList = async key => { await gate; return deleteList(key); };
+    offline.markDomainChanged('recent', { listKeys: ['recent:index'] });
+    assert.equal(offline.isDomainBlocked('recent'), true);
+    globalThis.prksIsRecentIndexShape = Array.isArray;
+    globalThis.prksMergeRecentOpen = (rows, result) => [{ id: result.work_id }, ...rows];
+    const reconciling = offline.reconcileRecentOpen({ work_id: 'W' });
+    release();
+    await reconciling;
+    for (let i = 0; i < 5; i += 1) await later();
+    assert.equal(offline.isDomainBlocked('recent'), false, 'the finished sweep unblocks the newer generation');
+}
+
 async function main() {
     await sourceCache();
     await notesCache();
@@ -660,6 +680,7 @@ async function main() {
     await mountedSourceCorrectiveRead();
     await notesEditorAndSourceReplacement();
     await failedDeletions();
+    await sweepSurvivesReconcile();
     console.log('All ' + checks + ' Work source and note ACK ordering checks passed');
 }
 
