@@ -387,17 +387,22 @@
              * AGAINST, and leaving it would show them video A while the server
              * holds video C -- with the pending overlay gone, nothing else
              * would ever correct it. A focused source field keeps the user's
-             * text and the base it was measured against: a Save from it then
-             * conflicts with the newer source instead of overwriting it. */
+             * text and the revision it was measured against: a Save from it
+             * then conflicts with the newer source instead of overwriting it.
+             * The identity is the newer one, so a draft naming the ACK's video
+             * is a change to send (and conflict), not a match that cancels. */
+            const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value));
             if (adopt) {
                 const held = ctx.getEntity('work');
                 if (held && held.id === state.workId) {
                     ctx.setEntity('work', adoptSourceOf(held, workResult.value));
                 }
-                if (!writeInput(ctx, state, workResult.value.source_url || '') && state.observed) return true;
+                if (!writeInput(ctx, state, workResult.value.source_url || '') && state.observed) {
+                    state.observed = baseOf(state.observed.revision, identity);
+                    return true;
+                }
             }
-            state.observed = baseOf(stateResult.value.revision,
-                root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
+            state.observed = baseOf(stateResult.value.revision, identity);
             return true;
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;

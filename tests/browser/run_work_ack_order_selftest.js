@@ -524,9 +524,15 @@ async function mountedSourceCorrectiveRead() {
         delete globalThis.document;
         globalThis.prksRightPanelOwnedBy = () => false;
         globalThis.prksOwnerTabIsFocused = () => false;
-        assert.equal(state.observed.revision, 1, 'the focused field keeps the ACK base');
-        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(
-            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })));
+        assert.equal(state.observed.revision, 1, 'the focused field keeps the ACK revision');
+        /* The store cancels a save whose identity matches the base. With the
+         * newer identity, a draft naming the ACK's video AAA is queued against
+         * revision 1 and conflicts; a draft naming CCC is the server's own. */
+        const ccc = globalThis.prksWorkSourceIdentity(globalThis.prksWorkSourceOf(serverWork('CCC').value));
+        assert.equal(state.observed.identity, ccc, 'paired with the server identity, not the ACK one');
+        assert.notEqual(state.observed.identity, globalThis.prksWorkSourceIdentity(
+            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })),
+            'a draft naming the ACK video is not cancelled as a no-op');
         assert.equal(ctx.entity.provider_id, 'CCC', 'the Work still takes the server source');
         listeners.length = 0;
     }
@@ -650,6 +656,27 @@ async function notesEditorAndSourceReplacement() {
         assert.deepEqual(refsAtApply, { b: 'concept-B' }, 'its preview renders with the references for that body');
         assert.equal(ctx.resources.workNotesObserved.research.value, 'B');
         assert.equal(ctx.resources.workNotesObserved.research.revision, 2, 'at the revision read with it');
+    }
+    /* The tab's Research Notes session decides last: one holding work of
+     * its own keeps the base; a clean one is retired with the old text. */
+    {
+        listeners.length = 0;
+        appliedTexts.length = 0;
+        const release = gated();
+        const op = opFor('A');
+        await later();
+        const notes = withEditor(editorWith('A'));
+        const ctx = ownerWith('older', { workNotes: notes });
+        const asked = [];
+        globalThis.prksResearchNotesAdoptBody = (_ctx, workId, shown) => { asked.push([workId, shown]); return false; };
+        globalThis.prksBindWorkNotesSync(ctx);
+        emit({ acknowledged: ackOf(1), op });
+        release();
+        await flush(); await flush(); await flush();
+        delete globalThis.prksResearchNotesAdoptBody;
+        assert.deepEqual(asked, [['W', 'A']], 'the session is asked about the text the editor shows');
+        assert.deepEqual(appliedTexts, [], 'a session that keeps its text keeps the editor');
+        assert.equal(ctx.resources.workNotesObserved.research.revision, 1, 'and the ACK base');
     }
     /* An editor with typing keeps its base, so its next save conflicts. */
     {
