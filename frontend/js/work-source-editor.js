@@ -211,18 +211,25 @@
      * write would never run and the editor would keep showing the URL the user
      * typed after the server had answered with another. What must not be
      * overwritten is text the user is typing right now -- and only the owner
-     * of the shared panel may write into it at all.
+     * of the shared panel may write into it at all. False when the owner's
+     * focused source field kept other text.
      */
     function writeInput(ctx, state, url) {
+        const focused = typeof document !== 'undefined' ? document.activeElement : null;
+        const typing = !!focused && typeof focused.matches === 'function' &&
+            focused.matches('[data-prks-work-field="source_url"], #meta-video-url') &&
+            focused.value !== String(url == null ? '' : url);
+        if (typing && owns(ctx, state)) return false;
         if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
             typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
             root.prksVueWorkMetadataEditorOwns(ctx)) {
             root.prksVueAcceptWorkMetadataField(ctx, 'source_url', url == null ? '' : String(url));
-            return;
+            return true;
         }
         const section = owns(ctx, state) ? sectionOf() : null;
         const input = section && section.querySelector('#meta-video-url');
         if (input && document.activeElement !== input) input.value = url;
+        return true;
     }
 
     /**
@@ -370,20 +377,22 @@
                 if (!(options && options.keep)) state.observed = null;
                 return true;
             }
-            state.observed = baseOf(stateResult.value.revision,
-                root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
             /* The server's Work replaces what this tab was holding. After
              * "Use server" the tab's copy is the source the user just decided
              * AGAINST, and leaving it would show them video A while the server
              * holds video C -- with the pending overlay gone, nothing else
-             * would ever correct it. */
+             * would ever correct it. A focused source field keeps the user's
+             * text and the base it was measured against: a Save from it then
+             * conflicts with the newer source instead of overwriting it. */
             if (adopt) {
                 const held = ctx.getEntity('work');
                 if (held && held.id === state.workId) {
                     ctx.setEntity('work', adoptSourceOf(held, workResult.value));
                 }
-                writeInput(ctx, state, workResult.value.source_url || '');
+                if (!writeInput(ctx, state, workResult.value.source_url || '') && state.observed) return true;
             }
+            state.observed = baseOf(stateResult.value.revision,
+                root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
             return true;
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
