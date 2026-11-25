@@ -864,14 +864,15 @@ def citations_openapi_document() -> dict[str, Any]:
     }
 
 
-SAVED_VIEWS_CONTRACT_VERSION = "0.1.0"
+SAVED_VIEWS_CONTRACT_VERSION = "0.2.0"
 
 
 def saved_views_openapi_document() -> dict[str, Any]:
     """OpenAPI 3.1 for the online-only Saved Views HTTP family (#45 / #232).
 
     Same Pydantic-generated contract style as Publishers. Saved Views have no
-    durable operation, revision, or sync state. Results are never stored.
+    durable operation or sync state; each carries a ``revision`` that an update
+    must name (#873). Results are never stored.
     """
     schemas: dict[str, Any] = {}
     for model in (
@@ -996,7 +997,10 @@ def saved_views_openapi_document() -> dict[str, Any]:
                         "or search definition."
                     ),
                     "404": _json_error("No such Saved View."),
-                    "409": _json_error("Name already used by another Saved View."),
+                    "409": _json_error(
+                        "Name already used by another Saved View, or the view "
+                        "changed since `base_revision` (code `revision_conflict`)."
+                    ),
                     **mutation_body_read_errors,
                 },
             },

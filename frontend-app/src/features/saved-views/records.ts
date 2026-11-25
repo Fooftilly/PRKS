@@ -49,7 +49,7 @@ export interface SavedViewRecords {
    */
   get(viewId: string, signal?: AbortSignal): Promise<SavedView | null>
   create(input: SavedViewInput): Promise<SavedView>
-  update(viewId: string, input: SavedViewInput): Promise<SavedView>
+  update(viewId: string, input: SavedViewInput, baseRevision: number): Promise<SavedView>
   remove(viewId: string): Promise<void>
   /** {@link savedViewActionMessage}, for classic callers. */
   actionMessage(err: unknown, fallback: string): string
@@ -253,8 +253,8 @@ export function savedViewRecords(queryClient?: QueryClient): SavedViewRecords {
     create(input) {
       return write(() => createSavedView(input))
     },
-    update(viewId, input) {
-      return write(() => updateSavedView(viewId, input))
+    update(viewId, input, baseRevision) {
+      return write(() => updateSavedView(viewId, input, baseRevision))
     },
     remove(viewId) {
       return write(() => deleteSavedView(viewId))

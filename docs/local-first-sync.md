@@ -1260,6 +1260,11 @@ form did not show has no known base; changing it is refused with a "changed
 elsewhere" message and the draft is kept. This device's own unsent edit counts
 as shown, at the revision it was measured against. Person Groups (#783) and
 Playlists (#894) save this way; Concept Definitions already did (#568).
+Online-only editors follow the same rule on the server: a Saved View carries
+a `revision`, and an update names the one its dialog opened on (`base_revision`)
+or is refused with `409 revision_conflict` (#873). BibTeX export toggles send
+only the fields a page changed, so a stale Settings tab cannot undo another
+tab's toggles (#889).
 
 ### An acknowledgement states the stored row; the client never rebuilds it
 

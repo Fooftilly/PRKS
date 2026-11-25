@@ -3574,6 +3574,12 @@
           "type": "text"
         },
         {
+          "default": "0",
+          "name": "revision",
+          "not_null": true,
+          "type": "bigint"
+        },
+        {
           "default": "now()",
           "name": "created_at",
           "not_null": true,
@@ -3601,6 +3607,8 @@
         "saved_views_name_key_not_null": "NOT NULL name_key",
         "saved_views_name_not_null": "NOT NULL name",
         "saved_views_pkey": "PRIMARY KEY (id)",
+        "saved_views_revision_check": "CHECK (revision >= 0)",
+        "saved_views_revision_not_null": "NOT NULL revision",
         "saved_views_search_author_check": "CHECK (char_length(search_author) <= 200)",
         "saved_views_search_author_not_null": "NOT NULL search_author",
         "saved_views_search_check": "CHECK ((((search_q || search_tag) || search_author) || search_publisher) !~ '[\\x01-\\x1f\\x7f]'::text AND search_q = btrim(search_q) AND search_tag = btrim(search_tag) AND search_author = btrim(search_author) AND search_publisher = btrim(search_publisher))",

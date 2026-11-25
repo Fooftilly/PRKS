@@ -35,7 +35,7 @@ class TestSavedViewsApiController(SavedViewTestCase):
         status, body = self.call("GET", f"/api/saved-views/{vid.replace('-', '%2D', 1)}")
         self.assertEqual((status, body["id"]), (200, vid))
 
-        status, body = self.call("PATCH", f"/api/saved-views/{vid}", {"name": "Renamed"})
+        status, body = self.call("PATCH", f"/api/saved-views/{vid}", {"base_revision": 0, "name": "Renamed"})
         self.assertEqual((status, body["name"]), (200, "Renamed"))
 
         self.assertEqual(self.call("DELETE", f"/api/saved-views/{vid}"), (200, {"status": "deleted"}))
@@ -46,8 +46,8 @@ class TestSavedViewsApiController(SavedViewTestCase):
                          (400, {"error": "JSON object body required", "code": "invalid_request"}))
         status, _ = self.call("POST", "/api/saved-views", {"name": "", "search": {"mode": "all", "q": "x"}})
         self.assertEqual(status, 400)
-        self.assertEqual(self.call("PATCH", "/api/saved-views/SV-missing", {"name": "Nope"})[0], 404)
-        self.assertEqual(self.call("PATCH", "/api/saved-views/SV-missing", {}),
+        self.assertEqual(self.call("PATCH", "/api/saved-views/SV-missing", {"base_revision": 0, "name": "Nope"})[0], 404)
+        self.assertEqual(self.call("PATCH", "/api/saved-views/SV-missing", {"base_revision": 0}),
                          (400, {"error": "Nothing to update."}))
 
 

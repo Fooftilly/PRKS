@@ -87,15 +87,39 @@ function currentMap(): Record<string, boolean> {
   return next
 }
 
-function persist(): void {
-  dirty = true
-  const next = currentMap()
-  window.prksSetBibtexExportFieldsCache?.(next)
-  window.clearTimeout(timer)
-  timer = window.setTimeout(() => {
-    void window.prksPatchAppSettings?.({ bibtex_export_fields: next }).catch((error: unknown) => {
+/* Only the toggles this page changed are sent. A full map would carry this
+ * page's stale view of every other toggle and undo what another tab or device
+ * saved meanwhile; PRKS merges a partial map under its row lock (#889). */
+let changed: Record<string, boolean> = {}
+let inFlight = 0
+
+function flush(): void {
+  const patch = changed
+  changed = {}
+  if (!Object.keys(patch).length) return
+  inFlight += 1
+  void Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch }))
+    .catch((error: unknown) => {
       console.warn(error)
     })
+    .finally(() => {
+      inFlight -= 1
+      // Once nothing of ours is waiting, show what PRKS holds: our toggles
+      // merged with any another session saved.
+      if (inFlight || timer || Object.keys(changed).length) return
+      const stored = window.__prksBibtexExportFields
+      if (stored && typeof stored === 'object') applyMap(stored)
+    })
+}
+
+function persist(id: string, on: boolean): void {
+  dirty = true
+  changed[id] = on
+  window.prksSetBibtexExportFieldsCache?.(currentMap())
+  window.clearTimeout(timer)
+  timer = window.setTimeout(() => {
+    timer = 0
+    flush()
   }, 450)
 }
 
@@ -103,7 +127,7 @@ function toggle(id: string): void {
   const field = fields.value.find((item) => item.id === id)
   if (!field) return
   field.on = !field.on
-  persist()
+  persist(id, field.on)
 }
 
 async function restoreDefaults(): Promise<void> {
@@ -113,6 +137,9 @@ async function restoreDefaults(): Promise<void> {
   applyMap(allTrue)
   dirty = true
   window.clearTimeout(timer)
+  timer = 0
+  changed = {}
+  // Restore defaults is an explicit choice about every toggle, so it sends all of them.
   try {
     await window.prksPatchAppSettings?.({ bibtex_export_fields: allTrue })
   } catch (error) {
@@ -138,6 +165,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.clearTimeout(timer)
+  timer = 0
+  // A toggle still waiting for its debounce is sent, not dropped.
+  flush()
 })
 </script>
 

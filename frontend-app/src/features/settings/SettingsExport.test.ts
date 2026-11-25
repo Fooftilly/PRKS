@@ -104,3 +104,80 @@ describe('SettingsExport citation style', () => {
     expect(sent).toEqual([])
   })
 })
+
+describe('SettingsExport BibTeX toggles', () => {
+  type BibtexWindow = Window & {
+    PRKS_BIBTEX_EXPORT_FIELD_DEFS?: Array<readonly [string, string]>
+    __prksBibtexExportFields?: Record<string, boolean>
+    prksSetBibtexExportFieldsCache?: (map: Record<string, boolean>) => void
+  }
+  const bib = window as BibtexWindow
+  let patches: Array<Record<string, boolean>>
+  /* PRKS as another tab left it: Author already turned off there. */
+  let server: Record<string, boolean>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    patches = []
+    server = { author: false, doi: true, url: true }
+    bib.PRKS_BIBTEX_EXPORT_FIELD_DEFS = [['author', 'Author'], ['doi', 'DOI'], ['url', 'URL']]
+    bib.__prksBibtexExportFields = { author: true, doi: true, url: true }
+    bib.prksSetBibtexExportFieldsCache = (map) => { bib.__prksBibtexExportFields = { ...map } }
+    win.prksLoadAppSettings = vi.fn(async () => undefined)
+    win.prksPatchAppSettings = vi.fn(async (partial: { bibtex_export_fields?: Record<string, boolean> }) => {
+      const patch = partial.bibtex_export_fields ?? {}
+      patches.push({ ...patch })
+      server = { ...server, ...patch }
+      bib.prksSetBibtexExportFieldsCache?.(server) // as api.js does with the response
+      return { bibtex_export_fields: server }
+    }) as StyleWindow['prksPatchAppSettings']
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    delete bib.PRKS_BIBTEX_EXPORT_FIELD_DEFS
+    delete bib.__prksBibtexExportFields
+    delete bib.prksSetBibtexExportFieldsCache
+  })
+
+  const isOn = (wrapper: ReturnType<typeof mount>, id: string) =>
+    wrapper.get(`[data-bibtex-field="${id}"]`).attributes('aria-checked') === 'true'
+
+  it('sends only the toggles this page changed, so another tab’s choice survives (#889)', async () => {
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    expect(isOn(wrapper, 'author')).toBe(true) // this tab's stale view
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    expect(patches).toEqual([])
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(patches).toEqual([{ doi: false, url: true }])
+    expect(server).toEqual({ author: false, doi: false, url: true })
+    expect(isOn(wrapper, 'author')).toBe(false)
+    expect(isOn(wrapper, 'doi')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('sends a toggle still waiting for its debounce when the page closes', async () => {
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    wrapper.unmount()
+    await flushPromises()
+    expect(patches).toEqual([{ url: false }])
+  })
+
+  it('restores every toggle explicitly', async () => {
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    await wrapper.get('#prks-bibtex-export-reset').trigger('click')
+    await flushPromises()
+    vi.advanceTimersByTime(1000)
+    await flushPromises()
+    expect(patches).toEqual([{ author: true, doi: true, url: true }])
+    wrapper.unmount()
+  })
+})
