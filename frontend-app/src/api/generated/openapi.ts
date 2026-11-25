@@ -690,6 +690,40 @@ export interface components {
              */
             citation_style?: string;
         };
+        /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
+        BackupProgressLine: {
+            /**
+             * Error
+             * @description `failed` only: what to tell the user.
+             * @default null
+             */
+            error?: string | null;
+            /**
+             * Filename
+             * @description `ready` only: the archive's file name.
+             * @default null
+             */
+            filename?: string | null;
+            /** Percent */
+            percent: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "snapshot" | "objects" | "ready" | "failed";
+            /**
+             * Token
+             * @description `ready` only: the download token.
+             * @default null
+             */
+            token?: string | null;
+            /**
+             * Warnings
+             * @description `ready` only.
+             * @default null
+             */
+            warnings?: string[] | null;
+        };
         /** @description A backup or restore refusal: ``reason`` is the stable code. */
         BackupRefusal: {
             /**
@@ -2182,6 +2216,7 @@ export interface components {
 export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
 export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
+export type BackupProgressLine = components['schemas']['BackupProgressLine'];
 export type BackupRefusal = components['schemas']['BackupRefusal'];
 export type BackupStaged = components['schemas']['BackupStaged'];
 export type BibtexExportFields = components['schemas']['BibtexExportFields'];

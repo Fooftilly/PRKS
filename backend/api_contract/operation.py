@@ -47,6 +47,9 @@ class Reply:
     schema: Schema = None
     media_type: str | tuple[str, ...] = JSON
     headers: Mapping[str, Header] = field(default_factory=dict)
+    #: For a stream of JSON texts (NDJSON): the shape of each line, published
+    #: as the media type's ``x-line-schema``.
+    line_schema: Schema = None
 
 
 @dataclass(frozen=True)

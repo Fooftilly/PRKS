@@ -125,7 +125,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -157,6 +158,9 @@
                 "schema": {
                   "type": "string",
                   "description": "Newline-delimited JSON: each line is one BackupProgressLine object."
+                },
+                "x-line-schema": {
+                  "$ref": "#/components/schemas/BackupProgressLine"
                 }
               }
             }
@@ -199,7 +203,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -296,7 +301,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -421,7 +427,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -503,7 +510,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -945,7 +953,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1026,7 +1035,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1127,7 +1137,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1377,7 +1388,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1501,7 +1513,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1582,7 +1595,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1683,7 +1697,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -1782,7 +1797,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2018,7 +2034,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2100,7 +2117,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2166,7 +2184,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2229,7 +2248,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2424,7 +2444,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2513,7 +2534,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2607,7 +2629,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2724,7 +2747,8 @@
             "required": true,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
           }
@@ -2842,7 +2866,8 @@
             "required": false,
             "schema": {
               "type": "string",
-              "pattern": "^[0-9]+$"
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
             },
             "description": "The Library epoch the client acted on. A new operation without it, or with another epoch, is refused; a replay of a ledgered op_id answers its ledgered result."
           }
@@ -3137,6 +3162,88 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "BackupProgressLine": {
+        "additionalProperties": false,
+        "description": "One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last.",
+        "properties": {
+          "phase": {
+            "enum": [
+              "snapshot",
+              "objects",
+              "ready",
+              "failed"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Percent",
+            "type": "integer"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`ready` only: the download token.",
+            "title": "Token"
+          },
+          "filename": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`ready` only: the archive's file name.",
+            "title": "Filename"
+          },
+          "warnings": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`ready` only.",
+            "title": "Warnings"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "`failed` only: what to tell the user.",
+            "title": "Error"
+          }
+        },
+        "required": [
+          "phase",
+          "percent"
+        ],
         "type": "object"
       },
       "BackupRefusal": {

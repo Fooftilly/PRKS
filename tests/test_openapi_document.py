@@ -187,6 +187,21 @@ class OpenApiDocumentTests(unittest.TestCase):
                 else:
                     self.assertNotIn("PRKS-Library-Epoch", headers)
 
+    def test_the_epoch_header_schema_is_parse_epochs_text_form(self) -> None:
+        from backend.domain.identity.request_context import EPOCH_MAX, parse_epoch
+
+        header = next(p for p in self.document["paths"]["/api/settings"]["patch"]["parameters"]
+                      if p["name"] == "PRKS-Library-Epoch")
+        pattern = re.compile(header["schema"]["pattern"])
+        for text in ("0", "01", "+1", " 1", "1.0", "1", "42", str(EPOCH_MAX)):
+            with self.subTest(text=text):
+                self.assertEqual(pattern.search(text) is not None, parse_epoch(text) is not None)
+
+    def test_a_stream_publishes_its_line_schema(self) -> None:
+        media = self.document["paths"]["/api/backups/progress"]["post"]["responses"]["200"]["content"]
+        self.assertEqual(media["application/x-ndjson"]["x-line-schema"],
+                         {"$ref": "#/components/schemas/BackupProgressLine"})
+
     def test_a_read_sent_as_post_documents_no_epoch_refusal(self) -> None:
         for path in ("/api/citations", "/api/diagnostics/performance/reset"):
             responses = self.document["paths"][path]["post"]["responses"]

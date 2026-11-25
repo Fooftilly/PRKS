@@ -37,7 +37,9 @@ REF = "#/components/schemas/{model}"
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
-_EPOCH_SCHEMA = {"type": "string", "pattern": "^[0-9]+$"}
+# parse_epoch's canonical form: a positive bigint, no sign, no leading zero.
+_EPOCH_SCHEMA = {"type": "string", "pattern": "^[1-9][0-9]{0,18}$",
+                 "description": "1 to 9223372036854775807, in decimal."}
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
@@ -104,6 +106,9 @@ def _reply(components: _Components, reply: Reply) -> dict[str, Any]:
                           for name, h in reply.headers.items()}
     if reply.schema is not None:
         out["content"] = _content(components, reply.media_type, reply.schema)
+        if reply.line_schema is not None:
+            for media in out["content"].values():
+                media["x-line-schema"] = components.ref(reply.line_schema)
     return out
 
 
