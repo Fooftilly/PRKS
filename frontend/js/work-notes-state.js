@@ -314,20 +314,19 @@
      * become its save base. A clean editor takes the body and its revision
      * together; an editor with typing, a save in flight, or text other than
      * what the ACK left keeps its old base, so its next save conflicts with
-     * the newer note instead of overwriting it unseen. */
-    function editorTakes(ctx, workId, field, shown, body) {
+     * the newer note instead of overwriting it unseen. Returns the editor to
+     * write the body into, `true` when there is none, or null to keep. */
+    function editorFor(ctx, workId, field, shown) {
         if (field === 'text_content') {
             const notes = ctx.getResource && ctx.getResource('workNotes');
             if (!notes || !notes.editor || String(notes.workId) !== String(workId)) return true;
             if (notes.drafting || notes.pendingSave ||
-                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown) return false;
-            if (typeof root.prksResearchNotesApplyText !== 'function') return false;
-            root.prksResearchNotesApplyText(notes, body);
-            return true;
+                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown) return null;
+            return typeof root.prksResearchNotesApplyText === 'function' ? notes : null;
         }
         /* Reminders keep a live session while their editor is open. */
         const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
-        return !(session && String(session.entityId) === String(workId) && !session.retired);
+        return session && String(session.entityId) === String(workId) && !session.retired ? null : true;
     }
 
     /* An unproven ACK was written into this owner's Work: take the body the
@@ -340,6 +339,9 @@
      * older body with a newer revision and overwrite a save never shown. */
     function rereadNoteBody(ctx, workId, field, fence) {
         if (typeof root.prksOfflineReadEntity !== 'function') return;
+        /* A refresh or reopen of the same Work starts a new route generation
+         * with its own note and base; this read belongs to the old one. */
+        const generation = ctx.generation;
         const revisionKey = field === 'private_notes' ? 'private_note_revision' : 'research_note_revision';
         const fresh = { dedupe: false };
         void reconcileCore.adoptFresh(
@@ -353,7 +355,7 @@
                 return { source: 'server', value: { work: read.value, revision: state.value[revisionKey] } };
             },
             () => {
-                if (ctx.destroyed) return null;
+                if (ctx.destroyed || ctx.generation !== generation) return null;
                 const current = ctx.getEntity && ctx.getEntity('work');
                 return current && current.id === workId ? noteFence(ctx, workId, field) : null;
             },
@@ -362,7 +364,8 @@
                 const work = ctx.getEntity('work');
                 const body = read[field] == null ? '' : String(read[field]);
                 const shown = work[field] == null ? '' : String(work[field]);
-                if (!editorTakes(ctx, workId, field, shown, body)) return;
+                const editor = editorFor(ctx, workId, field, shown);
+                if (!editor) return;
                 work[field] = field === 'private_notes' ? (read[field] == null ? null : body) : body;
                 /* The references are resolved against the body: B's text
                  * never renders with the links resolved for A. */
@@ -381,6 +384,8 @@
                     slot.revision = revision;
                     slot.source = 'server';
                 }
+                /* Last, so its preview renders with the references above. */
+                if (editor !== true) root.prksResearchNotesApplyText(editor, body);
             });
     }
 
