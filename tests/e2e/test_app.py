@@ -6386,13 +6386,19 @@ class TabContextHostRootTests(_BrowserE2E):
         fail_next = {"value": True}
         sync_path = "/api/person-groups/%s/sync-state" % group_id
 
+        # Save re-reads a base it could not pin, within the same click, so a
+        # failed save needs that second read to fail as well.
+        fail_repin = {"value": False}
+
         def hold_then_fail_once(route):
             req = route.request
-            if (hold_active["on"]
-                    and req.method == "GET"
-                    and urlparse(req.url).path == sync_path
-                    and fail_next["value"]):
+            is_base_read = req.method == "GET" and urlparse(req.url).path == sync_path
+            if hold_active["on"] and is_base_read and fail_next["value"]:
                 held.append(route)
+                return
+            if is_base_read and fail_repin["value"]:
+                fail_repin["value"] = False
+                route.fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
                 return
             route.fallback()
 
@@ -6423,8 +6429,10 @@ class TabContextHostRootTests(_BrowserE2E):
             # A base this device cannot read is the one thing that still stops a
             # durable save: without the group's revisions the edit would have to
             # guess, and guessing is what a base revision exists to prevent.
+            fail_repin["value"] = True
             held.pop().fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
             page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+            self.assertFalse(fail_repin["value"], "Save did not re-read the base it could not pin")
             self.assertIn("cannot be edited offline yet",
                           page.locator("#prks-modal-confirm-desc").inner_text())
             page.locator("#prks-modal-confirm-ok").click()
