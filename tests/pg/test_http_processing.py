@@ -529,6 +529,10 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
                 res = self.call(method, write_path, cookies=self.cookies, epoch=self.library_epoch())
                 self.assertEqual(res.status, 415, res.raw)
         self.assertEqual(self.ok(self.get(path))["status"], "ready")
+        # With the JSON Content-Type, the single import's empty body reaches the route.
+        res = self.call("POST", f"{path}/import", cookies=self.cookies, epoch=self.library_epoch(),
+                        headers=[("Content-Type", "application/json")])
+        self.assertIn(res.status, (200, 201), res.raw)
 
 
 class ServerWithoutAuthTests(HttpAuthTestCase):

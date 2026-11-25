@@ -91,6 +91,8 @@ class ContractCheck:
                         self.violations.append(f"{where}: answer {err}")
             elif "application/json" in content:  # an empty text answer (an empty BibTeX entry) is one
                 self.violations.append(f"{where}: no body, but the contract documents JSON")
+            elif content and media not in content:
+                self.violations.append(f"{where}: empty {media or 'answer without Content-Type'} not documented")
         body = operation.get("requestBody")
         if body and "application/json" not in body["content"]:
             body = None  # a byte stream (an upload) is not read as JSON

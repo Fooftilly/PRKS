@@ -66,6 +66,12 @@ class ContractCheckTests(unittest.TestCase):
         self.check.check(_IMPORT_ONE, _request(), _json(201, {}))
         self.assertFalse(any("request" in v for v in self.check.violations), self.check.violations)
 
+    def test_an_empty_answer_still_names_a_documented_media_type(self) -> None:
+        self.check.check(_JOBS, _request(), Response(404, [("Content-Type", "text/plain")], b""))
+        self.assertEqual(self.check.violations, [])
+        self.check.check(_JOBS, _request(), Response(404, [], b""))
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+
 
 if __name__ == "__main__":
     unittest.main()
