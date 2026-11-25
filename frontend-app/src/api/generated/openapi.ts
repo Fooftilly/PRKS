@@ -1813,30 +1813,55 @@ export interface components {
             /** Year */
             year?: boolean;
         };
-        /** @description ``POST /api/works/bulk``: one action on up to 500 Works, all or nothing. */
-        BulkWorkRequest: {
+        BulkMoveFolder: {
             /**
-             * Action
+             * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            action: "set_status" | "move_folder" | "add_tags" | "remove_tags";
+            action: "move_folder";
             /**
              * Folder Id
-             * @description move_folder: the Folder; null: Uncategorized.
-             * @default null
+             * @description The Folder; null: Uncategorized. Required (null included); an empty string is refused.
              */
-            folder_id?: string | null;
+            folder_id: string | null;
+            /**
+             * Work Ids
+             * @description 1 to 500 Work ids; repeats count once.
+             */
+            work_ids: string[];
+        };
+        BulkSetStatus: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "set_status";
             /**
              * Status
-             * @description set_status: the new status.
+             * @description The new status, one of the Work statuses.
              */
-            status?: string;
+            status: string;
+            /**
+             * Work Ids
+             * @description 1 to 500 Work ids; repeats count once.
+             */
+            work_ids: string[];
+        };
+        BulkTags: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            action: "add_tags" | "remove_tags";
             /**
              * Tag Ids
-             * @description add_tags and remove_tags: the Tags.
+             * @description The Tags to add or remove; at least one.
              */
-            tag_ids?: string[];
-            /** Work Ids */
+            tag_ids: string[];
+            /**
+             * Work Ids
+             * @description 1 to 500 Work ids; repeats count once.
+             */
             work_ids: string[];
         };
         BulkWorkResult: {
@@ -1854,7 +1879,7 @@ export interface components {
             status: "updated";
             /**
              * Updated
-             * @description The Works whose state changed.
+             * @description Equal to ``requested``: every selected Work, changed or not.
              */
             updated: number;
         };
@@ -2380,14 +2405,17 @@ export interface components {
             /** Role Type */
             role_type: string;
         };
-        MetadataFieldState: {
+        /** @description A field measured in bytes: its revision alone, never its value. */
+        MetadataFieldRevision: {
             /** Revision */
             revision: number;
-            /**
-             * Value
-             * @description The current value; left out for the fields measured in bytes (title, abstract, ...).
-             */
-            value?: string | number | null;
+        };
+        /** @description A small field: its revision and its current value. */
+        MetadataFieldValue: {
+            /** Revision */
+            revision: number;
+            /** Value */
+            value: string | number | null;
         };
         /** @description ``501 not_ported`` (``backend.web.dispatch.not_ported``): a route PostgreSQL does not serve yet. */
         NotPortedEnvelope: {
@@ -4408,14 +4436,14 @@ export interface components {
             edition?: string;
             /**
              * File B64
-             * @description The uploaded PDF, base64 encoded.
+             * @description The uploaded PDF, base64 encoded. Null: no upload.
              */
-            file_b64?: string;
+            file_b64?: string | null;
             /**
              * File Name
-             * @description The uploaded file's name; sent with file_b64.
+             * @description The uploaded file's name; sent with file_b64. Null: no upload.
              */
-            file_name?: string;
+            file_name?: string | null;
             /**
              * File Path
              * @description A managed PDF (``/api/pdfs/<name>``) the new Work adopts.
@@ -4448,8 +4476,11 @@ export interface components {
             provider?: string;
             /** Provider Id */
             provider_id?: string;
-            /** Published Date */
-            published_date?: string;
+            /**
+             * Published Date
+             * @description Null: none (the New File form sends null for no date).
+             */
+            published_date?: string | null;
             /** Publisher */
             publisher?: string;
             /** Roles */
@@ -4615,12 +4646,31 @@ export interface components {
             /** Work Id */
             work_id: string;
         };
+        /** @description Every synchronized field (``metadata_rules.SYNCED_FIELDS``), each one present. */
+        WorkMetadataFields: {
+            abstract: components["schemas"]["MetadataFieldRevision"];
+            author_text: components["schemas"]["MetadataFieldRevision"];
+            citation_style: components["schemas"]["MetadataFieldValue"];
+            doc_type: components["schemas"]["MetadataFieldValue"];
+            doi: components["schemas"]["MetadataFieldValue"];
+            edition: components["schemas"]["MetadataFieldValue"];
+            isbn: components["schemas"]["MetadataFieldValue"];
+            issue: components["schemas"]["MetadataFieldValue"];
+            journal: components["schemas"]["MetadataFieldValue"];
+            location: components["schemas"]["MetadataFieldValue"];
+            pages: components["schemas"]["MetadataFieldValue"];
+            published_date: components["schemas"]["MetadataFieldValue"];
+            publisher: components["schemas"]["MetadataFieldValue"];
+            source_url: components["schemas"]["MetadataFieldRevision"];
+            status: components["schemas"]["MetadataFieldValue"];
+            thumb_page: components["schemas"]["MetadataFieldValue"];
+            title: components["schemas"]["MetadataFieldRevision"];
+            volume: components["schemas"]["MetadataFieldValue"];
+            year: components["schemas"]["MetadataFieldValue"];
+        };
         /** @description ``GET /api/works/:id/metadata-state``: each synchronized field's revision. */
         WorkMetadataState: {
-            /** Fields */
-            fields: {
-                [key: string]: components["schemas"]["MetadataFieldState"];
-            };
+            fields: components["schemas"]["WorkMetadataFields"];
             /** Work Id */
             work_id: string;
         };
@@ -5009,7 +5059,9 @@ export type BackupRefusal = components['schemas']['BackupRefusal'];
 export type BackupStaged = components['schemas']['BackupStaged'];
 export type BibtexExportFields = components['schemas']['BibtexExportFields'];
 export type BibtexExportFieldsPatch = components['schemas']['BibtexExportFieldsPatch'];
-export type BulkWorkRequest = components['schemas']['BulkWorkRequest'];
+export type BulkMoveFolder = components['schemas']['BulkMoveFolder'];
+export type BulkSetStatus = components['schemas']['BulkSetStatus'];
+export type BulkTags = components['schemas']['BulkTags'];
 export type BulkWorkResult = components['schemas']['BulkWorkResult'];
 export type CitationsBibtex = components['schemas']['CitationsBibtex'];
 export type CitationsCslJson = components['schemas']['CitationsCslJson'];
@@ -5052,7 +5104,8 @@ export type JobDiagnostics = components['schemas']['JobDiagnostics'];
 export type JobQueueDepth = components['schemas']['JobQueueDepth'];
 export type JobWorkerCounters = components['schemas']['JobWorkerCounters'];
 export type LinkedPerson = components['schemas']['LinkedPerson'];
-export type MetadataFieldState = components['schemas']['MetadataFieldState'];
+export type MetadataFieldRevision = components['schemas']['MetadataFieldRevision'];
+export type MetadataFieldValue = components['schemas']['MetadataFieldValue'];
 export type NotPortedEnvelope = components['schemas']['NotPortedEnvelope'];
 export type PerformanceCounters = components['schemas']['PerformanceCounters'];
 export type PerformanceDiagnosticsReset = components['schemas']['PerformanceDiagnosticsReset'];
@@ -5159,6 +5212,7 @@ export type WorkCreated = components['schemas']['WorkCreated'];
 export type WorkCreateRequest = components['schemas']['WorkCreateRequest'];
 export type WorkDetail = components['schemas']['WorkDetail'];
 export type WorkFolderState = components['schemas']['WorkFolderState'];
+export type WorkMetadataFields = components['schemas']['WorkMetadataFields'];
 export type WorkMetadataState = components['schemas']['WorkMetadataState'];
 export type WorkNotesState = components['schemas']['WorkNotesState'];
 export type WorkPatch = components['schemas']['WorkPatch'];
@@ -6199,7 +6253,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description One byte range, e.g. ``bytes=0-65535``. */
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
                 Range?: string;
             };
             path: {
@@ -6212,6 +6266,12 @@ export interface operations {
             /** @description The whole file. */
             200: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6221,6 +6281,14 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6241,6 +6309,8 @@ export interface operations {
             /** @description The range is outside the file. */
             416: {
                 headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6252,7 +6322,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description One byte range, e.g. ``bytes=0-65535``. */
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
                 Range?: string;
             };
             path: {
@@ -6265,6 +6335,12 @@ export interface operations {
             /** @description The whole file. */
             200: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6272,6 +6348,14 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6300,6 +6384,8 @@ export interface operations {
             /** @description The range is outside the file. */
             416: {
                 headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6976,7 +7062,15 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            503: components["responses"]["Unavailable"];
+            /** @description The Library is unavailable, or in maintenance when an editor's miss caches the portrait (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
         };
     };
     listPlaylists: {
@@ -7931,6 +8025,12 @@ export interface operations {
             /** @description The whole file. */
             200: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7940,6 +8040,12 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
                     "Content-Range": string;
                     [name: string]: unknown;
@@ -7962,6 +8068,8 @@ export interface operations {
             /** @description The range is outside the file. */
             416: {
                 headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -7986,6 +8094,12 @@ export interface operations {
             /** @description The whole file. */
             200: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -7993,6 +8107,12 @@ export interface operations {
             /** @description The requested range. */
             206: {
                 headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description `no-store, max-age=0, must-revalidate`. */
+                    "Cache-Control": string;
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
                     "Content-Range": string;
                     [name: string]: unknown;
@@ -8023,6 +8143,8 @@ export interface operations {
             /** @description The range is outside the file. */
             416: {
                 headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -8392,7 +8514,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            /** @description The Library is unavailable, or in maintenance when an editor's miss saves the copy (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
         };
     };
     addRole: {
@@ -9994,7 +10124,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["BulkWorkRequest"];
+                "application/json": components["schemas"]["BulkSetStatus"] | components["schemas"]["BulkMoveFolder"] | components["schemas"]["BulkTags"];
             };
         };
         responses: {

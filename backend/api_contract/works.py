@@ -8,7 +8,7 @@ the bulk limits stay in ``backend/domain/works``, which refuses them with a
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional, Union
+from typing import Annotated, Any, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -224,12 +224,47 @@ class WorkDetail(BaseModel):
     research_refs: ResearchRefs
 
 
-class MetadataFieldState(BaseModel):
+class MetadataFieldRevision(BaseModel):
+    """A field measured in bytes: its revision alone, never its value."""
+
     model_config = _FORBID
 
     revision: int
-    value: Optional[Union[str, int]] = omittable(
-        "The current value; left out for the fields measured in bytes (title, abstract, ...).")
+
+
+class MetadataFieldValue(BaseModel):
+    """A small field: its revision and its current value."""
+
+    model_config = _FORBID
+
+    revision: int
+    value: Optional[Union[str, int]]
+
+
+class WorkMetadataFields(BaseModel):
+    """Every synchronized field (``metadata_rules.SYNCED_FIELDS``), each one present."""
+
+    model_config = _FORBID
+
+    abstract: MetadataFieldRevision
+    author_text: MetadataFieldRevision
+    citation_style: MetadataFieldValue
+    doc_type: MetadataFieldValue
+    doi: MetadataFieldValue
+    edition: MetadataFieldValue
+    isbn: MetadataFieldValue
+    issue: MetadataFieldValue
+    journal: MetadataFieldValue
+    location: MetadataFieldValue
+    pages: MetadataFieldValue
+    published_date: MetadataFieldValue
+    publisher: MetadataFieldValue
+    source_url: MetadataFieldRevision
+    status: MetadataFieldValue
+    thumb_page: MetadataFieldValue
+    title: MetadataFieldRevision
+    volume: MetadataFieldValue
+    year: MetadataFieldValue
 
 
 class WorkMetadataState(BaseModel):
@@ -238,7 +273,7 @@ class WorkMetadataState(BaseModel):
     model_config = _FORBID
 
     work_id: str
-    fields: dict[str, MetadataFieldState]
+    fields: WorkMetadataFields
 
 
 class WorkSourceState(BaseModel):
@@ -287,7 +322,7 @@ class WorkCreateRequest(BaseModel):
     author_text: str = omittable()
     doc_type: str = omittable()
     year: str = omittable()
-    published_date: str = omittable()
+    published_date: Optional[str] = omittable("Null: none (the New File form sends null for no date).")
     publisher: str = omittable()
     location: str = omittable()
     edition: str = omittable()
@@ -298,8 +333,8 @@ class WorkCreateRequest(BaseModel):
     isbn: str = omittable()
     doi: str = omittable()
     file_path: str = omittable("A managed PDF (``/api/pdfs/<name>``) the new Work adopts.")
-    file_name: str = omittable("The uploaded file's name; sent with file_b64.")
-    file_b64: str = omittable("The uploaded PDF, base64 encoded.")
+    file_name: Optional[str] = omittable("The uploaded file's name; sent with file_b64. Null: no upload.")
+    file_b64: Optional[str] = omittable("The uploaded PDF, base64 encoded. Null: no upload.")
     source_kind: str = omittable("``pdf`` or ``video``; inferred when left out.")
     source_url: str = omittable("A YouTube URL for a video Work, else the citation URL.")
     source_mime: str = omittable()
@@ -364,16 +399,30 @@ class WorkStatus(BaseModel):
     status: Literal["updated", "deleted", "opened"]
 
 
-class BulkWorkRequest(BaseModel):
-    """``POST /api/works/bulk``: one action on up to 500 Works, all or nothing."""
-
+class _BulkWorks(BaseModel):
     model_config = _IGNORE
 
-    action: Literal["set_status", "move_folder", "add_tags", "remove_tags"]
-    work_ids: list[str]
-    status: str = omittable("set_status: the new status.")
-    folder_id: Optional[str] = Field(default=None, description="move_folder: the Folder; null: Uncategorized.")
-    tag_ids: list[str] = omittable("add_tags and remove_tags: the Tags.")
+    work_ids: list[str] = Field(description="1 to 500 Work ids; repeats count once.")
+
+
+class BulkSetStatus(_BulkWorks):
+    action: Literal["set_status"]
+    status: str = Field(description="The new status, one of the Work statuses.")
+
+
+class BulkMoveFolder(_BulkWorks):
+    action: Literal["move_folder"]
+    folder_id: Optional[str] = Field(
+        description="The Folder; null: Uncategorized. Required (null included); an empty string is refused.")
+
+
+class BulkTags(_BulkWorks):
+    action: Literal["add_tags", "remove_tags"]
+    tag_ids: list[str] = Field(description="The Tags to add or remove; at least one.")
+
+
+BulkWorkRequest = Annotated[Union[BulkSetStatus, BulkMoveFolder, BulkTags], Field(discriminator="action")]
+"""``POST /api/works/bulk``: one action on up to 500 Works, all or nothing; ``action`` picks the fields."""
 
 
 class BulkWorkResult(BaseModel):
@@ -382,7 +431,7 @@ class BulkWorkResult(BaseModel):
     status: Literal["updated"]
     action: str
     requested: int = Field(description="The distinct Works named.")
-    updated: int = Field(description="The Works whose state changed.")
+    updated: int = Field(description="Equal to ``requested``: every selected Work, changed or not.")
 
 
 class TextRebuildRequest(BaseModel):

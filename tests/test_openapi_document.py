@@ -54,6 +54,14 @@ UNTYPED = frozenset({
 })
 
 
+#: Operations that answer only 501 until they are ported to PostgreSQL; a ported
+#: one leaves this set and documents its success.
+_NOT_PORTED = frozenset({"linearizeExistingPdfs"})
+
+#: Unfenced reads that save what they serve on a miss, through a command.
+_FILLS_ON_READ = frozenset({("GET", "/api/remote-images"), ("GET", "/api/persons/{person_id}/profile-image")})
+
+
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
     return {(method.upper(), path): op for path, item in document["paths"].items()
             for method, op in item.items() if method != "parameters"}
@@ -80,9 +88,12 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_each_operation_names_a_success_and_its_path_parameters(self) -> None:
         for (method, path), op in _operations(self.document).items():
             with self.subTest(method=method, path=path):
-                # A route not ported to PostgreSQL yet answers only 501 (pre-1.0 policy).
-                self.assertTrue(any(status.startswith("2") or status == "501" for status in op["responses"]),
-                                op["responses"])
+                if op["operationId"] in _NOT_PORTED:
+                    # Not ported to PostgreSQL yet: it answers only 501 (pre-1.0 policy).
+                    self.assertIn("501", op["responses"])
+                    self.assertFalse([s for s in op["responses"] if s.startswith("2")], op["responses"])
+                else:
+                    self.assertTrue(any(status.startswith("2") for status in op["responses"]), op["responses"])
                 names = {p["name"] for p in self.document["paths"][path].get("parameters", [])}
                 self.assertEqual(names, set(re.findall(r"\{(\w+)\}", path)))
 
@@ -109,12 +120,17 @@ class OpenApiDocumentTests(unittest.TestCase):
                         {"$ref": "#/components/responses/BadRequest"}))
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
-                    # Only library_command takes the maintenance lock (#1431).
+                    # Only library_command takes the maintenance lock (#1431): an
+                    # unfenced read may be refused for maintenance only when it runs
+                    # one to fill a cache on a miss.
                     unavailable = op["responses"]["503"]
                     if "$ref" in unavailable:
                         name = unavailable["$ref"].rsplit("/", 1)[-1]
                         unavailable = self.document["components"]["responses"][name]
-                    self.assertNotIn("MAINTENANCE", unavailable["description"])
+                    if (method.upper(), path) in _FILLS_ON_READ:
+                        self.assertIn("MAINTENANCE", unavailable["description"])
+                    else:
+                        self.assertNotIn("MAINTENANCE", unavailable["description"])
 
     def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
         for (method, path), op in _operations(self.document).items():
