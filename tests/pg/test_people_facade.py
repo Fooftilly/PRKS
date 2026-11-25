@@ -28,7 +28,6 @@ from backend.domain.people import groups, persons, publishers, queries
 from tests import acting_context as facade_context
 from backend.domain.people.group_rules import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
-from backend.web.etags import etag_for_representation
 from tests.narrowing import require
 from tests.pg.answers import AnswerAssertions
 from backend.domain.people import group_commands
@@ -821,7 +820,6 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
                               "groups": [{"id": "<PG Thinkers>", "name": "Thinkers"}], "id": "<P Alpha>",
                               "last_name": "Alpha", "updated_at": "<s>"})
         self.assertNotIn("works", rows[0])
-        self.assertEqual(etag_for_representation('persons', rows), etag_for_representation("persons", rows))
 
     def test_profile_edits_and_their_groups(self) -> None:
         weil = self.person("Weil", first_name="Simone")
@@ -880,7 +878,6 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
              "member_count": 0, "name": "Frankfurt School", "parent_id": "<PG Philosophy>", "updated_at": "<s>"},
             {"child_count": 1, "created_at": "<s>", "description": "", "id": "<PG Philosophy>", "member_count": 0,
              "name": "Philosophy", "parent_id": None, "updated_at": "<s>"}])
-        self.assertEqual(etag_for_representation('person-groups', rows), etag_for_representation("person-groups", rows))
         # An existing parent is found by name.
         self.group("Ethics", parent_name="philosophy")
         self.assertEqual(require(group_commands.detail(self.db, self.ctx, parent))["children"][0]["name"], "Ethics")
