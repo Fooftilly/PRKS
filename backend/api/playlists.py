@@ -87,7 +87,12 @@ def work_state(req: Request) -> Response:
 def update(req: Request) -> Response:
     from backend.domain.organization import playlist_commands
 
-    playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
+    try:
+        playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
+    except LookupError as e:
+        return json_response(req, 404, {"error": str(e)})
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
     return json_response(req, 200, {"status": "updated"})
 
 
@@ -103,12 +108,15 @@ def create(req: Request) -> Response:
     from backend.domain.organization import playlist_commands
 
     data = req.data
-    pl_id = playlist_commands.create(
-        *req.actor,
-        title=data.get("title", "") or "",
-        description=data.get("description", "") or "",
-        original_url=data.get("original_url", "") or "",
-    )
+    try:
+        pl_id = playlist_commands.create(
+            *req.actor,
+            title=data.get("title", "") or "",
+            description=data.get("description", "") or "",
+            original_url=data.get("original_url", "") or "",
+        )
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
     return json_response(req, 200, {"id": pl_id})
 
 
@@ -153,6 +161,7 @@ def remove_item(req: Request) -> Response:
 
 
 _TAG = "playlists"
+_TOO_LONG = error("A value that is not a string, or past its limit (title 300 bytes, the others 4000).")
 
 
 ROUTES = (
@@ -160,13 +169,14 @@ ROUTES = (
         "listPlaylists", "Every Playlist with its item count", _TAG, list[PlaylistCard],
         "Every Playlist, last changed first.")),
     route("POST", "/api/playlists", create, contract=Operation(
-        "createPlaylist", "Create a Playlist", _TAG, {200: ok(Created, "Created.")},
+        "createPlaylist", "Create a Playlist", _TAG, {200: ok(Created, "Created."), 400: _TOO_LONG},
         request=body(PlaylistCreateRequest, "Left out: an empty Playlist.", required=False))),
     route("GET", "/api/playlists/{playlist_id}", detail, contract=Operation(
         "getPlaylist", "A Playlist with its Works in order", _TAG,
         {200: ok(PlaylistDetail, "The Playlist."), 404: plain("No Playlist with that id.")})),
     route("PATCH", "/api/playlists/{playlist_id}", update, contract=Operation(
-        "updatePlaylist", "Change a Playlist's fields", _TAG, {200: ok(Done, "Updated.")},
+        "updatePlaylist", "Change a Playlist's fields", _TAG,
+        {200: ok(Done, "Updated."), 400: _TOO_LONG, 404: error("No Playlist with that id (a change was sent).")},
         request=body(PlaylistPatch, "Left out: nothing changes.", required=False))),
     route("DELETE", "/api/playlists/{playlist_id}", delete, contract=Operation(
         "deletePlaylist", "Delete a Playlist and release its Works", _TAG, {200: ok(Done, "Deleted.")})),
@@ -183,8 +193,10 @@ ROUTES = (
     route("POST", "/api/playlists/{playlist_id}/reorder", reorder, contract=Operation(
         "reorderPlaylist", "Rewrite a Playlist's order", _TAG,
         {200: ok(Done, "Reordered."),
-         400: error("``work_ids`` is not an array, or not exactly the member Works.")},
-        request=body(PlaylistReorderRequest, "Left out: an empty order.", required=False))),
+         400: error("``work_ids`` is not an array, or no such Playlist.")},
+        request=body(PlaylistReorderRequest, "Left out: an empty order.", required=False),
+        description=("Unknown and repeated ids are ignored; the members left out follow the named ones "
+                     "in their current order."))),
     route("GET", "/api/works/{work_id}/playlist-state", work_state, contract=revalidated_read(
         "getWorkPlaylistState", "Which Playlist a Work is in, and its revision", _TAG, WorkPlaylistState,
         "The Work's Playlist (empty for none) and the revision.", {404: error("No Work with that id.")})),

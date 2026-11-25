@@ -703,7 +703,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rewrite a Playlist's order */
+        /**
+         * Rewrite a Playlist's order
+         * @description Unknown and repeated ids are ignored; the members left out follow the named ones in their current order.
+         */
         post: operations["reorderPlaylist"];
         delete?: never;
         options?: never;
@@ -2217,7 +2220,7 @@ export interface components {
              * Description
              * @description Left out: empty.
              */
-            description?: string | null;
+            description?: string;
             /**
              * Parent Id
              * @description Left out or null: a root Folder.
@@ -2227,7 +2230,7 @@ export interface components {
              * Title
              * @description Left out: ``Untitled Folder``.
              */
-            title?: string | null;
+            title?: string;
         };
         /** @description ``GET /api/folders/{id}``: the Folder with its children, parent, Works and Tags. */
         FolderDetail: {
@@ -2540,7 +2543,7 @@ export interface components {
             about: string | null;
             /**
              * Aliases
-             * @description The aliases, one per line; empty when none.
+             * @description The aliases, comma-separated; empty when none.
              */
             aliases: string;
             /**
@@ -2581,7 +2584,7 @@ export interface components {
             about?: string | null;
             /**
              * Aliases
-             * @description One per line.
+             * @description Comma-separated.
              */
             aliases?: string | null;
             /** Birth Date */
@@ -2612,7 +2615,7 @@ export interface components {
             about: string | null;
             /**
              * Aliases
-             * @description The aliases, one per line; empty when none.
+             * @description The aliases, comma-separated; empty when none.
              */
             aliases: string;
             /** Birth Date */
@@ -2791,7 +2794,7 @@ export interface components {
             about?: string | null;
             /**
              * Aliases
-             * @description One per line.
+             * @description Comma-separated.
              */
             aliases?: string | null;
             /** Birth Date */
@@ -7136,7 +7139,15 @@ export interface operations {
                     "application/json": components["schemas"]["Created"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["EpochChanged"];
@@ -7237,9 +7248,26 @@ export interface operations {
                     "application/json": components["schemas"]["Done"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            /** @description A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
+            /** @description No Playlist with that id (a change was sent). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
@@ -7349,7 +7377,7 @@ export interface operations {
                     "application/json": components["schemas"]["Done"];
                 };
             };
-            /** @description ``work_ids`` is not an array, or not exactly the member Works. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            /** @description ``work_ids`` is not an array, or no such Playlist. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
