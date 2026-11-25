@@ -164,7 +164,8 @@ def remove_item(req: Request) -> Response:
 _TAG = "playlists"
 _LIMITS = "title 300 bytes, the others 4000"
 _REFUSED_NEW = error(f"A value that is not a string, or past its limit ({_LIMITS}).")
-_TOO_LONG = error(f"A value past its limit ({_LIMITS}); other values are sent as their text.")
+_TOO_LONG = error(f"A value past its limit ({_LIMITS}); null, false and 0 clear a field, and other "
+                  "values are stored as their text.")
 
 
 ROUTES = (
