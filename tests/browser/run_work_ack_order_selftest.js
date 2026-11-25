@@ -541,11 +541,9 @@ async function mountedSourceCorrectiveRead() {
                 'the base is the cached pair, whatever the Work read time says');
             assert.equal(ctx.entity.provider_id, stateId, 'the tab shows the source its base belongs to');
         }
-        /* A cached revision with no source is no base. */
-        globalThis.prksOfflineReadEntity = async (_kind, _id, _path, options) => {
-            const value = { work_id: 'W', revision: 2 };
-            return options.validate(value) ? { value, source: 'cache' } : { value: null, source: 'unavailable' };
-        };
+        /* A cached revision with no source is no base. The cache answer
+         * comes back unvalidated, as readThroughEntity returns it offline. */
+        globalThis.prksOfflineReadEntity = async () => ({ value: { work_id: 'W', revision: 2 }, source: 'cache' });
         const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
         await ctx.resources.workSourceEditor.preparing;

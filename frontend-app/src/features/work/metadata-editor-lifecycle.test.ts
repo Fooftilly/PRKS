@@ -557,7 +557,8 @@ describe('work metadata editor lifecycle', () => {
     expect(reads.length).toBe(2)
     const newerWork = work()
     newerWork.source_url = 'https://example.test/newer'
-    reads[1].resolve({ source: 'server', value: { ...newerWork, revision: 7, work_id: 'work-a' } })
+    const videoSource = { source_kind: 'video', provider: 'youtube', provider_id: 'newer' }
+    reads[1].resolve({ source: 'server', value: { ...newerWork, revision: 7, work_id: 'work-a', ...videoSource } })
     await secondPrepare
     expect(reads.length).toBe(2)
     expect(state.observed).toEqual({ revision: 7, identity: 'https://example.test/newer' })
