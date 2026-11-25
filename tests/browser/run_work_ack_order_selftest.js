@@ -142,9 +142,11 @@ async function parkedSourceOwner() {
     globalThis.prksRightPanelOwnedBy = () => false;
     globalThis.prksOwnerTabIsFocused = () => false;
     let reads = 0;
+    const policies = [];
     const fresh = { id: 'W', title: 'Clip', ...video('BBB') };
-    globalThis.prksOfflineReadEntity = async () => {
+    globalThis.prksOfflineReadEntity = async (_kind, _id, _path, options) => {
         reads += 1;
+        policies.push(options && options.requestPolicy && options.requestPolicy.dedupe);
         return { value: core.observe({ ...fresh }, Date.now()), source: 'server', cachedAt: Date.now() };
     };
     require('../../frontend/js/work-source-editor.js');
@@ -156,6 +158,7 @@ async function parkedSourceOwner() {
     apply(newer, ack, op);
     await flush();
     assert.equal(reads, 1, 'an unproven parked source ACK re-reads the Work');
+    assert.deepEqual(policies, [false], 'without joining an older GET');
     assert.equal(newer.entity.provider_id, 'BBB', 'the parked owner ends on the newer video');
 
     const older = ownerCtx(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
@@ -550,6 +553,24 @@ async function mountedSourceCorrectiveRead() {
         await state.preparing;
         assert.equal(state.observed, null, 'a server revision never pairs with a cached Work');
         assert.equal(policies[1], false, 'the Work read after a server revision is fresh');
+        listeners.length = 0;
+    }
+    /* Reopened offline: two cached answers pair only when the Work was read
+     * no earlier than the revision. */
+    {
+        const t = Date.now();
+        const cached = (value, at) => ({ value: core.observe(value, at), source: 'cache', cachedAt: at });
+        for (const [stateAt, workAt, paired] of [[t, t - 1000, false], [t - 1000, t, true]]) {
+            globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state'
+                ? cached({ work_id: 'W', revision: 2 }, stateAt)
+                : cached({ id: 'W', title: 'Clip', ...video('ZZZ') }, workAt));
+            const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, t));
+            globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+            const state = ctx.resources.workSourceEditor;
+            await state.preparing;
+            if (paired) assert.equal(state.observed && state.observed.revision, 2, 'a Work read after the revision pairs');
+            else assert.equal(state.observed, null, 'an older cached Work never pairs with a newer cached revision');
+        }
         listeners.length = 0;
     }
     /* A revision answered from the cache adopts nothing and keeps the ACK's base. */
