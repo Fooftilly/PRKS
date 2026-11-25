@@ -134,14 +134,17 @@
                 if (ack.present) tags.push(ack.tag);
                 return { ...folder, tags };
             },
+            // A corrective read must start after the ACK, never join an older flight.
             read: () => root.prksOfflineReadEntity('folder', ack.folder_id,
                 '/api/folders/' + encodeURIComponent(ack.folder_id), {
                     validate: v => !!(v && typeof v === 'object' && v.id === ack.folder_id),
                     domain: 'folders',
+                    requestPolicy: { dedupe: false },
                 }),
-            adopted: () => {
-                if (live(ctx, state)) void paint(ctx, state).catch(() => {});
-            },
+            // Only the links come from the re-read: the held Folder also
+            // carries pending edits and ACKs of other families.
+            merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
+            adopted: () => refreshOptions(ctx, state),
         });
         if (plan === 'superseded') return;
         if (state.options) {
@@ -150,14 +153,27 @@
             if (ack.present) state.options.assigned.push({ tag_id: ack.tag_id, relation_revision: ack.server_revision });
             else if (ack.server_revision) state.options.known_absent[ack.tag_id] = ack.server_revision;
         }
+        // An ACK during a refresh cancelled its read (readVersion): read again.
+        if (state.refreshing) refreshOptions(ctx, state);
     }
-    async function prepare(ctx, state) {
+    /* A re-read moved the Folder past the options base (another device's link
+     * change), so an edit made against the old base could be a no-op or the
+     * wrong direction. Editing waits for options read after it. */
+    function refreshOptions(ctx, state) {
+        if (!live(ctx, state)) return;
+        state.options = null;
+        state.refreshing = true;
+        state.preparing = prepare(ctx, state, { dedupe: false });
+    }
+    async function prepare(ctx, state, requestPolicy) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
             const [options, catalog] = await Promise.allSettled([
-                root.prksReadFolderTagOptions(state.folderId), root.prksReadTagsIndex(),
+                root.prksReadFolderTagOptions(state.folderId, requestPolicy ? { requestPolicy } : undefined),
+                root.prksReadTagsIndex(),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            state.refreshing = false;
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
             state.catalogGeneration = root.prksOfflineDomainGeneration('tags');

@@ -144,11 +144,20 @@
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         state.readVersion = (state.readVersion || 0) + 1;
         const held = state.options ? root.prksWorkTagBase(state.options, ack.tag_id).revision : null;
-        const plan = applyWorkTagAck(ctx, ack, op, held, () => {
-            if (live(ctx, state)) void paint(ctx, state).catch(() => {});
-        });
+        const plan = applyWorkTagAck(ctx, ack, op, held, () => refreshOptions(ctx, state));
         if (plan === 'superseded') return;
         if (state.options) setOptionsBase(state.options, ack.tag_id, ack.present, ack.server_revision);
+        // An ACK during a refresh cancelled its read (readVersion): read again.
+        if (state.refreshing) refreshOptions(ctx, state);
+    }
+    /* A re-read moved the Work past the options base (another device's link
+     * change), so an edit made against the old base could be a no-op or the
+     * wrong direction. Editing waits for options read after it. */
+    function refreshOptions(ctx, state) {
+        if (!live(ctx, state)) return;
+        state.options = null;
+        state.refreshing = true;
+        state.preparing = prepare(ctx, state, { dedupe: false });
     }
     /**
      * One Tag-link ACK into this owner's Work, under the shared ordering rule
@@ -173,9 +182,13 @@
                 if (ack.present) tags.push(ack.tag);
                 return { ...work, tags };
             },
+            // A corrective read must start after the ACK, never join an older flight.
             read: () => root.prksOfflineReadEntity('work', ack.work_id,
                 '/api/works/' + encodeURIComponent(ack.work_id),
-                { validate: value => !!value && value.id === ack.work_id }),
+                { validate: value => !!value && value.id === ack.work_id, requestPolicy: { dedupe: false } }),
+            // Only the links come from the re-read: the held Work also carries
+            // pending Folder, Playlist and source values and other ACKs.
+            merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
             adopted,
         });
     }
@@ -190,13 +203,15 @@
         if (!ctx || !ack || !Number.isSafeInteger(ack.server_revision)) return;
         applyWorkTagAck(ctx, ack, op, null, null);
     }
-    async function prepare(ctx, state) {
+    async function prepare(ctx, state, requestPolicy) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
             const [options, catalog] = await Promise.allSettled([
-                root.prksReadWorkTagOptions(state.workId), root.prksReadTagsIndex(),
+                root.prksReadWorkTagOptions(state.workId, requestPolicy ? { requestPolicy } : undefined),
+                root.prksReadTagsIndex(),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            state.refreshing = false;
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
             state.catalogGeneration = root.prksOfflineDomainGeneration('tags');

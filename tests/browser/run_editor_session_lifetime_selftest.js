@@ -632,6 +632,60 @@ async function warmAcknowledgementSurvivesActivation() {
     }
 }
 
+/* #1425 / #1088: an unproven Tag ACK re-reads the Work. The re-read takes only
+ * the links (pending values of other families stay), and the editor's
+ * revisioned options are read again, past any in-flight request, before an
+ * edit can be made against them. */
+async function tagAckReReadRefreshesOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-reread';
+    const ctx = mountTab('tag-reread');
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, folder_id: 'pending-folder' }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    const optionReads = [];
+    const freshOptions = { assigned: [], known_absent: { 'tag-1': 5 } };
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        optionReads.push(options || null);
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        return { value: refreshed ? freshOptions : { assigned: [], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id, _path, options) {
+        if (kind !== 'work') return previousRead(kind, id);
+        assert('the corrective Work read never joins an older flight',
+            !!(options && options.requestPolicy && options.requestPolicy.dedupe === false));
+        return { source: 'server', value: core.observe({ id: id, tags: [], folder_id: 'server-folder' }, Date.now()) };
+    };
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        emitLive({
+            acknowledged: { work_id: workId, tag_id: 'tag-1', present: true, server_revision: 3,
+                tag: { id: 'tag-1', name: 'Alpha' } },
+            operation: 'ADD_WORK_TAG',
+            op: op,
+        });
+        await flush();
+        const held = ctx.getEntity('work');
+        assertEq('the re-read links win over the unproven ACK', held.tags.length, 0);
+        assertEq('the re-read keeps the pending Folder value on the held Work', held.folder_id, 'pending-folder');
+        const last = optionReads[optionReads.length - 1];
+        assert('the options are read again, past any older flight, after the adopted Work',
+            !!last && !!last.requestPolicy && last.requestPolicy.dedupe === false);
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the editor edits against the refreshed options', state && state.options, freshOptions);
+        assertEq('the refresh settles', state && state.refreshing, false);
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1056,6 +1110,7 @@ async function main() {
     assertEq('repeated cycles leave no contexts', snap.contexts.length, 0);
     assertEq('no unhandled rejection', unhandled.length, 0);
 
+    await tagAckReReadRefreshesOptions();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
