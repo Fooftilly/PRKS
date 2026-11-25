@@ -219,6 +219,10 @@ export function browserPlaylistIntents(
       const pinned = pin && pin.playlistId === playlistId && pin.session === session ? await pin.base : null
       if (!sessionCurrent()) return { ok: true, message: '' }
       if (!pinned) {
+        // A failed pin read must not strand this session: the next Save pins
+        // again against what the form showed, so a field changed elsewhere
+        // meanwhile still reads as unknown rather than as a base.
+        this.pinEditBase(playlistId, { ...baseline })
         return {
           ok: false,
           message:

@@ -141,6 +141,13 @@ describe('Playlist intents', () => {
     const unavailable = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
     expect(unavailable.ok).toBe(false)
     expect(unavailable.message).toContain('cannot be changed offline yet')
+
+    // A failed pin does not strand the session: the next Save pins again
+    // against the values the form showed.
+    expect(window.prksPinPlaylistEdit).toHaveBeenLastCalledWith('PL-1', shown)
+    const retried = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
+    expect(retried.ok).toBe(true)
+    expect(window.updatePlaylist).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes the details panel when a save changes nothing', async () => {
