@@ -25,6 +25,7 @@ from backend.sync.handlers import work_lifecycle
 from tests.pg.test_playlists import PlaylistTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_payload
 from tests.narrowing import require
+from backend.domain.organization import playlist_commands
 
 _PLAYLIST_OPERATIONS = frozenset({"CREATE_PLAYLIST", "SET_PLAYLIST_FIELD", "REORDER_PLAYLIST_ITEMS",
                                   "DELETE_PLAYLIST"})
@@ -86,7 +87,7 @@ class CreateTests(PlaylistSyncTestCase):
                                        "playlist": {"id": playlist_id, "title": "Course", "description": "About",
                                                     "original_url": None, "item_count": 0}}))
         self.assertEqual(self.send(data), first)  # a replay
-        self.library.add_work_to_playlist(playlist_id, self.library.add_work("W"))
+        playlist_commands.add_item(self.db, self.ctx, playlist_id, self.library.add_work("W"))
         again = self.send(self.create("Other", playlist_id))
         self.assertEqual((again[1]["changed"], again[1]["playlist"]["title"], again[1]["playlist"]["item_count"]),
                          (False, "Course", 1))
@@ -104,7 +105,7 @@ class CreateTests(PlaylistSyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.create("Mine", theirs))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((len(self.ledger()), self.library.get_all_playlists()), (before, []))
+        self.assertEqual((len(self.ledger()), playlist_commands.catalog(self.db, self.ctx)), (before, []))
 
     def test_nul_is_an_invalid_envelope(self) -> None:
         self.assertEqual(self.send(self.create("a\x00b")), (400, {"code": "INVALID_ENVELOPE"}))
@@ -144,12 +145,12 @@ class EnvelopeTests(PlaylistSyncTestCase):
         for label, data, code in refused:
             with self.subTest(label):
                 self.assertEqual(self.send(data), (400, {"code": code}))
-        self.assertEqual((self.ledger(), require(self.library.get_playlist(playlist_id))["description"]), (before, ""))
+        self.assertEqual((self.ledger(), require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["description"]), (before, ""))
 
     def test_a_title_may_repeat(self) -> None:
         self.create_playlist("Lectures")
         self.create_playlist("Lectures")
-        self.assertEqual([row["title"] for row in self.library.get_all_playlists()], ["Lectures", "Lectures"])
+        self.assertEqual([row["title"] for row in playlist_commands.catalog(self.db, self.ctx)], ["Lectures", "Lectures"])
 
 
 class WorkPlaylistTests(PlaylistSyncTestCase):
@@ -287,7 +288,7 @@ class CreateWorkFilingTests(PlaylistSyncTestCase):
     def test_a_missing_or_foreign_playlist_refuses_the_create(self) -> None:
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_playlist("Theirs")
+            theirs = playlist_commands.create(self.db, self.ctx, "Theirs")
         for playlist_id in (generate("PL"), theirs):
             with self.subTest(playlist_id=playlist_id):
                 data = self.create_work(playlist_id=playlist_id)
@@ -361,7 +362,7 @@ class LedgerAndIsolationTests(PlaylistSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "playlist_id": playlist_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((require(self.library.get_playlist(playlist_id))["title"], self.items(playlist_id)),
+        self.assertEqual((require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["title"], self.items(playlist_id)),
                          ("Mine", [(work_id, 0)]))
 
     def test_an_op_id_of_another_library_is_reuse_and_discloses_nothing(self) -> None:
@@ -423,7 +424,7 @@ class AnswerTests(PlaylistSyncTestCase):
         missing = generate("PL")
         self.assertEqual(self.send(self.playlist_field(missing, "title", "X", 0)),
                          (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": missing, "field": "title"}))
-        detail = require(self.library.get_playlist(playlist_id))
+        detail = require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
         self.assertEqual((detail["title"], detail["original_url"]), ("Untitled playlist", None))
 
     def test_work_playlist_and_order_decision_tables(self) -> None:

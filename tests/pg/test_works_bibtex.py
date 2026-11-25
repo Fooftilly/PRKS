@@ -21,6 +21,7 @@ from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.works.metadata_rules import DOC_TYPES
 from tests.bibtex_entry import assert_one_bibtex_entry
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.domain.settings import commands as settings_commands
 
 _ENTRY = ("@book{Lovelace1843,\n"
           "  title = {Notes},\n"
@@ -76,9 +77,9 @@ class IsolationTests(BibtexTestCase):
         mine = self.book()
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            self.library.patch_app_settings({"bibtex_export_fields": {"author": False, "publisher": False}})
+            settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"author": False, "publisher": False}})
         self.assertEqual(self.library.generate_bibtex(mine), _ENTRY)
-        self.library.patch_app_settings({"bibtex_export_fields": {"year": False}})
+        settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"year": False}})
         self.assertEqual(self.library.generate_bibtex(mine), _ENTRY.replace("  year = {1843},\n", ""))
 
     def test_credits_are_read_from_this_library_only(self) -> None:
@@ -166,7 +167,7 @@ class SnapshotTests(BibtexTestCase):
                 # statement, before the record, profile and credits are read.
                 self.library.add_role(person_id, work_id, "Editor")
                 self.library.update_work_metadata(work_id, {"title": "Renamed"})
-                self.library.patch_app_settings({"bibtex_export_fields": {"publisher": False}})
+                settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"publisher": False}})
                 changed.append(True)
             return found
 
@@ -262,7 +263,7 @@ class AnswerTests(BibtexTestCase):
         return day
 
     def export_fields(self, fields: dict[str, bool]) -> None:
-        self.library.patch_app_settings({"bibtex_export_fields": fields})
+        settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": fields})
 
     # -- entries with every line fixed
 

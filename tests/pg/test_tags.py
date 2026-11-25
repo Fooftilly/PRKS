@@ -25,6 +25,7 @@ from tests.pg.test_people_facade import PeopleFacadeTestCase
 from backend.web.etags import etag_for_representation
 from tests.narrowing import require
 from tests.pg.answers import AnswerAssertions
+from backend.domain.organization import folder_commands
 
 
 class OrganizationTestCase(PeopleFacadeTestCase):
@@ -43,10 +44,10 @@ class OrganizationTestCase(PeopleFacadeTestCase):
             self.hold_serializable = False
 
     def folder(self, title: str = "Folder") -> str:
-        return self.library.add_folder(title)
+        return folder_commands.create(self.db, self.ctx, title)
 
     def tag(self, name: str) -> str:
-        return self.library.add_tag(name)["id"]
+        return tag_commands.create(self.db, self.ctx, name)["id"]
 
     def lifecycle_of(self, tag_id: str) -> dict[str, Any]:
         return library_query(self.db, self.actor.context, lambda scope: lifecycle.resolve(scope, tag_id))
@@ -78,37 +79,37 @@ class OrganizationTestCase(PeopleFacadeTestCase):
 
 class IdentityTests(OrganizationTestCase):
     def test_names_compare_by_identity_key(self) -> None:
-        logos = self.library.add_tag("Λόγος")
-        self.assertEqual(self.library.add_tag("ΛΌΓΟΣ")["id"], logos["id"])
+        logos = tag_commands.create(self.db, self.ctx, "Λόγος")
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "ΛΌΓΟΣ")["id"], logos["id"])
         strasse = self.tag("Straße")
-        self.assertEqual(self.library.add_tag("  STRASSE ")["id"], strasse)
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "  STRASSE ")["id"], strasse)
         composed = self.tag(unicodedata.normalize("NFC", "Café"))
         self.assertEqual(self.tag(unicodedata.normalize("NFD", "CAFÉ")), composed)
         # Diacritics are not folded (§8.1).
         self.assertNotEqual(self.tag("Resume"), self.tag("Résumé"))
         self.assertEqual(self.count("tags"), 5)
-        self.assertEqual(self.library.resolve_tag_id_by_label("λόγος"), logos["id"])
-        self.assertIsNone(self.library.resolve_tag_id_by_label("Logos"))
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "λόγος")), logos["id"])
+        self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Logos")))
         self.assert_integrity()
 
     def test_an_existing_name_takes_the_colour_given(self) -> None:
-        first = self.library.add_tag("Ethics", "#111111")
-        again = self.library.add_tag("ETHICS", "#222222")
+        first = tag_commands.create(self.db, self.ctx, "Ethics", "#111111")
+        again = tag_commands.create(self.db, self.ctx, "ETHICS", "#222222")
         self.assertEqual(again, {"id": first["id"], "name": "Ethics", "color": "#222222", "existed": True})
-        self.assertEqual(self.library.add_tag("Blank", "  ")["color"], tags.DEFAULT_COLOR)
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "Blank", "  ")["color"], tags.DEFAULT_COLOR)
 
     def test_untrusted_tag_color_is_rejected_on_postgresql(self) -> None:
         for value in ("red;position:fixed", "x;background:url(https://example.test)",
                       "#12345", "javascript:alert(1)"):
             with self.subTest(value=value), self.assertRaises(ValueError):
-                self.library.add_tag("Untrusted", value)
+                tag_commands.create(self.db, self.ctx, "Untrusted", value)
         self.assertEqual(self.count("tags"), 0)
-        self.assertEqual(self.library.add_tag("Safe", "#AABBCC")["color"], "#AABBCC")
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "Safe", "#AABBCC")["color"], "#AABBCC")
 
     def test_names_and_aliases_share_one_namespace(self) -> None:
         ethics, logic = self.tag("Ethics"), self.tag("Logic")
-        self.library.add_tag_alias(ethics, "Morals")
-        self.library.add_tag_alias(ethics, "MORALS")  # its own alias again: a no-op
+        tag_commands.add_alias(self.db, self.ctx, ethics, "Morals")
+        tag_commands.add_alias(self.db, self.ctx, ethics, "MORALS")  # its own alias again: a no-op
         refusals = {
             (ethics, "ETHICS"): "alias matches canonical tag name",
             (ethics, "logic"): "alias conflicts with another tag name",
@@ -118,72 +119,72 @@ class IdentityTests(OrganizationTestCase):
         }
         for (tag_id, alias), message in refusals.items():
             with self.subTest(alias=alias), self.assertRaises(ValueError) as caught:
-                self.library.add_tag_alias(tag_id, alias)
+                tag_commands.add_alias(self.db, self.ctx, tag_id, alias)
             self.assertEqual(str(caught.exception), message)
         # A name that is an alias is that alias's Tag.
-        self.assertEqual(self.library.add_tag("morals")["id"], ethics)
-        self.assertEqual(self.library.resolve_tag_id_by_label("Morals"), ethics)
-        self.assertEqual(self.library.get_all_tags()[0]["aliases"], ["Morals"])
-        self.assertTrue(self.library.delete_tag_alias(ethics, "MORALS"))
-        self.assertFalse(self.library.delete_tag_alias(ethics, "Morals"))
-        self.assertIsNone(self.library.resolve_tag_id_by_label("Morals"))
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "morals")["id"], ethics)
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Morals")), ethics)
+        self.assertEqual(tag_commands.all_tags(self.db, self.ctx)[0]["aliases"], ["Morals"])
+        self.assertTrue(tag_commands.delete_alias(self.db, self.ctx, ethics, "MORALS"))
+        self.assertFalse(tag_commands.delete_alias(self.db, self.ctx, ethics, "Morals"))
+        self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Morals")))
         self.assert_integrity()
 
     def test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write(self) -> None:
         ethics = self.tag("Ethics")
-        for call, args in (("add_tag", ("a\x00b",)), ("add_tag", ("x" * 201,)),
-                           ("add_tag_alias", (ethics, "a\x00b")), ("add_tag_alias", (ethics, "é" * 101))):
+        for call, args in (("create", ("a\x00b",)), ("create", ("x" * 201,)),
+                           ("add_alias", (ethics, "a\x00b")), ("add_alias", (ethics, "é" * 101))):
             with self.subTest(call=call, length=len(args[-1])), self.assertRaises(ValueError):
-                getattr(self.library, call)(*args)
-        self.assertEqual(self.library.add_tag("é" * 100)["name"], "é" * 100)  # 200 bytes
-        self.assertFalse(self.library.delete_tag_alias(ethics, "a\x00b"))
-        self.assertIsNone(self.library.resolve_tag_id_by_label("a\x00b"))
+                getattr(tag_commands, call)(self.db, self.ctx, *args)
+        self.assertEqual(tag_commands.create(self.db, self.ctx, "é" * 100)["name"], "é" * 100)  # 200 bytes
+        self.assertFalse(tag_commands.delete_alias(self.db, self.ctx, ethics, "a\x00b"))
+        self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "a\x00b")))
         self.assertEqual(self.count("tag_aliases"), 0)
 
 
 class LinkTests(OrganizationTestCase):
     def test_links_advance_their_scopes_and_no_op_edits_leave_no_row(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
-        self.library.remove_tag_from_work(work, tag)
-        self.library.add_tag_to_work(work, tag)
-        self.library.add_tag_to_work(work, tag)
-        self.library.add_tag_to_folder(folder, tag)
-        self.library.remove_tag_from_folder(folder, tag)
+        tag_commands.untag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_folder(self.db, self.ctx, folder, tag)
+        tag_commands.untag_folder(self.db, self.ctx, folder, tag)
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
         self.assertEqual(self.revisions("folder-tag"), {links.FOLDER.scope_id(folder, tag): 2})
-        self.assertEqual(self.library.get_work_tag_options(work), {
+        self.assertEqual(tag_commands.work_options(self.db, self.ctx, work), {
             "work_id": work, "assigned": [{"tag_id": tag, "relation_revision": 1}], "known_absent": {}})
-        self.assertEqual(self.library.get_folder_tag_options(folder),
+        self.assertEqual(tag_commands.folder_options(self.db, self.ctx, folder),
                          {"folder_id": folder, "assigned": [], "known_absent": {tag: 2}})
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
-        self.assertEqual(require(self.library.get_work(work))["tags"], self.library.get_work_tags(work))
-        self.assertIsNone(self.library.get_work_tag_options(generate("W")))
-        self.assertIsNone(self.library.get_folder_tag_options(generate("F")))
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [tag])
+        self.assertEqual(require(self.library.get_work(work))["tags"], library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)))
+        self.assertIsNone(tag_commands.work_options(self.db, self.ctx, generate("W")))
+        self.assertIsNone(tag_commands.folder_options(self.db, self.ctx, generate("F")))
 
     def test_a_link_needs_its_work_folder_and_tag(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
-        for call, args, message in (("add_tag_to_work", (generate("W"), tag), "work not found"),
-                                    ("add_tag_to_work", (work, generate("T")), "tag not found"),
-                                    ("add_tag_to_folder", (generate("F"), tag), "folder not found"),
-                                    ("add_tag_to_folder", (folder, generate("T")), "tag not found")):
+        for call, args, message in (("tag_work", (generate("W"), tag), "work not found"),
+                                    ("tag_work", (work, generate("T")), "tag not found"),
+                                    ("tag_folder", (generate("F"), tag), "folder not found"),
+                                    ("tag_folder", (folder, generate("T")), "tag not found")):
             with self.subTest(call=call, message=message), self.assertRaises(ValueError) as caught:
-                getattr(self.library, call)(*args)
+                getattr(tag_commands, call)(self.db, self.ctx, *args)
             self.assertEqual(str(caught.exception), message)
-        self.library.remove_tag_from_work(generate("W"), tag)  # nothing to remove
+        tag_commands.untag_work(self.db, self.ctx, generate("W"), tag)  # nothing to remove
         self.assertEqual(self.count("work_tags") + self.count("folder_tags"), 0)
         self.assertEqual(self.revisions("work-tag"), {})
 
     def test_a_work_delete_takes_its_links_and_tombstones_their_scopes(self) -> None:
         work, tag = self.library.add_work("W"), self.tag("Ethics")
-        self.library.add_tag_to_work(work, tag)
-        self.library.remove_tag_from_work(work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.untag_work(self.db, self.ctx, work, tag)
         other = self.tag("Logic")
-        self.library.add_tag_to_work(work, other)
+        tag_commands.tag_work(self.db, self.ctx, work, other)
         self.assertIsNotNone(self.library.delete_work_record(work))
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 3,
                                                       links.WORK.scope_id(work, other): 2})
         self.assertEqual(self.count("work_tags"), 0)
-        self.assertEqual(self.library.get_tags_in_use(), [])
+        self.assertEqual(tag_commands.in_use(self.db, self.ctx), [])
 
 
     def test_scope_ids_are_structural(self) -> None:
@@ -195,12 +196,12 @@ class DeleteTests(OrganizationTestCase):
     def test_a_delete_removes_links_aliases_and_keys_and_keeps_the_lifecycle(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.tag("Ethics")
         unlinked = self.library.add_work("Unlinked")
-        self.library.add_tag_alias(tag, "Morals")
-        self.library.add_tag_to_work(work, tag)
-        self.library.add_tag_to_folder(folder, tag)
-        self.library.add_tag_to_work(unlinked, tag)
-        self.library.remove_tag_from_work(unlinked, tag)
-        result = self.library.delete_tag(tag)
+        tag_commands.add_alias(self.db, self.ctx, tag, "Morals")
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_folder(self.db, self.ctx, folder, tag)
+        tag_commands.tag_work(self.db, self.ctx, unlinked, tag)
+        tag_commands.untag_work(self.db, self.ctx, unlinked, tag)
+        result = tag_commands.delete(self.db, self.ctx, tag)
         self.assertEqual(result, {
             "status": "deleted", "affected_work_ids": [work], "affected_folder_ids": [folder],
             "affected_tag_options_work_ids": sorted([work, unlinked]),
@@ -211,7 +212,7 @@ class DeleteTests(OrganizationTestCase):
         self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.DELETED})
         self.assertEqual((self.count("tags"), self.count("tag_aliases"), self.keys()), (0, 0, []))
         with self.assertRaises(ValueError) as caught:
-            self.library.delete_tag(tag)
+            tag_commands.delete(self.db, self.ctx, tag)
         self.assertEqual(str(caught.exception), "tag not found")
         # The name is free again, under a new identity.
         self.assertNotEqual(self.tag("ethics"), tag)
@@ -220,7 +221,7 @@ class DeleteTests(OrganizationTestCase):
 
     def test_a_delete_in_a_failed_command_leaves_the_tag_and_its_links(self) -> None:
         work, tag = self.library.add_work("W"), self.tag("Ethics")
-        self.library.add_tag_to_work(work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
 
         class Abort(Exception):
             pass
@@ -232,7 +233,7 @@ class DeleteTests(OrganizationTestCase):
         with self.assertRaises(Abort):
             self.run_command(delete_then_fail)
         self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.ACTIVE})
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [tag])
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
         self.assert_integrity()
 
@@ -255,72 +256,72 @@ class TagIdentityTests(OrganizationTestCase):
         tag = self.tag("Guarded")
         self.forbid_tag_deletion()
         with self.assertRaises(Exception):
-            self.library.delete_tag(tag)
+            tag_commands.delete(self.db, self.ctx, tag)
         self.assertEqual(self.count("tags"), 1)
 
     def test_deleting_a_folder_keeps_its_tags(self) -> None:
         folder, tag = self.folder("Doomed"), self.tag("OnlyOnThisFolder")
-        self.library.add_tag_to_folder(folder, tag)
+        tag_commands.tag_folder(self.db, self.ctx, folder, tag)
         self.forbid_tag_deletion()
-        self.library.delete_empty_folder(folder)
+        folder_commands.delete(self.db, self.ctx, folder)
         self.assertEqual((self.count("folders"), self.count("folder_tags"), self.count("tags")), (0, 0, 1))
         self.assertEqual(self.lifecycle_of(tag), {"state": lifecycle.ACTIVE})
 
     def test_removing_a_tag_from_a_folder_or_a_work_keeps_the_tag(self) -> None:
         folder, work, tag = self.folder("Tagged"), self.library.add_work("Tagged work"), self.tag("SoleUse")
-        self.library.add_tag_to_folder(folder, tag)
-        self.library.add_tag_to_work(work, tag)
+        tag_commands.tag_folder(self.db, self.ctx, folder, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
-        self.library.remove_tag_from_folder(folder, tag)
-        self.library.remove_tag_from_work(work, tag)
-        self.assertEqual((self.library.get_folder_tags(folder), self.library.get_work_tags(work)), ([], []))
+        tag_commands.untag_folder(self.db, self.ctx, folder, tag)
+        tag_commands.untag_work(self.db, self.ctx, work, tag)
+        self.assertEqual((library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.FOLDER, folder)), library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))), ([], []))
         self.assertEqual(self.count("tags"), 1)
 
     def test_bulk_tag_removal_keeps_the_tags(self) -> None:
         tag = self.tag("BulkTag")
         works = [self.library.add_work("Bulk %d" % i) for i in range(3)]
         for work in works:
-            self.library.add_tag_to_work(work, tag)
+            tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
         self.library.bulk_update_works({"action": "remove_tags", "work_ids": works, "tag_ids": [tag]})
-        self.assertEqual([self.library.get_work_tags(work) for work in works], [[], [], []])
+        self.assertEqual([library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)) for work in works], [[], [], []])
         self.assertEqual(self.count("tags"), 1)
 
     def test_deleting_a_work_keeps_its_tags(self) -> None:
         work, tag = self.library.add_work("Doomed work"), self.tag("OnlyOnThisWork")
-        self.library.add_tag_to_work(work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
         self.run_command(lambda scope: commands.delete_work(scope, work), serializable=True)
         self.assertEqual((self.count("works"), self.count("work_tags"), self.count("tags")), (0, 0, 1))
 
     def test_an_explicit_delete_destroys_the_tag_and_all_its_links(self) -> None:
         work, folder, tag = self.library.add_work("Explicit"), self.folder("Explicit"), self.tag("Doomed")
-        self.library.add_tag_to_work(work, tag)
-        self.library.add_tag_to_folder(folder, tag)
-        self.library.delete_tag(tag)
-        self.assertEqual((self.count("tags"), self.library.get_work_tags(work), self.library.get_folder_tags(folder)),
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_folder(self.db, self.ctx, folder, tag)
+        tag_commands.delete(self.db, self.ctx, tag)
+        self.assertEqual((self.count("tags"), library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)), library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.FOLDER, folder))),
                          (0, [], []))
 
     def test_a_merge_destroys_only_the_source_tag(self) -> None:
         work, source, target = self.library.add_work("Merged"), self.tag("Source"), self.tag("Target")
-        self.library.add_tag_to_work(work, source)
-        self.library.merge_tags_into(source, target)
-        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [target])
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [target])
+        tag_commands.tag_work(self.db, self.ctx, work, source)
+        tag_commands.merge(self.db, self.ctx, source, target)
+        self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [target])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [target])
 
 
 class MergeTests(OrganizationTestCase):
     def test_a_merge_moves_links_aliases_and_the_name(self) -> None:
         source, target = self.tag("Moral philosophy"), self.tag("Ethics")
-        self.library.add_tag_alias(source, "Morals")
-        self.library.add_tag_alias(target, "Ethik")
+        tag_commands.add_alias(self.db, self.ctx, source, "Morals")
+        tag_commands.add_alias(self.db, self.ctx, target, "Ethik")
         only_source, both = self.library.add_work("Only"), self.library.add_work("Both")
         folder = self.folder()
         for work in (only_source, both):
-            self.library.add_tag_to_work(work, source)
-        self.library.add_tag_to_work(both, target)
-        self.library.add_tag_to_folder(folder, source)
-        result = self.library.merge_tags_into(source, target)
+            tag_commands.tag_work(self.db, self.ctx, work, source)
+        tag_commands.tag_work(self.db, self.ctx, both, target)
+        tag_commands.tag_folder(self.db, self.ctx, folder, source)
+        result = tag_commands.merge(self.db, self.ctx, source, target)
         self.assertEqual(result, {
             "canonical_tag_id": target, "canonical_name": "Ethics",
             "affected_work_ids": sorted([only_source, both]), "affected_folder_ids": [folder],
@@ -331,21 +332,21 @@ class MergeTests(OrganizationTestCase):
             links.WORK.scope_id(both, source): 2, links.WORK.scope_id(both, target): 1})
         self.assertEqual(self.revisions("folder-tag"), {links.FOLDER.scope_id(folder, source): 2,
                                                         links.FOLDER.scope_id(folder, target): 1})
-        [ethics] = self.library.get_all_tags()
+        [ethics] = tag_commands.all_tags(self.db, self.ctx)
         self.assertEqual(ethics["aliases"], ["Ethik", "Moral philosophy", "Morals"])
-        self.assertEqual(self.library.resolve_tag_id_by_label("moral PHILOSOPHY"), target)
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "moral PHILOSOPHY")), target)
         self.assertEqual(self.lifecycle_of(source), {"state": lifecycle.MERGED, "target_tag_id": target})
-        self.assertEqual(self.library.get_tags_in_use()[0]["work_count"], 2)
+        self.assertEqual(tag_commands.in_use(self.db, self.ctx)[0]["work_count"], 2)
         self.assert_integrity()
 
     def test_merges_flatten_their_chains(self) -> None:
         first, second, third = self.tag("A"), self.tag("B"), self.tag("C")
-        self.library.merge_tags_into(first, second)
-        self.library.merge_tags_into(second, third)
+        tag_commands.merge(self.db, self.ctx, first, second)
+        tag_commands.merge(self.db, self.ctx, second, third)
         rows = self.sql("SELECT tag_id, target_tag_id FROM prks.sync_tag_lifecycle WHERE state = 'merged'")
         self.assertEqual({row["tag_id"]: row["target_tag_id"] for row in rows}, {first: third, second: third})
         self.assertEqual(self.lifecycle_of(first), {"state": lifecycle.MERGED, "target_tag_id": third})
-        self.library.delete_tag(third)
+        tag_commands.delete(self.db, self.ctx, third)
         self.assertEqual(self.lifecycle_of(first), {"state": lifecycle.DELETED})
         self.assert_integrity()
 
@@ -356,12 +357,12 @@ class MergeTests(OrganizationTestCase):
                                         (tag, generate("T"), "tag not found"),
                                         (generate("T"), tag, "tag not found")):
             with self.subTest(message=message), self.assertRaises(ValueError) as caught:
-                self.library.merge_tags_into(source, target)
+                tag_commands.merge(self.db, self.ctx, source, target)
             self.assertEqual(str(caught.exception), message)
 
     def test_a_lifecycle_cycle_is_a_server_failure(self) -> None:
         first, second = self.tag("A"), self.tag("B")
-        self.library.merge_tags_into(first, second)
+        tag_commands.merge(self.db, self.ctx, first, second)
         # No constraint forbids a cycle; only the merge command's flattening does.
         self.sql("UPDATE prks.sync_tag_lifecycle SET state = 'merged', target_tag_id = %s WHERE tag_id = %s",
                  (first, second))
@@ -374,35 +375,35 @@ class IsolationTests(OrganizationTestCase):
         tag, work = self.tag("Ethics"), self.library.add_work("W")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            self.assertEqual(self.library.get_all_tags(), [])
-            self.assertIsNone(self.library.resolve_tag_id_by_label("Ethics"))
-            theirs = self.library.add_tag("Ethics")  # the namespace is per Library
+            self.assertEqual(tag_commands.all_tags(self.db, self.ctx), [])
+            self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Ethics")))
+            theirs = tag_commands.create(self.db, self.ctx, "Ethics")  # the namespace is per Library
             self.assertFalse(theirs["existed"])
             their_work = self.library.add_work("Theirs")
-            for call, args in (("add_tag_to_work", (their_work, tag)), ("add_tag_to_work", (work, theirs["id"])),
-                               ("add_tag_alias", (tag, "x")), ("delete_tag", (tag,)),
-                               ("merge_tags_into", (theirs["id"], tag))):
+            for call, args in (("tag_work", (their_work, tag)), ("tag_work", (work, theirs["id"])),
+                               ("add_alias", (tag, "x")), ("delete", (tag,)),
+                               ("merge", (theirs["id"], tag))):
                 with self.subTest(call=call), self.assertRaises(ValueError):
-                    getattr(self.library, call)(*args)
-            self.assertFalse(self.library.delete_tag_alias(tag, "x"))
-            self.assertIsNone(self.library.get_work_tag_options(work))
-        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [tag])
+                    getattr(tag_commands, call)(self.db, self.ctx, *args)
+            self.assertFalse(tag_commands.delete_alias(self.db, self.ctx, tag, "x"))
+            self.assertIsNone(tag_commands.work_options(self.db, self.ctx, work))
+        self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [tag])
         self.assertEqual(self.lifecycle_of(theirs["id"]), {"state": lifecycle.UNKNOWN})
 
     def test_a_reader_reads_tags_but_cannot_change_them(self) -> None:
         tag, work = self.tag("Ethics"), self.library.add_work("W")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(len(self.library.get_all_tags()), 1)
-            for call, args in (("add_tag", ("New",)), ("add_tag_to_work", (work, tag)), ("delete_tag", (tag,))):
+            self.assertEqual(len(tag_commands.all_tags(self.db, self.ctx)), 1)
+            for call, args in (("create", ("New",)), ("tag_work", (work, tag)), ("delete", (tag,))):
                 with self.subTest(call=call), self.assertRaises(AccessRefused):
-                    getattr(self.library, call)(*args)
+                    getattr(tag_commands, call)(self.db, self.ctx, *args)
 
 
 class ConcurrencyTests(OrganizationTestCase):
     def test_two_creates_of_one_name_make_one_tag(self) -> None:
         tag_id = generate("T")
         holder, contender = self.race(lambda scope: tags.add_tag(scope, tag_id, "Λόγος", "#111111"),
-                                      lambda: self.library.add_tag("ΛΌΓΟΣ"), serializable=True)
+                                      lambda: tag_commands.create(self.db, self.ctx, "ΛΌΓΟΣ"), serializable=True)
         self.assertFalse(holder["existed"])
         self.assertEqual((contender["id"], contender["existed"]), (tag_id, True))
         self.assertEqual(self.count("tags"), 1)
@@ -411,7 +412,7 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_an_alias_racing_a_create_of_the_same_name(self) -> None:
         ethics = self.tag("Ethics")
         holder, contender = self.race(lambda scope: tags.add_alias(scope, generate("L"), ethics, "Morals"),
-                                      lambda: self.library.add_tag("morals"), serializable=True)
+                                      lambda: tag_commands.create(self.db, self.ctx, "morals"), serializable=True)
         self.assertIsNone(holder)
         self.assertEqual((contender["id"], contender["existed"]), (ethics, True))
         self.assertEqual(self.count("tags"), 1)
@@ -420,7 +421,7 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_a_create_racing_an_alias_of_the_same_name(self) -> None:
         ethics = self.tag("Ethics")
         holder, contender = self.race(lambda scope: tags.add_tag(scope, generate("T"), "Morals", "#111111"),
-                                      lambda: self.library.add_tag_alias(ethics, "MORALS"), serializable=True)
+                                      lambda: tag_commands.add_alias(self.db, self.ctx, ethics, "MORALS"), serializable=True)
         self.assertFalse(holder["existed"])
         self.assertIsInstance(contender, ValueError)
         self.assertEqual(str(contender), "alias conflicts with another tag name")
@@ -430,7 +431,7 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_a_link_to_the_source_waits_for_the_merge_and_is_refused(self) -> None:
         source, target, work = self.tag("A"), self.tag("B"), self.library.add_work("W")
         holder, contender = self.race(lambda scope: tags.merge(scope, source, target, generate("L")),
-                                      lambda: self.library.add_tag_to_work(work, source), serializable=True)
+                                      lambda: tag_commands.tag_work(self.db, self.ctx, work, source), serializable=True)
         self.assertEqual(holder["canonical_tag_id"], target)
         self.assertIsInstance(contender, ValueError)
         self.assertEqual(self.count("work_tags"), 0)
@@ -442,11 +443,11 @@ class ConcurrencyTests(OrganizationTestCase):
         def link(scope: LibraryScope) -> None:
             links.edit(scope, links.WORK, work, source, True)
 
-        holder, contender = self.race(link, lambda: self.library.merge_tags_into(source, target),
+        holder, contender = self.race(link, lambda: tag_commands.merge(self.db, self.ctx, source, target),
                                       serializable=serializable)
         self.assertIsNone(holder)
         self.assertEqual(contender["affected_work_ids"], [work])
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [target])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [target])
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, source): 2,
                                                       links.WORK.scope_id(work, target): 1})
 
@@ -463,7 +464,7 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_a_create_of_the_source_name_waits_for_the_merge(self) -> None:
         source, target = self.tag("A"), self.tag("B")
         holder, contender = self.race(lambda scope: tags.merge(scope, source, target, generate("L")),
-                                      lambda: self.library.add_tag("a"), serializable=True)
+                                      lambda: tag_commands.create(self.db, self.ctx, "a"), serializable=True)
         self.assertEqual(holder["canonical_tag_id"], target)
         self.assertEqual((contender["id"], contender["existed"]), (target, True))
         self.assert_integrity()
@@ -471,23 +472,23 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_crossed_merges_leave_one_tag(self) -> None:
         first, second = self.tag("A"), self.tag("B")
         holder, contender = self.race(lambda scope: tags.merge(scope, first, second, generate("L")),
-                                      lambda: self.library.merge_tags_into(second, first), serializable=True)
+                                      lambda: tag_commands.merge(self.db, self.ctx, second, first), serializable=True)
         self.assertEqual(holder["canonical_tag_id"], second)
         self.assertIsInstance(contender, ValueError)
-        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [second])
+        self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [second])
         self.assert_integrity()
 
     def test_a_link_waits_for_the_delete_and_is_refused(self) -> None:
         tag, work = self.tag("A"), self.library.add_work("W")
         holder, contender = self.race(lambda scope: tags.delete_tag(scope, tag),
-                                      lambda: self.library.add_tag_to_work(work, tag))
+                                      lambda: tag_commands.tag_work(self.db, self.ctx, work, tag))
         self.assertTrue(holder[0])
         self.assertIsInstance(contender, ValueError)
         self.assertEqual(self.count("work_tags"), 0)
 
     def linked(self) -> tuple[str, str, str]:
         tag, work = self.tag("Ethics"), self.library.add_work("W")
-        self.library.add_tag_to_work(work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
         return tag, work, links.WORK.scope_id(work, tag)
 
     def test_a_work_delete_waits_for_a_tag_delete(self) -> None:
@@ -502,7 +503,7 @@ class ConcurrencyTests(OrganizationTestCase):
     def test_a_tag_delete_waits_for_a_work_delete(self) -> None:
         tag, work, scope_id = self.linked()
         holder, contender = self.race(lambda scope: commands.delete_work(scope, work),
-                                      lambda: self.library.delete_tag(tag))
+                                      lambda: tag_commands.delete(self.db, self.ctx, tag))
         self.assertIsNotNone(holder)
         # The link went with its Work; the Tag delete found nothing to remove.
         self.assertEqual(contender["affected_work_ids"], [])
@@ -543,8 +544,8 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         # An alias resolves to its Tag, in a create too.
         self.answer(self.create("Morals"), {"color": "#6d6cf7", "existed": True, "id": "<T Ethics>",
                                             "name": "Ethics"})
-        self.answer(self.library.resolve_tag_id_by_label("MORALS"), "<T Ethics>")
-        self.assertIsNone(self.library.resolve_tag_id_by_label("nothing"))
+        self.answer(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "MORALS")), "<T Ethics>")
+        self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "nothing")))
         catalog = tag_commands.all_tags(db, ctx)
         self.answer(catalog, [
             {"aliases": ["Morals"], "color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"},
@@ -575,8 +576,8 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         self.answer(tag_commands.folder_options(db, ctx, folder),
                     {"assigned": assigned, "folder_id": "<F F>", "known_absent": {"<T Logic>": 2}})
         row = {"color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"}
-        self.answer(self.library.get_work_tags(work), [row])
-        self.answer(self.library.get_folder_tags(folder), [row])
+        self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)), [row])
+        self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.FOLDER, folder)), [row])
         self.answer(require(self.library.get_work(work))["tags"], [row])
         self.answer(tag_commands.in_use(db, ctx), [{**row, "aliases": [], "folder_count": 1, "work_count": 1}])
         self.assertIsNone(tag_commands.work_options(db, ctx, "W-" + "0" * 32))
@@ -601,7 +602,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         self.answer(tag_commands.folder_options(db, ctx, folder),
                     {"assigned": [], "folder_id": "<F F>", "known_absent": {}})
         self.assertEqual(tag_commands.all_tags(db, ctx), [])
-        self.assertIsNone(self.library.resolve_tag_id_by_label("Morals"))
+        self.assertIsNone(library_query(self.db, self.ctx, lambda scope: tags.resolve_label(scope, "Morals")))
         self.assert_refused(lambda: tag_commands.delete(db, ctx, ethics), "tag not found")
         self.assert_refused(lambda: tag_commands.delete(db, ctx, ""), "tag_id is required")
 

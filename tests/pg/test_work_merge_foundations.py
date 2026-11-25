@@ -30,6 +30,8 @@ from tests import acting_context as facade_context
 from backend.sync import protocol
 from tests.pg.test_works_sync import SyncTestCase, create_payload
 from tests.narrowing import require
+from backend.domain.organization import folder_commands
+from backend.domain.organization import tag_commands
 
 T = TypeVar("T")
 _PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -136,7 +138,7 @@ class LifecycleTests(MergeTestCase):
 class SyncGateTests(MergeTestCase):
     def test_every_operation_naming_a_merged_work_is_refused_and_ledgered(self) -> None:
         source, target = self.library.add_work("Source"), self.library.add_work("Target")
-        tag = self.library.add_tag("Tag")["id"]
+        tag = tag_commands.create(self.db, self.ctx, "Tag")["id"]
         self.merged(source, target)
         before = self.snapshot()
         expected = (409, {"code": "WORK_MERGED", "work_id": source, "target_work_id": target})
@@ -350,18 +352,18 @@ class PlanTests(MergeTestCase):
         source = self.library.add_work("Source title", author_text="Source, A.")
         target = self.library.add_work("Target title", abstract="Target abstract", author_text="Target, B.")
         own_title = self.add_manifestation(source, title="Its own title")
-        shared, only_source = self.library.add_tag("Shared")["id"], self.library.add_tag("Only")["id"]
+        shared, only_source = tag_commands.create(self.db, self.ctx, "Shared")["id"], tag_commands.create(self.db, self.ctx, "Only")["id"]
         for work_id, tag in ((source, shared), (target, shared), (source, only_source)):
-            self.library.add_tag_to_work(work_id, tag)
+            tag_commands.tag_work(self.db, self.ctx, work_id, tag)
         same, moved, colliding = (self.library.add_person(name, "Person") for name in ("Same", "Moved", "Two"))
         self.library.add_role(same, source, "Author", credit_name="S. Person")
         self.library.add_role(same, target, "Author", credit_name="S. Person")
         self.library.add_role(moved, source, "Editor")
         self.library.add_role(colliding, source, "Author", credit_name="One spelling")
         self.library.add_role(colliding, target, "Author", credit_name="Another spelling")
-        here, there = self.library.add_folder("Here"), self.library.add_folder("There")
-        self.library.move_work_to_folder(source, here)
-        self.library.move_work_to_folder(target, there)
+        here, there = folder_commands.create(self.db, self.ctx, "Here"), folder_commands.create(self.db, self.ctx, "There")
+        folder_commands.move_work(self.db, self.ctx, source, here)
+        folder_commands.move_work(self.db, self.ctx, target, there)
         self.library.update_work_metadata(source, {"text_content": "Source research", "private_notes": "mine",
                                                    "status": "Completed"})
         self.library.update_work_metadata(target, {"text_content": "Target research"})
@@ -473,7 +475,7 @@ class PlanTests(MergeTestCase):
         # §7.1: a row that joins the source after the merge read the set is
         # caught by SSI, because the writer is SERIALIZABLE (PEER_WRITERS).
         source, target = self.library.add_work("S"), self.library.add_work("T")
-        tag = self.library.add_tag("Late")["id"]
+        tag = tag_commands.create(self.db, self.ctx, "Late")["id"]
         snapshot_taken, added = threading.Event(), threading.Event()
         plans: list[merge.MergePlan] = []
 
@@ -491,7 +493,7 @@ class PlanTests(MergeTestCase):
         thread.start()
         try:
             self.assertTrue(snapshot_taken.wait(30))
-            self.library.add_tag_to_work(source, tag)
+            tag_commands.tag_work(self.db, self.ctx, source, tag)
         finally:
             added.set()
             thread.join(60)

@@ -7,6 +7,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.storage.config import StorageConfig
+from backend.domain.organization import folder_commands
+from backend.domain.organization import playlist_commands
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 REPO = Path(__file__).resolve().parents[2]
 MINIMAL_PDF = REPO / "tests" / "browser" / "assets" / "minimal.pdf"
@@ -521,12 +525,10 @@ def seed_playlists_library(storage_root: str) -> dict:
         provider_id="e2e0000002",
         author_text=PLAYLIST_CHANNEL,
     )
-    playlist_a = db.add_playlist(
-        PLAYLIST_A_TITLE, PLAYLIST_A_DESCRIPTION, PLAYLIST_A_URL
-    )
-    playlist_b = db.add_playlist(PLAYLIST_B_TITLE, "Never opened while online.")
-    db.add_work_to_playlist(playlist_a, video_one)
-    db.add_work_to_playlist(playlist_a, video_two)
+    playlist_a = playlist_commands.create(db.database, current_context(), PLAYLIST_A_TITLE, PLAYLIST_A_DESCRIPTION, PLAYLIST_A_URL)
+    playlist_b = playlist_commands.create(db.database, current_context(), PLAYLIST_B_TITLE, "Never opened while online.")
+    playlist_commands.add_item(db.database, current_context(), playlist_a, video_one)
+    playlist_commands.add_item(db.database, current_context(), playlist_a, video_two)
     ids.update(
         {
             "playlist_a": playlist_a,
@@ -559,13 +561,13 @@ def seed_folders_library(storage_root: str) -> dict:
     ids = seed_playlists_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    parent = db.add_folder(FOLDER_PARENT_TITLE, FOLDER_PARENT_DESCRIPTION, None)
-    child = db.add_folder(FOLDER_CHILD_TITLE, "Child folder.", parent)
-    unvisited = db.add_folder(FOLDER_UNVISITED_TITLE, "Never opened while online.", None)
-    db.add_work_to_folder(parent, ids["work_a"])
-    db.add_work_to_folder(child, ids["work_b"])
-    tag_id = db.add_tag(FOLDER_TAG_NAME, "#556677")["id"]
-    db.add_tag_to_folder(parent, tag_id)
+    parent = folder_commands.create(db.database, current_context(), FOLDER_PARENT_TITLE, FOLDER_PARENT_DESCRIPTION, None)
+    child = folder_commands.create(db.database, current_context(), FOLDER_CHILD_TITLE, "Child folder.", parent)
+    unvisited = folder_commands.create(db.database, current_context(), FOLDER_UNVISITED_TITLE, "Never opened while online.", None)
+    folder_commands.file_work(db.database, current_context(), parent, ids["work_a"])
+    folder_commands.file_work(db.database, current_context(), child, ids["work_b"])
+    tag_id = tag_commands.create(db.database, current_context(), FOLDER_TAG_NAME, "#556677")["id"]
+    tag_commands.tag_folder(db.database, current_context(), parent, tag_id)
     ids.update(
         {
             "folder_parent": parent,
@@ -599,13 +601,13 @@ def seed_library_nav_folders(storage_root: str) -> dict:
     """
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    research = db.add_folder(LIBRARY_NAV_RESEARCH, "Library nav root.", None)
-    philosophy = db.add_folder(LIBRARY_NAV_PHILOSOPHY, "Philosophy branch.", research)
-    ethics = db.add_folder(LIBRARY_NAV_ETHICS, "Ethics leaf.", philosophy)
-    epistemology = db.add_folder(LIBRARY_NAV_EPISTEMOLOGY, "Epistemology leaf.", philosophy)
-    computing = db.add_folder(LIBRARY_NAV_COMPUTING, "Computing branch.", research)
-    ai = db.add_folder(LIBRARY_NAV_AI, "AI leaf.", computing)
-    networking = db.add_folder(LIBRARY_NAV_NETWORKING, "Networking leaf.", computing)
+    research = folder_commands.create(db.database, current_context(), LIBRARY_NAV_RESEARCH, "Library nav root.", None)
+    philosophy = folder_commands.create(db.database, current_context(), LIBRARY_NAV_PHILOSOPHY, "Philosophy branch.", research)
+    ethics = folder_commands.create(db.database, current_context(), LIBRARY_NAV_ETHICS, "Ethics leaf.", philosophy)
+    epistemology = folder_commands.create(db.database, current_context(), LIBRARY_NAV_EPISTEMOLOGY, "Epistemology leaf.", philosophy)
+    computing = folder_commands.create(db.database, current_context(), LIBRARY_NAV_COMPUTING, "Computing branch.", research)
+    ai = folder_commands.create(db.database, current_context(), LIBRARY_NAV_AI, "AI leaf.", computing)
+    networking = folder_commands.create(db.database, current_context(), LIBRARY_NAV_NETWORKING, "Networking leaf.", computing)
     return {
         "research": research,
         "philosophy": philosophy,

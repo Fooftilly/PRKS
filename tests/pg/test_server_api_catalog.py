@@ -16,6 +16,10 @@ from typing import Any
 
 from backend.domain.entity_ids import generate
 from tests.pg.server_api_fixtures import ServerApiTestCase
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import links
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 
 class CatalogTests(ServerApiTestCase):
@@ -27,7 +31,7 @@ class CatalogTests(ServerApiTestCase):
 
     def work_tag_ids(self, work_id: str) -> list[str]:
         with self.acting():
-            return [row["id"] for row in self.facade.get_work_tags(work_id)]
+            return [row["id"] for row in library_query(self.facade.database, current_context(), lambda scope: links.tags_of(scope, links.WORK, work_id))]
 
     def test_a_concept_is_created_from_one_json_body(self) -> None:
         body = self.ok(self.send("POST", "/api/concepts", {"name": "API Concept", "description": "from test"}), 201)
@@ -85,10 +89,10 @@ class CatalogTests(ServerApiTestCase):
     def test_a_tag_merge_moves_its_works_and_a_self_merge_is_refused(self) -> None:
         work_id = self.create_work("API Merge Work")["id"]
         with self.acting():
-            source = self.facade.add_tag("ApiMergeSrc", "#a00")["id"]
-            target = self.facade.add_tag("ApiMergeTgt", "#b00")["id"]
-            self.facade.add_tag_to_work(work_id, source)
-            solo = self.facade.add_tag("ApiMergeSolo", "#c00")["id"]
+            source = tag_commands.create(self.facade.database, current_context(), "ApiMergeSrc", "#a00")["id"]
+            target = tag_commands.create(self.facade.database, current_context(), "ApiMergeTgt", "#b00")["id"]
+            tag_commands.tag_work(self.facade.database, current_context(), work_id, source)
+            solo = tag_commands.create(self.facade.database, current_context(), "ApiMergeSolo", "#c00")["id"]
         body = self.ok(self.send("POST", "/api/tags/merge", {"source_tag_id": source, "target_tag_id": target}))
         self.assertEqual((body.get("status"), body.get("canonical_tag_id"), body.get("canonical_name")),
                          ("merged", target, "ApiMergeTgt"))
@@ -100,9 +104,9 @@ class CatalogTests(ServerApiTestCase):
     def test_a_tag_delete_removes_it_with_its_aliases_and_promotes_nothing(self) -> None:
         work_id = self.create_work("API Delete Tag Work")["id"]
         with self.acting():
-            tag_id = self.facade.add_tag("ApiDeleteCanon", "#d00")["id"]
-            self.facade.add_tag_alias(tag_id, "ApiDeleteAlias")
-            self.facade.add_tag_to_work(work_id, tag_id)
+            tag_id = tag_commands.create(self.facade.database, current_context(), "ApiDeleteCanon", "#d00")["id"]
+            tag_commands.add_alias(self.facade.database, current_context(), tag_id, "ApiDeleteAlias")
+            tag_commands.tag_work(self.facade.database, current_context(), work_id, tag_id)
         body = self.ok(self.send("DELETE", f"/api/tags/{tag_id}"))
         self.assertEqual(body.get("status"), "deleted")
         self.assertNotIn("promoted", body)

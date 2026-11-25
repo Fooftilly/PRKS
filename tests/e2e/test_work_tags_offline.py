@@ -1,5 +1,4 @@
 """Existing Work Tags: durable UI intent, reconnect, replay and conflicts."""
-import json
 import os
 import unittest
 
@@ -8,6 +7,10 @@ from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, open_library, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import links
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -26,9 +29,9 @@ def tearDownModule():
 def seed(root):
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    ids['tag'] = db.add_tag('Offline Existing')['id']
-    ids['assigned'] = db.add_tag('Initially Assigned')['id']
-    db.add_tag_to_work(ids['work_a'], ids['assigned'])
+    ids['tag'] = tag_commands.create(db.database, current_context(), 'Offline Existing')['id']
+    ids['assigned'] = tag_commands.create(db.database, current_context(), 'Initially Assigned')['id']
+    tag_commands.tag_work(db.database, current_context(), ids['work_a'], ids['assigned'])
     return ids
 
 
@@ -126,7 +129,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         server._seed_fn = None; server.start()
         self.reconnect(page, context); self.pending(page, 0)
         db = library_for(server)
-        self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']], self.tag_ledger(server))
+        self.assertEqual([t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a']))], [server.ids['tag']], self.tag_ledger(server))
         self.offline(page, context); page.reload()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
@@ -153,17 +156,17 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.add(page); self.pending(page, 1)
         db = library_for(server)
         w, t = server.ids['work_a'], server.ids['tag']
-        db.add_tag_to_work(w, t); db.remove_tag_from_work(w, t)
+        db.run(tag_commands.tag_work, w, t); db.run(tag_commands.untag_work, w, t)
         original = self.tag_operations(page)[0]['op_id']
         self.reconnect(page, context)
         page.get_by_role('button', name='Apply my change', exact=True).wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
-        self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
+        self.assertNotIn(t, [r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))])
         page.get_by_role('button', name='Apply my change', exact=True).click()
         self.pending(page, 0)
         self.assertEqual(self.tag_operations(page), [],
                          'the completed operation is retired locally')
-        self.assertIn(t, [r['id'] for r in db.get_work_tags(w)])
+        self.assertIn(t, [r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))])
         # The ledger proves a NEW operation carried the reapplied intent: the
         # original id kept its recorded conflict and was never reused.
         ledger = {r['op_id']: r['status'] for r in self.tag_ledger(server)}
@@ -180,7 +183,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         self.reconnect(page, context); self.pending(page, 0)
         db = library_for(server)
-        self.assertIn(server.ids['tag'], [t['id'] for t in db.get_work_tags(server.ids['work_a'])])
+        self.assertIn(server.ids['tag'], [t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a']))])
 
     # ---- helpers for the degraded and conflicted paths ----
 
@@ -253,7 +256,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(self.db_for(server).get_work_tags(server.ids['work_a']), [])
+        self.assertEqual(self.db_for(server).run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a'])), [])
 
     def test_a_tag_created_offline_is_attachable_immediately(self):
         """The id is minted on this device, so it is a real Tag the moment it
@@ -291,12 +294,12 @@ class OfflineWorkTagTests(unittest.TestCase):
             }
         }""")
         db = self.db_for(server)
-        rows = [t for t in db.get_all_tags() if t['name'] == 'Brand New Offline Tag']
+        rows = [t for t in db.run(tag_commands.all_tags) if t['name'] == 'Brand New Offline Tag']
         self.assertEqual(len(rows), 1, 'created once, not twice')
         self.assertEqual(rows[0]['id'], created[0]['entity_id'],
                          'the id the client minted is the id SQLite stores')
         self.assertIn(rows[0]['id'],
-                      [t['id'] for t in db.get_work_tags(server.ids['work_a'])])
+                      [t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a']))])
 
     # ---- Phase H: one durable-first path, online and offline ----
 
@@ -314,7 +317,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertTrue([1 for _, url in writes if url.endswith('/api/sync/operations')], writes)
         self.assertEqual([(m, u) for m, u in writes if '/tags' in u], [], writes)
         db = self.db_for(server)
-        self.assertEqual([t['id'] for t in db.get_work_tags(server.ids['work_a'])], [server.ids['tag']])
+        self.assertEqual([t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, server.ids['work_a']))], [server.ids['tag']])
         self.assertEqual(
             sorted(r['status'] for r in self.tag_ledger(server)),
             ['ACKNOWLEDGED', 'ACKNOWLEDGED'])
@@ -328,15 +331,15 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         db = self.db_for(server)
         w, t = server.ids['work_a'], server.ids['tag']
-        db.add_tag_to_work(w, t)
-        db.remove_tag_from_work(w, t)
+        db.run(tag_commands.tag_work, w, t)
+        db.run(tag_commands.untag_work, w, t)
         self.reconnect(page, context)
         page.get_by_role('button', name='Use server state', exact=True).click()
         self.pending(page, 0)
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for(state='detached')
         self.assertEqual(self.tag_operations(page), [],
                          'resolving with server state creates no replacement operation')
-        self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
+        self.assertNotIn(t, [r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))])
         # The conflict itself was ledgered; resolving it mutated nothing more.
         rows = self.tag_ledger(server)
         self.assertEqual([r['status'] for r in rows], ['REVISION_CONFLICT'])
@@ -356,7 +359,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         db = self.db_for(server)
         w, source, target = server.ids['work_a'], server.ids['tag'], server.ids['assigned']
-        db.merge_tags_into(source, target)
+        db.run(tag_commands.merge, source, target)
         self.reconnect(page, context)
         operation = self.sole_conflict(page)
         self.assertEqual(operation['server_result']['code'], 'TAG_MERGED')
@@ -364,14 +367,14 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertIn('was merged into', self.conflict_text(page))
         # The local intent is still visible and the server was not touched.
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
-        self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target])
+        self.assertEqual([t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))], [target])
 
         page.get_by_role('button', name='Discard local change', exact=True).click()
         self.pending(page, 0)
         self.assertEqual(self.tag_operations(page), [])
-        self.assertEqual([t['id'] for t in db.get_work_tags(w)], [target],
+        self.assertEqual([t['id'] for t in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))], [target],
                          'discarding a merge conflict retargets nothing')
-        self.assertNotIn(source, [r['id'] for r in db.get_all_tags()])
+        self.assertNotIn(source, [r['id'] for r in db.run(tag_commands.all_tags)])
 
     def test_tag_deleted_conflict_never_recreates_the_tag(self):
         server, page, context = self.start()
@@ -380,7 +383,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         db = self.db_for(server)
         w, t = server.ids['work_a'], server.ids['tag']
-        db.delete_tag(t)
+        db.run(tag_commands.delete, t)
         self.reconnect(page, context)
         operation = self.sole_conflict(page)
         self.assertEqual(operation['server_result']['code'], 'TAG_DELETED')
@@ -388,8 +391,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.get_by_role('button', name='Discard local change', exact=True).click()
         self.pending(page, 0)
         self.assertEqual(self.tag_operations(page), [])
-        self.assertNotIn(t, [r['id'] for r in db.get_all_tags()])
-        self.assertEqual([r['id'] for r in db.get_work_tags(w)], [server.ids['assigned']])
+        self.assertNotIn(t, [r['id'] for r in db.run(tag_commands.all_tags)])
+        self.assertEqual([r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))], [server.ids['assigned']])
 
     def test_missing_work_is_terminal_and_stays_discoverable(self):
         server, page, context = self.start()
@@ -421,8 +424,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.pending(page, 1)
         db = self.db_for(server)
         w, t = server.ids['work_a'], server.ids['tag']
-        db.add_tag_to_work(w, t)
-        db.remove_tag_from_work(w, t)
+        db.run(tag_commands.tag_work, w, t)
+        db.run(tag_commands.untag_work, w, t)
         self.clear_offline_cache(page)
         self.reconnect(page, context)
         self.assertEqual(self.sole_conflict(page)['server_result']['code'], 'REVISION_CONFLICT')
@@ -436,7 +439,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         discard.click()
         wait_for_async(page,
             "() => prksSync.store.listOperations().then(rows => rows.every(r => !%s))" % self.TAG_OPS)
-        self.assertNotIn(t, [r['id'] for r in db.get_work_tags(w)])
+        self.assertNotIn(t, [r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))])
         self.assertEqual([r['status'] for r in self.tag_ledger(server)], ['REVISION_CONFLICT'])
 
     # ---- the Tag vocabulary itself -------------------------------------------
@@ -476,7 +479,7 @@ class OfflineWorkTagTests(unittest.TestCase):
         }""")
         db = self.db_for(server)
         self.assertEqual(
-            [t for t in db.get_all_tags() if t['id'] == server.ids['tag']], [])
+            [t for t in db.run(tag_commands.all_tags) if t['id'] == server.ids['tag']], [])
 
     def test_deleting_a_tag_cancels_the_attachment_it_would_undo(self):
         server, page, context = self.start()

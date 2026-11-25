@@ -28,6 +28,11 @@ from tests.e2e.fixtures import (
     open_library,
     seed_graph_context_library,
 )
+from backend.domain.organization import folder_commands
+from backend.domain.organization import playlist_commands
+from backend.domain.organization import tag_commands
+from backend.domain.saved_views import commands as saved_view_commands
+from tests.acting_context import current_context
 
 WORK_C_TITLE = "E2E UX Tour PDF Work"
 WORK_D_TITLE = "E2E UX Tour Planned Work"
@@ -53,10 +58,10 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     db = open_library(cfg)
 
     # --- Folder hierarchy: parent + child, each holding one of the two seed Works. ---
-    parent_folder = db.add_folder("UX Tour Library")
-    child_folder = db.add_folder("UX Tour Subfolder", parent_id=parent_folder)
-    db.add_work_to_folder(parent_folder, ids["work_a"])
-    db.add_work_to_folder(child_folder, ids["work_b"])
+    parent_folder = folder_commands.create(db.database, current_context(), "UX Tour Library")
+    child_folder = folder_commands.create(db.database, current_context(), "UX Tour Subfolder", '', parent_folder)
+    folder_commands.file_work(db.database, current_context(), parent_folder, ids["work_a"])
+    folder_commands.file_work(db.database, current_context(), child_folder, ids["work_b"])
     ids["folder_parent"] = parent_folder
     ids["folder_child"] = child_folder
 
@@ -84,16 +89,16 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     # --- Several Tags, applied across Works. ---
     tag_ids = {}
     for tag_name in TAG_NAMES:
-        tag_ids[tag_name] = db.add_tag(tag_name)["id"]
-    db.add_tag_to_work(ids["work_a"], tag_ids[TAG_NAMES[0]])
-    db.add_tag_to_work(ids["work_a"], tag_ids[TAG_NAMES[1]])
-    db.add_tag_to_work(work_c, tag_ids[TAG_NAMES[2]])
+        tag_ids[tag_name] = tag_commands.create(db.database, current_context(), tag_name)["id"]
+    tag_commands.tag_work(db.database, current_context(), ids["work_a"], tag_ids[TAG_NAMES[0]])
+    tag_commands.tag_work(db.database, current_context(), ids["work_a"], tag_ids[TAG_NAMES[1]])
+    tag_commands.tag_work(db.database, current_context(), work_c, tag_ids[TAG_NAMES[2]])
     ids["tags"] = tag_ids
 
     # --- Playlist containing two Works. ---
-    playlist_id = db.add_playlist(PLAYLIST_TITLE, description="Playlist used by the UX tour.")
-    db.add_work_to_playlist(playlist_id, ids["work_a"])
-    db.add_work_to_playlist(playlist_id, work_c)
+    playlist_id = playlist_commands.create(db.database, current_context(), PLAYLIST_TITLE, "Playlist used by the UX tour.")
+    playlist_commands.add_item(db.database, current_context(), playlist_id, ids["work_a"])
+    playlist_commands.add_item(db.database, current_context(), playlist_id, work_c)
     ids["playlist"] = playlist_id
 
     # --- A second Person with a role, plus a second role for the first Person. ---
@@ -134,10 +139,7 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     ids["tour_stance"] = tour_stance["id"]
 
     # --- Saved View. ---
-    saved_view = db.create_saved_view(
-        SAVED_VIEW_NAME,
-        {"mode": "all", "q": WORK_A_TITLE, "tag": "", "author": "", "publisher": ""},
-    )
+    saved_view = saved_view_commands.create(db.database, current_context(), SAVED_VIEW_NAME, {"mode": "all", "q": WORK_A_TITLE, "tag": "", "author": "", "publisher": ""})
     ids["saved_view"] = saved_view["id"]
 
     ids["work_a_title"] = WORK_A_TITLE

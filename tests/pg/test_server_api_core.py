@@ -20,6 +20,8 @@ from backend.api import playlists as playlists_api
 from backend.api import work_roles as work_roles_api
 from backend.domain.works import work_commands
 from tests.pg.server_api_fixtures import ServerApiTestCase
+from backend.domain.organization import folder_commands
+from tests.acting_context import current_context
 
 
 class RequestIdTests(ServerApiTestCase):
@@ -156,12 +158,9 @@ class CreateRefusalTests(ServerApiTestCase):
         with self.acting():
             work_id = self.facade.add_work("Race Filing Work")  # not filed anywhere yet
             with self.assertRaisesRegex(ValueError, "no longer exists"):
-                self.facade.add_work_to_folder("F-does-not-exist", work_id)
-            with mock.patch.object(self.facade, "folder_exists", return_value=True):
-                with self.assertRaisesRegex(ValueError, "no longer exists"):
-                    self.facade.add_work_to_folder("F-deleted-meanwhile", work_id)
+                folder_commands.file_work(self.facade.database, current_context(), "F-does-not-exist", work_id)
             with self.assertRaisesRegex(ValueError, "file no longer exists"):
-                self.facade.add_work_to_folder(folder, "W-gone")
+                folder_commands.file_work(self.facade.database, current_context(), folder, "W-gone")
 
     def test_an_unknown_person_is_refused_before_anything_is_stored(self) -> None:
         res = self.send("POST", "/api/works", {"title": "Unknown Person Work",

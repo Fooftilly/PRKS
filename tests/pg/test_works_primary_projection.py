@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 from tests.pg.test_search_refresh import SearchTestCase
 from tests.narrowing import require
+from backend.domain.organization import folder_commands
+from backend.domain.organization import playlist_commands
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
@@ -110,18 +112,18 @@ class PrimaryProjectionTests(SearchTestCase):
     def test_every_reader_family_carries_the_same_identity(self) -> None:
         work_id = self.library.add_work("Reader Family Work", file_path=self.store_pdf("family.pdf", b"family"))
         self.stream(work_id, self.manifestation(work_id))
-        folder_id = self.library.add_folder("Projection Folder")
-        self.library.add_work_to_folder(folder_id, work_id)
+        folder_id = folder_commands.create(self.db, self.ctx, "Projection Folder")
+        folder_commands.file_work(self.db, self.ctx, folder_id, work_id)
         person_id = self.library.add_person("Ada", "Lovelace")
         self.library.add_role(person_id, work_id, "Author")
-        playlist_id = self.library.add_playlist("Projection Playlist")
-        self.library.add_work_to_playlist(playlist_id, work_id)
+        playlist_id = playlist_commands.create(self.db, self.ctx, "Projection Playlist")
+        playlist_commands.add_item(self.db, self.ctx, playlist_id, work_id)
         self.library.mark_work_opened(work_id)
 
         expected = self.identity(require(self.library.get_work(work_id)))
         self.assertEqual((expected["manifestation_count"], expected["asset_count"]), (2, 2))
-        folder, person, playlist = (self.library.get_folder(folder_id), self.library.get_person(person_id),
-                                    self.library.get_playlist(playlist_id))
+        folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir), self.library.get_person(person_id),
+                                    playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
         assert folder is not None and person is not None and playlist is not None
         families = {
             "all": self.library.get_all_works(),

@@ -5,17 +5,20 @@ title, a durable operation's ledger row. :func:`library_for` gives it the
 store the server itself writes: the server's PostgreSQL Library, through the
 facade, acting as the bootstrap owner.
 
-The public facade method names work as on the server. ``query`` and
-``execute`` run one statement against the ``prks`` schema; ``command`` runs a
-domain function inside the facade's ``library_command`` transaction.
+``run`` calls a domain command or query with the server's database and the
+owner's context. ``query`` and ``execute`` run one statement against the
+``prks`` schema; ``command`` runs a domain function inside the facade's
+``library_command`` transaction.
 """
 
 from __future__ import annotations
 
 import contextlib
-from typing import Any, LiteralString
+from typing import Any, Callable, LiteralString, TypeVar
 
 from tests.e2e.postgres_identity import owner_facade
+
+T = TypeVar("T")
 
 
 class LibraryStore:
@@ -42,6 +45,17 @@ class LibraryStore:
                 return method(*args, **kwargs)
 
         return call
+
+    def run(self, call: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+        """``call(database, owner context, *args, **kwargs)``: one domain command or query as the owner."""
+        return call(self._facade.database, self._ctx, *args, **kwargs)
+
+    @property
+    def pdfs_dir(self) -> str:
+        """The server's PDF directory (a Folder or Playlist detail lists its Works' files)."""
+        storage = self._facade.storage
+        assert storage is not None
+        return storage.pdfs_dir
 
     def query(self, postgres: LiteralString, *, params: tuple = ()) -> list[dict]:
         """Rows of one read against the ``prks`` schema, with ``%s`` placeholders."""

@@ -40,6 +40,8 @@ from tests.library_adapter import TestLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_http_processing import ProcessingHttpTestCase
 from tests.pg.test_search_text import pdf_bytes
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 _API_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend", "api")
 
@@ -173,7 +175,7 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
             self.ids = {
                 "work": self.facade.add_work("Matrix Work", file_path=f"/api/pdfs/{name}"),
                 "pdf": name,
-                "tag": self.facade.add_tag("Seeded tag")["id"],
+                "tag": tag_commands.create(self.facade.database, current_context(), "Seeded tag")["id"],
                 "person": self.facade.add_person("Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),
             }
             cached = self.facade._cache_person_portrait(

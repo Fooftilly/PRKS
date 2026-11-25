@@ -24,6 +24,9 @@ from backend.sync import protocol
 from backend.sync.families import Environment
 from tests.pg.test_folders import FolderTestCase
 from tests.narrowing import require
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import folder_commands
+from backend.domain.organization import tag_commands
 
 
 class BulkTestCase(FolderTestCase):
@@ -41,7 +44,7 @@ class BulkTestCase(FolderTestCase):
         return state["fields"]["status"]["value"], state["fields"]["status"]["revision"]
 
     def tag_ids(self, work_id: str) -> list[str]:
-        return sorted(row["id"] for row in self.library.get_work_tags(work_id))
+        return sorted(row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work_id)))
 
     def snapshot(self) -> list[Any]:
         """Everything a bulk action may change: revisions, links, filings, Statuses, Work times."""
@@ -109,12 +112,12 @@ class ActionTests(BulkTestCase):
         x, y = self.folder("X"), self.folder("Y")
         a, b, c = (self.library.add_work(t) for t in "ABC")
         for work_id in (a, b, c):
-            self.library.move_work_to_folder(work_id, x)
-        self.library.move_work_to_folder(b, y)
+            folder_commands.move_work(self.db, self.ctx, work_id, x)
+        folder_commands.move_work(self.db, self.ctx, b, y)
         result = self.bulk("move_folder", [a, b], folder_id=f"  {y}  ")
         self.assertEqual(result, {"action": "move_folder", "requested": 2, "status": "updated",
                                   "target_count": 1, "updated": 2})
-        self.assertEqual([(row["title"], row["work_count"]) for row in self.library.get_all_folders()],
+        self.assertEqual([(row["title"], row["work_count"]) for row in folder_commands.catalog(self.db, self.ctx)],
                          [("X", 1), ("Y", 2)])
         self.assertEqual(self.filed(), sorted([(a, y), (b, y), (c, x)]))
         self.assertEqual([self.work_folder(w) for w in (a, b, c)], [(y, 2), (y, 2), (x, 1)])
@@ -122,7 +125,7 @@ class ActionTests(BulkTestCase):
                          {"action": "move_folder", "requested": 3, "status": "updated", "target_count": 1,
                           "updated": 3})
         self.assertEqual(self.filed(), [])
-        self.assertEqual([(row["title"], row["work_count"]) for row in self.library.get_all_folders()],
+        self.assertEqual([(row["title"], row["work_count"]) for row in folder_commands.catalog(self.db, self.ctx)],
                          [("X", 0), ("Y", 0)])
         self.assertEqual([self.work_folder(w) for w in (a, b, c)], [("", 3), ("", 3), ("", 2)])
         self.bulk("move_folder", [a, b], folder_id=None)  # nothing to clear
@@ -131,8 +134,8 @@ class ActionTests(BulkTestCase):
     def test_tag_actions_are_idempotent_and_advance_only_changed_links(self) -> None:
         a, b, c = (self.library.add_work(t) for t in "ABC")
         t1, t2 = self.tag("T1"), self.tag("T2")
-        self.library.add_tag_to_work(a, t1)
-        self.library.add_tag_to_work(c, t1)
+        tag_commands.tag_work(self.db, self.ctx, a, t1)
+        tag_commands.tag_work(self.db, self.ctx, c, t1)
         result = self.bulk("add_tags", [a, b], tag_ids=[t2, t1, t2])
         self.assertEqual(result, {"action": "add_tags", "requested": 2, "status": "updated", "target_count": 2,
                                   "updated": 2})
@@ -144,13 +147,13 @@ class ActionTests(BulkTestCase):
         self.assertEqual(self.bulk("remove_tags", [a, c], tag_ids=[t2]),  # c never had t2: no scope row for it
                          {"action": "remove_tags", "requested": 2, "status": "updated", "target_count": 1,
                           "updated": 2})
-        self.assertEqual([(row["name"], row["work_count"]) for row in self.library.get_tags_in_use()],
+        self.assertEqual([(row["name"], row["work_count"]) for row in tag_commands.in_use(self.db, self.ctx)],
                          [("T1", 3), ("T2", 1)])
         self.assertEqual([self.tag_ids(w) for w in (a, b, c)], [[t1], sorted([t1, t2]), [t1]])
         revisions = self.revisions("work-tag")
         self.assertEqual((revisions[links.WORK.scope_id(a, t2)], revisions[links.WORK.scope_id(b, t2)]), (2, 1))
         self.assertNotIn(links.WORK.scope_id(c, t2), revisions)
-        self.assertEqual(require(self.library.get_work_tag_options(a))["known_absent"], {t2: 2})
+        self.assertEqual(require(tag_commands.work_options(self.db, self.ctx, a))["known_absent"], {t2: 2})
 
 
 class RefusalTests(BulkTestCase):
@@ -191,10 +194,10 @@ class RefusalTests(BulkTestCase):
         gone_work = self.library.add_work("Gone")
         self.library.delete_work_record(gone_work)
         gone_tag, merged = self.tag("Deleted"), self.tag("Merged")
-        self.library.delete_tag(gone_tag)
-        self.library.merge_tags_into(merged, tag)
+        tag_commands.delete(self.db, self.ctx, gone_tag)
+        tag_commands.merge(self.db, self.ctx, merged, tag)
         gone_folder = self.folder("Gone")
-        self.library.delete_empty_folder(gone_folder)
+        folder_commands.delete(self.db, self.ctx, gone_folder)
         before = self.snapshot()
         works = "One or more selected files no longer exist."
         for missing in (generate("W"), gone_work):
@@ -236,7 +239,7 @@ class RefusalTests(BulkTestCase):
         x, y = self.folder("X"), self.folder("Y")
         tag = self.tag("T")
         for work_id in works:
-            self.library.move_work_to_folder(work_id, x)
+            folder_commands.move_work(self.db, self.ctx, work_id, x)
         before = self.snapshot()
         writers = {"set_status": (metadata, "set_synced_field", {"status": "Completed"}),
                    "move_folder": (folders, "set_work_folder", {"folder_id": y}),
@@ -265,8 +268,8 @@ class IsolationAndRoleTests(BulkTestCase):
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = self.library.add_work("Theirs", status="Paused")
-            their_folder = self.library.add_folder("Theirs")
-            their_tag = self.library.add_tag("Theirs")["id"]
+            their_folder = folder_commands.create(self.db, self.ctx, "Theirs")
+            their_tag = tag_commands.create(self.db, self.ctx, "Theirs")["id"]
         before = self.snapshot()
         self.refused_bulk(404, "One or more selected files no longer exist.", "set_status", [mine, theirs],
                           status="Completed")
@@ -303,7 +306,7 @@ class StaleOperationTests(BulkTestCase):
         work = self.library.add_work("W", status="Paused")
         x, y = self.folder("X"), self.folder("Y")
         tag = self.tag("T")
-        self.library.move_work_to_folder(work, x)
+        folder_commands.move_work(self.db, self.ctx, work, x)
         self.bulk("set_status", [work], status="Completed")
         self.bulk("move_folder", [work], folder_id=y)
         self.bulk("add_tags", [work], tag_ids=[tag])
@@ -445,7 +448,7 @@ class ConcurrencyTests(BulkTestCase):
         a, b = self.library.add_work("A"), self.library.add_work("B")
         source, target = self.tag("Source"), self.tag("Target")
         holder, contender = self.race(self.held_bulk("add_tags", [a, b], tag_ids=[source]),
-                                      lambda: self.library.merge_tags_into(source, target),
+                                      lambda: tag_commands.merge(self.db, self.ctx, source, target),
                                       serializable=True)
         self.assertIsNone(holder)
         self.assertNotIsInstance(contender, BaseException)
@@ -461,7 +464,7 @@ class ConcurrencyTests(BulkTestCase):
         self.assertIsInstance(contender, BulkWorkError)
         self.assertEqual(str(contender), "Folder not found.")
         holder, contender = self.race(self.held_bulk("move_folder", [a], folder_id=kept),
-                                      lambda: self.library.delete_empty_folder(kept), serializable=True)
+                                      lambda: folder_commands.delete(self.db, self.ctx, kept), serializable=True)
         self.assertIsNone(holder)
         self.assertIsInstance(contender, ValueError)
         self.assertEqual((self.filed(), self.work_folder(a)), ([(a, kept)], (kept, 1)))

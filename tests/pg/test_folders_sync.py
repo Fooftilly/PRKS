@@ -26,6 +26,8 @@ from backend.sync.handlers import work_lifecycle
 from tests.pg.test_folders import FolderTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase, create_payload
 from tests.narrowing import require
+from backend.domain.organization import folder_commands
+from backend.domain.organization import tag_commands
 
 _FOLDER_OPERATIONS = frozenset({"CREATE_FOLDER", "SET_FOLDER_FIELD", "DELETE_FOLDER"})
 
@@ -80,7 +82,7 @@ class CreateTests(FolderSyncTestCase):
                                                   "parent_id": parent, "private_notes": "",
                                                   "work_count": 0, "child_count": 0}}))
         self.assertEqual(self.send(data), first)  # a replay
-        self.library.add_work_to_folder(folder_id, self.library.add_work("W"))
+        folder_commands.file_work(self.db, self.ctx, folder_id, self.library.add_work("W"))
         again = self.send(self.create("Other", folder_id))
         self.assertEqual((again[1]["changed"], again[1]["folder"]["title"], again[1]["folder"]["work_count"]),
                          (False, "Λόγος", 1))
@@ -103,7 +105,7 @@ class CreateTests(FolderSyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.create("Mine", theirs))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((len(self.ledger()), self.library.get_all_folders()), (before, []))
+        self.assertEqual((len(self.ledger()), folder_commands.catalog(self.db, self.ctx)), (before, []))
 
     def test_nul_is_an_invalid_envelope(self) -> None:
         self.assertEqual(self.send(self.create("a\x00b")), (400, {"code": "INVALID_ENVELOPE"}))
@@ -146,9 +148,9 @@ class EnvelopeTests(FolderSyncTestCase):
 
     def test_an_empty_title_becomes_the_placeholder_on_both_paths(self) -> None:
         folder_id = self.create_folder("   ")
-        self.assertEqual(require(self.library.get_folder(folder_id))["title"], "Untitled Folder")
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir))["title"], "Untitled Folder")
         top = self.create_folder("Top")
-        self.assertEqual(require(self.library.get_folder(self.library.add_folder("  ", "", top)))["title"],
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_commands.create(self.db, self.ctx, "  ", "", top), self.pdfs_dir))["title"],
                          "Untitled Folder")
 
     def test_clearing_a_parent_by_sync_leaves_no_parent(self) -> None:
@@ -157,13 +159,13 @@ class EnvelopeTests(FolderSyncTestCase):
         self.assertEqual(self.send(self.folder_field(child, "parent_id", "", 0))[1]["server_revision"], 1)
         self.assertEqual(self.sql("SELECT parent_id FROM prks.folders WHERE id = %s", (child,)),
                          [{"parent_id": None}])
-        self.assertIsNone(require(self.library.get_folder(child))["parent"])
+        self.assertIsNone(require(folder_commands.detail(self.db, self.ctx, child, self.pdfs_dir))["parent"])
 
 
 class FieldTests(FolderSyncTestCase):
     def test_the_decision_table(self) -> None:
         folder_id, work_id = self.create_folder("Folder"), self.library.add_work("W")
-        self.library.add_work_to_folder(folder_id, work_id)
+        folder_commands.file_work(self.db, self.ctx, folder_id, work_id)
         renamed = self.send(self.folder_field(folder_id, "title", "Renamed", 0))
         self.assertEqual(renamed, (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "field": "title",
                                          "server_revision": 1, "changed": True, "value_omitted": True,
@@ -274,7 +276,7 @@ class DeleteTests(FolderSyncTestCase):
     def test_a_base_from_before_the_delete_never_lands_on_the_folder_created_again(self) -> None:
         folder_id = generate("F")
         self.send(self.create("Old", folder_id))
-        tag = self.library.add_tag("Ethics")["id"]
+        tag = tag_commands.create(self.db, self.ctx, "Ethics")["id"]
         self.assertEqual(self.send(self.envelope("ADD_FOLDER_TAG", folder_id, {"tag_id": tag}, 0,
                                                  entity_type="folder"))[1]["server_revision"], 1)
         self.assertEqual(self.send(self.envelope("DELETE_FOLDER", folder_id, {}))[1]["changed"], True)
@@ -301,8 +303,8 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         uncategorized = result["folder_id"]
         self.assertEqual((result["changed"], result["playlist_id"], result["role_count"]), (True, "", 0))
         self.assertEqual(self.send(second)[1]["folder_id"], uncategorized)
-        self.assertEqual(require(self.library.get_folder(uncategorized))["title"], "Uncategorized")
-        self.assertEqual(self.library.get_all_folders()[0]["work_count"], 2)
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, uncategorized, self.pdfs_dir))["title"], "Uncategorized")
+        self.assertEqual(folder_commands.catalog(self.db, self.ctx)[0]["work_count"], 2)
         self.assertEqual(require(self.library.get_work(first["entity_id"]))["folder_title"], "Uncategorized")
         # Filing is construction: no revision moved.
         self.assertEqual(self.work_folder(first["entity_id"]), (uncategorized, 0))
@@ -332,7 +334,7 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         status, result = self.send(data)
         self.assertEqual((status, result["role_count"], result["aliases_revisions"]), (200, 1, {person: 1}))
         self.assertEqual([row["id"] for row in self.library.get_work_roles(data["entity_id"])], [person])
-        self.assertEqual(self.library.get_related_folders_for_work(data["entity_id"]), [])
+        self.assertEqual(folder_commands.related(self.db, self.ctx, data["entity_id"]), [])
 
     def test_a_missing_playlist_refuses_the_create_before_the_work_exists(self) -> None:
         data = self.create_work(playlist_id="PL-" + "0" * 32)
@@ -351,7 +353,7 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         self.assertEqual(self.count("works"), 0)
 
     def test_a_create_with_no_folder_waits_for_an_uncategorized_delete(self) -> None:
-        doomed = self.library.ensure_default_uncategorized_folder_id()
+        doomed = folder_commands.ensure_uncategorized(self.db, self.ctx)
         data = self.create_work()
         holder, contender = self.race(
             self.applying(folder_handlers.DELETE_HANDLER, self.envelope("DELETE_FOLDER", doomed, {})),
@@ -433,7 +435,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((require(self.library.get_folder(folder_id))["title"], self.filed()), ("Mine", []))
+        self.assertEqual((require(folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir))["title"], self.filed()), ("Mine", []))
 
     def test_a_reader_cannot_send_folder_operations(self) -> None:
         reader = self.reader_context()
@@ -443,8 +445,8 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
 
     def test_a_folder_operation_and_a_tag_delete_share_the_folder_in_turn(self) -> None:
         folder_id = self.create_folder("Tagged")
-        tag = self.library.add_tag("Ethics")["id"]
-        self.library.add_tag_to_folder(folder_id, tag)
+        tag = tag_commands.create(self.db, self.ctx, "Ethics")["id"]
+        tag_commands.tag_folder(self.db, self.ctx, folder_id, tag)
         holder, contender = self.race(lambda scope: folders.delete(scope, folder_id),
                                       lambda: self.send(self.envelope("DELETE_TAG", tag, {}, entity_type="tag")))
         self.assertEqual(holder, (True, None))

@@ -15,6 +15,7 @@ from typing import Any
 from backend.domain.search import queries
 from tests.pg.answers import AnswerAssertions
 from tests.pg.test_search_refresh import SearchTestCase
+from backend.domain.organization import tag_commands
 
 
 class SearchQueryTestCase(SearchTestCase):
@@ -219,15 +220,15 @@ class IsolationTests(SearchQueryTestCase):
         self.assertEqual(self.library.work_ids_matching_publisher("press"), [mine])
 
     def test_another_librarys_tag_of_the_same_name_is_never_used(self) -> None:
-        tag = self.library.add_tag("Physics")
-        self.library.add_tag_alias(tag["id"], "phys")
+        tag = tag_commands.create(self.db, self.ctx, "Physics")
+        tag_commands.add_alias(self.db, self.ctx, tag["id"], "phys")
         mine = self.library.add_work("Mine")
-        self.library.add_tag_to_work(mine, tag["id"])
+        tag_commands.tag_work(self.db, self.ctx, mine, tag["id"])
         self.bind(self.other_actor().context)
-        their_tag = self.library.add_tag("Physics")
-        self.library.add_tag_alias(their_tag["id"], "phys")
+        their_tag = tag_commands.create(self.db, self.ctx, "Physics")
+        tag_commands.add_alias(self.db, self.ctx, their_tag["id"], "phys")
         theirs = self.library.add_work("Theirs")
-        self.library.add_tag_to_work(theirs, their_tag["id"])
+        tag_commands.tag_work(self.db, self.ctx, theirs, their_tag["id"])
         self.assertEqual([row["id"] for row in self.library.get_works_by_tag_name("phys")], [theirs])
         self.bind(self.actor.context)
         for label in ("Physics", "phys"):
@@ -325,10 +326,10 @@ class AnswerTests(AnswerAssertions, SearchTestCase):
 
     def test_the_tag_filter_lists_tagged_works_newest_first(self) -> None:
         works = [self.work(label) for label in ("Older", "Newer", "Untagged")]
-        tag = self.library.add_tag("Physics")
-        self.library.add_tag_alias(tag["id"], "phys")
+        tag = tag_commands.create(self.db, self.ctx, "Physics")
+        tag_commands.add_alias(self.db, self.ctx, tag["id"], "phys")
         for work_id in works[:2]:
-            self.library.add_tag_to_work(work_id, tag["id"])
+            tag_commands.tag_work(self.db, self.ctx, work_id, tag["id"])
         for minute, work_id in enumerate(works, start=1):
             self.sql("UPDATE prks.works SET created_at = %s::timestamptz WHERE id = %s",
                      (f"2025-01-01 09:{minute:02d}:00+00", work_id))

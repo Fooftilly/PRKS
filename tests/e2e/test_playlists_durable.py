@@ -15,6 +15,8 @@ import unittest
 from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import seed_library
+from backend.domain.organization import playlist_commands
+from tests.acting_context import current_context
 
 VIDEO_A_TITLE = 'E2E Lecture One'
 VIDEO_B_TITLE = 'E2E Lecture Two'
@@ -50,9 +52,9 @@ def seed(root):
     ids['video_b'] = db.add_work(
         title=VIDEO_B_TITLE, doc_type='video', source_kind='video',
         source_url='https://www.youtube.com/watch?v=E2ETWOLECT')
-    ids['playlist'] = db.add_playlist('Durable Playlist', 'Seeded description')
-    db.add_work_to_playlist(ids['playlist'], ids['video_a'])
-    db.add_work_to_playlist(ids['playlist'], ids['video_b'])
+    ids['playlist'] = playlist_commands.create(db.database, current_context(), 'Durable Playlist', 'Seeded description')
+    playlist_commands.add_item(db.database, current_context(), ids['playlist'], ids['video_a'])
+    playlist_commands.add_item(db.database, current_context(), ids['playlist'], ids['video_b'])
     return ids
 
 
@@ -136,7 +138,7 @@ class DurablePlaylistTests(unittest.TestCase):
         return existing
 
     def playlists_in_db(self, server):
-        return {row['title']: row for row in self.db_for(server).get_all_playlists()}
+        return {row['title']: row for row in self.db_for(server).run(playlist_commands.catalog)}
 
     def order_in_db(self, server, playlist_id):
         rows = self.db_for(server).query(
@@ -188,7 +190,7 @@ class DurablePlaylistTests(unittest.TestCase):
             timeout=60000,
             message='a repeated title is not a refusal, so nothing should be stranded')
         self.assertEqual(
-            len([r for r in self.db_for(server).get_all_playlists()
+            len([r for r in self.db_for(server).run(playlist_commands.catalog)
                  if r['title'] == 'Durable Playlist']), 2)
 
     # ---- fields -------------------------------------------------------------
