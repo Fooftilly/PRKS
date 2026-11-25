@@ -1303,6 +1303,14 @@ created against a revision the server has already passed — so the user
 conflicts with their own previous edit, on a Work nobody else has touched. Both
 are updated on ACK, and the cached one never moves backwards.
 
+The base is a revision **with** the source it belongs to, and both come from
+one answer: `GET /api/works/:id/source-state` returns the revision and the
+stored source from one snapshot, and an ACK writes both into the cached
+projection together. A revision paired with a separately read Work cannot be
+proven safe: a read's time is when it finished, not when its snapshot was
+taken, so an older identity beside a newer revision would let a Save overwrite
+a source the user never saw. The editor shows the source its base belongs to.
+
 ### One unsynchronized intent per aggregate
 
 Choosing video B and then video C before either is sent must leave **one**
