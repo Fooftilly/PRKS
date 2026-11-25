@@ -309,9 +309,13 @@
         applySourceAck(ctx, ack, op, null, true);
     }
 
+    /* The revision and the source it belongs to: an answer without the
+     * source is no base. */
     function sourceStateShape(workId) {
         return value => !!value && typeof value === 'object' && value.work_id === workId &&
-            Number.isSafeInteger(value.revision) && value.revision >= 0;
+            Number.isSafeInteger(value.revision) && value.revision >= 0 &&
+            typeof value.source_kind === 'string' && typeof value.provider === 'string' &&
+            typeof value.provider_id === 'string' && typeof value.source_url === 'string';
     }
 
     /**
@@ -343,55 +347,28 @@
      * `options.adopt` says this read follows a discard, so its result replaces
      * what the tab is holding rather than merely establishing a base.
      */
-    /* Two cached answers pair only when the Work was read no earlier than
-     * the revision: the revision is cached as soon as it answers, so a Work
-     * read that failed after it leaves an older identity beside a newer
-     * revision, and reopening offline would pair them. */
-    function readNoEarlier(workResult, stateResult) {
-        const at = result => {
-            const observed = reconcileCore.observedAt(result.value);
-            return observed !== null ? observed : (Number.isFinite(result.cachedAt) ? result.cachedAt : null);
-        };
-        const work = at(workResult);
-        const revision = at(stateResult);
-        return work !== null && revision !== null && work >= revision;
-    }
-
     async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         const adopt = !!(options && options.adopt);
-        /* The revision is read before the Work, so the identity is never older
-         * than the revision paired with it: a save in between pairs a newer
-         * identity with an older revision, which conflicts, where the reverse
-         * would pair an older identity with a newer revision and turn a return
-         * to the old video into a cancellation. A corrective read replaces
-         * what the tab holds, so it takes fresh server answers only. */
+        /* ONE answer is the whole base. The source state carries the revision
+         * with the source it belongs to, from one server snapshot, and every
+         * cache write keeps them together (an ACK carries both). A revision
+         * beside a separately read Work could not prove which read came first:
+         * a read's time is when it finished, not when its snapshot was taken,
+         * and an older identity beside a newer revision lets a Save overwrite
+         * a source this tab never saw. A corrective read replaces what the tab
+         * holds, so it takes a fresh server answer only. */
         const policy = adopt ? { requestPolicy: { dedupe: false } } : {};
-        const accepted = result => !!(result && result.value && (adopt
-            ? result.source === 'server' : result.source !== 'unavailable'));
         try {
             const stateResult = await root.prksOfflineReadEntity('work-source-state', state.workId,
                 '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
                 Object.assign({ validate: sourceStateShape(state.workId) }, policy));
-            /* A cold park or a newer read between the two requests ends this
-             * one: a parked tab makes no requests. */
+            /* A cold park or a newer read ends this one: a parked tab adopts
+             * nothing. */
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            const workResult = accepted(stateResult)
-                ? await root.prksOfflineReadEntity('work', state.workId,
-                    '/api/works/' + encodeURIComponent(state.workId),
-                    Object.assign({ validate: value => !!value && value.id === state.workId },
-                        stateResult.source === 'server' ? { requestPolicy: { dedupe: false } } : policy))
-                : null;
-            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
-            if (options && typeof options.still === 'function' && !options.still()) return false;
-            /* A server revision pairs only with a server Work read after it:
-             * an older cached or joined Work would pair an older identity
-             * with that revision and let a Save overwrite a source unseen. */
-            const usable = accepted(stateResult) && accepted(workResult) &&
-                (stateResult.source !== 'server' || workResult.source === 'server') &&
-                (stateResult.source === 'server' || workResult.source === 'server' ||
-                    readNoEarlier(workResult, stateResult));
+            const usable = !!(stateResult && stateResult.value && (adopt
+                ? stateResult.source === 'server' : stateResult.source !== 'unavailable'));
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
@@ -401,23 +378,25 @@
                 if (!(options && options.keep)) state.observed = null;
                 return true;
             }
-            /* The server's Work replaces what this tab was holding. After
-             * "Use server" the tab's copy is the source the user just decided
-             * AGAINST, and leaving it would show them video A while the server
-             * holds video C -- with the pending overlay gone, nothing else
-             * would ever correct it. A focused source field keeps the user's
-             * text and the revision it was measured against: a Save from it
-             * then conflicts with the newer source instead of overwriting it.
-             * The identity is the newer one, so a draft naming the ACK's video
-             * is a change to send (and conflict), not a match that cancels. */
-            const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value));
-            if (adopt) {
-                const held = ctx.getEntity('work');
-                if (held && held.id === state.workId) {
-                    ctx.setEntity('work', adoptSourceOf(held, workResult.value));
-                }
-                if (!writeInput(ctx, state, workResult.value.source_url || '') && state.observed) {
-                    state.observed = baseOf(state.observed.revision, identity);
+            const source = root.prksAcknowledgedWorkSource(stateResult.value);
+            const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(source));
+            /* The tab shows the source its base belongs to. After "Use server"
+             * the tab's copy is the source the user just decided AGAINST, and
+             * a Work cached beside an older or newer state would otherwise
+             * show one video while a Save is measured against another. Only
+             * the source columns move: the rest of the held Work may be newer
+             * than this read. A focused source field keeps the user's text
+             * and the revision it was measured against: a Save from it then
+             * conflicts with the newer source instead of overwriting it. The
+             * identity is the newer one, so a draft naming the ACK's video is
+             * a change to send (and conflict), not a match that cancels. */
+            const held = ctx.getEntity('work');
+            const shown = held && held.id === state.workId ? held : null;
+            const differs = !!shown && root.prksWorkSourceIdentity(root.prksWorkSourceOf(shown)) !== identity;
+            if (adopt || differs) {
+                if (shown) ctx.setEntity('work', Object.assign({}, shown, source));
+                if (!writeInput(ctx, state, source.source_url || '')) {
+                    state.observed = adopt && state.observed ? baseOf(state.observed.revision, identity) : null;
                     return true;
                 }
             }
