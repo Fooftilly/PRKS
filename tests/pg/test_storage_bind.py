@@ -1,10 +1,11 @@
 """``server.bind_storage`` binding the PostgreSQL Library (PG-C2 #641).
 
-``bind_storage(config, library_database=...)`` publishes the Library handle
-(:class:`backend.library.PostgresLibrary`) for a storage root. These tests check
-that the binding is frozen against later environment changes, creates no
-SQLite file and no legacy processing inbox, and is published whole or not
-at all. They replace the SQLite ``tests/test_storage_bind.py`` cases.
+``bind_storage(config, library_database=...)`` builds the served
+:class:`backend.web.app.App` with the Library handle
+(:class:`backend.library.PostgresLibrary`) for a storage root. These tests
+check that the binding is frozen against later environment changes, creates
+no SQLite file and no legacy processing inbox, and that a failed binding
+changes nothing already served.
 """
 
 from __future__ import annotations
@@ -12,49 +13,38 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
-from typing import Any
 from unittest.mock import patch
 
 from backend.library import PostgresLibrary
 from backend.storage.config import StorageConfig
+from backend.web.app import App
 from tests.pg.test_works_facade import WorksFacadeTestCase
 
 
 class PostgresStorageBindTests(WorksFacadeTestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        import backend.server as server_module
-
-        self.server = server_module
-        published = (server_module._bound_storage, server_module.pdfs_dir, server_module.thumbs_dir,
-                     server_module.db)
-        self.addCleanup(self._restore, published)
-
-    def _restore(self, published: tuple[Any, ...]) -> None:
-        module = self.server
-        module._bound_storage, module.pdfs_dir, module.thumbs_dir, module.db = published
+    """``bind_storage`` builds one :class:`App`; no module state is published (#1424)."""
 
     def root(self) -> str:
         path = tempfile.mkdtemp(prefix="prks-pg-bind-")
         self.addCleanup(shutil.rmtree, path, True)
         return path
 
-    def bind_root(self, config: StorageConfig) -> StorageConfig:
-        return self.server.bind_storage(config, library_database=self.db)
+    def bind_root(self, config: StorageConfig) -> App:
+        from backend.server import bind_storage
+
+        return bind_storage(config, library_database=self.db)
 
     def test_the_binding_is_frozen_against_later_environment_changes(self) -> None:
         config = StorageConfig.for_testing(self.root())
-        bound = self.bind_root(config)
-        self.assertIs(self.server._bound_storage, bound)
-        self.assertIsInstance(self.server.db, PostgresLibrary)
+        app = self.bind_root(config)
+        self.assertIs(app.storage, config)
+        self.assertIsInstance(app.library, PostgresLibrary)
         with patch.dict(os.environ, {"PRKS_STORAGE": "/tmp/changed-after-bind", "PRKS_TESTING": "1",
                                      "PRKS_FOR_PROCESSING_DIR": "/tmp/inbox-after-bind"}):
-            self.assertEqual(self.server.pdfs_dir, config.pdfs_dir)
-            assert self.server._bound_storage is not None
-            self.assertEqual(self.server._bound_storage.pdfs_dir, config.pdfs_dir)
-            assert self.server.db is not None
-            assert self.server.db.storage is not None
-            self.assertEqual(self.server.db.storage.pdfs_dir, config.pdfs_dir)
+            self.assertEqual(app.pdfs_dir, config.pdfs_dir)
+            library = app.require_library()
+            assert library.storage is not None
+            self.assertEqual(library.storage.pdfs_dir, config.pdfs_dir)
 
     def test_the_binding_opens_no_sqlite_file_and_no_inbox(self) -> None:
         config = StorageConfig.for_testing(self.root())
@@ -65,25 +55,20 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
             self.assertFalse(os.path.exists(path), path)
         self.assertTrue(os.path.isdir(config.thumbs_dir))
 
-    def test_a_rebind_publishes_the_new_root_whole(self) -> None:
+    def test_each_binding_is_its_own_app(self) -> None:
         first = self.bind_root(StorageConfig.for_testing(self.root()))
-        db = self.server.db
         second = self.bind_root(StorageConfig.for_testing(self.root()))
-        self.assertIs(self.server._bound_storage, second)
-        self.assertIsNot(self.server.db, db)
-        assert self.server.db is not None
-        self.assertIs(self.server.db.storage, second)
-        self.assertEqual(self.server.pdfs_dir, second.pdfs_dir)
+        self.assertIsNot(second.library, first.library)
+        self.assertIs(second.require_library().storage, second.storage)
         self.assertNotEqual(second.pdfs_dir, first.pdfs_dir)
 
-    def test_a_failed_rebind_keeps_the_previous_binding(self) -> None:
+    def test_a_failed_binding_leaves_the_served_app_as_it_was(self) -> None:
         first = self.bind_root(StorageConfig.for_testing(self.root()))
-        db = self.server.db
+        library, storage = first.library, first.storage
         # Building the Library handle fails after the root's directories were made.
         with patch("backend.library.PostgresLibrary", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 self.bind_root(StorageConfig.for_testing(self.root()))
-        self.assertIs(self.server._bound_storage, first)
-        self.assertIs(self.server.db, db)
-        self.assertIsInstance(db, PostgresLibrary)
-        self.assertEqual(self.server.pdfs_dir, first.pdfs_dir)
+        self.assertIs(first.library, library)
+        self.assertIs(first.storage, storage)
+        self.assertIsInstance(library, PostgresLibrary)

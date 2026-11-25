@@ -25,45 +25,23 @@ apply_isolated_test_env(_PROJECT_DIR)
 
 from backend.api import settings as settings_api
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
-from tests.acting_context import current_context
-from tests.library_adapter import SettingsCommandsOver, route_commands_over
+from tests.library_adapter import SettingsCommandsOver, call_route, route_commands_over
 from tests.backend_parity import parametrize_backends
 from tests.people_parity_helpers import PeopleParityTestCase
 
 
-class _Handler:
-    """The admitted request ``backend/api/settings.py`` answers: its context is the bound actor."""
-
-    def __init__(self) -> None:
-        self.calls: list[tuple[int, Any]] = []
-
-    @property
-    def _prks_request_context(self) -> Any:
-        return current_context()
-
-    def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
-        self.calls.append((status, body))
-
-
 def _settings_route(db: Any, method: str, data: Any = None, *, reference: bool = False) -> tuple[int, Any]:
-    """``/api/settings`` through the production route module.
+    """``/api/settings`` through the served route table.
 
     The reference replays SQLite's recorded calls by name, so on its side the
     route's commands become those calls (``SettingsCommandsOver``).
     """
-    handler = _Handler()
-    def route() -> bool:
-        if method == "GET":
-            return settings_api.handle_get(handler, db, settings_api.PATH)
-        return settings_api.handle_patch(handler, db, settings_api.PATH, data)
-
     if reference:
-        with route_commands_over(settings_api, SettingsCommandsOver(db)):
-            handled = route()
-    else:
-        handled = route()
-    assert handled, method
-    return handler.calls[-1]
+        from backend.domain.settings import commands
+
+        with route_commands_over(commands, SettingsCommandsOver(db)):
+            return call_route(db, method, settings_api.PATH, data)
+    return call_route(db, method, settings_api.PATH, data)
 
 
 @parametrize_backends

@@ -14,14 +14,8 @@ from backend.storage.config import StorageConfig
 
 
 class TestListenPortGuard(unittest.TestCase):
-    def setUp(self):
-        self._prev = server_module._bound_storage
-
-    def tearDown(self):
-        server_module._bound_storage = self._prev
-
     def test_non_testing_rejects_testing_default_port(self):
-        server_module._bound_storage = StorageConfig(
+        storage = StorageConfig(
             mode="production",
             configured_root=None,
             root="/tmp/prks-listen-prod",
@@ -34,15 +28,17 @@ class TestListenPortGuard(unittest.TestCase):
             log_file="/tmp/prks-listen-prod/prks-errors.log",
         )
         with self.assertRaises(RuntimeError) as ctx:
-            server_module._validate_listen_port(server_module.PRKS_TESTING_DEFAULT_PORT)
+            server_module.validate_listen_port(
+                server_module.PRKS_TESTING_DEFAULT_PORT, testing=storage.mode == "testing"
+            )
         self.assertIn(str(server_module.PRKS_TESTING_DEFAULT_PORT), str(ctx.exception))
 
     def test_testing_env_allows_testing_default_port(self):
-        server_module._bound_storage = StorageConfig.for_testing("/tmp/prks-listen")
-        server_module._validate_listen_port(server_module.PRKS_TESTING_DEFAULT_PORT)
+        storage = StorageConfig.for_testing("/tmp/prks-listen")
+        server_module.validate_listen_port(server_module.PRKS_TESTING_DEFAULT_PORT, testing=storage.mode == "testing")
 
     def test_non_testing_allows_other_ports(self):
-        server_module._bound_storage = StorageConfig(
+        storage = StorageConfig(
             mode="production",
             configured_root=None,
             root="/tmp/prks-listen-prod",
@@ -54,7 +50,7 @@ class TestListenPortGuard(unittest.TestCase):
             research_index_db_path="/tmp/prks-listen-prod/prks_research_index.db",
             log_file="/tmp/prks-listen-prod/prks-errors.log",
         )
-        server_module._validate_listen_port(8080)
+        server_module.validate_listen_port(8080, testing=storage.mode == "testing")
 
 
 if __name__ == "__main__":

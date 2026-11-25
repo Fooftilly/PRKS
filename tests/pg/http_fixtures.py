@@ -70,14 +70,8 @@ class HttpAuthTestCase(IdentityTestCase):
         from run_tests import apply_isolated_test_env
 
         apply_isolated_test_env(_PROJECT_DIR)
-        import backend.server as server_module
         from backend.storage.config import StorageConfig
 
-        cls.server_module = server_module
-        cls._previous = (
-            server_module._bound_storage, server_module.pdfs_dir, server_module.thumbs_dir,
-            server_module.db,
-        )
         cls._tmpdir = tempfile.mkdtemp(prefix="prks-http-auth-")
         cls._storage = StorageConfig.for_testing(os.path.join(cls._tmpdir, "storage"))
         # Tests place managed PDF files under the root's pdfs directory.
@@ -85,18 +79,15 @@ class HttpAuthTestCase(IdentityTestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        module = cls.server_module
-        (
-            module._bound_storage, module.pdfs_dir, module.thumbs_dir,
-            module.db,
-        ) = cls._previous
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
         super().tearDownClass()
 
     def setUp(self) -> None:
         super().setUp()
         # This test's database is a fresh one, so its Library is bound per test.
-        self.server_module.bind_storage(self._storage, library_database=self.db)
+        from backend.server import bind_storage
+
+        self.app = bind_storage(self._storage, library_database=self.db)
         self.owner = self.user("Owner")
         self.lib = self.run_sql(
             "SELECT library_id FROM prks.library_memberships WHERE user_id = %s", (self.owner,)
@@ -130,7 +121,8 @@ class HttpAuthTestCase(IdentityTestCase):
         """
         from backend.web.settings import HttpServerSettings
 
-        module = self.server_module
+        from backend.server import make_server
+
         if auth is _SENTINEL:
             auth = WebAuth(self.db, settings or self.settings(), self.instance_id, self.lib, hasher=self.hasher)
         http = HttpServerSettings()
@@ -139,13 +131,14 @@ class HttpAuthTestCase(IdentityTestCase):
             cert, key = temporary_pair(self)
             http = HttpServerSettings(tls_cert_file=cert, tls_key_file=key)
             self.tls_cert = cert
-        httpd = module.make_server(("127.0.0.1", 0), http)
-        httpd.prks_bind_host = "127.0.0.1"
-        httpd.prks_trusted_hosts = frozenset()
-        httpd.prks_auth = auth
-        httpd.prks_jobs = jobs
-        if auth is not None and auth.settings.public_origin is not None:
-            httpd.prks_trusted_hosts = frozenset({auth.settings.public_origin[1]})
+        app = self.app
+        app.bind_host = "127.0.0.1"
+        app.trusted_hosts = frozenset()
+        app.auth = auth
+        app.jobs = jobs
+        if auth is not None:
+            app.trust_public_origin(auth.settings.public_origin)
+        httpd = make_server(("127.0.0.1", 0), app, http)
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)

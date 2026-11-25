@@ -26,14 +26,77 @@ does waits briefly for a free connection. It fails only after
 `/readyz` waits one second instead and answers 503 when no connection frees
 up. If you raise `PRKS_HTTP_THREADS` a lot, raise `PRKS_DB_POOL_MAX` with it.
 
-`PRKSHandler` no longer subclasses `http.server.SimpleHTTPRequestHandler`:
-its base is `backend.web.handler_base.HttpHandlerBase` (response head,
-plain-text `send_error`, static frontend files with `Last-Modified` and
-`If-Modified-Since`), and nothing imports `http.server`. Only regular files
-beneath the frontend directory are served, each resolved with its symlinks
-(the shell too): `/` and unknown paths get `index.html`, any other directory
-answers 404, and directory listings are not served. That completes step 8
-below.
+### Request layer (#1424)
+
+Requests are answered by a small typed layer and a route table, still on
+Uvicorn and with no framework. The `http.server`-shaped handler, its fake
+`rfile`/`wfile` objects, the `do_*` methods and `handler_base.py` are gone.
+
+- `backend/web/http.py`: `Request` (method, raw path, query, `Headers`,
+  route `params`, the admitted `context`, the parsed JSON body) and
+  `Response` (status, headers, a bytes body or a `stream(write)` callback,
+  and a `cleanup` that runs once the answer is sent or abandoned), plus
+  `json_response` (gzip, ETag and 304), `error_response` and friends.
+- `backend/web/routing.py`: `Route(method, pattern, handler, body)` and the
+  `RouteTable`. A pattern's `{name}` takes one path segment and
+  `{name:path}` the rest of the path; literal segments win over
+  parameters. A path no route takes is 404; a path whose routes take other
+  methods is 405 with `Allow`. A route's body is JSON (the default for
+  POST, PUT and PATCH), none, or a stream the route reads itself (backup
+  staging, Processing uploads).
+- `backend/web/app.py`: `App`, everything one server serves (storage root,
+  Library, route table, bind and trusted hosts, identity, jobs, readiness,
+  setup phase). It replaces the module globals of `server.py` and the
+  `prks_*` attributes on the server object.
+- `backend/web/dispatch.py`: the cross-cutting rules, once: method and NUL
+  checks, the Host check, the probes and static files, admission
+  (`backend/api/session.py`, `backend/api/setup.py`), the JSON body, the
+  answer to an exception a route raised (refusals, `NotPortedError` as 501,
+  otherwise a 500 logged by type and route only), and the headers every
+  answer carries (security headers and CSP, HSTS over TLS, `X-Request-ID`,
+  `Server-Timing`, the Library epoch).
+- `backend/web/asgi.py`: the Uvicorn adapter (bounded thread pool and wait
+  list, head limits and deadline, disconnects, TLS) builds a `Request` and
+  sends the `Response`.
+- `backend/web/hosts.py` (Host and Origin parsing) and `backend/web/static.py`
+  (the frontend files) hold what `server.py` held for them.
+- `backend/api/<family>.py`: each family's `ROUTES`; `backend/api/__init__.py`
+  collects them. Handlers are `(Request) -> Response` and import their domain
+  commands inside the handler. Thumbnails, PDF bytes, backups, sync posting
+  and the YouTube oEmbed lookup moved here from `server.py`.
+- `backend/server.py` only binds the storage root and Library into an `App`
+  and starts or stops the server (`run_server`, `start_setup_server`).
+
+**JSON bodies.** The dispatcher reads a JSON route's body once, before the
+route runs. A body that is not a JSON object answers
+`400 {"error": "JSON object body required", "code": "invalid_request"}`;
+text that is not JSON (including `NaN`, `Infinity`, numbers past the float
+range and lone surrogates) answers `400 {"error": "invalid_json", "code":
+"invalid_request"}`; a missing or other media type is 415 and a body past the
+limit 413, as before. No body is `{}`. `tests/pg/test_http_route_table.py`
+walks the route table and sends each JSON route these bodies, so a new route
+is covered without being listed.
+
+This replaced per-route body handling on purpose (#1424). Routes that took a
+non-object body now refuse it: the bare-array form of `PUT
+/api/arguments/{id}/sources|targets` and `PUT /api/concepts/{id}/parents|aliases`
+(send `{"sources": [...]}` and so on; the app writes these through sync),
+the ignored body of `POST /api/processing-items/{id}/import` (send `{}`), and
+the Processing PATCH and batch import, which answered `VALIDATION_ERROR`
+for a non-object body. A known path asked with a method it does not serve is
+405 with `Allow`, where some families answered 404.
+
+**Paths.** The route table sees the path as sent: `;params` are no longer
+stripped, so `;x` stays part of the segment. `/api/pdfs/<name>;x` names
+another file (404), and a frontend path such as `/index.html;x` falls back to
+the app shell. A path segment is percent-decoded by the route that reads it,
+once. The most specific pattern that takes a path owns it: a wrong method on
+a literal endpoint such as `/api/works/bulk` is 405 with that endpoint's own
+`Allow`, never a fall-through to `/api/works/{work_id}`.
+
+Only regular files beneath the frontend directory are served, each resolved
+with its symlinks (the shell too): `/` and unknown paths get `index.html`,
+any other directory answers 404, and directory listings are not served.
 
 #1339 adds PRKS's own TLS on this server: `PRKS_TLS_CERT_FILE` and
 `PRKS_TLS_KEY_FILE` (`backend.web.settings`, loaded once at start) are passed
@@ -43,9 +106,8 @@ to Uvicorn, and a request served over TLS gets `Secure` cookies, HSTS and an
 **No Starlette** (maintainer decision, 2026-11-20). B1 to B3 wrote the parts
 Starlette was meant to supply directly on plain ASGI (`backend/web/asgi.py`):
 streamed bodies, disconnects, the bounded queue, head limits, TLS and static
-files. Every cross-cutting check already runs once, in `PRKSHandler`, so
-Starlette would now replace little of PRKS's code for a new runtime dependency
-and a port of the whole handler surface. The design steps below that name
+files. Every cross-cutting check already runs once, in the dispatcher, so
+Starlette would now replace little of PRKS's code for a new runtime dependency. The design steps below that name
 Starlette are superseded on that point; the behaviour they describe holds.
 
 Phase C so far:
@@ -135,7 +197,8 @@ component that faces the network for years after 1.0, it is weighty.
 
 ## What the server has to carry
 
-Everything below was read from master 02845f1.
+Everything below was read from master 02845f1, before the request layer
+(#1424) replaced the handler; it is kept as the design record.
 
 - **Dispatch.** `backend/server.py` holds `PRKSHandler(http.server.SimpleHTTPRequestHandler)` and `PRKSThreadingTCPServer(ThreadingMixIn, TCPServer)`. The `do_*` methods run host validation, `/healthz` and `/readyz`, admission (`backend/api/session.py`), the Library access gate and then the route families in `backend/api/*.py`.
 - **Controllers use a narrow handler surface.** Across `backend/api/*.py`, the controllers call:

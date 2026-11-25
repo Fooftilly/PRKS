@@ -1,13 +1,11 @@
 """Storage status (storage-architecture §11.1, #720): facts, wire contract and route rules."""
 from __future__ import annotations
 
-import io
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Optional
 from unittest.mock import patch
 
 from openapi_core import OpenAPI
@@ -29,35 +27,20 @@ from backend.storage.preflight import (
     probe_name_semantics,
 )
 from backend.storage.root_marker import MAINTENANCE_DIRNAME
+from backend.web.app import App
+from backend.web.http import Headers, Request, Response
+from backend.web.routing import Match
 
 _ROOT = Path(__file__).resolve().parents[1]
 _ARTIFACT = _ROOT / "docs" / "api" / "openapi-storage-status.json"
 
 
-class _Handler:
-    """Just enough of PRKSHandler for ``storage_api.handle_get``."""
-
-    command = "GET"
-
-    def __init__(self) -> None:
-        self.status = None
-        self.headers: dict[str, str] = {}
-        self.wfile = io.BytesIO()
-        self.json = None
-
-    def send_response(self, status: int) -> None:
-        self.status = status
-
-    def send_header(self, name: str, value: str) -> None:
-        self.headers[name] = value
-
-    def end_headers(self) -> None:
-        pass
-
-    def send_json(self, status: int, payload: dict, cache_control: Optional[str] = None) -> None:
-        self.status, self.json = status, payload
-        if cache_control:
-            self.headers["Cache-Control"] = cache_control
+def _get(app: App) -> Response:
+    """``GET /api/storage-status`` through the route table."""
+    found = app.routes.resolve("GET", storage_api.PATH)
+    assert isinstance(found, Match)
+    request = Request("GET", storage_api.PATH, "", Headers(), app)
+    return found.route.handler(request)
 
 
 class StatusTestCase(unittest.TestCase):
@@ -193,20 +176,15 @@ class StorageRouteTests(StatusTestCase):
                 self.assertEqual(safe_route(route), route)
 
     def test_the_answer_is_never_cached(self) -> None:
-        handler = _Handler()
-        config = StorageConfig.for_testing(self.root)
-        self.assertTrue(storage_api.handle_get(handler, storage_api.PATH, config=config, library=None))
-        self.assertEqual(handler.status, 200)
-        self.assertEqual(handler.headers["Cache-Control"], "no-store")
-        body = handler.json
-        assert body is not None
+        response = _get(App(storage=StorageConfig.for_testing(self.root)))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.header("Cache-Control"), "no-store")
+        body = json.loads(response.body)
         self.assertEqual(body["identity"]["storage_root_id"], self.bound.storage_root_id)
 
     def test_other_paths_and_an_unbound_process(self) -> None:
-        handler = _Handler()
-        self.assertFalse(storage_api.handle_get(handler, "/api/storage-statuses", config=None, library=None))
-        self.assertTrue(storage_api.handle_get(handler, storage_api.PATH, config=None, library=None))
-        self.assertEqual(handler.status, 503)
+        self.assertNotIsInstance(App().routes.resolve("GET", "/api/storage-statuses"), Match)
+        self.assertEqual(_get(App()).status, 503)
 
     def test_the_database_summary_never_carries_credentials(self) -> None:
         for conninfo, expected in (

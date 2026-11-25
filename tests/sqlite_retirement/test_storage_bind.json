@@ -17,12 +17,12 @@
     },
     "TestStorageBind.test_failed_rebind_keeps_previous_published_state": {
       "replaced_by": [
-        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_a_failed_rebind_keeps_the_previous_binding"
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_a_failed_binding_leaves_the_served_app_as_it_was"
       ]
     },
     "TestStorageBind.test_successful_rebind_uses_new_index_path": {
       "replaced_by": [
-        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_a_rebind_publishes_the_new_root_whole"
+        "tests/pg/test_storage_bind.py::PostgresStorageBindTests.test_each_binding_is_its_own_app"
       ]
     },
     "TestStorageBind.test_constructor_conflict_db": {

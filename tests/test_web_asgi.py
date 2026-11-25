@@ -1,4 +1,4 @@
-"""The Uvicorn HTTP server (#1329): settings, and PRKSHandler served over ASGI.
+"""The Uvicorn HTTP server (#1329): settings, and the PRKS dispatcher served over ASGI.
 
 These run without PostgreSQL; ``tests/pg/http_fixtures.py`` runs the
 PostgreSQL HTTP suites over the same server.
@@ -26,6 +26,9 @@ from run_tests import apply_isolated_test_env  # noqa: E402
 apply_isolated_test_env(_PROJECT)
 
 from backend import server as server_module  # noqa: E402
+from backend.web import dispatch as dispatch_module  # noqa: E402
+from backend.web.app import FRONTEND_DIR, App  # noqa: E402
+from backend.web.http import Response  # noqa: E402
 from backend.web import asgi  # noqa: E402
 from backend.web.settings import (  # noqa: E402
     DEFAULT_THREADS,
@@ -36,6 +39,11 @@ from backend.web.settings import (  # noqa: E402
     HttpSettingsError,
 )
 from tests.tls_certificate import client_context, encrypted_key, temporary_pair  # noqa: E402
+
+
+def _app(**fields):
+    """An App with no Library and no identity: every ``/api/`` request answers 503."""
+    return App(bind_host="127.0.0.1", trusted_hosts=frozenset(), **fields)
 
 
 class _Collect(logging.Handler):
@@ -114,21 +122,14 @@ class HttpSettingsTests(unittest.TestCase):
             self.assertIsNone(caught.exception.__cause__)
 
     def test_make_server_serves_with_uvicorn(self):
-        httpd = server_module.make_server(("127.0.0.1", 0))
+        httpd = server_module.make_server(("127.0.0.1", 0), _app())
         httpd.server_close()
         self.assertIsInstance(httpd, asgi.UvicornServing)
 
 
 class UvicornTransportTests(unittest.TestCase):
     def setUp(self):
-        self.httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings(4)
-        )
-        self.httpd.prks_bind_host = "127.0.0.1"
-        self.httpd.prks_trusted_hosts = frozenset()
-        self.httpd.prks_auth = None  # every /api/ request answers 503
-        self.httpd.prks_jobs = None
-        self.httpd.prks_readiness = None
+        self.httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings(4))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.thread.join, 10)
@@ -139,14 +140,7 @@ class UvicornTransportTests(unittest.TestCase):
 
     def _start_server(self, threads=4):
         """Another Uvicorn transport, configured like setUp's; returns its port."""
-        httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings(threads)
-        )
-        httpd.prks_bind_host = "127.0.0.1"
-        httpd.prks_trusted_hosts = frozenset()
-        httpd.prks_auth = None
-        httpd.prks_jobs = None
-        httpd.prks_readiness = None
+        httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings(threads))
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)
@@ -240,7 +234,7 @@ class UvicornTransportTests(unittest.TestCase):
                 self.assertEqual(headers.get("content-length"), str(len(body)))
                 self.assertEqual(headers.get("cache-control"), cache)
                 self.assertTrue(headers.get("last-modified"))
-                with open(os.path.join(server_module.frontend_dir, path.lstrip("/")), "rb") as f:
+                with open(os.path.join(FRONTEND_DIR, path.lstrip("/")), "rb") as f:
                     self.assertEqual(body, f.read())
 
     def test_static_head_has_no_body_and_unchanged_files_answer_304(self):
@@ -265,7 +259,7 @@ class UvicornTransportTests(unittest.TestCase):
                 handle.write("<html>a subdirectory index")
             os.symlink(secret, os.path.join(frontend, "index.html"))
             os.symlink(secret, os.path.join(frontend, "leak.html"))
-            with mock.patch.object(server_module, "frontend_dir", frontend):
+            with mock.patch.object(self.httpd.prks_app, "frontend_dir", frontend):
                 for path in ("/", "/no/such/route", "/index.html", "/leak.html", "/app", "/app/"):
                     with self.subTest(path=path):
                         status, body, _ = self.request("GET", path)
@@ -307,17 +301,19 @@ class UvicornTransportTests(unittest.TestCase):
         # thread and its Library access scope until the job ends.
         ended = threading.Event()
 
-        def stream(handler):
-            handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
-            try:
-                for _ in range(400):  # 20 s if nothing stops it
-                    handler.wfile.write(b"tick\n")
-                    time.sleep(0.05)
-            except BrokenPipeError:
-                ended.set()
-                raise
+        def stream(request):
+            def send(write):
+                try:
+                    for _ in range(400):  # 20 s if nothing stops it
+                        write(b"tick\n")
+                        time.sleep(0.05)
+                except BrokenPipeError:
+                    ended.set()
+                    raise
 
-        with mock.patch.object(asgi._AsgiHandler, "do_GET", stream):
+            return Response(200, [("Content-Type", "text/plain")], stream=send)
+
+        with mock.patch.object(asgi, "dispatch", stream):
             sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
             sock.sendall(b"GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
             received = b""
@@ -329,21 +325,23 @@ class UvicornTransportTests(unittest.TestCase):
             self.assertTrue(ended.wait(3), "the stream kept writing after the client left")
 
     def test_disconnect_ends_a_stream_whose_request_body_is_unread(self):
-        # A GET handler never reads rfile. Body chunks it leaves unread must
+        # A GET route never reads its body. Body chunks it leaves unread must
         # not stop the adapter from seeing the client leave.
         ended = threading.Event()
 
-        def stream(handler):
-            handler.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\n")
-            try:
-                for _ in range(400):
-                    handler.wfile.write(b"tick\n")
-                    time.sleep(0.05)
-            except BrokenPipeError:
-                ended.set()
-                raise
+        def stream(request):
+            def send(write):
+                try:
+                    for _ in range(400):
+                        write(b"tick\n")
+                        time.sleep(0.05)
+                except BrokenPipeError:
+                    ended.set()
+                    raise
 
-        with mock.patch.object(asgi._AsgiHandler, "do_GET", stream):
+            return Response(200, [("Content-Type", "text/plain")], stream=send)
+
+        with mock.patch.object(asgi, "dispatch", stream):
             sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
             sock.sendall(
                 b"GET /stream HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -368,11 +366,7 @@ class UvicornTransportTests(unittest.TestCase):
         root.setLevel(logging.NOTSET)  # PRKS_LOG_LEVEL=NOTSET
         self.addCleanup(root.setLevel, old_level)
         self.addCleanup(root.removeHandler, handler)
-        httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings()
-        )
-        for name in ("prks_bind_host", "prks_trusted_hosts", "prks_auth", "prks_jobs", "prks_readiness"):
-            setattr(httpd, name, getattr(self.httpd, name))
+        httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings())
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)
@@ -399,21 +393,17 @@ class UvicornTransportTests(unittest.TestCase):
         # so a request over the bound waits for a thread rather than a 503.
         release = threading.Event()
         started = threading.Semaphore(0)
-        original = asgi._AsgiHandler.do_GET
+        original = asgi.dispatch
 
-        def slow_or_normal(handler):
-            if handler.path != "/slow":
-                return original(handler)
+        def slow_or_normal(request):
+            if request.path != "/slow":
+                return original(request)
             started.release()
             release.wait(10)
-            handler.send_response(200)
-            handler.send_header("Content-Length", "4")
-            handler.end_headers()
-            handler.wfile.write(b"slow")
-            return None
+            return Response(200, [("Content-Length", "4")], b"slow")
 
         self.addCleanup(release.set)
-        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+        with mock.patch.object(asgi, "dispatch", slow_or_normal):
             slow = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
             for thread in slow:
                 thread.start()
@@ -436,22 +426,19 @@ class UvicornTransportTests(unittest.TestCase):
         # 4 threads x QUEUE_PER_THREAD (patched to 1) = 4 may wait; the next is refused.
         release = threading.Event()
         started = threading.Semaphore(0)
-        original = asgi._AsgiHandler.do_GET
+        original = asgi.dispatch
 
-        def slow_or_normal(handler):
-            if handler.path != "/slow":
-                return original(handler)
+        def slow_or_normal(request):
+            if request.path != "/slow":
+                return original(request)
             started.release()
             release.wait(10)
-            handler.send_response(200)
-            handler.send_header("Content-Length", "0")
-            handler.end_headers()
-            return None
+            return Response(200, [("Content-Length", "0")])
 
         self.addCleanup(release.set)
         with mock.patch.object(asgi, "QUEUE_PER_THREAD", 1):
             port = self._start_server()
-        with mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal):
+        with mock.patch.object(asgi, "dispatch", slow_or_normal):
             busy = [threading.Thread(target=self.request, args=("GET", "/slow", None, None, None, port), daemon=True)
                     for _ in range(4)]
             for thread in busy:
@@ -464,7 +451,9 @@ class UvicornTransportTests(unittest.TestCase):
             for thread in waiters:
                 thread.start()
             deadline = time.monotonic() + 5
-            while self.other_httpd.app.admitted < 8:  # four running, four waiting
+            asgi_app = self.other_httpd.app
+            assert asgi_app is not None
+            while asgi_app.admitted < 8:  # four running, four waiting
                 self.assertLess(time.monotonic(), deadline, "the waiters never reached the wait list")
                 time.sleep(0.01)
             status, body, headers = self.request("GET", "/healthz", port=port)
@@ -649,22 +638,19 @@ class UvicornTransportTests(unittest.TestCase):
         release = threading.Event()
         started = threading.Semaphore(0)
         ran = []
-        original = asgi._AsgiHandler.do_GET
+        original = asgi.dispatch
 
-        def routes(handler):
-            if handler.path == "/abandoned":
-                ran.append(handler.path)
-            if handler.path != "/slow":
-                return original(handler)
+        def routes(request):
+            if request.path == "/abandoned":
+                ran.append(request.path)
+            if request.path != "/slow":
+                return original(request)
             started.release()
             release.wait(10)
-            handler.send_response(200)
-            handler.send_header("Content-Length", "0")
-            handler.end_headers()
-            return None
+            return Response(200, [("Content-Length", "0")])
 
         self.addCleanup(release.set)
-        with mock.patch.object(asgi._AsgiHandler, "do_GET", routes):
+        with mock.patch.object(asgi, "dispatch", routes):
             busy = [threading.Thread(target=self.request, args=("GET", "/slow"), daemon=True) for _ in range(4)]
             for thread in busy:
                 thread.start()
@@ -766,6 +752,11 @@ class UvicornTransportTests(unittest.TestCase):
                 _, _, headers = self.request("GET", path)
                 self.assertNotIn("strict-transport-security", headers)
 
+    def test_a_long_request_target_is_414_not_431(self):
+        # The request line counts toward the head as well; it is checked first.
+        path = "/healthz?" + "a" * 66000
+        self.assertEqual(self.request("GET", path)[0], 414)
+
     def test_too_many_headers_is_431(self):
         headers = {f"X-H{i}": "v" for i in range(101)}
         self.assertEqual(self.request("GET", "/healthz", headers=headers)[0], 431)
@@ -817,20 +808,16 @@ class UvicornTransportTests(unittest.TestCase):
             self.assertTrue(self._closed_within(conn.sock, 5))
 
     def test_a_slow_response_is_not_cut_by_the_head_deadline(self):
-        original = asgi._AsgiHandler.do_GET
+        original = asgi.dispatch
 
-        def slow_or_normal(handler):
-            if handler.path != "/slow":
-                return original(handler)
+        def slow_or_normal(request):
+            if request.path != "/slow":
+                return original(request)
             time.sleep(1.5)
-            handler.send_response(200)
-            handler.send_header("Content-Length", "4")
-            handler.end_headers()
-            handler.wfile.write(b"slow")
-            return None
+            return Response(200, [("Content-Length", "4")], b"slow")
 
         with mock.patch.object(asgi, "REQUEST_HEAD_SECONDS", 0.5), mock.patch.object(
-            asgi._AsgiHandler, "do_GET", slow_or_normal
+            asgi, "dispatch", slow_or_normal
         ):
             status, body, _ = self.request("GET", "/slow")
         self.assertEqual((status, body), (200, b"slow"))
@@ -842,13 +829,8 @@ class TlsTransportTests(unittest.TestCase):
     def setUp(self):
         self.cert, key = temporary_pair(self)
         self.httpd = server_module.make_server(
-            ("127.0.0.1", 0), HttpServerSettings(2, tls_cert_file=self.cert, tls_key_file=key)
+            ("127.0.0.1", 0), _app(), HttpServerSettings(2, tls_cert_file=self.cert, tls_key_file=key)
         )
-        self.httpd.prks_bind_host = "127.0.0.1"
-        self.httpd.prks_trusted_hosts = frozenset()
-        self.httpd.prks_auth = None
-        self.httpd.prks_jobs = None
-        self.httpd.prks_readiness = None
         thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(thread.join, 10)
@@ -885,7 +867,7 @@ class TlsTransportTests(unittest.TestCase):
             with self.subTest(path=path):
                 got, _, headers = self.request(method, path)
                 self.assertEqual(got, status)
-                self.assertEqual(headers.get("strict-transport-security"), server_module.HSTS_VALUE)
+                self.assertEqual(headers.get("strict-transport-security"), dispatch_module.HSTS_VALUE)
 
     def test_uvicorns_own_parser_400_carries_no_hsts(self):
         # The documented boundary (docs/https.md): Uvicorn answers a request it
@@ -902,7 +884,7 @@ class TlsTransportTests(unittest.TestCase):
         self.assertNotIn(b"strict-transport-security", head)
 
     def test_the_busy_answer_carries_the_security_headers_and_hsts_over_tls(self):
-        for https, expected in ((True, server_module.HSTS_VALUE.encode("ascii")), (False, None)):
+        for https, expected in ((True, dispatch_module.HSTS_VALUE.encode("ascii")), (False, None)):
             sent = []
 
             async def send(message, sent=sent):
@@ -913,7 +895,7 @@ class TlsTransportTests(unittest.TestCase):
             with self.subTest(https=https):
                 self.assertEqual(sent[0]["status"], 503)
                 self.assertEqual(headers.get(b"strict-transport-security"), expected)
-                for name, value in server_module.SECURITY_HEADERS:
+                for name, value in dispatch_module.SECURITY_HEADERS:
                     self.assertEqual(headers.get(name.lower().encode("ascii")), value.encode("ascii"))
 
     def test_the_client_sees_the_configured_certificate(self):
@@ -943,16 +925,13 @@ class TlsTransportTests(unittest.TestCase):
 
 class ShutdownTests(unittest.TestCase):
     def test_shutdown_before_serving_returns(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
+        httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings())
         httpd.shutdown()
         httpd.serve_forever()  # returns at once: a stop was already requested
         httpd.server_close()
 
     def test_shutdown_waits_for_serving_to_end_and_closes_the_port(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings())
-        for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
-                            ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
-            setattr(httpd, name, value)
+        httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings())
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         port = httpd.server_address[1]
@@ -976,30 +955,23 @@ class ShutdownTests(unittest.TestCase):
 
 
     def _serving(self):
-        httpd = server_module.make_server(("127.0.0.1", 0), HttpServerSettings(2))
-        for name, value in (("prks_bind_host", "127.0.0.1"), ("prks_trusted_hosts", frozenset()),
-                            ("prks_auth", None), ("prks_jobs", None), ("prks_readiness", None)):
-            setattr(httpd, name, value)
+        httpd = server_module.make_server(("127.0.0.1", 0), _app(), HttpServerSettings(2))
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(httpd.server_close)
         return httpd, thread
 
     def _slow_get(self, started, seconds):
-        original = asgi._AsgiHandler.do_GET
+        original = asgi.dispatch
 
-        def slow_or_normal(handler):
-            if handler.path != "/slow":
-                return original(handler)
+        def slow_or_normal(request):
+            if request.path != "/slow":
+                return original(request)
             started.set()
             time.sleep(seconds)
-            handler.send_response(200)
-            handler.send_header("Content-Length", "4")
-            handler.end_headers()
-            handler.wfile.write(b"slow")
-            return None
+            return Response(200, [("Content-Length", "4")], b"slow")
 
-        return mock.patch.object(asgi._AsgiHandler, "do_GET", slow_or_normal)
+        return mock.patch.object(asgi, "dispatch", slow_or_normal)
 
     def _get_slow(self, port, result):
         deadline = time.monotonic() + 5

@@ -6,39 +6,33 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from backend import server
+import json
+
 from backend.domain.works import note_rules
-
-
-class _Handler:
-    """Just enough of ``PRKSHandler`` for ``_handle_postgres_sync_operation``."""
-
-    _prks_request_context = object()
-    _prks_request_id = "req-1"
-
-    def __init__(self) -> None:
-        self.sent: list[tuple[int, dict]] = []
-
-    def send_json(self, status: int, body: dict) -> None:
-        self.sent.append((status, body))
+from backend.api import sync as sync_api
+from backend.web.app import App
+from backend.web.http import Headers, Request
 
 
 class PostgresSyncRouteTests(unittest.TestCase):
     def answer(self, operation: str, refs) -> tuple[int, dict]:
-        handler = _Handler()
         acked = (200, {"code": "ACKNOWLEDGED", "work_id": "W-1", "changed": True, "file_path": "x"})
         library = SimpleNamespace(database=object())
+        storage = SimpleNamespace(pdfs_dir="/unused/pdfs")
+        context = object()
+        request = Request(
+            "POST", "/api/sync/operations", "", Headers(),
+            App(storage=storage, library=library),  # type: ignore[arg-type]
+            request_id="req-1", context=context,  # type: ignore[arg-type]
+            json={"operation": operation, "entity_id": "W-1"}, json_absent=False,
+        )
         # The route reads the refs for the admitted context (PG-C3 #642).
         with mock.patch("backend.sync.protocol.process_operation", return_value=acked), \
-                mock.patch.object(server, "db", library), \
-                mock.patch.object(server, "pdfs_dir", "/unused/pdfs"), \
                 mock.patch("backend.domain.research.index_commands.research_refs", refs):
-            server.PRKSHandler._handle_postgres_sync_operation(
-                handler, {"operation": operation, "entity_id": "W-1"})  # type: ignore[arg-type]
+            response = sync_api.post_operation(request)
         if refs.call_count:
-            refs.assert_called_once_with(library.database, handler._prks_request_context, "W-1")
-        [sent] = handler.sent
-        return sent
+            refs.assert_called_once_with(library.database, context, "W-1")
+        return response.status, json.loads(response.body)
 
     def test_a_note_ack_carries_its_refs(self) -> None:
         refs = {"concepts": [], "arguments": [], "pending": True}

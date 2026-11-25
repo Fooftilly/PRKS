@@ -321,7 +321,7 @@ A PRKS-owned PostgreSQL job table (§12.1). Alternatives:
 
 | Layer | Package | May import | Owns |
 | --- | --- | --- | --- |
-| HTTP adapter | `backend/server.py`, `backend/api/<family>.py` | domain, `api_contract` | parsing, auth/session resolution, status codes, ETags, streaming |
+| HTTP adapter | `backend/web/`, `backend/api/<family>.py` | domain, `api_contract` | parsing, auth/session resolution, status codes, ETags, streaming |
 | Sync adapter | `backend/sync/` (`protocol.py` plus one thin handler per family) | domain | envelope validation, ledger, ACK shape |
 | Application/domain | `backend/domain/<family>/` (`commands.py`, `queries.py`, `rules.py`, `sql.py` as needed) | `backend/db`, `backend/storage`, other domains' public functions | validation, authorization, transactions, revisions, jobs, uniqueness, projections |
 | Persistence plumbing | `backend/db/` | psycopg, psycopg_pool | pool, transaction helpers, error mapping, migrations, test provisioning |
@@ -2626,7 +2626,7 @@ The job counters and queue depth are served to the Library owner at
 | Gate | Replaces | Checks |
 | --- | --- | --- |
 | Schema snapshot (`check_pg_schema.py` + test) | (new) | fresh schema equals snapshot; after 1.0, migrated equals fresh, migrations append-only and unedited |
-| Persistence boundary | (new) | `psycopg` imported only in `backend/db/` and `backend/domain/`; no SQL strings in `server.py`/`backend/api/`/`backend/sync/` |
+| Persistence boundary | (new) | `psycopg` imported only in `backend/db/` and `backend/domain/`; no SQL strings in `backend/web/`/`backend/api/`/`backend/sync/` |
 | Revision ownership | discussion #583 option (a) | DML on revisioned tables only in `backend/domain/`; FKs into revision-owning rows are not `ON DELETE CASCADE` unless listed with the command that tombstones them |
 | Isolation declared | (new) | every command declares its isolation level; no command that adds rows to a listed peer table declares READ COMMITTED (§7.1); a tag added to the source during a tag merge either lands on the target or makes the merge retry |
 | Text identity vectors | (new) | Python, SQL and TypeScript agree on every vector |

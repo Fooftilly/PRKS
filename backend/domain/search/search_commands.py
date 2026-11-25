@@ -155,7 +155,7 @@ def search(db: Database, ctx: RequestContext, pdfs_dir: str, *, q: str = "", tag
     return finish(rows, pdfs_dir)
 
 
-def queue_text_rebuild(db: Database, ctx: RequestContext) -> dict:
+def queue_text_rebuild(db: Database, ctx: RequestContext) -> dict[str, Any]:
     """``POST /api/works/reindex-pdf-text``: queue the Library's ``text`` rebuild (§8.6).
 
     The counters are zero, because the work happens later in the worker, and

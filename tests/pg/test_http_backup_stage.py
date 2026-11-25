@@ -48,8 +48,8 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
         self.assertEqual(json.loads(rest.partition(b"\r\n\r\n")[2])["reason"], "upload_timeout")
         self.assertIn(b"connection: close", rest.lower())
         self.assertLess(elapsed, 5)
-        assert self.server_module._bound_storage is not None
-        directory = staged.staged_dir(self.server_module._bound_storage.root)
+        assert self.app.storage is not None
+        directory = staged.staged_dir(self.app.storage.root)
         self.assertEqual(os.listdir(directory) if os.path.isdir(directory) else [], [])
 
     def stage(self, data: bytes, content_type: str = "application/octet-stream") -> Response:
@@ -68,13 +68,13 @@ class BackupStageHttpTests(ProcessingHttpTestCase):
             conn.close()
 
     def staged_files(self) -> list[str]:
-        assert self.server_module._bound_storage is not None
-        directory = staged.staged_dir(self.server_module._bound_storage.root)
+        assert self.app.storage is not None
+        directory = staged.staged_dir(self.app.storage.root)
         return os.listdir(directory) if os.path.isdir(directory) else []
 
     def test_refusals_before_the_body_stage_nothing(self) -> None:
         self.assertEqual(self.stage(b"PK\x03\x04", content_type="text/plain").status, 415)
-        with mock.patch.object(self.server_module, "backup_max_upload_bytes", return_value=3):
+        with mock.patch("backend.api.maintenance.backup_max_upload_bytes", return_value=3):
             res = self.stage(b"PK\x03\x04")
         self.assertEqual((res.status, res.body), (413, {"error": "request_too_large"}))
         self.assertEqual(self.staged_files(), [])

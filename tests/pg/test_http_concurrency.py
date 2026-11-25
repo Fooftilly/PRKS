@@ -187,7 +187,7 @@ class ConcurrentHttpTests(ProcessingHttpTestCase):
                 handle.write(b"partial")
             raise OSError("forced")
 
-        with mock.patch.object(self.server_module, "stream_upload_to_file", fail):
+        with mock.patch("backend.api.maintenance.stream_upload_to_file", fail):
             res = self._stage(b"not-a-real-backup")
         self.assertEqual(res.status, 500, res.raw)
         self.assertEqual(res.body.get("error"), "internal_error")

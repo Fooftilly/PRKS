@@ -13,16 +13,12 @@ admitted request's context on the served Library's database. The commands
 open the transactions, so authorization stays in ``library_query`` and
 ``library_command``, and a write's maintenance and epoch fence in
 ``library_command``.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+The commands are imported when a route runs: the served app loads no
+PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
@@ -38,122 +34,91 @@ from backend.api_contract.positions import (
 )
 from backend.domain.research.rules import ResearchError
 from backend.web.etags import etag_for_representation
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
 
-COLLECTION = "/api/positions"
-_PREFIX = COLLECTION + "/"
+
+def _id(req: Request) -> str:
+    return unquote(req.params["position_id"])
 
 
-def _commands() -> Any:
-    """``backend.domain.research.position_commands``, imported when a route runs.
+def _refused(req: Request, error: ResearchError) -> Response:
+    return json_response(req, error.http_status, research_error_envelope(message=str(error), code=error.code))
 
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
+
+def catalog(req: Request) -> Response:
     from backend.domain.research import position_commands
 
-    return position_commands
+    return json_response(req, 200, dump_response(PositionSummary, position_commands.catalog(*req.actor)))
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a Position route ran without an admitted request context")
-    return db.database, ctx
+def detail(req: Request) -> Response:
+    from backend.domain.research import position_commands
 
-
-def _item_id(path: str) -> Optional[str]:
-    """The Position id of ``/api/positions/:id`` (unquoted), else ``None``."""
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        return unquote(path.split("/")[-1])
-    return None
-
-
-def _refused(handler: Any, error: ResearchError) -> None:
-    handler.send_json(error.http_status, research_error_envelope(message=str(error), code=error.code))
-
-
-def handle_get(handler: Any, db: Any, path: str) -> bool:
-    """The catalog and one Position (the sync state is :func:`handle_sync_state`)."""
-    if path == COLLECTION:
-        handler.send_json(200, dump_response(PositionSummary, _commands().catalog(*_actor(handler, db))))
-        return True
-    pid = _item_id(path)
-    if pid is None:
-        return False
-    item = _commands().detail(*_actor(handler, db), pid)
+    item = position_commands.detail(*req.actor, _id(req))
     if item:
-        handler.send_json(200, dump_response(PositionDetail, item))
-    else:
-        handler.send_json(404, research_error_envelope(message="Position not found."))
-    return True
+        return json_response(req, 200, dump_response(PositionDetail, item))
+    return json_response(req, 404, research_error_envelope(message="Position not found."))
 
 
-def handle_sync_state(handler: Any, db: Any, path: str) -> bool:
+def sync_state(req: Request) -> Response:
     """``GET /api/positions/:id/sync-state``."""
-    parts = path.split("/")
-    if not (path.startswith(_PREFIX) and path.endswith("/sync-state") and len(parts) == 5):
-        return False
+    from backend.domain.research import position_commands
+
     # REVISIONS ONLY: the Position detail already carries both values, and a
     # second copy would be a second thing to keep true.
-    data = _commands().sync_state(*_actor(handler, db), unquote(parts[3]))
+    data = position_commands.sync_state(*req.actor, _id(req))
     if data is None:
-        handler.send_json(404, research_error_envelope(message="Position not found"))
-        return True
+        return json_response(req, 404, research_error_envelope(message="Position not found"))
     body = dump_response(PositionSyncState, data)
-    etag = etag_for_representation("position-state", body)
-    if handler._prks_if_none_match(etag):
-        handler._send_json_not_modified(etag)
-        return True
-    handler.send_json(200, body, etag=etag, precondition_checked=True)
-    return True
+    return json_response(req, 200, body, etag=etag_for_representation("position-state", body))
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path != COLLECTION:
-        return False
-    req, err = parse_position_request(PositionCreateRequest, data)
-    if err is not None or req is None:
-        handler.send_json(400, err)
-        return True
+def create(req: Request) -> Response:
+    from backend.domain.research import position_commands
+
+    parsed, err = parse_position_request(PositionCreateRequest, req.data)
+    if err is not None or parsed is None:
+        return json_response(req, 400, err)
     try:
-        item = _commands().create(*_actor(handler, db), req.name, req.description)
+        item = position_commands.create(*req.actor, parsed.name, parsed.description)
     except ResearchError as e:
-        _refused(handler, e)
-        return True
+        return _refused(req, e)
     # Domain already committed; do not dump_response here (see
     # docs/api-contract-boundary.md — post-commit response validation).
-    handler.send_json(201, item)
-    return True
+    return json_response(req, 201, item)
 
 
-def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    pid = _item_id(path)
-    if pid is None:
-        return False
-    req, err = parse_position_request(PositionUpdateRequest, data)
-    if err is not None or req is None:
-        handler.send_json(400, err)
-        return True
+def update(req: Request) -> Response:
+    from backend.domain.research import position_commands
+
+    parsed, err = parse_position_request(PositionUpdateRequest, req.data)
+    if err is not None or parsed is None:
+        return json_response(req, 400, err)
     try:
-        item = _commands().update(*_actor(handler, db), pid, **req.domain_field_kwargs())
+        item = position_commands.update(*req.actor, _id(req), **parsed.domain_field_kwargs())
     except ResearchError as e:
-        _refused(handler, e)
-        return True
+        return _refused(req, e)
     # Domain already committed; do not dump_response here (see
     # docs/api-contract-boundary.md — post-commit response validation).
-    handler.send_json(200, item)
-    return True
+    return json_response(req, 200, item)
 
 
-def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    pid = _item_id(path)
-    if pid is None:
-        return False
+def delete(req: Request) -> Response:
+    from backend.domain.research import position_commands
+
     try:
-        _commands().delete(*_actor(handler, db), pid)
+        position_commands.delete(*req.actor, _id(req))
     except ResearchError as e:
-        _refused(handler, e)
-        return True
-    handler.send_json(200, dump_response(PositionDeleted, {"status": "deleted"}))
-    return True
+        return _refused(req, e)
+    return json_response(req, 200, dump_response(PositionDeleted, {"status": "deleted"}))
+
+
+ROUTES = (
+    route("GET", "/api/positions", catalog),
+    route("POST", "/api/positions", create),
+    route("GET", "/api/positions/{position_id}", detail),
+    route("PATCH", "/api/positions/{position_id}", update),
+    route("DELETE", "/api/positions/{position_id}", delete),
+    route("GET", "/api/positions/{position_id}/sync-state", sync_state),
+)

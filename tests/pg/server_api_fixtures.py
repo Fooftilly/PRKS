@@ -32,23 +32,23 @@ from tests.pg.test_search_text import pdf_bytes
 class ServerApiTestCase(HttpAuthTestCase):
     def setUp(self) -> None:
         super().setUp()
-        module = self.server_module
+        module = self.app
         from backend.domain.research import reindex  # noqa: F401  registers research.reindex_work
 
-        previous = module.db
+        previous = module.library
         self.addCleanup(self._restore, previous)
-        self.storage = module._bound_storage
+        self.storage = module.storage
         assert self.storage is not None
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
         assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
         self.facade = TestLibrary(self.db, storage=self.storage)
-        module.db = self.facade
+        module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()
 
     def _restore(self, previous: Any) -> None:
-        self.server_module.db = previous
+        self.app.library = previous
 
     # -- requests ----------------------------------------------------------------------
 

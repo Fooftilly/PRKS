@@ -16,18 +16,15 @@ from run_tests import apply_isolated_test_env
 
 apply_isolated_test_env(_PROJECT_DIR)
 
-import backend.server as server_module
 from backend.server import run_server
 from backend.storage.config import StorageConfig
+from backend.web.app import App
 
 
 class StorageBindGuardTests(unittest.TestCase):
     def test_run_server_without_bind_raises(self):
-        previous = server_module._bound_storage
-        self.addCleanup(setattr, server_module, "_bound_storage", previous)
-        server_module._bound_storage = None
         with self.assertRaises(RuntimeError) as ctx:
-            run_server()
+            run_server(App())
         self.assertIn("not bound", str(ctx.exception))
 
     def test_for_testing_data_still_refused(self):

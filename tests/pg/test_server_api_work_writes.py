@@ -20,6 +20,7 @@ import uuid
 from typing import Any
 from unittest import mock
 
+from backend.api import works as works_api
 from tests.pg.server_api_fixtures import ServerApiTestCase
 
 VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -169,7 +170,7 @@ class VideoSourceTests(ServerApiTestCase):
             return {"title": "Enriched Title", "author_name": "Enriched Channel",
                     "thumbnail_url": "https://img.example/thumb.jpg"}
 
-        with mock.patch.object(self.server_module, "_fetch_youtube_oembed", oembed):
+        with mock.patch.object(works_api, "fetch_youtube_oembed", oembed):
             declared = self.create_work("", source_kind="video", source_url=VIDEO)
             inferred = self.ok(self.send("POST", "/api/works", {"source_url": VIDEO}))
         self.assertEqual(seen, [VIDEO, VIDEO], "the same enrichment boundary, twice")
@@ -182,7 +183,7 @@ class VideoSourceTests(ServerApiTestCase):
 
     def test_a_file_backed_work_is_never_enriched(self) -> None:
         seen: list[str] = []
-        with mock.patch.object(self.server_module, "_fetch_youtube_oembed", seen.append):
+        with mock.patch.object(works_api, "fetch_youtube_oembed", seen.append):
             created = self.create_work("Paper", file_b64=PDF, file_name="paper.pdf", source_url=VIDEO)
         self.assertEqual(seen, [], "no video enrichment for a file-backed Work")
         row = self.work(created["id"])

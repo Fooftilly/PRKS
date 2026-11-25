@@ -37,7 +37,8 @@ from backend.domain.identity.web_setup import (
     read_state,
 )
 from backend.domain.identity.web_start import settings_from_env
-from backend.server import parse_request_origin, start_setup_server
+from backend.server import start_setup_server
+from backend.web.hosts import parse_request_origin
 from backend.storage import root_marker
 from backend.storage.bootstrap_config import BootstrapConfigStore, expect_absent, read_bootstrap_config
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at
@@ -104,16 +105,15 @@ class AfterSetupTests(unittest.TestCase):
     """``/api/setup`` on the normal server, once the root is claimed (#612)."""
 
     def answer(self, method: str, path: str = "/api/setup") -> Any:
-        from email.message import Message
-
         from backend.api.session import HttpRequest
         from backend.api.setup import handle_after_setup
+        from backend.web.http import Headers
 
         def unread() -> object:
             raise AssertionError("the body is never read after setup")
 
         return handle_after_setup(HttpRequest(
-            method=method, path=path, headers=Message(), peer="127.0.0.1",
+            method=method, path=path, headers=Headers(), peer="127.0.0.1",
             request_host=("127.0.0.1", 8000), scheme="http", parse_origin=parse_request_origin,
             read_json=unread,
         ))
