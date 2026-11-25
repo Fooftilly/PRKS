@@ -38,6 +38,7 @@ from backend.domain.processing import commands as processing
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_backup_export import BackupTestCase
+from backend.domain.organization import tag_commands
 
 
 class RestoreTestCase(BackupTestCase):
@@ -103,8 +104,8 @@ class CommitTests(RestoreTestCase):
     def test_a_restore_replaces_the_library_and_queues_its_follow_up_work(self) -> None:
         kept = self.put(b"%PDF kept")
         kept_work = self.create(kept)
-        tag = self.library.add_tag("Philosophy")
-        self.library.add_tag_to_work(kept_work, tag["id"])
+        tag = tag_commands.create(self.db, self.ctx, "Philosophy")
+        tag_commands.tag_work(self.db, self.ctx, kept_work, tag["id"])
         archive = self.backup().path
         tags_then = self.sql("SELECT id, name, name_key FROM prks.tags ORDER BY id")
         # After the backup: a new Work with a new object, an edit, and a delete.
@@ -259,7 +260,7 @@ class CommitTests(RestoreTestCase):
         archive = self.backup().path
         self.restore(archive)
         with self.assertRaises(AccessRefused) as caught:
-            self.library.add_tag("Stale")  # the actor's context still carries epoch 1
+            tag_commands.create(self.db, self.ctx, "Stale")  # the actor's context still carries epoch 1
         self.assertEqual(caught.exception.refusal.code, "LIBRARY_EPOCH_CHANGED")
         self.assertEqual(self.sql("SELECT 1 FROM prks.tags WHERE name = 'Stale'"), [])
 
@@ -407,7 +408,7 @@ class AbortTests(RestoreTestCase):
 
         self.refused(self.archive, "internal", hooks={restore.HOOK_COMMITTING: fail})
         self.assert_unchanged_after_abort(self.before, 1, "internal")
-        self.library.add_tag("Right after")
+        tag_commands.create(self.db, self.ctx, "Right after")
         # The Library's jobs stay queued, and nothing R4 enqueued survived.
         self.assertEqual({(row["kind"], row["state"], row["library_epoch"]) for row in self.jobs()},
                          {("text.extract", "queued", 1)})
@@ -449,14 +450,14 @@ class AbortTests(RestoreTestCase):
             holder.execute("SELECT pg_advisory_unlock_all()")
         self.assert_unchanged_after_abort(self.before, 1, "drain_timeout")
         # Abort finalization cleared the flag: an ordinary command goes through at once.
-        self.library.add_tag("Right after")
+        tag_commands.create(self.db, self.ctx, "Right after")
 
     def test_commands_are_refused_while_the_flag_is_set(self) -> None:
         seen: dict[str, Any] = {}
 
         def try_command() -> None:
             try:
-                self.library.add_tag("During")
+                tag_commands.create(self.db, self.ctx, "During")
             except Exception as exc:  # noqa: BLE001 - the admission error type is the Works lane's
                 seen["error"] = exc
 

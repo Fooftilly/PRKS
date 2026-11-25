@@ -20,6 +20,8 @@ from typing import Any, Optional
 from backend.web import dispatch
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 BROWSE = {"works-browse": "/api/works?projection=browse", "recent": "/api/recent",
           "recently-added": "/api/recently-added"}
@@ -84,14 +86,14 @@ class CatalogEtagTests(FreshnessTestCase):
             # step with their identity keys, so a name change is an alias
             # change here; the colour has no key and is changed directly.
             check(lambda: self.sql("UPDATE prks.tags SET color = %s WHERE id = %s RETURNING id", ("#abcdef", tag)))
-            check(lambda: self.facade.add_tag_alias(tag, "ETag FOUR"))
-            check(lambda: self.facade.add_tag_alias(tag, "ETag FIVE"))
-            check(lambda: self.facade.delete_tag_alias(tag, "ETag FIVE"))
-            check(lambda: self.facade.add_tag("ETag Created"))
-            check(lambda: self.facade.add_tag_to_work(work_id, tag), False)
-            check(lambda: self.facade.remove_tag_from_work(work_id, tag), False)
-            check(lambda: self.facade.merge_tags_into(tag, target))
-            check(lambda: self.facade.delete_tag(target))
+            check(lambda: tag_commands.add_alias(self.facade.database, current_context(), tag, "ETag FOUR"))
+            check(lambda: tag_commands.add_alias(self.facade.database, current_context(), tag, "ETag FIVE"))
+            check(lambda: tag_commands.delete_alias(self.facade.database, current_context(), tag, "ETag FIVE"))
+            check(lambda: tag_commands.create(self.facade.database, current_context(), "ETag Created"))
+            check(lambda: tag_commands.tag_work(self.facade.database, current_context(), work_id, tag), False)
+            check(lambda: tag_commands.untag_work(self.facade.database, current_context(), work_id, tag), False)
+            check(lambda: tag_commands.merge(self.facade.database, current_context(), tag, target))
+            check(lambda: tag_commands.delete(self.facade.database, current_context(), target))
 
     def folder(self, title: str, **fields: Any) -> str:
         return self.ok(self.send("POST", "/api/folders", {"title": title, **fields}))["id"]

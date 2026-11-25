@@ -28,6 +28,8 @@ from backend.storage.objects import LocalFilesystemStorage
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_search_text import pdf_bytes
+from backend.domain.organization import tag_commands
+from tests.acting_context import current_context
 
 
 class SearchHttpTests(HttpAuthTestCase):
@@ -82,13 +84,13 @@ class SearchHttpTests(HttpAuthTestCase):
 
     def test_the_tag_filter_with_an_author_filter(self) -> None:
         with self.acting():
-            tag = self.facade.add_tag("Physics")
-            self.facade.add_tag_alias(tag["id"], "phys")
+            tag = tag_commands.create(self.facade.database, current_context(), "Physics")
+            tag_commands.add_alias(self.facade.database, current_context(), tag["id"], "phys")
             kept = self.facade.add_work("Tagged by Ann", author_text="Ann")
             other = self.facade.add_work("Tagged by Bob", author_text="Bob")
             self.facade.add_work("Untagged", author_text="Ann")
             for work in (kept, other):
-                self.facade.add_tag_to_work(work, tag["id"])
+                tag_commands.tag_work(self.facade.database, current_context(), work, tag["id"])
         self.assertEqual(self.search(tag="phys"), ["Tagged by Bob", "Tagged by Ann"])  # newest first
         self.assertEqual(self.search(tag="Physics", author="ann"), ["Tagged by Ann"])
         self.assertEqual(self.search(tag="unknown"), [])

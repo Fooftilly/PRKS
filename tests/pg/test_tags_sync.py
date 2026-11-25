@@ -29,6 +29,8 @@ from backend.sync.handlers import tag_link
 from tests.pg.test_tags import OrganizationTestCase
 from tests.pg.test_works_sync import RecreatedWorkTests, SyncTestCase
 from tests.narrowing import require
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import tag_commands
 
 _ENTITY_TYPES = {"CREATE_TAG": "tag", "DELETE_TAG": "tag", "MERGE_TAG": "tag",
                  "ADD_FOLDER_TAG": "folder", "REMOVE_FOLDER_TAG": "folder"}
@@ -72,7 +74,7 @@ class CreateTests(TagSyncTestCase):
         again = self.send(self.create("Other", tag_id, "#000000"))
         self.assertEqual(again[1]["changed"], False)
         self.assertEqual(again[1]["tag"]["name"], "Λόγος")
-        self.library.add_tag_alias(tag_id, "Logos")
+        tag_commands.add_alias(self.db, self.ctx, tag_id, "Logos")
         for name in ("ΛΌΓΟΣ", "LOGOS"):
             other = self.create(name)
             with self.subTest(name=name):
@@ -83,8 +85,8 @@ class CreateTests(TagSyncTestCase):
 
     def test_a_deleted_or_merged_id_is_never_constructed_again(self) -> None:
         deleted, source, target = self.create_tag("A"), self.create_tag("B"), self.create_tag("C")
-        self.library.delete_tag(deleted)
-        self.library.merge_tags_into(source, target)
+        tag_commands.delete(self.db, self.ctx, deleted)
+        tag_commands.merge(self.db, self.ctx, source, target)
         self.assertEqual(self.send(self.create("A", deleted)), (409, {"code": "TAG_DELETED", "tag_id": deleted}))
         self.assertEqual(self.send(self.create("New", source)),
                          (409, {"code": "TAG_MERGED", "tag_id": source, "target_tag_id": target}))
@@ -103,7 +105,7 @@ class CreateTests(TagSyncTestCase):
                 self.send(self.create("Mine", tag_id))
             self.assertEqual(caught.exception.refusal, Refusal.FORBIDDEN)
         self.assertEqual(len(self.ledger()), before)
-        self.assertEqual(self.library.get_all_tags(), [])
+        self.assertEqual(tag_commands.all_tags(self.db, self.ctx), [])
 
     def test_nul_is_an_invalid_envelope(self) -> None:
         self.assertEqual(self.send(self.create("a\x00b")), (400, {"code": "INVALID_ENVELOPE"}))
@@ -149,7 +151,7 @@ class EnvelopeTests(TagSyncTestCase):
             with self.subTest(color=good):
                 status, result = self.send(self.create("Hex " + good, color=good))
                 self.assertEqual((status, result["tag"]["color"]), (200, good))
-        self.assertEqual(sorted(row["color"] for row in self.library.get_all_tags()),
+        self.assertEqual(sorted(row["color"] for row in tag_commands.all_tags(self.db, self.ctx)),
                          sorted(["#abc", "#abcd", "#AABBCC", "#AABBCCdd"]))
 
     def test_delete_and_merge_address_an_identity_and_carry_no_base_revision(self) -> None:
@@ -157,7 +159,7 @@ class EnvelopeTests(TagSyncTestCase):
         for data in (self.envelope("DELETE_TAG", source, {}, 0), self.merge(source, target) | {"base_revision": 0}):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data), (400, {"code": "INVALID_BASE_REVISION"}))
-        self.assertEqual(sorted(row["id"] for row in self.library.get_all_tags()), sorted([source, target]))
+        self.assertEqual(sorted(row["id"] for row in tag_commands.all_tags(self.db, self.ctx)), sorted([source, target]))
 
     def test_every_tag_operation_is_registered_under_its_entity_type(self) -> None:
         self.assertLessEqual({"CREATE_TAG", "DELETE_TAG", "MERGE_TAG", "ADD_WORK_TAG", "REMOVE_WORK_TAG",
@@ -191,16 +193,16 @@ class ReplayTests(TagSyncTestCase):
         record("ACKNOWLEDGED", self.link("ADD_WORK_TAG", work, tag, 0))
         record("REVISION_CONFLICT", self.link("REMOVE_WORK_TAG", work, tag, 0))
         record("ENTITY_NOT_FOUND", self.link("ADD_WORK_TAG", generate("W"), tag, 0))
-        self.library.merge_tags_into(merged, target)
+        tag_commands.merge(self.db, self.ctx, merged, target)
         record("TAG_MERGED", self.link("ADD_WORK_TAG", work, merged, 0))
-        self.library.delete_tag(doomed)
+        tag_commands.delete(self.db, self.ctx, doomed)
         record("TAG_DELETED", self.link("ADD_WORK_TAG", work, doomed, 0))
         record("FUTURE_REVISION", self.link("ADD_WORK_TAG", work, tag, 99))
         # Every way a replay could re-derive another answer: the link flips,
         # the merge target is deleted, a new Tag appears.
-        self.library.remove_tag_from_work(work, tag)
-        self.library.add_tag_to_work(work, tag)
-        self.library.delete_tag(target)
+        tag_commands.untag_work(self.db, self.ctx, work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
+        tag_commands.delete(self.db, self.ctx, target)
         self.create_tag("Newcomer")
         before, ledger = self.state(), self.ledger()
         for code, (data, result) in sent.items():
@@ -232,7 +234,7 @@ class ReplayTests(TagSyncTestCase):
 
     def test_a_lifecycle_cycle_fails_the_operation_unledgered(self) -> None:
         work, first, second = self.library.add_work("W"), self.create_tag("A"), self.create_tag("B")
-        self.library.merge_tags_into(first, second)
+        tag_commands.merge(self.db, self.ctx, first, second)
         self.sql("UPDATE prks.sync_tag_lifecycle SET state = 'merged', target_tag_id = %s WHERE tag_id = %s",
                  (first, second))
         before = self.ledger()
@@ -295,7 +297,7 @@ class LinkTests(TagSyncTestCase):
         status, result = self.send(data)
         self.assertEqual((status, result["code"], result["server_revision"], result["changed"]),
                          (200, "ACKNOWLEDGED", 1, True))
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [tag])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [tag])
         self.assertEqual(self.revisions("work-tag"), {links.WORK.scope_id(work, tag): 1})
         self.assertEqual(len(self.ledger()), len(before) + 1)
 
@@ -310,7 +312,7 @@ class LinkTests(TagSyncTestCase):
         # A stale remove of the source never reaches the target's link.
         self.assertEqual(self.send(self.link("REMOVE_WORK_TAG", work, source, 1)),
                          (409, {"code": "TAG_MERGED", "work_id": work, "tag_id": source, "target_tag_id": target}))
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [target])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [target])
         self.assertEqual(self.send(self.link("ADD_WORK_TAG", work, generate("T"), 0))[1]["code"],
                          "ENTITY_NOT_FOUND")
 
@@ -331,7 +333,7 @@ class LinkTests(TagSyncTestCase):
             lambda: self.send(self.merge(source, target)), serializable=True)
         self.assertEqual(holder[0], 200)
         self.assertEqual(contender[1]["affected_work_ids"], [work])
-        self.assertEqual([row["id"] for row in self.library.get_work_tags(work)], [target])
+        self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [target])
 
     def test_a_merge_reruns_on_the_key_after_a_read_committed_link(self) -> None:
         work, source, target = self.library.add_work("W"), self.create_tag("A"), self.create_tag("B")
@@ -391,7 +393,7 @@ class LifecycleTests(TagSyncTestCase):
         self.assertEqual(holder[0], 200)
         # It waited for the first merge and found its target merged away.
         self.assertEqual(contender, (404, {"code": "ENTITY_NOT_FOUND", "tag_id": first}))
-        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [second])
+        self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [second])
         self.assert_integrity()
 
     def test_dependencies_name_acknowledged_operations_of_the_device(self) -> None:
@@ -425,7 +427,7 @@ class IsolationTests(TagSyncTestCase):
             theirs = self.library.add_work("Theirs")
         self.assertEqual(self.send(self.link("ADD_WORK_TAG", theirs, tag, 0) | {
             "device_id": str(other.context.device_id)}, other.context)[1]["code"], "ENTITY_NOT_FOUND")
-        self.assertEqual(len(self.library.get_all_tags()), 1)
+        self.assertEqual(len(tag_commands.all_tags(self.db, self.ctx)), 1)
         self.assertEqual(self.count("work_tags"), 0)
 
     def test_a_reader_cannot_send_tag_operations(self) -> None:
@@ -462,7 +464,7 @@ class AnswerTests(TagSyncTestCase):
             with self.subTest(data=data["payload"], entity_id=data["entity_id"]):
                 expected = "INVALID_BASE_REVISION" if data["base_revision"] == 0 else "INVALID_ENVELOPE"
                 self.assertEqual(self.send(data), (400, {"code": expected}))
-        self.assertEqual([row["id"] for row in self.library.get_all_tags()], [ethics])
+        self.assertEqual([row["id"] for row in tag_commands.all_tags(self.db, self.ctx)], [ethics])
 
     def test_link_answers(self) -> None:
         work, folder, tag = self.library.add_work("W"), self.folder(), self.create_tag("Ethics")

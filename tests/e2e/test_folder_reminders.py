@@ -17,6 +17,8 @@ from tests.e2e.fixtures import seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
+from tests.acting_context import current_context
+from tests.narrowing import require
 
 FOLDER_A_TITLE = 'Reminders Folder Alpha'
 FOLDER_B_TITLE = 'Reminders Folder Beta'
@@ -41,11 +43,12 @@ def tearDownModule():
 
 
 def seed(root):
+    from backend.domain.organization import folder_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    ids['folder_a'] = db.add_folder(FOLDER_A_TITLE, 'Synthetic folder A.')
-    ids['folder_b'] = db.add_folder(FOLDER_B_TITLE, 'Synthetic folder B.')
-    db.update_folder_metadata(ids['folder_a'], {'private_notes': FOLDER_A_NOTES})
+    ids['folder_a'] = folder_commands.create(db.database, current_context(), FOLDER_A_TITLE, 'Synthetic folder A.')
+    ids['folder_b'] = folder_commands.create(db.database, current_context(), FOLDER_B_TITLE, 'Synthetic folder B.')
+    folder_commands.update(db.database, current_context(), ids['folder_a'], {'private_notes': FOLDER_A_NOTES})
     return ids
 
 
@@ -100,7 +103,9 @@ class _FolderRemindersPage(_PageBase):
             timeout=25000, message='Sync did not settle')
 
     def server_notes(self, server, folder_id):
-        return self.db(server).get_folder(folder_id)['private_notes']
+        from backend.domain.organization import folder_commands
+        store = self.db(server)
+        return require(store.run(folder_commands.detail, folder_id, store.pdfs_dir))['private_notes']
 
 
 class FolderRemindersSessionTests(_FolderRemindersPage, unittest.TestCase):
@@ -234,7 +239,8 @@ class FolderRemindersRecoveryTests(_FolderRemindersPage, unittest.TestCase):
             .map(r => r.payload.value))""")
 
     def set_server_notes(self, server, text):
-        self.db(server).update_folder_metadata(self.folder_id, {'private_notes': text})
+        from backend.domain.organization import folder_commands
+        self.db(server).run(folder_commands.update, self.folder_id, {'private_notes': text})
 
     def wait_server_notes(self, page, text):
         wait_for_async(

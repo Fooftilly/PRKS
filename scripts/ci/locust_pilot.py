@@ -84,7 +84,9 @@ def command(binary: str, origin: str, csv_prefix: str) -> list[str]:
 
 def seeder(extra: int) -> Callable[[str], dict[str, Any]]:
     def seed(storage_root: str) -> dict[str, Any]:
+        from backend.domain.organization import tag_commands
         from backend.storage.config import StorageConfig
+        from tests.acting_context import current_context
         from tests.e2e.fixtures import open_library
         from tests.ux_tour.fixtures import seed_ux_tour_library
 
@@ -97,7 +99,7 @@ def seeder(extra: int) -> Callable[[str], dict[str, Any]]:
         ]
         # The whole seeded library, so a catalog or tag list missing any fixture fails.
         ids["catalog_size"] = len(db.get_all_works())
-        ids["tag_count"] = len(db.get_all_tags())
+        ids["tag_count"] = len(tag_commands.all_tags(db.database, current_context()))
         return ids
 
     return seed

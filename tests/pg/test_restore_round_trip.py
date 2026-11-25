@@ -25,6 +25,12 @@ from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, NAMESPACE_PORTRAITS
 from tests.pg.test_annotations import HIGHLIGHT
 from tests.pg.test_objects_portraits import image
 from tests.pg.test_restore_commit import RestoreTestCase
+from backend.domain.organization import folder_commands
+from backend.domain.organization import playlist_commands
+from backend.domain.organization import tag_commands
+from backend.domain.saved_views import commands as saved_view_commands
+from backend.domain.settings import commands as settings_commands
+from tests.acting_context import current_context
 
 # Identity columns the restore renumbers from the live sequence (see the staging tests).
 _RENUMBERED = {"seq"}
@@ -77,18 +83,18 @@ class EveryTableRoundTripTests(RestoreTestCase):
         self.edit_command(lambda scope: portraits.commit(scope, self.objects, ada, "https://example.org/ada.png",
                                                     portrait))
         # Organization.
-        tag = lib.add_tag("Philosophy")["id"]
-        lib.add_tag_alias(tag, "Phil")
-        lib.add_tag_to_work(first, tag)
-        lib.delete_tag(lib.add_tag("Retired")["id"])
-        folder = lib.add_folder("Reading")
-        lib.add_work_to_folder(folder, first)
-        lib.add_tag_to_folder(folder, tag)
-        playlist = lib.add_playlist("Queue")
-        lib.add_work_to_playlist(playlist, first)
-        lib.create_saved_view("Culture", {"mode": "all", "q": "culture", "tag": "", "author": "",
+        tag = tag_commands.create(lib.database, current_context(), "Philosophy")["id"]
+        tag_commands.add_alias(lib.database, current_context(), tag, "Phil")
+        tag_commands.tag_work(lib.database, current_context(), first, tag)
+        tag_commands.delete(lib.database, current_context(), tag_commands.create(lib.database, current_context(), "Retired")["id"])
+        folder = folder_commands.create(lib.database, current_context(), "Reading")
+        folder_commands.file_work(lib.database, current_context(), folder, first)
+        tag_commands.tag_folder(lib.database, current_context(), folder, tag)
+        playlist = playlist_commands.create(lib.database, current_context(), "Queue")
+        playlist_commands.add_item(lib.database, current_context(), playlist, first)
+        saved_view_commands.create(lib.database, current_context(), "Culture", {"mode": "all", "q": "culture", "tag": "", "author": "",
                                           "publisher": ""})
-        lib.patch_app_settings({"annotation_author": "Ada"})
+        settings_commands.patch(lib.database, current_context(), {"annotation_author": "Ada"})
         self.sql("INSERT INTO prks.citation_styles (library_id, id, title, csl) VALUES (%s, %s, 'House', '<style/>')",
                  (self.actor.library_id, "custom-" + "a" * 32))
         # Research.
@@ -144,7 +150,7 @@ class EveryTableRoundTripTests(RestoreTestCase):
         # Change every family after the backup.
         self.library.delete_work_record(ids["second"])
         self.library.update_work_metadata(ids["first"], {"title": "Changed"})
-        self.library.delete_tag(ids["tag"])
+        tag_commands.delete(self.db, self.ctx, ids["tag"])
         self.library.add_person("Later", "Person")
         self.sql("DELETE FROM prks.library_settings")
         self.sql("DELETE FROM prks.citation_styles")

@@ -18,6 +18,8 @@ from tests.e2e.fixtures import (
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
+from tests.acting_context import current_context
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -146,6 +148,11 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def db_for(self, server):
         return library_for(server)
 
+    def playlist(self, server, playlist_id):
+        from backend.domain.organization import playlist_commands
+        store = self.db_for(server)
+        return require(store.run(playlist_commands.detail, playlist_id, store.pdfs_dir))
+
     def offline(self, page, context):
         context.set_offline(True)
         page.evaluate("async () => { try { await prksRequest('/api/settings'); } catch (_) {} }")
@@ -238,11 +245,12 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertNotIn('No playlists yet.', body)
 
     def test_legitimately_empty_index_renders_its_empty_state(self):
+        from backend.domain.organization import playlist_commands
         def empty(root):
             ids = seed_playlists_library(root)
             db = open_library(StorageConfig.for_testing(root))
-            db.delete_playlist(ids['playlist_a'])
-            db.delete_playlist(ids['playlist_b'])
+            playlist_commands.delete(db.database, current_context(), ids['playlist_a'])
+            playlist_commands.delete(db.database, current_context(), ids['playlist_b'])
             return ids
 
         server, page, context = self.start(empty)
@@ -462,6 +470,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def test_the_creation_modal_creates_offline_from_every_surface(self):
         """Creating a playlist mints its id here, so the modal opens and saves
         with no server -- and the playlist is real immediately."""
+        from backend.domain.organization import playlist_commands
         server, page, context = self.start()
         self.index(page)
         page.wait_for_selector('.playlists-page')
@@ -493,7 +502,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=30000, message='the creation never retired')
         self.assertIn('Disconnected playlist',
-                      [row['title'] for row in self.db_for(server).get_all_playlists()])
+                      [row['title'] for row in self.db_for(server).run(playlist_commands.catalog)])
 
     # ---- what still needs a server -----------------------------------------
 
@@ -557,7 +566,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertEqual(fields, ['description', 'title'])
         self.assertEqual(seen, [], 'nothing canonical left the browser')
         self.assertEqual(
-            self.db_for(server).get_playlist(pid)['title'], PLAYLIST_A_TITLE,
+            self.playlist(server, pid)['title'], PLAYLIST_A_TITLE,
             'the server has not been told anything yet')
 
         self.online(page, context)
@@ -565,7 +574,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             page,
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=30000, message='the field operations never retired')
-        self.assertEqual(self.db_for(server).get_playlist(pid)['title'],
+        self.assertEqual(self.playlist(server, pid)['title'],
                          'Renamed while disconnected')
 
     def test_an_inline_rename_is_durable_offline_and_never_patches_the_work(self):
@@ -734,7 +743,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
             timeout=30000, message='the membership operation never retired')
         self.assertEqual(
-            [w['id'] for w in self.db_for(server).get_playlist(ids['playlist_a'])['items']],
+            [w['id'] for w in self.playlist(server, ids['playlist_a'])['items']],
             [ids['playlist_video_two']])
 
     # ---- direct Playlist coherence -----------------------------------------

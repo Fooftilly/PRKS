@@ -33,6 +33,10 @@ from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalFilesystemStorage, StorageKey
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import folder_commands
+from backend.domain.organization import links
+from backend.domain.organization import tag_commands
 
 CAP = 10 * 1024 * 1024
 
@@ -392,8 +396,8 @@ class EditTests(QueueTestCase):
         item = self.ready()
         ada = self.library.add_person("Ada", "Lovelace")
         alan = self.library.add_person("Alan", "Turing")
-        tag = self.library.add_tag("logic")["id"]
-        folder = self.library.add_folder("Reading")
+        tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        folder = folder_commands.create(self.db, self.ctx, "Reading")
         after = self.edit(item["id"], 0, {
             "title": "  On Computable Numbers ", "status": "In Progress", "doc_type": "book", "year": 1936,
             "thumb_page": "2", "target_folder_id": folder, "unknown": "ignored",
@@ -419,7 +423,7 @@ class EditTests(QueueTestCase):
 
     def test_an_invalid_edit_changes_nothing(self) -> None:
         item = self.ready()
-        tag = self.library.add_tag("logic")["id"]
+        tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
         for fields in ({"status_draft": "Done"}, {"title": "a\x00b"}, {"title": "x", "target_folder_id": "F-NONE"},
                        {"title": "x", "roles": [{"person_id": "P-NONE", "role_type": "Author"}]},
                        {"title": "x", "roles": [{"person_id": "P-NONE", "role_type": "Mentioned"}]},
@@ -441,41 +445,41 @@ class EditTests(QueueTestCase):
     def test_deleting_a_folder_person_or_tag_updates_the_draft(self) -> None:
         item = self.ready()
         ada = self.library.add_person("Ada", "Lovelace")
-        tag = self.library.add_tag("logic")["id"]
-        folder = self.library.add_folder("Reading")
+        tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        folder = folder_commands.create(self.db, self.ctx, "Reading")
         self.edit(item["id"], 0, {"target_folder_id": folder, "roles": [{"person_id": ada, "role_type": "Author"}],
                                   "tags": [{"id": tag}]})
         self.run_command(lambda scope: folders.delete(scope, folder))
         self.serializable(lambda scope: persons.delete_person(scope, ada))
-        self.library.delete_tag(tag)
+        tag_commands.delete(self.db, self.ctx, tag)
         draft = require(self.get(item["id"]))["draft"]
         self.assertEqual((draft["target_folder_id"], draft["roles"], draft["tags"]), ("", [], []))
 
     def test_a_tag_merge_moves_draft_tags(self) -> None:
         item = self.ready()
-        source = self.library.add_tag("logic")["id"]
-        target = self.library.add_tag("maths")["id"]
+        source = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        target = tag_commands.create(self.db, self.ctx, "maths")["id"]
         self.edit(item["id"], 0, {"tags": [{"id": source}]})
-        self.library.merge_tags_into(source, target)
+        tag_commands.merge(self.db, self.ctx, source, target)
         self.assertEqual([tag["id"] for tag in require(self.get(item["id"]))["draft"]["tags"]], [target])
 
     def test_a_tag_merge_keeps_one_draft_tag_when_the_draft_had_both(self) -> None:
         item = self.ready()
-        source = self.library.add_tag("logic")["id"]
-        target = self.library.add_tag("maths")["id"]
+        source = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        target = tag_commands.create(self.db, self.ctx, "maths")["id"]
         self.edit(item["id"], 0, {"tags": [{"id": source}, {"id": target}]})
-        self.library.merge_tags_into(source, target)
+        tag_commands.merge(self.db, self.ctx, source, target)
         self.assertEqual([tag["id"] for tag in require(self.get(item["id"]))["draft"]["tags"]], [target])
         self.assertEqual(self.sql("SELECT tag_id FROM prks.processing_item_tags WHERE item_id = %s",
                                   (item["id"],)), [{"tag_id": target}])
 
     def test_a_work_tag_edit_never_takes_a_draft_tag(self) -> None:
         item = self.ready()
-        tag = self.library.add_tag("staged only")["id"]
+        tag = tag_commands.create(self.db, self.ctx, "staged only")["id"]
         work = self.library.add_work("Unrelated")
-        self.library.add_tag_to_work(work, tag)
+        tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.edit(item["id"], 0, {"tags": [{"id": tag}]})
-        self.library.remove_tag_from_work(work, tag)
+        tag_commands.untag_work(self.db, self.ctx, work, tag)
         self.assertEqual([row["id"] for row in require(self.get(item["id"]))["draft"]["tags"]], [tag])
 
 
@@ -483,8 +487,8 @@ class ImportTests(QueueTestCase):
     def test_an_import_creates_the_work_from_the_draft_and_moves_the_key_to_its_asset(self) -> None:
         item = self.ready(filename="turing.pdf")
         alan = self.library.add_person("Alan", "Turing")
-        tag = self.library.add_tag("logic")["id"]
-        folder = self.library.add_folder("Reading")
+        tag = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        folder = folder_commands.create(self.db, self.ctx, "Reading")
         self.edit(item["id"], 0, {
             "title": "On Computable Numbers", "status_draft": "Planned", "abstract": "A", "year": "1936",
             "journal": "PLMS", "doc_type": "article", "private_notes": "note", "thumb_page": 3,
@@ -497,7 +501,7 @@ class ImportTests(QueueTestCase):
         assert work is not None
         self.assertEqual((work["title"], work["status"], work["abstract"], work["year"], work["journal"]),
                          ("On Computable Numbers", "Planned", "A", "1936", "PLMS"))
-        self.assertEqual([found["id"] for found in self.library.get_work_tags(done.work_id)], [tag])
+        self.assertEqual([found["id"] for found in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, done.work_id))], [tag])
         self.assertEqual(self.sql("SELECT folder_id FROM prks.folder_files WHERE work_id = %s",
                                   (done.work_id,)), [{"folder_id": folder}])
         self.assertEqual([(row["person_id"], row["role_type"]) for row in self.sql(
@@ -644,12 +648,12 @@ class ImportRaceTests(QueueTestCase):
         from backend.domain.organization import tags
 
         item = self.ready()
-        source = self.library.add_tag("logic")["id"]
-        target = self.library.add_tag("maths")["id"]
+        source = tag_commands.create(self.db, self.ctx, "logic")["id"]
+        target = tag_commands.create(self.db, self.ctx, "maths")["id"]
         self.edit(item["id"], 0, {"tags": [{"id": source}]})
         _merged, waited = self.hold_then(lambda scope: tags.merge(scope, source, target, "L-" + uuid.uuid4().hex.upper()),
                                          lambda: self.import_(item["id"]), serializable=True)
-        self.assertEqual([tag["id"] for tag in self.library.get_work_tags(waited.work_id)], [target])
+        self.assertEqual([tag["id"] for tag in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, waited.work_id))], [target])
 
     def test_a_settle_waiting_on_an_import_finds_the_asset(self) -> None:
         item = self.ready()

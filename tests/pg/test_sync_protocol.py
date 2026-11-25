@@ -18,13 +18,14 @@ from backend.sync import envelope as rules
 from backend.sync import handlers, protocol
 from backend.sync.handlers import work_open
 from tests.pg.test_works_sync import SyncTestCase
+from backend.domain.organization import tag_commands
 
 
 class ProtocolTests(SyncTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.work = self.library.add_work("Protocol work")
-        self.tag = self.library.add_tag("Protocol tag")["id"]
+        self.tag = tag_commands.create(self.db, self.ctx, "Protocol tag")["id"]
 
     def op(self, operation: str, payload: dict[str, Any], base: Optional[int], **changes: Any) -> dict[str, Any]:
         return self.envelope(operation, self.work, payload, base, **changes)

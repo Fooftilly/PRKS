@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import unicodedata
+from functools import partial
 from typing import Any, Callable
 from unittest import mock
 
@@ -26,6 +27,7 @@ from tests import acting_context as facade_context
 from tests.library_adapter import call_route
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
+from backend.domain.saved_views import commands as saved_view_commands
 
 _ALL = {"mode": "all", "q": "culture", "tag": "", "author": "", "publisher": ""}
 _ADVANCED = {"mode": "advanced", "q": "", "tag": "", "author": "Adorno", "publisher": ""}
@@ -36,7 +38,7 @@ _MISSING = "SV-" + "0" * 32
 
 class SavedViewTestCase(OrganizationTestCase):
     def create(self, name: str, search: dict[str, str] | None = None) -> dict[str, Any]:
-        return self.library.create_saved_view(name, dict(search or _ALL))
+        return saved_view_commands.create(self.db, self.ctx, name, dict(search or _ALL))
 
     def refused(self, message: str, status: int, call: Callable[..., Any], *args: Any,
                 **kwargs: Any) -> None:
@@ -52,7 +54,7 @@ class SavedViewTestCase(OrganizationTestCase):
                      (library_id or self.actor.library_id, generate("SV"), f"Seed {index:03d}"))
 
     def names(self) -> list[str]:
-        return [row["name"] for row in self.library.get_saved_views()]
+        return [row["name"] for row in saved_view_commands.all_views(self.db, self.ctx)]
 
 
 class CrudTests(SavedViewTestCase):
@@ -62,22 +64,22 @@ class CrudTests(SavedViewTestCase):
         self.assertEqual((created["name"], created["search"]), ("Industry", _ALL))
         self.assertEqual(set(created), {"id", "name", "search", "created_at", "updated_at"})
         view_id = created["id"]
-        self.assertEqual(self.library.get_saved_view(f"  {view_id} "), created)
-        self.assertEqual(self.library.get_saved_views(), [created])
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, f"  {view_id} "), created)
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [created])
 
-        renamed = self.library.update_saved_view(view_id, name="Renamed")
+        renamed = saved_view_commands.update(self.db, self.ctx, view_id, name="Renamed")
         self.assertEqual((renamed["name"], renamed["search"]), ("Renamed", _ALL))  # the definition kept
-        redefined = self.library.update_saved_view(view_id, search=_ADVANCED)
+        redefined = saved_view_commands.update(self.db, self.ctx, view_id, search=_ADVANCED)
         self.assertEqual((redefined["name"], redefined["search"]), ("Renamed", _ADVANCED))  # the name kept
-        both = self.library.update_saved_view(f" {view_id} ", name="Both", search=_TAG)
+        both = saved_view_commands.update(self.db, self.ctx, f" {view_id} ", name="Both", search=_TAG)
         self.assertEqual((both["name"], both["search"]), ("Both", _TAG))
-        self.assertEqual(self.library.get_saved_view(view_id), both)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, view_id), both)
 
-        self.assertIsNone(self.library.delete_saved_view(f" {view_id}"))
-        self.assertIsNone(self.library.get_saved_view(view_id))
-        self.assertEqual((self.library.get_saved_views(), self.count("saved_views")), ([], 0))
-        self.refused(views.NOT_FOUND, 404, self.library.delete_saved_view, view_id)
-        self.refused(views.NOT_FOUND, 404, self.library.update_saved_view, view_id, name="Again")
+        self.assertIsNone(saved_view_commands.delete(self.db, self.ctx, f" {view_id}"))
+        self.assertIsNone(saved_view_commands.view(self.db, self.ctx, view_id))
+        self.assertEqual((saved_view_commands.all_views(self.db, self.ctx), self.count("saved_views")), ([], 0))
+        self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.delete, self.db, self.ctx), view_id)
+        self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.update, self.db, self.ctx), view_id, name="Again")
 
     def test_every_definition_shape_is_stored_as_given(self) -> None:
         shapes = [
@@ -93,7 +95,7 @@ class CrudTests(SavedViewTestCase):
             with self.subTest(search=search):
                 created = self.create(f"Shape {index}", search)
                 self.assertEqual(created["search"], {key: value.strip() for key, value in search.items()})
-                self.assertEqual(self.library.get_saved_view(created["id"]), created)
+                self.assertEqual(saved_view_commands.view(self.db, self.ctx, created["id"]), created)
 
     def test_invalid_input_is_refused_before_any_write(self) -> None:
         refusals: list[tuple[Any, Any, str]] = [
@@ -119,36 +121,36 @@ class CrudTests(SavedViewTestCase):
         ]
         for name, search, message in refusals:
             with self.subTest(message=message, name=str(name)[:10]):
-                self.refused(message, 400, self.library.create_saved_view, name, search)
+                self.refused(message, 400, partial(saved_view_commands.create, self.db, self.ctx), name, search)
         self.assertEqual(self.count("saved_views"), 0)
         kept = self.create("Kept")
         for name, search, message in refusals:
             if name is None or search is None:
                 continue  # None is "not given" to an update
             with self.subTest(update=message):
-                self.refused(message, 400, self.library.update_saved_view, kept["id"],
+                self.refused(message, 400, partial(saved_view_commands.update, self.db, self.ctx), kept["id"],
                              name=name if name != "Ok" else None, search=search if name == "Ok" else None)
-        self.refused("Nothing to update.", 400, self.library.update_saved_view, kept["id"])
-        self.assertEqual(self.library.get_saved_views(), [kept])
+        self.refused("Nothing to update.", 400, partial(saved_view_commands.update, self.db, self.ctx), kept["id"])
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [kept])
 
     def test_an_id_no_saved_view_can_have_is_not_found(self) -> None:
         kept = self.create("Kept")
         for view_id in ("", "   ", "SV-missing", _MISSING, "a\x00b", kept["id"].lower()):
             with self.subTest(view_id=view_id):
-                self.assertIsNone(self.library.get_saved_view(view_id))
-                self.refused(views.NOT_FOUND, 404, self.library.update_saved_view, view_id, name="X")
-                self.refused(views.NOT_FOUND, 404, self.library.delete_saved_view, view_id)
+                self.assertIsNone(saved_view_commands.view(self.db, self.ctx, view_id))
+                self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.update, self.db, self.ctx), view_id, name="X")
+                self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.delete, self.db, self.ctx), view_id)
         # SQLite's order: an empty id is not found before "Nothing to update"; any other id after it.
-        self.refused(views.NOT_FOUND, 404, self.library.update_saved_view, "")
-        self.refused("Nothing to update.", 400, self.library.update_saved_view, _MISSING)
-        self.refused("Name is required.", 400, self.library.update_saved_view, _MISSING, name=" ")
-        self.assertEqual(self.library.get_saved_views(), [kept])
+        self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.update, self.db, self.ctx), "")
+        self.refused("Nothing to update.", 400, partial(saved_view_commands.update, self.db, self.ctx), _MISSING)
+        self.refused("Name is required.", 400, partial(saved_view_commands.update, self.db, self.ctx), _MISSING, name=" ")
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [kept])
 
     def test_deleting_a_view_leaves_the_works_it_finds(self) -> None:
         work_id = self.library.add_work("Kept Work")
         view = self.create("Everything", {**_ALL, "q": "kept"})
-        self.library.delete_saved_view(view["id"])
-        self.assertIsNone(self.library.get_saved_view(view["id"]))
+        saved_view_commands.delete(self.db, self.ctx, view["id"])
+        self.assertIsNone(saved_view_commands.view(self.db, self.ctx, view["id"]))
         work = self.library.get_work(work_id)
         assert work is not None
         self.assertEqual(work["title"], "Kept Work")
@@ -171,11 +173,11 @@ class NameTests(SavedViewTestCase):
 
     def test_a_rename_may_change_only_the_case_of_its_own_name(self) -> None:
         mine, other = self.create("Straße"), self.create("Logic")
-        self.assertEqual(self.library.update_saved_view(mine["id"], name="STRASSE")["name"], "STRASSE")
-        self.refused(views.NAME_TAKEN, 409, self.library.update_saved_view, other["id"], name="strasse")
-        self.refused(views.NAME_TAKEN, 409, self.library.update_saved_view, other["id"], name="straße",
+        self.assertEqual(saved_view_commands.update(self.db, self.ctx, mine["id"], name="STRASSE")["name"], "STRASSE")
+        self.refused(views.NAME_TAKEN, 409, partial(saved_view_commands.update, self.db, self.ctx), other["id"], name="strasse")
+        self.refused(views.NAME_TAKEN, 409, partial(saved_view_commands.update, self.db, self.ctx), other["id"], name="straße",
                      search=_ADVANCED)
-        self.assertEqual(self.library.get_saved_view(other["id"]), other)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, other["id"]), other)
 
     def test_the_backstop_is_registered_on_the_saved_view_import_path(self) -> None:
         code = ("import backend.domain.saved_views.views as views; from backend.db.errors import DEFAULT_REGISTRY;"
@@ -189,7 +191,7 @@ class NameTests(SavedViewTestCase):
         with mock.patch.object(views, "_assert_name_free"):
             self.refused(views.NAME_TAKEN, 409, self.create, "ETHICS")
             renamed = self.create("Logic")
-            self.refused(views.NAME_TAKEN, 409, self.library.update_saved_view, renamed["id"], name="ethics")
+            self.refused(views.NAME_TAKEN, 409, partial(saved_view_commands.update, self.db, self.ctx), renamed["id"], name="ethics")
         self.assertEqual(self.names(), ["Ethics", "Logic"])
 
 
@@ -202,8 +204,8 @@ class LimitTests(SavedViewTestCase):
         self.refused(views.LIMIT_REACHED, 409, self.create, "LAST")
         self.assertEqual(self.count("saved_views"), PRKS_SAVED_VIEW_MAX)
         # A full Library still renames and redefines.
-        self.assertEqual(self.library.update_saved_view(last["id"], name="Final", search=_TAG)["name"], "Final")
-        self.library.delete_saved_view(last["id"])
+        self.assertEqual(saved_view_commands.update(self.db, self.ctx, last["id"], name="Final", search=_TAG)["name"], "Final")
+        saved_view_commands.delete(self.db, self.ctx, last["id"])
         self.create("One more")
 
     def test_another_librarys_views_do_not_count(self) -> None:
@@ -224,17 +226,17 @@ class TimestampAndOrderTests(SavedViewTestCase):
         other = self.create("Other")
         for refused in ((views.NAME_TAKEN, 409, {"name": "other"}),
                         ("Nothing to update.", 400, {})):
-            self.refused(refused[0], refused[1], self.library.update_saved_view, created["id"], **refused[2])
-        self.assertEqual(require(self.library.get_saved_view(created["id"]))["updated_at"], "2020-01-02 03:04:05")
+            self.refused(refused[0], refused[1], partial(saved_view_commands.update, self.db, self.ctx), created["id"], **refused[2])
+        self.assertEqual(require(saved_view_commands.view(self.db, self.ctx, created["id"]))["updated_at"], "2020-01-02 03:04:05")
         for change in ({"name": "Dated"}, {"search": _ALL}):  # a write moves it even when nothing differs
             with self.subTest(change=change):
                 self.sql("UPDATE prks.saved_views SET updated_at = '2020-01-02 03:04:05+00' WHERE id = %s",
                          (created["id"],))
-                updated = self.library.update_saved_view(created["id"], **change)
+                updated = saved_view_commands.update(self.db, self.ctx, created["id"], **change)
                 self.assertEqual(updated["created_at"], "2020-01-02 03:04:05")
                 self.assertRegex(updated["updated_at"], _MOMENT)
                 self.assertGreater(updated["updated_at"], "2020-01-02 03:04:05")
-        self.assertEqual(self.library.get_saved_view(other["id"]), other)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, other["id"]), other)
 
     def test_the_list_orders_by_ascii_folded_name_then_id(self) -> None:
         names = ["beta", "Alpha", "alpha two", "Zeta", "_under", "Ärger", "ångström", "Ωmega", "10", "9"]
@@ -247,10 +249,10 @@ class TimestampAndOrderTests(SavedViewTestCase):
 class AtomicityTests(SavedViewTestCase):
     def test_a_refused_rename_leaves_the_definition_too(self) -> None:
         mine, other = self.create("Mine"), self.create("Other")
-        self.refused(views.NAME_TAKEN, 409, self.library.update_saved_view, mine["id"], name="OTHER",
+        self.refused(views.NAME_TAKEN, 409, partial(saved_view_commands.update, self.db, self.ctx), mine["id"], name="OTHER",
                      search=_ADVANCED)
-        self.assertEqual(self.library.get_saved_view(mine["id"]), mine)
-        self.assertEqual(self.library.get_saved_view(other["id"]), other)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, mine["id"]), mine)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, other["id"]), other)
 
     def test_a_failure_after_the_write_rolls_it_back(self) -> None:
         kept = self.create("Kept")
@@ -258,8 +260,8 @@ class AtomicityTests(SavedViewTestCase):
             with self.assertRaises(RuntimeError):
                 self.create("Lost")
             with self.assertRaises(RuntimeError):
-                self.library.update_saved_view(kept["id"], name="Changed", search=_TAG)
-        self.assertEqual(self.library.get_saved_views(), [kept])
+                saved_view_commands.update(self.db, self.ctx, kept["id"], name="Changed", search=_TAG)
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [kept])
 
 
 class IsolationTests(SavedViewTestCase):
@@ -267,27 +269,27 @@ class IsolationTests(SavedViewTestCase):
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = self.create("Shared name")
-        self.assertIsNone(self.library.get_saved_view(theirs["id"]))
-        self.assertEqual(self.library.get_saved_views(), [])
-        self.refused(views.NOT_FOUND, 404, self.library.update_saved_view, theirs["id"], name="Mine")
-        self.refused(views.NOT_FOUND, 404, self.library.delete_saved_view, theirs["id"])
+        self.assertIsNone(saved_view_commands.view(self.db, self.ctx, theirs["id"]))
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [])
+        self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.update, self.db, self.ctx), theirs["id"], name="Mine")
+        self.refused(views.NOT_FOUND, 404, partial(saved_view_commands.delete, self.db, self.ctx), theirs["id"])
         mine = self.create("SHARED NAME")  # names are unique per Library
-        self.assertEqual(self.library.get_saved_views(), [mine])
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [mine])
         with facade_context.acting_as(other.context):
-            self.assertEqual(self.library.get_saved_views(), [theirs])
+            self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [theirs])
 
     def test_a_reader_reads_views_but_cannot_change_them(self) -> None:
         view = self.create("Read me")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.get_saved_views(), [view])
-            self.assertEqual(self.library.get_saved_view(view["id"]), view)
+            self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [view])
+            self.assertEqual(saved_view_commands.view(self.db, self.ctx, view["id"]), view)
             for call in (lambda: self.create("New"),
-                         lambda: self.library.update_saved_view(view["id"], name="Changed"),
-                         lambda: self.library.update_saved_view(view["id"], search=_TAG),
-                         lambda: self.library.delete_saved_view(view["id"])):
+                         lambda: saved_view_commands.update(self.db, self.ctx, view["id"], name="Changed"),
+                         lambda: saved_view_commands.update(self.db, self.ctx, view["id"], search=_TAG),
+                         lambda: saved_view_commands.delete(self.db, self.ctx, view["id"])):
                 with self.assertRaises(AccessRefused):
                     call()
-        self.assertEqual(self.library.get_saved_views(), [view])
+        self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [view])
 
 
 class RaceTests(SavedViewTestCase):
@@ -311,12 +313,11 @@ class RaceTests(SavedViewTestCase):
     def test_a_rename_waiting_on_a_create_of_its_name_is_refused(self) -> None:
         moving = self.create("Before")
         holder, contender = self.race(lambda scope: views.create(scope, generate("SV"), "Target", _ALL),
-                                      lambda: self.library.update_saved_view(moving["id"], name="TARGET",
-                                                                             search=_TAG))
+                                      lambda: saved_view_commands.update(self.db, self.ctx, moving["id"], name="TARGET", search=_TAG))
         self.assertEqual(holder["name"], "Target")
         self.assertIsInstance(contender, SavedViewError)
         self.assertEqual(str(contender), views.NAME_TAKEN)
-        self.assertEqual(self.library.get_saved_view(moving["id"]), moving)
+        self.assertEqual(saved_view_commands.view(self.db, self.ctx, moving["id"]), moving)
 
     def test_a_rename_freeing_a_name_lets_the_waiting_create_take_it(self) -> None:
         moving = self.create("Taken")
@@ -337,7 +338,7 @@ class RaceTests(SavedViewTestCase):
     def test_an_update_waiting_on_a_delete_is_not_found(self) -> None:
         doomed = self.create("Doomed")
         holder, contender = self.race(lambda scope: views.delete(scope, doomed["id"]),
-                                      lambda: self.library.update_saved_view(doomed["id"], search=_TAG))
+                                      lambda: saved_view_commands.update(self.db, self.ctx, doomed["id"], search=_TAG))
         self.assertIsNone(holder)
         self.assertIsInstance(contender, SavedViewError)
         self.assertEqual((str(contender), contender.http_status), (views.NOT_FOUND, 404))
@@ -346,17 +347,17 @@ class RaceTests(SavedViewTestCase):
     def test_a_delete_waits_for_an_update(self) -> None:
         busy = self.create("Busy")
         holder, contender = self.race(lambda scope: views.update(scope, busy["id"], search=_TAG),
-                                      lambda: self.library.delete_saved_view(busy["id"]))
+                                      lambda: saved_view_commands.delete(self.db, self.ctx, busy["id"]))
         self.assertEqual((holder["search"], contender), (_TAG, None))
         self.assertEqual(self.count("saved_views"), 0)
 
     def test_concurrent_updates_of_the_two_parts_keep_both(self) -> None:
         view = self.create("Old name")
         holder, contender = self.race(lambda scope: views.update(scope, view["id"], search=_TAG),
-                                      lambda: self.library.update_saved_view(view["id"], name="New name"))
+                                      lambda: saved_view_commands.update(self.db, self.ctx, view["id"], name="New name"))
         self.assertEqual(holder["search"], _TAG)
         self.assertEqual((contender["name"], contender["search"]), ("New name", _TAG))
-        found = self.library.get_saved_view(view["id"])
+        found = saved_view_commands.view(self.db, self.ctx, view["id"])
         assert found is not None
         self.assertEqual((found["name"], found["search"], found["created_at"]),
                          ("New name", _TAG, view["created_at"]))
@@ -400,4 +401,4 @@ class RouteAnswerTests(SavedViewTestCase):
         for name in ("One more", "seed 000"):
             with self.subTest(name=name):
                 self.refused("The library already has the maximum number of Saved Views.", 409,
-                             self.library.create_saved_view, name, _ALL)
+                             partial(saved_view_commands.create, self.db, self.ctx), name, _ALL)

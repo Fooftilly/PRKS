@@ -18,6 +18,7 @@ from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
+from tests.acting_context import current_context
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -34,10 +35,11 @@ def tearDownModule():
 
 
 def seed(root):
+    from backend.domain.organization import folder_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
-    ids['folder'] = db.add_folder('Durable Folder', 'Seeded description')
-    db.move_work_to_folder(ids['work_a'], ids['folder'])
+    ids['folder'] = folder_commands.create(db.database, current_context(), 'Durable Folder', 'Seeded description')
+    folder_commands.move_work(db.database, current_context(), ids['work_a'], ids['folder'])
     return ids
 
 
@@ -120,7 +122,8 @@ class DurableFolderTests(unittest.TestCase):
         return existing
 
     def folders_in_db(self, server):
-        return {row['title']: row for row in self.db_for(server).get_all_folders()}
+        from backend.domain.organization import folder_commands
+        return {row['title']: row for row in self.db_for(server).run(folder_commands.catalog)}
 
     # ---- creation -----------------------------------------------------------
 
@@ -149,6 +152,7 @@ class DurableFolderTests(unittest.TestCase):
         self.assertIn('Double-click Folder', self.folders_in_db(server))
 
     def test_double_submit_new_folder_calls_create_once_online(self):
+        from backend.domain.organization import folder_commands
         server, page, _context = self.start()
         page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Double-click Online')")
         page.wait_for_selector('#folder-modal:not(.hidden)')
@@ -165,7 +169,7 @@ class DurableFolderTests(unittest.TestCase):
         }""")
         self.assertEqual(page.evaluate("() => window.__folderCreateCalls"), 1)
         self.settled(page)
-        rows = self.db_for(server).get_all_folders()
+        rows = self.db_for(server).run(folder_commands.catalog)
         self.assertEqual(
             sum(row['title'] == 'Double-click Online' for row in rows), 1,
             'exactly one submitted Folder must persist after queue acknowledgement',

@@ -44,6 +44,7 @@ from backend.domain.maintenance.connection import maintenance_connection
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_backup_export import BackupTestCase
+from backend.domain.organization import tag_commands
 
 
 csv.field_size_limit(sys.maxsize)
@@ -364,8 +365,8 @@ class StagingTests(StagingTestCase):
     def test_staging_rebuilds_the_library_beside_the_live_tables(self) -> None:
         obj = self.put(b"%PDF staged")
         work_id = self.create(obj)
-        tag = self.library.add_tag("Philosophy")
-        self.library.add_tag_to_work(work_id, tag["id"])
+        tag = tag_commands.create(self.db, self.ctx, "Philosophy")
+        tag_commands.tag_work(self.db, self.ctx, work_id, tag["id"])
         self.ledger_row(self.actor, work_id)
         result = self.backup()
         before = self.sql("SELECT count(*) AS n FROM prks.works")[0]["n"]
@@ -407,8 +408,8 @@ class StagingTests(StagingTestCase):
 
     def test_a_parent_missing_from_the_archive_is_refused_even_if_it_exists_live(self) -> None:
         work_id = self.create(self.put())
-        tag = self.library.add_tag("Kept live")
-        self.library.add_tag_to_work(work_id, tag["id"])
+        tag = tag_commands.create(self.db, self.ctx, "Kept live")
+        tag_commands.tag_work(self.db, self.ctx, work_id, tag["id"])
         result = self.backup()
         with zipfile.ZipFile(result.path) as source:
             tags = source.read("db/tags.csv").decode()

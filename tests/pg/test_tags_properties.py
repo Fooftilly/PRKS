@@ -17,6 +17,8 @@ from typing import Any
 
 from backend.domain.organization import links
 from tests.pg.test_tags_sync import TagSyncTestCase
+from backend.domain.identity.library_scope import library_query
+from backend.domain.organization import tag_commands
 
 _BASES = ("current", "stale", "future")
 
@@ -26,14 +28,14 @@ class WorkTagPropertyTests(TagSyncTestCase):
         return self.library.add_work("Property work"), self.create_tag("Property " + uuid.uuid4().hex)
 
     def state(self, work_id: str, tag_id: str) -> tuple[bool, int]:
-        present = any(row["id"] == tag_id for row in self.library.get_work_tags(work_id))
+        present = any(row["id"] == tag_id for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work_id)))
         return present, self.revisions("work-tag").get(links.WORK.scope_id(work_id, tag_id), 0)
 
     def direct(self, work_id: str, tag_id: str, desired: bool) -> None:
         if desired:
-            self.library.add_tag_to_work(work_id, tag_id)
+            tag_commands.tag_work(self.db, self.ctx, work_id, tag_id)
         else:
-            self.library.remove_tag_from_work(work_id, tag_id)
+            tag_commands.untag_work(self.db, self.ctx, work_id, tag_id)
 
     def op(self, work_id: str, tag_id: str, desired: bool, base: int) -> dict[str, Any]:
         return self.link("ADD_WORK_TAG" if desired else "REMOVE_WORK_TAG", work_id, tag_id, base)
