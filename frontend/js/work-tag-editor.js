@@ -458,6 +458,9 @@
             if (state.options) setOptionsBase(state.options, tagId, base.present, base.revision);
             // A corrective refresh installs only options it proved consistent.
             else if (!state.refreshing) state.options = read.value;
+            // Superseding a corrective refresh (readVersion) must not end it:
+            // start it again past this read, or editing stays off for good.
+            if (state.refreshing) refreshOptions(ctx, state);
             return base;
         }
         if (outcome === 'settled') return null;

@@ -854,6 +854,85 @@ async function crossTabSettlementRefreshesOptions() {
     }
 }
 
+/* #1088 review: two changes settled in other tabs before one paint. The first
+ * one's corrective read starts an options refresh; the second one's settled
+ * read supersedes it (readVersion) while already agreeing with the Work, so it
+ * starts no refresh of its own. The superseded refresh must be started again,
+ * or Tag editing stays off for the session. */
+async function twoCrossTabSettlementsKeepTheRefresh() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-two-settled';
+    const ctx = mountTab('tag-two-settled');
+    const created = new Date(Date.now() - 1000).toISOString();
+    const alpha = { id: 'tag-a', name: 'Alpha' };
+    const beta = { id: 'tag-b', name: 'Beta' };
+    function addOp(id, tag) {
+        return { op_id: id, entity_type: 'work', entity_id: workId, operation: 'ADD_WORK_TAG',
+            payload: { tag_id: tag.id }, status: 'syncing', attempt_count: 1, base_revision: 0,
+            created_at: created, local_context: { tag: tag } };
+    }
+    const ops = [addOp('op-a', alpha), addOp('op-b', beta)];
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previous = {
+        options: global.prksReadWorkTagOptions, read: global.prksOfflineReadEntity,
+        list: prksSync.store.listOperations, base: global.prksWorkTagBase, css: global.prksCssVarClass,
+    };
+    // The chips render once the Work holds Tags; the harness has no CSS helper.
+    if (typeof global.prksCssVarClass !== 'function') global.prksCssVarClass = function () { return ''; };
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    const both = { assigned: [{ tag_id: 'tag-a', relation_revision: 1 }, { tag_id: 'tag-b', relation_revision: 1 }], known_absent: {} };
+    let phase = 'before';
+    let settledReads = 0;
+    let refreshStarted; const refreshStart = new Promise(r => { refreshStarted = r; });
+    let releaseRefresh; const refreshGate = new Promise(r => { releaseRefresh = r; });
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (phase === 'before') return { value: { assigned: [], known_absent: {} }, source: 'server' };
+        if (refreshed) {
+            refreshStarted();
+            await refreshGate;
+            return { value: both, source: 'server' };
+        }
+        settledReads += 1;
+        // The second settlement's read lands after the first one's refresh began.
+        if (settledReads === 2) { await refreshStart; setTimeout(releaseRefresh, 0); }
+        return { value: JSON.parse(JSON.stringify(both)), source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previous.read(kind, id);
+        return { source: 'server', value: core.observe({ id: id, tags: [alpha, beta] }, Date.now()) };
+    };
+    prksSync.store.listOperations = async function () { return phase === 'before' ? ops : []; };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('both in-flight ADDs are held', state.operations.length, 2);
+        phase = 'settled';
+        emitLive({});
+        await flush(); await flush();
+        assertEq('the refresh survives the second settlement', state.refreshing, false);
+        assert('the editor holds options again', !!state.options);
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-a', false);
+        assert('a later edit reaches the durable store', tagWrites.length === writes + 1);
+    } finally {
+        global.prksReadWorkTagOptions = previous.options;
+        global.prksOfflineReadEntity = previous.read;
+        prksSync.store.listOperations = previous.list;
+        global.prksWorkTagBase = previous.base;
+        global.prksCssVarClass = previous.css;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1281,6 +1360,7 @@ async function main() {
     await tagAckReReadRefreshesOptions();
     await tagAckRefreshRejectsInconsistentOptions();
     await crossTabSettlementRefreshesOptions();
+    await twoCrossTabSettlementsKeepTheRefresh();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
