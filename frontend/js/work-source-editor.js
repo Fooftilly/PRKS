@@ -200,7 +200,7 @@
          * falling back to the stale pre-conflict Work. A session that ended
          * during the resolution must not adopt that re-read. */
         if (!apply && still() && live(ctx, state)) {
-            const settled = await readBase(ctx, state, { adopt: true, still: still });
+            const settled = await readBase(ctx, state, { adopt: true, still: still, resolved: true });
             if (!settled) return;
         }
         if (still()) await safePaint(ctx, state);
@@ -217,20 +217,25 @@
      * of the shared panel may write into it at all. False when the owner's
      * focused source field kept other text.
      */
-    function writeInput(ctx, state, url) {
+    /* Unsaved source text other than `url`: a draft that differs from its
+     * baseline is the user's, not the tab's copy of the server's. */
+    function unsavedSource(ctx, state, url) {
+        const ui = ctx && ctx.ui;
+        const draft = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaDraft;
+        const baseline = draft && ui.workMetaBaseline;
+        return !!baseline && draft.source_url != null &&
+            String(draft.source_url) !== String(baseline.source_url == null ? '' : baseline.source_url) &&
+            String(draft.source_url) !== String(url == null ? '' : url);
+    }
+
+    /* `resolved` is the user's explicit "Use server": that choice replaces an
+     * unsaved draft, which otherwise stays after the field loses focus too. */
+    function writeInput(ctx, state, url, resolved) {
         const focused = typeof document !== 'undefined' ? document.activeElement : null;
         const typing = !!focused && typeof focused.matches === 'function' &&
             focused.matches('[data-prks-work-field="source_url"], #meta-video-url') &&
             focused.value !== String(url == null ? '' : url);
-        /* Unsaved source text is kept after the field loses focus too: a
-         * draft that differs from its baseline is the user's, not the tab's
-         * copy of the server's. */
-        const ui = ctx && ctx.ui;
-        const draft = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaDraft;
-        const baseline = draft && ui.workMetaBaseline;
-        const unsaved = !!baseline && draft.source_url != null &&
-            String(draft.source_url) !== String(baseline.source_url == null ? '' : baseline.source_url) &&
-            String(draft.source_url) !== String(url == null ? '' : url);
+        const unsaved = !resolved && unsavedSource(ctx, state, url);
         if ((typing || unsaved) && owns(ctx, state)) return false;
         if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
             typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
@@ -461,10 +466,18 @@
             const differs = !!shown && identityOf(shown) !== identityOf(effective);
             if (adopt || differs) {
                 if (shown) ctx.setEntity('work', effective);
-                if (!writeInput(ctx, state, effective.source_url || '')) {
+                if (!writeInput(ctx, state, effective.source_url || '', !!(options && options.resolved))) {
                     state.observed = adopt && state.observed ? baseOf(state.observed.revision, identity) : null;
                     return true;
                 }
+            }
+            /* An unsaved draft stays measured against the base it was typed
+             * over. A corrective read may already have moved the tab's Work
+             * to the newer source while keeping that draft; taking the newer
+             * revision here would let its Save replace a source the user
+             * never saw instead of conflicting with it. */
+            if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '')) {
+                return true;
             }
             state.observed = baseOf(stateResult.value.revision, identity);
             return true;
@@ -581,9 +594,17 @@
             /* Measured against the base and the queue, never against the
              * tab's Work: that Work shows a queued replacement over the
              * acknowledged columns, and a save that cancelled the
-             * replacement leaves it naming a video nothing will send. The
-             * queue view is current: every paint and every Save refreshes it. */
-            if (currentIdentity(workId, state) === root.prksWorkSourceIdentity(source)) {
+             * replacement leaves it naming a video nothing will send. Every
+             * paint refreshes the queue view; a match is checked again
+             * against a fresh one, since a no-op never reaches the store's
+             * transaction. A mismatch goes to that transaction anyway. */
+            const sameVideo = async () => {
+                if (currentIdentity(workId, state) !== root.prksWorkSourceIdentity(source)) return false;
+                await root.prksRefreshPendingWorkSources();
+                return currentIdentity(workId, state) === root.prksWorkSourceIdentity(source);
+            };
+            if (await sameVideo()) {
+                if (!still() || !live(ctx, state)) return;
                 // The same video the user is already looking at, however it is
                 // spelled. Nothing to record. (Returning to the ACKNOWLEDGED
                 // video over a pending change is a different case and is the
