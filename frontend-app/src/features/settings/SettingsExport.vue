@@ -93,6 +93,8 @@ function currentMap(): Record<string, boolean> {
 let changed: Record<string, boolean> = {}
 let inFlight = 0
 let queue: Promise<void> = Promise.resolve()
+/* Patches sent or queued whose answer has not come back. */
+const waiting: Array<Record<string, boolean>> = []
 
 /* Every write of the toggles -- a debounced patch or Restore defaults -- runs
  * after the one before it, so an older patch can never land after a newer
@@ -100,6 +102,7 @@ let queue: Promise<void> = Promise.resolve()
  * our toggles merged with any another session saved. */
 function send(patch: Record<string, boolean>): Promise<void> {
   inFlight += 1
+  waiting.push(patch)
   const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
     .then(() => undefined, (error: unknown) => {
       console.warn(error)
@@ -107,8 +110,15 @@ function send(patch: Record<string, boolean>): Promise<void> {
   queue = run
   return run.finally(() => {
     inFlight -= 1
-    if (inFlight || timer || Object.keys(changed).length) return
+    waiting.splice(waiting.indexOf(patch), 1)
     const stored = window.__prksBibtexExportFields
+    if (inFlight || timer || Object.keys(changed).length) {
+      /* The answer is PRKS before our later toggles. Copy BibTeX reads this
+       * cache, so it keeps the toggles the page shows until they are saved. */
+      const ours = Object.assign({}, ...waiting, changed)
+      window.prksSetBibtexExportFieldsCache?.({ ...(stored && typeof stored === 'object' ? stored : {}), ...ours })
+      return
+    }
     if (stored && typeof stored === 'object') applyMap(stored)
   })
 }

@@ -203,6 +203,26 @@ describe('SettingsExport BibTeX toggles', () => {
     wrapper.unmount()
   })
 
+  it('keeps Copy BibTeX on the toggles shown while an older patch answers', async () => {
+    const held = holdPatches()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    held[0]()
+    await flushPromises()
+    expect(bib.__prksBibtexExportFields?.doi).toBe(false) // PRKS answered before the DOI toggle
+    expect(bib.__prksBibtexExportFields?.url).toBe(false)
+    held[1]()
+    await flushPromises()
+    expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: false, url: false })
+    wrapper.unmount()
+  })
+
   it('waits for a pending toggle before restoring, and shows the restored defaults', async () => {
     const held = holdPatches()
     const wrapper = mount(SettingsExport)
