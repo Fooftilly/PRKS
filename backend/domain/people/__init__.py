@@ -25,8 +25,8 @@ row's newest version only.
 
 **Differences from SQLite**, each deliberate. The commands that routes call are ``person_commands``,
 ``group_commands``, ``role_commands`` and ``publisher_commands`` (PG-C3
-#642; the facade's ``PeopleMixin`` is gone); a SQLite method name below is
-the one ``tests/library_adapter.py`` keeps:
+#642; the facade's ``PeopleMixin`` is gone); a SQLite method name below
+names the operation those commands took over:
 
 - Names (groups, the parent-name lookup) compare by
   ``prks.identity_key`` (§8.1), not ASCII-only ``LOWER``.

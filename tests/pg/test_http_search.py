@@ -2,7 +2,7 @@
 
 ``backend/api/search.py`` searches the bound ``db``'s database through
 ``backend/domain/search/search_commands.py`` (PG-C3 #642), as does the PDF
-text rebuild route. These tests bind :class:`~tests.library_adapter.TestLibrary`
+text rebuild route. These tests bind :class:`~backend.library.PostgresLibrary`
 there, sign in over HTTP, and check the route's modes: keyword
 search with author and publisher filters, the Tag filter, any mode with the
 PDF text hits appended (and filtered), and the PDF text rebuild route, which
@@ -22,7 +22,7 @@ from backend.domain.search import text as search_text
 from backend.jobs import queue
 from backend.jobs.handlers import REGISTRY
 from backend.jobs.runner import Outcome, run_job
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import LocalFilesystemStorage
 from tests.pg.http_fixtures import HttpAuthTestCase
@@ -40,7 +40,7 @@ class SearchHttpTests(HttpAuthTestCase):
         previous = module.library
         self.addCleanup(self._restore, previous)
         self.storage = module.storage
-        self.facade = TestLibrary(self.db, storage=self.storage)
+        self.facade = PostgresLibrary(self.db, storage=self.storage)
         module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()

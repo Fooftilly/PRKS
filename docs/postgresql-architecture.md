@@ -406,9 +406,8 @@ that calls domain commands and queries with the served Library's database
 and the admitted `RequestContext`; `library_command` and `library_query`
 authorize inside each transaction. `backend/library.py` keeps
 `PostgresLibrary` (the database-plus-storage handle the routes hold) and
-`NotPortedError` (answered 501). Some tests still call the old facade
-method names over the same commands (`tests/library_adapter.py`); #1426
-moves them to direct domain calls.
+`NotPortedError` (answered 501). Tests call the same domain commands
+directly (#1426).
 
 ---
 

@@ -29,7 +29,7 @@ from backend.domain.objects.lifecycle import ObjectMissing, Settled
 from backend.domain.works import commands
 from backend.domain.entity_ids import generate
 from backend.pdf.pdf_materialization import STALE_CODE
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.test_annotations import HIGHLIGHT, annotation
@@ -498,7 +498,7 @@ class RestartTests(ReplaceTestCase):
         self.db.close()
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
-        library = TestLibrary(self.db, storage=self.storage)
+        library = PostgresLibrary(self.db, storage=self.storage)
         self.assertEqual(require(work_commands.detail(library.database, current_context(), works_fixtures.pdfs_dir(library.storage), work_id))["file_path"], done["file_path"])
         status = require(annotation_commands.materialization(library.database, current_context(), work_id))
         self.assertEqual((status["canonical_annotation_set_revision"], status["stale"]), (2, True))

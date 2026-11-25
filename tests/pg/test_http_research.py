@@ -3,7 +3,7 @@
 ``server.py`` reaches Research records, mentions and the graph through the
 domain commands with its bound ``db``'s database and, with ``PRKS_AUTH``,
 the admitted :class:`RequestContext` (PG-C3 #642). These tests bind
-:class:`~tests.library_adapter.TestLibrary` there, sign in over HTTP, and check that the routes answer
+:class:`~backend.library.PostgresLibrary` there, sign in over HTTP, and check that the routes answer
 from PostgreSQL with today's statuses, bodies and refusal codes: Concept,
 Position and Argument CRUD, Version-aware citations, the Research Note save
 and its references with ``pending`` until ``research.reindex_work`` runs,
@@ -20,7 +20,7 @@ from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
 from backend.jobs import queue
 from backend.jobs.runner import Outcome, run_job
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
@@ -42,7 +42,7 @@ class ResearchHttpTestCase(HttpAuthTestCase):
         module = self.app
         previous = module.library
         self.addCleanup(self._restore, previous)
-        self.facade = TestLibrary(self.db, storage=module.storage)
+        self.facade = PostgresLibrary(self.db, storage=module.storage)
         module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()

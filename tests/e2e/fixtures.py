@@ -27,7 +27,7 @@ _POSTGRES_LIBRARY = None
 
 @contextmanager
 def seeding_into(library):
-    """Run the seeds inside this block against ``library`` (a bound ``tests.library_adapter.TestLibrary``)."""
+    """Run the seeds inside this block against ``library`` (a bound :class:`backend.library.PostgresLibrary`)."""
     global _POSTGRES_LIBRARY
     previous, _POSTGRES_LIBRARY = _POSTGRES_LIBRARY, library
     try:
@@ -37,9 +37,9 @@ def seeding_into(library):
 
 
 def open_library(cfg: StorageConfig):
-    """The Library a seed writes: the PostgreSQL facade ``seeding_into`` bound.
+    """The Library a seed writes: the PostgreSQL handle ``seeding_into`` bound.
 
-    ``cfg`` names the seed's storage root; the facade already serves it. A
+    ``cfg`` names the seed's storage root; the handle already serves it. A
     seed run outside ``seeding_into`` has no Library and is refused.
     """
     if _POSTGRES_LIBRARY is None:

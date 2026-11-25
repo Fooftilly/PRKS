@@ -18,7 +18,7 @@ from unittest.mock import patch
 from backend.media.derived_caches import prks_thumb_cache_stem
 from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.test_search_text import pdf_bytes
@@ -35,7 +35,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         self.storage = module.storage
         assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
-        self.facade = TestLibrary(self.db, storage=self.storage)
+        self.facade = PostgresLibrary(self.db, storage=self.storage)
         module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()
