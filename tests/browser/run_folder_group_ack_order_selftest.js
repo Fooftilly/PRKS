@@ -298,6 +298,25 @@ async function failuresAndReplays() {
         await later(); await later();
         assert.equal(await cache.getList('people:index'), null, 'the older People read is not published');
     }
+    /* Nor a Person detail read started before the ACK, with no profile cached. */
+    {
+        const { cache } = setup();
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+            await gate;
+            return { ok: true, status: 200, json: async () => ({ id: 'P', name: 'Ada', groups: [] }) };
+        } });
+        const reading = offline.readThroughEntity('person', 'P', '/api/people/P', { domain: 'people' });
+        await later();
+        const op = createdNow();
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+        release();
+        await reading;
+        await later(); await later();
+        assert.equal(await cache.getEntity('person', 'P'), null, 'the older Person read is not published');
+    }
     /* The replay after a first attempt dropped the catalogue and then failed
      * to write the Person: the chip is named from the Group detail. */
     {
