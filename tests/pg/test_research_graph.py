@@ -29,6 +29,8 @@ from tests import people_fixtures
 from backend.domain.research import argument_commands
 from backend.domain.research import concept_commands
 from backend.domain.research import position_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class GraphReadTestCase(ResearchIndexTestCase):
@@ -49,7 +51,7 @@ class GraphReadTestCase(ResearchIndexTestCase):
 class FenceTests(GraphReadTestCase):
     def test_the_reads_follow_the_index_while_its_job_is_pending(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]]")
         # Committed, not indexed yet: the reads show no mention, and the fence says so.
         self.assertEqual(self.index.work_research_refs(work, None)["pending"], True)
@@ -72,7 +74,7 @@ class FenceTests(GraphReadTestCase):
 
     def test_a_pending_edit_cuts_no_snippet_from_the_new_note(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]] opens the note.")
         self.run_jobs()
         self.research_note(work, "An unrelated opening sentence, then [[concept:Ethics]].")
@@ -95,10 +97,10 @@ class StaleRowTests(GraphReadTestCase):
     def test_a_deleted_work_leaves_the_reads_before_its_reindex_runs(self) -> None:
         ethics = self.concept("Ethics")
         claim = self.argument("Claim")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, f"[[concept:Ethics]] [[argument:{claim}]]")
         self.run_jobs()
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.assertGreater(self.derived_rows(work), 0)  # the delete's reindex has not run
         self.assertEqual(self.index.concept_mention_counts(), {})
         self.assertEqual(self.index.argument_mention_counts(), {})
@@ -110,7 +112,7 @@ class StaleRowTests(GraphReadTestCase):
 
     def test_a_concept_deleted_before_the_reindex_of_its_last_note_runs_leaves_the_reads(self) -> None:
         temp = self.concept("Temporary")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Temporary]]")
         self.run_jobs()
         self.research_note(work, "")  # the note no longer names it, so the delete is allowed
@@ -124,7 +126,7 @@ class StaleRowTests(GraphReadTestCase):
 
     def test_an_argument_deleted_before_the_reindex_of_its_last_note_runs_leaves_the_reads(self) -> None:
         claim = self.argument("Claim")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, f"[[argument:{claim}]]")
         self.run_jobs()
         self.research_note(work, "")
@@ -138,13 +140,13 @@ class StaleRowTests(GraphReadTestCase):
 class IsolationTests(GraphReadTestCase):
     def test_each_library_reads_its_own_network(self) -> None:
         ours = self.concept("Shared")
-        work = self.library.add_work("Ours")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Ours")
         self.research_note(work, "[[concept:Shared]]")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             theirs = self.concept("Shared")
-            their_work = self.library.add_work("Theirs")
-            self.library.update_work_metadata(their_work, {"text_content": "[[concept:Shared]] [[concept:Shared]]"})
+            their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
+            work_commands.update_metadata(self.db, self.ctx, their_work, {"text_content": "[[concept:Shared]] [[concept:Shared]]"})
         self.run_jobs()
         self.assertEqual(self.index.concept_mention_counts(), {ours: 1})
         self.assertEqual(self.node_ids(), {graph_node_id("concept", ours), graph_node_id("work", work)})
@@ -162,7 +164,7 @@ class LargeNetworkTests(GraphReadTestCase):
         ids = [self.concept(name) for name in names]
         for child, parent in zip(ids[1:], ids):
             concept_commands.replace_parents(self.db, self.ctx, child, [parent])
-        work = self.library.add_work("Index")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Index")
         self.research_note(work, " ".join(f"[[concept:{name}]] [[concept:{name.upper()}]]" for name in names))
         self.run_jobs()
         graph = self.graph()
@@ -180,7 +182,7 @@ class LargeNetworkTests(GraphReadTestCase):
 class BacklinkTests(GraphReadTestCase):
     def test_backlinks_are_ordered_by_work_then_offset(self) -> None:
         ethics = self.concept("Ethics")
-        works = sorted([self.library.add_work("First"), self.library.add_work("Second")])
+        works = sorted([works_fixtures.add_work(self.db, self.ctx, self.storage, "First"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Second")])
         for work in reversed(works):
             self.research_note(work, "Before [[concept:Ethics]] between [[concept:ethics]] after.")
         self.run_jobs()
@@ -203,7 +205,7 @@ class ProjectionTests(GraphReadTestCase):
         parent, child = self.concept("Critical Theory"), self.concept(PRIVATE_CONCEPT)
         concept_commands.replace_parents(self.db, self.ctx, child, [parent])
         pos = self.position("Standardization thesis")
-        work_x, work_y = self.library.add_work(PRIVATE_WORK), self.library.add_work("Minima Moralia")
+        work_x, work_y = works_fixtures.add_work(self.db, self.ctx, self.storage, PRIVATE_WORK), works_fixtures.add_work(self.db, self.ctx, self.storage, "Minima Moralia")
         arg1 = self.argument(PRIVATE_ARGUMENT, sources=[{"work_id": work_x, "pages": "12-14"}],
                              targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
         arg2 = self.argument("Counter", kind="stance", targets=[{"type": "argument", "id": arg1, "verdict_id": "opposes"}])
@@ -218,7 +220,7 @@ class ProjectionTests(GraphReadTestCase):
 
     def test_a_representative_network(self) -> None:
         n = self.network()
-        self.library.add_work("Unrelated library file")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Unrelated library file")
         snap = self.graph()
         nodes = {item["id"]: item for item in snap["nodes"]}
         g = graph_node_id
@@ -279,7 +281,7 @@ class ProjectionTests(GraphReadTestCase):
         person = people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace")
         position = self.position("Collision Position")
         self.sql("UPDATE prks.positions SET id = %s WHERE id = %s", (person, position))
-        work = self.library.add_work("Linked")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Linked")
         self.concept(PRIVATE_CONCEPT)
         self.research_note(work, "[[concept:%s]]" % PRIVATE_CONCEPT)
         self.run_jobs()
@@ -294,7 +296,7 @@ class ProjectionTests(GraphReadTestCase):
             for i in range(count):
                 name = "%s concept %s" % (prefix, i)
                 self.concept(name)
-                work = self.library.add_work("%s work %s" % (prefix, i))
+                work = works_fixtures.add_work(self.db, self.ctx, self.storage, "%s work %s" % (prefix, i))
                 self.argument("%s arg %s" % (prefix, i), sources=[{"work_id": work, "pages": "1"}])
                 self.research_note(work, "[[concept:%s]]" % name)
             self.run_jobs()
@@ -364,8 +366,8 @@ class AnswerTests(AnswerAssertions, GraphReadTestCase):
         concept_commands.replace_parents(self.db, self.ctx, ethics, [theory])
         name(self.concept("Unmentioned"), "<C Unmentioned>")
         thesis = name(position_commands.create(self.db, self.ctx, "Thesis", "")["id"], "<P Thesis>")
-        source = name(self.library.add_work("Source", doc_type="book"), "<W Source>")
-        commentary = name(self.library.add_work("Commentary"), "<W Commentary>")
+        source = name(works_fixtures.add_work(self.db, self.ctx, self.storage, "Source", doc_type="book"), "<W Source>")
+        commentary = name(works_fixtures.add_work(self.db, self.ctx, self.storage, "Commentary"), "<W Commentary>")
         claim = name(argument_commands.create(self.db, self.ctx, name="Claim", kind="argument", sources=[{"work_id": source, "pages": "1-2"}], targets=[{"type": "position", "id": thesis, "verdict_id": "supports"}])["id"], "<A Claim>")
         reply = name(argument_commands.create(self.db, self.ctx, name="Reply", kind="stance", targets=[{"type": "argument", "id": claim, "verdict_id": "opposes"}])["id"],
             "<A Reply>")
@@ -449,7 +451,7 @@ class AnswerTests(AnswerAssertions, GraphReadTestCase):
 
     def test_a_deleted_work_and_a_dropped_reference_leave_the_reads(self) -> None:
         ids = self.network()
-        self.library.delete_work_record(ids["Commentary"])
+        work_commands.delete(self.db, self.ctx, ids["Commentary"])
         self.run_jobs()
         self.assertEqual(self.labels.show(self.index.concept_mention_counts()), {"<C Theory>": 1, "<C Ethics>": 2})
         self.assertEqual(len(self.index.concept_backlinks(ids["Ethics"], None)), 1)

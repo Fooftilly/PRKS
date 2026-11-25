@@ -24,6 +24,10 @@ from tests import acting_context as facade_context
 from tests.pg.test_works_facade import WorksAnswerTestCase
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
+from backend.domain.annotations import annotation_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
+from tests.acting_context import current_context
 
 HIGHLIGHT: dict[str, Any] = {
     "id": "ann-1",
@@ -50,10 +54,10 @@ class AnnotationTestCase(SyncTestCase):
     maxDiff = None
 
     def add_pdf_work(self, name: str = "p.pdf") -> str:
-        return self.library.add_work("Paper", file_path=self.store_pdf(name, b"%PDF-1.4\n" + name.encode()))
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf(name, b"%PDF-1.4\n" + name.encode()))
 
     def asset_of(self, work_id: str) -> str:
-        return str(require(self.library.get_work(work_id))["primary_asset_id"])
+        return str(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["primary_asset_id"])
 
     def op(self, operation: str, work_id: str, item: dict[str, Any], base: Optional[int] = None,
            **changes: Any) -> dict[str, Any]:
@@ -66,7 +70,7 @@ class AnnotationTestCase(SyncTestCase):
         return self.send(self.op("CREATE_PDF_ANNOTATION", work_id, item))
 
     def listed(self, work_id: str) -> list[dict[str, Any]]:
-        return json.loads(self.library.get_work_annotations(work_id))
+        return json.loads(annotation_commands.annotations_json(self.db, self.ctx, work_id))
 
     def scopes(self, asset_id: str) -> dict[str, int]:
         rows = self.sql("SELECT scope_id, revision FROM prks.entity_revisions"
@@ -85,7 +89,7 @@ class PersistenceTests(AnnotationTestCase):
         self.assertEqual(listed, HIGHLIGHT)
         self.assertEqual(result["annotation"], HIGHLIGHT)
         # The Work detail reads the same rows in its snapshot.
-        self.assertEqual(json.loads(require(self.library.get_work(work_id))["annotations"]), self.listed(work_id))
+        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["annotations"]), self.listed(work_id))
         (row,) = self.sql("SELECT library_id, asset_id, work_id, type, content, page_index, color,"
                           " jsonb_typeof(geometry) AS kind, geometry FROM prks.annotations")
         self.assertEqual({k: row[k] for k in ("library_id", "asset_id", "work_id", "type", "content",
@@ -110,13 +114,13 @@ class PersistenceTests(AnnotationTestCase):
         self.assertEqual((status, result["server_revision"], result["present"]), (200, 2, False))
         self.assertEqual(self.listed(work_id), [])
         self.assertEqual(self.scopes(asset_id), {store.scope_id(asset_id, "ann-1"): 2})
-        snapshot = self.library.get_work_annotations_snapshot(work_id)
+        snapshot = require(annotation_commands.snapshot(self.db, self.ctx, work_id))
         self.assertEqual((snapshot["known_absent"], snapshot["canonical_annotation_set_revision"]),
                          ({"ann-1": 2}, 3))
         (asset,) = self.sql("SELECT canonical_annotation_set_revision AS c,"
                             " materialized_pdf_annotation_revision AS m FROM prks.assets")
         self.assertEqual(asset, {"c": 3, "m": 0})
-        self.assertEqual(self.library.get_work_pdf_materialization(work_id)["stale"], True)
+        self.assertEqual(require(annotation_commands.materialization(self.db, self.ctx, work_id))["stale"], True)
 
     def test_one_viewer_id_on_two_assets_is_two_annotations(self) -> None:
         first, second = self.add_pdf_work("a.pdf"), self.add_pdf_work("b.pdf")
@@ -139,7 +143,7 @@ class PersistenceTests(AnnotationTestCase):
         asset_id = self.asset_of(work_id)
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            other_work = self.library.add_work("Theirs", file_path=self.store_pdf("o.pdf", b"%PDF-1.4 o"))
+            other_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", file_path=self.store_pdf("o.pdf", b"%PDF-1.4 o"))
         insert = "INSERT INTO prks.annotations (library_id, asset_id, id, work_id) VALUES (%s, %s, %s, %s)"
         refusals = (
             # The same identity on one Asset.
@@ -161,24 +165,24 @@ class PersistenceTests(AnnotationTestCase):
         self.assertEqual(self.count("annotations"), 1)
 
     def test_a_work_without_a_managed_pdf(self) -> None:
-        work_id = self.library.add_work("Plain")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain")
         self.assertEqual(self.create(work_id, HIGHLIGHT), (404, {"code": "ENTITY_NOT_FOUND", "work_id": work_id,
                                                                  "annotation_id": "ann-1"}))
-        self.assertEqual(self.library.save_work_annotations(work_id, "[]", base_set_revision=0), 0)
+        self.assertEqual(annotation_commands.save(self.db, self.ctx, work_id, "[]", base_set_revision=0), 0)
         with self.assertRaises(WorkAnnotationError) as caught:
-            self.library.save_work_annotations(work_id, json.dumps([HIGHLIGHT]), base_set_revision=0)
+            annotation_commands.save(self.db, self.ctx, work_id, json.dumps([HIGHLIGHT]), base_set_revision=0)
         self.assertEqual((caught.exception.code, caught.exception.http_status), ("work_pdf_not_found", 404))
         with self.assertRaises(WorkAnnotationError):
-            self.library.adopt_byte_only_user_markup(work_id, [HIGHLIGHT])
-        self.assertEqual(self.library.get_work_annotations_snapshot(work_id)["items"], [])
-        self.assertEqual(self.library.get_work_pdf_materialization(work_id)["stale"], False)
+            annotation_commands.adopt(self.db, self.ctx, work_id, [HIGHLIGHT])
+        self.assertEqual(require(annotation_commands.snapshot(self.db, self.ctx, work_id))["items"], [])
+        self.assertEqual(require(annotation_commands.materialization(self.db, self.ctx, work_id))["stale"], False)
         self.assertEqual(self.count("annotations"), 0)
 
     def test_what_postgresql_cannot_store_is_refused(self) -> None:
         work_id = self.add_pdf_work()
         for item in (annotation(pageIndex=2**31), annotation(custom={"k": "a\x00b"}), annotation(id="x" * 201)):
             with self.subTest(item=item["id"][:8]), self.assertRaises(WorkAnnotationError) as caught:
-                self.library.save_work_annotations(work_id, json.dumps([item]), base_set_revision=0)
+                annotation_commands.save(self.db, self.ctx, work_id, json.dumps([item]), base_set_revision=0)
             self.assertEqual(caught.exception.code, "malformed_annotation_payload")
         self.assertEqual(self.create(work_id, annotation(pageIndex=2**31)), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual((self.count("annotations"), self.ledger()), (0, []))
@@ -197,7 +201,7 @@ class SyncTests(AnnotationTestCase):
         results = self.concurrently([lambda: self.create(work_id, HIGHLIGHT) for _ in range(5)])
         self.assertEqual(sorted(result[1]["changed"] for result in results), [False] * 4 + [True])
         self.assertTrue(all(result[1]["code"] == "ACKNOWLEDGED" for result in results))
-        snapshot = self.library.get_work_annotations_snapshot(work_id)
+        snapshot = require(annotation_commands.snapshot(self.db, self.ctx, work_id))
         self.assertEqual((snapshot["canonical_annotation_set_revision"], len(snapshot["items"])), (1, 1))
 
     def test_writers_on_one_base(self) -> None:
@@ -209,7 +213,7 @@ class SyncTests(AnnotationTestCase):
         ])
         self.assertEqual(sorted(result[1]["code"] for result in results),
                          ["ACKNOWLEDGED"] + ["REVISION_CONFLICT"] * 3)
-        self.assertEqual(self.library.get_work_annotations_state(work_id)["annotations"],
+        self.assertEqual(require(annotation_commands.state(self.db, self.ctx, work_id))["annotations"],
                          [{"annotation_id": "ann-1", "revision": 1}])
 
     def test_an_edit_held_then_a_stale_delete(self) -> None:
@@ -278,22 +282,20 @@ class SyncTests(AnnotationTestCase):
                 self.assertRaises(RuntimeError):
             self.send(data)
         self.assertEqual((self.count("annotations"), self.ledger()), (0, []))
-        self.assertEqual(self.library.get_work_pdf_materialization(work_id)["canonical_annotation_set_revision"], 0)
+        self.assertEqual(require(annotation_commands.materialization(self.db, self.ctx, work_id))["canonical_annotation_set_revision"], 0)
         # The op_id was not burnt.
         self.assertEqual(self.send(data)[1]["changed"], True)
 
     def test_a_refused_replace_writes_nothing(self) -> None:
         work_id = self.add_pdf_work()
-        self.library.save_work_annotations(work_id, json.dumps([HIGHLIGHT, annotation(id="ann-2")]),
-                                           base_set_revision=0)
-        self.library.save_work_annotations(work_id, json.dumps([HIGHLIGHT]), base_set_revision=1)
+        annotation_commands.save(self.db, self.ctx, work_id, json.dumps([HIGHLIGHT, annotation(id="ann-2")]), base_set_revision=0)
+        annotation_commands.save(self.db, self.ctx, work_id, json.dumps([HIGHLIGHT]), base_set_revision=1)
         with self.assertRaises(WorkAnnotationError) as caught:
             # An update first, then a tombstoned id: the update is rolled back too.
-            self.library.save_work_annotations(
-                work_id, json.dumps([annotation(color="#999999"), annotation(id="ann-2")]), base_set_revision=2)
+            annotation_commands.save(self.db, self.ctx, work_id, json.dumps([annotation(color="#999999"), annotation(id="ann-2")]), base_set_revision=2)
         self.assertEqual(caught.exception.code, "ANNOTATION_ID_REUSED")
         self.assertEqual([item["color"] for item in self.listed(work_id)], ["#FFCD45"])
-        self.assertEqual(self.library.get_work_annotations_snapshot(work_id)["canonical_annotation_set_revision"], 2)
+        self.assertEqual(require(annotation_commands.snapshot(self.db, self.ctx, work_id))["canonical_annotation_set_revision"], 2)
 
 
 class WorkDeleteTests(AnnotationTestCase):
@@ -313,7 +315,7 @@ class WorkDeleteTests(AnnotationTestCase):
                                                  store.scope_id(asset_id, "ann-edited"): 2,
                                                  store.scope_id(asset_id, "ann-gone"): 2})
         self.assertEqual(self.create(work_id, HIGHLIGHT)[1]["code"], "ENTITY_NOT_FOUND")
-        self.assertIsNone(self.library.get_work_annotations_snapshot(work_id))
+        self.assertIsNone(annotation_commands.snapshot(self.db, self.ctx, work_id))
         self.assertEqual(self.listed(kept)[0]["id"], "ann-1")
 
     def test_the_command_deletes_annotations_before_assets(self) -> None:
@@ -330,12 +332,12 @@ class AccessTests(AnnotationTestCase):
         self.create(work_id, HIGHLIGHT)
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            self.assertIsNone(self.library.get_work_annotations_snapshot(work_id))
-            self.assertIsNone(self.library.get_work_annotations_state(work_id))
-            self.assertIsNone(self.library.get_work_pdf_materialization(work_id))
-            self.assertEqual(self.library.get_work_annotations(work_id), "[]")
+            self.assertIsNone(annotation_commands.snapshot(self.db, self.ctx, work_id))
+            self.assertIsNone(annotation_commands.state(self.db, self.ctx, work_id))
+            self.assertIsNone(annotation_commands.materialization(self.db, self.ctx, work_id))
+            self.assertEqual(annotation_commands.annotations_json(self.db, self.ctx, work_id), "[]")
             with self.assertRaises(WorkAnnotationError) as caught:
-                self.library.save_work_annotations(work_id, "[]", base_set_revision=1)
+                annotation_commands.save(self.db, self.ctx, work_id, "[]", base_set_revision=1)
             self.assertEqual(caught.exception.code, "work_not_found")
         status, result = self.send(dict(self.op("DELETE_PDF_ANNOTATION", work_id, HIGHLIGHT, 0),
                                         device_id=str(other.context.device_id)), other.context)
@@ -348,10 +350,10 @@ class AccessTests(AnnotationTestCase):
         reader = self.reader_context()
         with facade_context.acting_as(reader):
             self.assertEqual(len(self.listed(work_id)), 1)
-            self.assertEqual(self.library.get_work_annotations_state(work_id)["annotations"],
+            self.assertEqual(require(annotation_commands.state(self.db, self.ctx, work_id))["annotations"],
                              [{"annotation_id": "ann-1", "revision": 0}])
-            for write in (lambda: self.library.save_work_annotations(work_id, "[]", base_set_revision=1),
-                          lambda: self.library.adopt_byte_only_user_markup(work_id, [])):
+            for write in (lambda: annotation_commands.save(self.db, self.ctx, work_id, "[]", base_set_revision=1),
+                          lambda: annotation_commands.adopt(self.db, self.ctx, work_id, [])):
                 with self.assertRaises(AccessRefused) as caught:
                     write()
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -382,7 +384,7 @@ class DecisionTableTests(AnnotationTestCase):
                         (self.asset, annotation_id))
 
     def save(self, items: list[dict[str, Any]], base: Optional[int] = None) -> int:
-        return self.library.save_work_annotations(self.work, json.dumps(items), base_set_revision=base)
+        return annotation_commands.save(self.db, self.ctx, self.work, json.dumps(items), base_set_revision=base)
 
     def assert_scalar_conflict(self, result: dict[str, Any]) -> None:
         self.assertNotIn("current_annotation", result)
@@ -469,10 +471,10 @@ class DecisionTableTests(AnnotationTestCase):
 
     def test_the_state_and_the_snapshot_read_one_transaction(self) -> None:
         self.put("CREATE_PDF_ANNOTATION", HIGHLIGHT)
-        state = self.library.get_work_annotations_state(self.work)
+        state = require(annotation_commands.state(self.db, self.ctx, self.work))
         self.assertEqual((state["work_id"], state["annotations"]),
                          (self.work, [{"annotation_id": "ann-1", "revision": 0}]))
-        snapshot = self.library.get_work_annotations_snapshot(self.work)
+        snapshot = require(annotation_commands.snapshot(self.db, self.ctx, self.work))
         self.assertEqual((snapshot["work_id"], [item["id"] for item in snapshot["items"]]), (self.work, ["ann-1"]))
         self.assertEqual(snapshot["annotations"], state["annotations"])
         self.assertEqual(snapshot["known_absent"], state["known_absent"])
@@ -488,7 +490,7 @@ class DecisionTableTests(AnnotationTestCase):
         self.assertEqual(self.revision(), 1)
         self.save([])
         self.assertEqual((self.revision(), self.stored()), (2, []))
-        self.assertEqual(self.library.get_work_annotations_state(self.work)["known_absent"], {"ann-1": 2})
+        self.assertEqual(require(annotation_commands.state(self.db, self.ctx, self.work))["known_absent"], {"ann-1": 2})
         with self.assertRaises(WorkAnnotationError) as caught:
             self.save([HIGHLIGHT])
         self.assertEqual(caught.exception.code, "ANNOTATION_ID_REUSED")
@@ -522,13 +524,13 @@ class ReplaceTests(AnnotationTestCase):
         return {item["id"]: item for item in self.listed(work_id or self.work)}
 
     def replace(self, items: list[dict[str, Any]], work_id: Optional[str] = None) -> int:
-        return self.library.sync_work_annotations(work_id or self.work, items)
+        return annotation_commands.replace_all(self.db, self.ctx, work_id or self.work, items)
 
     def canonical(self) -> int:
-        return self.library.get_work_pdf_materialization(self.work)["canonical_annotation_set_revision"]
+        return require(annotation_commands.materialization(self.db, self.ctx, self.work))["canonical_annotation_set_revision"]
 
     def test_a_realistic_annotation_is_columns_plus_geometry(self) -> None:
-        self.library.save_work_annotations(self.work, json.dumps([HIGHLIGHT]))
+        annotation_commands.save(self.db, self.ctx, self.work, json.dumps([HIGHLIGHT]))
         (row,) = self.rows()
         self.assertEqual({k: row[k] for k in ("id", "type", "content", "page_index", "color")},
                          {"id": "ann-1", "type": "9", "content": "A comment", "page_index": 3, "color": "#FFCD45"})
@@ -540,7 +542,7 @@ class ReplaceTests(AnnotationTestCase):
         got.pop("updated_at")
         self.assertEqual(got, HIGHLIGHT)
         self.assertNotIn("page", got)
-        self.assertEqual(json.loads(require(self.library.get_work(self.work))["annotations"])[0]["custom"]["prksComment"],
+        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["annotations"])[0]["custom"]["prksComment"],
                          "A comment")
 
     def test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id(self) -> None:
@@ -573,14 +575,14 @@ class ReplaceTests(AnnotationTestCase):
             self.assertEqual((caught.exception.code, caught.exception.http_status), (code, 400))
         for raw in ("{", json.dumps({"id": "A"})):
             with self.subTest(raw=raw), self.assertRaises(WorkAnnotationError) as caught:
-                self.library.save_work_annotations(self.work, raw)
+                annotation_commands.save(self.db, self.ctx, self.work, raw)
             self.assertEqual(caught.exception.http_status, 400)
         self.assertEqual(self.rows(), before)
         self.assertEqual(self.by_id()["A"]["contents"], "keep")
 
     def test_a_missing_work_is_404_even_for_an_empty_list(self) -> None:
         for call in (lambda: self.replace([], "W-" + "E" * 32),
-                     lambda: self.library.save_work_annotations("W-" + "E" * 32, json.dumps([{"id": "A", "pageIndex": 0}]))):
+                     lambda: annotation_commands.save(self.db, self.ctx, "W-" + "E" * 32, json.dumps([{"id": "A", "pageIndex": 0}]))):
             with self.assertRaises(WorkAnnotationError) as caught:
                 call()
             self.assertEqual((caught.exception.code, caught.exception.http_status), ("work_not_found", 404))
@@ -640,9 +642,9 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
         return self.labels.show((status, result))
 
     def reads(self) -> Any:
-        return self.labels.show((self.library.get_work_annotations_state(self.work),
-                                 self.library.get_work_annotations_snapshot(self.work),
-                                 self.library.get_work_pdf_materialization(self.work)))
+        return self.labels.show((annotation_commands.state(self.db, self.ctx, self.work),
+                                 annotation_commands.snapshot(self.db, self.ctx, self.work),
+                                 annotation_commands.materialization(self.db, self.ctx, self.work)))
 
     def outcome(self, call: Any) -> Any:
         try:
@@ -651,8 +653,7 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
             return exc.code, exc.http_status, str(exc)
 
     def save(self, items: Any, base: Any) -> Any:
-        return self.outcome(lambda: self.library.save_work_annotations(self.work, json.dumps(items),
-                                                                       base_set_revision=base))
+        return self.outcome(lambda: annotation_commands.save(self.db, self.ctx, self.work, json.dumps(items), base_set_revision=base))
 
     def test_create_set_delete_decision_tables(self) -> None:
         ack = {"code": "ACKNOWLEDGED", "work_id": "<W pdf>"}
@@ -715,7 +716,7 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
             {"canonical_annotation_set_revision": 6, "code": "ANNOTATION_MATERIALIZATION_STALE",
              "materialized_pdf_annotation_revision": 0, "stale": True, "work_id": "<W pdf>"}))
         self.answer(self.labels.show(self.listed(self.work)), [_NOTE_STORED, ink])
-        work = require(self.library.get_work(self.work))
+        work = require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))
         self.answer(self.labels.show(json.loads(work["annotations"])), [_NOTE_STORED, ink])
         self.assertEqual(work["canonical_annotation_set_revision"], 6)
 
@@ -748,9 +749,9 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
              "materialized_pdf_annotation_revision": 0, "work_id": "<W pdf>"},
             {"canonical_annotation_set_revision": 0, "code": None, "materialized_pdf_annotation_revision": 0,
              "stale": False, "work_id": "<W pdf>"}))
-        self.assertIsNone(self.library.get_work_annotations_snapshot(_MISSING_WORK))
-        self.assertIsNone(self.library.get_work_pdf_materialization(_MISSING_WORK))
-        self.assertEqual(self.library.get_work_annotations(_MISSING_WORK), "[]")
+        self.assertIsNone(annotation_commands.snapshot(self.db, self.ctx, _MISSING_WORK))
+        self.assertIsNone(annotation_commands.materialization(self.db, self.ctx, _MISSING_WORK))
+        self.assertEqual(annotation_commands.annotations_json(self.db, self.ctx, _MISSING_WORK), "[]")
 
     def test_replayed_operation_answers_from_the_ledger(self) -> None:
         first_op = self.op("CREATE_PDF_ANNOTATION", self.work, _INK)
@@ -775,13 +776,13 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
         self.assertEqual(self.save([_NOTE, _INK], 2), (
             "ANNOTATION_ID_REUSED", 409, "Annotation ID was previously used and cannot be reinserted."))
         self.assertEqual(self.save([], None), 3)
-        self.assertEqual(self.outcome(lambda: self.library.save_work_annotations(self.work, "{}")),
+        self.assertEqual(self.outcome(lambda: annotation_commands.save(self.db, self.ctx, self.work, "{}")),
                          ("malformed_annotation_payload", 400, "annotations_json must be a JSON list."))
         self.answer(self.reads(), (
             {"annotations": [], "known_absent": {"ann-hi-1": 2, "ann-ink-1": 1, "ann-note-1": 1}},
             {"canonical_annotation_set_revision": 3, "items": []},
             {"canonical_annotation_set_revision": 3, "stale": True, "code": "ANNOTATION_MATERIALIZATION_STALE"}))
-        self.assertEqual(self.outcome(lambda: self.library.sync_work_annotations(_MISSING_WORK, [_HI])),
+        self.assertEqual(self.outcome(lambda: annotation_commands.replace_all(self.db, self.ctx, _MISSING_WORK, [_HI])),
                          ("work_not_found", 404, "Work not found."))
 
     def test_byte_only_markup_adoption(self) -> None:
@@ -789,7 +790,7 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
                 "rect": {"origin": {"x": 0, "y": 0}}}
         widget = {"id": "w-1", "type": "widget", "pageIndex": 0, "rect": {"origin": {"x": 0, "y": 0}}}
         viewer = [_HI, link, widget, "junk", _INK, _HI]
-        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, viewer)), {
+        self.assertEqual(self.outcome(lambda: annotation_commands.adopt(self.db, self.ctx, self.work, viewer)), {
             "adopted": ["ann-hi-1", "ann-ink-1"], "adopted_count": 2, "skipped_existing": 0,
             "skipped_known_absent": 0, "skipped_non_user": 3, "work_id": "<W pdf>"})
         self.answer(self.reads(), (
@@ -798,18 +799,18 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
             {"canonical_annotation_set_revision": 1},
             {"canonical_annotation_set_revision": 1, "materialized_pdf_annotation_revision": 0, "stale": True}))
         # The bytes now lag the metadata: adopting from them again is refused.
-        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, viewer)), (
+        self.assertEqual(self.outcome(lambda: annotation_commands.adopt(self.db, self.ctx, self.work, viewer)), (
             "ANNOTATION_MATERIALIZATION_STALE", 409, "Cannot adopt annotations from known-stale PDF bytes."))
-        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(_MISSING_WORK, viewer)),
+        self.assertEqual(self.outcome(lambda: annotation_commands.adopt(self.db, self.ctx, _MISSING_WORK, viewer)),
                          ("work_not_found", 404, "Work not found."))
 
     def test_adoption_skips_present_and_known_absent_ids(self) -> None:
-        self.library.save_work_annotations(self.work, json.dumps([_HI, _INK]), base_set_revision=0)
-        self.library.save_work_annotations(self.work, json.dumps([_HI]), base_set_revision=1)
+        annotation_commands.save(self.db, self.ctx, self.work, json.dumps([_HI, _INK]), base_set_revision=0)
+        annotation_commands.save(self.db, self.ctx, self.work, json.dumps([_HI]), base_set_revision=1)
         # PostgreSQL acknowledges only bytes it committed: mark the column directly.
         self.sql("UPDATE prks.assets SET materialized_pdf_annotation_revision = canonical_annotation_set_revision"
                  " WHERE work_id = %s", (self.work,))
-        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, [_HI, _INK, _NOTE])), {
+        self.assertEqual(self.outcome(lambda: annotation_commands.adopt(self.db, self.ctx, self.work, [_HI, _INK, _NOTE])), {
             "adopted": ["ann-note-1"], "adopted_count": 1, "skipped_existing": 1, "skipped_known_absent": 1,
             "skipped_non_user": 0, "work_id": "<W pdf>"})
         self.answer(self.reads(), (
@@ -829,24 +830,24 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
         library, work = self.library, self.work
         # The uploaded bytes embed the empty set (revision 0).
         for call, expected in (
-                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, 0), 0),
-                (lambda: library.mark_work_pdf_materialized(work), 0),
-                (lambda: library.mark_work_pdf_materialized(work, at_revision=0), 0),
-                (lambda: library.mark_work_pdf_materialized(work, at_revision=1), stale),
-                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, 1), stale),
-                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, False), stale),
-                (lambda: library.mark_work_pdf_materialized(_MISSING_WORK), 0),
-                (lambda: library.mark_work_pdf_materialized_if_claim_current(_MISSING_WORK, 0),
+                (lambda: works_fixtures.mark_materialized_if_claim_current(library.database, current_context(), library.storage, work, 0), 0),
+                (lambda: works_fixtures.mark_materialized(library.database, current_context(), work), 0),
+                (lambda: works_fixtures.mark_materialized(library.database, current_context(), work, at_revision=0), 0),
+                (lambda: works_fixtures.mark_materialized(library.database, current_context(), work, at_revision=1), stale),
+                (lambda: works_fixtures.mark_materialized_if_claim_current(library.database, current_context(), library.storage, work, 1), stale),
+                (lambda: works_fixtures.mark_materialized_if_claim_current(library.database, current_context(), library.storage, work, False), stale),
+                (lambda: works_fixtures.mark_materialized(library.database, current_context(), _MISSING_WORK), 0),
+                (lambda: works_fixtures.mark_materialized_if_claim_current(library.database, current_context(), library.storage, _MISSING_WORK, 0),
                  ("LookupError", "ENTITY_NOT_FOUND"))):
             self.assertEqual(outcome(call), expected)
         self.answer(self.reads()[2], {"canonical_annotation_set_revision": 0, "stale": False})
 
     def test_materialization_claims(self) -> None:
-        self.library.save_work_annotations(self.work, json.dumps([_HI]), base_set_revision=0)
+        annotation_commands.save(self.db, self.ctx, self.work, json.dumps([_HI]), base_set_revision=0)
 
         def accept(work_id: str, claim: Any) -> Any:
             try:
-                return self.library.accept_work_pdf_materialization_claim(work_id, claim)
+                return works_fixtures.accept_materialization_claim(self.db, self.ctx, work_id, claim)
             except (LookupError, ValueError) as exc:
                 return type(exc).__name__, str(exc)
 

@@ -21,6 +21,8 @@ import psycopg
 
 from tests.pg.test_people_schema import PeopleSchemaTestCase, new_id
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 Conn = Optional[psycopg.Connection[Any]]
 
@@ -624,7 +626,7 @@ class WorkDeleteTombstonesTagsTests(WorksFacadeTestCase):
     """The listed Work-Tag cascade: the Work delete removes the links and tombstones their scopes."""
 
     def test_deleting_a_work_tombstones_its_tag_scopes(self) -> None:
-        work_id = self.library.add_work("Tagged")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Tagged")
         library_id = self.sql("SELECT library_id FROM prks.works WHERE id = %s", (work_id,))[0]["library_id"]
         tag_id = new_id("T")
         scope_id = f'["{work_id}","{tag_id}"]'
@@ -637,7 +639,7 @@ class WorkDeleteTombstonesTagsTests(WorksFacadeTestCase):
                  {"lib": library_id, "tag": tag_id, "work": work_id})
         self.sql("INSERT INTO prks.entity_revisions (library_id, scope_type, scope_id, revision) "
                  "VALUES (%s, 'work-tag', %s, 1)", (library_id, scope_id))
-        self.assertIsNotNone(self.library.delete_work_record(work_id))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, work_id))
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.work_tags WHERE work_id = %s",
                                   (work_id,))[0]["n"], 0)
         self.assertEqual(self.sql("SELECT revision FROM prks.entity_revisions WHERE scope_id = %s",

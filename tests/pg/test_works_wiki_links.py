@@ -22,6 +22,9 @@ from tests.pg.answers import AnswerAssertions
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from tests.narrowing import require
 from tests import people_fixtures
+from backend.domain.identity.library_scope import library_query
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _LINK = '<a href="#/{kind}/{id}" class="wiki-link" style="color:var(--accent); text-decoration:none;">{name}</a>'
 _UNRESOLVED = '<span class="wiki-link-unresolved" style="color:#ef4444;">[[{raw}]]</span>'
@@ -48,49 +51,50 @@ class WikiLinkTestCase(WorksFacadeTestCase):
 
 class AuthorizationTests(WikiLinkTestCase):
     def test_a_reader_resolves(self) -> None:
-        work_id = self.library.add_work("Notes")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Notes")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.resolve_wiki_links("[[Notes]]"), link("works", work_id, "Notes"))
+            self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Notes]]")), link("works", work_id, "Notes"))
 
     def test_an_unbound_call_is_refused(self) -> None:
-        self.library.add_work("Notes")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Notes")
         for text in ("[[Notes]]", "plain"):
             with self.subTest(text=text), self.assertRaises(facade_context.NoRequestContext):
-                contextvars.Context().run(self.library.resolve_wiki_links, text)
+                contextvars.Context().run(
+                    lambda text=text: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, text)))
 
     def test_a_removed_member_is_refused(self) -> None:
-        self.library.add_work("Notes")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Notes")
         reader = self.reader_context()
         self.sql("DELETE FROM prks.library_memberships WHERE library_id = %s AND role = 'reader'",
                  (self.actor.library_id,))
         with facade_context.acting_as(reader):
             with self.assertRaises(AccessRefused) as caught:
-                self.library.resolve_wiki_links("[[Notes]]")
+                library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Notes]]"))
         self.assertIs(caught.exception.refusal, Refusal.NOT_AUTHENTICATED)
 
 
 class IsolationTests(WikiLinkTestCase):
     def test_another_librarys_works_and_people_are_not_found(self) -> None:
-        mine = self.library.add_work("Mine")
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
             their_person = people_fixtures.add_person(self.db, self.ctx, "Their", "Person")
-            self.library.add_work("Mine")  # the same title, in their Library
+            works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")  # the same title, in their Library
         text = f"[[Theirs]] [[{theirs}]] [[Person]] [[{their_person}]] [[Mine]]"
-        self.assertEqual(self.library.resolve_wiki_links(text), " ".join((
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, text)), " ".join((
             _UNRESOLVED.format(raw="Theirs"), _UNRESOLVED.format(raw=theirs),
             _UNRESOLVED.format(raw="Person"), _UNRESOLVED.format(raw=their_person),
             link("works", mine, "Mine"))))
         with facade_context.acting_as(other.context):
-            out = self.library.resolve_wiki_links(f"[[{mine}]] [[Theirs]]")
+            out = library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, f"[[{mine}]] [[Theirs]]"))
         self.assertEqual(out, f"{_UNRESOLVED.format(raw=mine)} {link('works', theirs, 'Theirs')}")
 
     def test_lookups_read_this_library_only(self) -> None:
-        mine = self.library.add_work("Shared title")
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Shared title")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            self.library.add_work("Shared title")
+            works_fixtures.add_work(self.db, self.ctx, self.storage, "Shared title")
         from backend.domain.identity.library_scope import library_query
 
         found = library_query(self.db, other.context, lambda scope: wiki_links.resolve_targets(
@@ -101,57 +105,57 @@ class IsolationTests(WikiLinkTestCase):
 
 class OrderingTests(WikiLinkTestCase):
     def test_the_earliest_created_row_wins_then_the_id(self) -> None:
-        first = self.library.add_work("Twin")
-        second = self.library.add_work("Twin")
-        self.assertEqual(self.library.resolve_wiki_links("[[Twin]]"), link("works", first, "Twin"))
+        first = works_fixtures.add_work(self.db, self.ctx, self.storage, "Twin")
+        second = works_fixtures.add_work(self.db, self.ctx, self.storage, "Twin")
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Twin]]")), link("works", first, "Twin"))
         # Rows created in one transaction share created_at; the id decides.
         low, high = sorted((second, first))
         self.sql("UPDATE prks.works SET created_at = '2001-01-01' WHERE id = ANY(%s)", ([first, second],))
-        self.assertEqual(self.library.resolve_wiki_links("[[Twin]]"), link("works", low, "Twin"))
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Twin]]")), link("works", low, "Twin"))
         self.sql("UPDATE prks.works SET created_at = '2000-01-01' WHERE id = %s", (high,))
-        self.assertEqual(self.library.resolve_wiki_links("[[Twin]]"), link("works", high, "Twin"))
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Twin]]")), link("works", high, "Twin"))
 
     def test_people_follow_the_same_rule(self) -> None:
         first = people_fixtures.add_person(self.db, self.ctx, "A", "Kant")
         second = people_fixtures.add_person(self.db, self.ctx, "B", "Kant")
-        self.assertEqual(self.library.resolve_wiki_links("[[Kant]]"), link("people", first, "A Kant"))
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Kant]]")), link("people", first, "A Kant"))
         self.sql("UPDATE prks.persons SET created_at = '2000-01-01' WHERE id = %s", (second,))
-        self.assertEqual(self.library.resolve_wiki_links("[[Kant]]"), link("people", second, "B Kant"))
+        self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Kant]]")), link("people", second, "B Kant"))
 
     def test_a_target_postgresql_text_cannot_hold_matches_nothing(self) -> None:
-        self.library.add_work("Real")
-        out, seen = self.lookups(lambda: self.library.resolve_wiki_links("[[Re\x00al]] [[Real]]"))
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Real")
+        out, seen = self.lookups(lambda: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Re\x00al]] [[Real]]")))
         self.assertTrue(out.startswith(_UNRESOLVED.format(raw="Re\x00al") + " <a "))
         self.assertEqual(seen, ["works"])
 
 
     def test_the_first_row_wins_whatever_batch_its_targets_fall_in(self) -> None:
         """A row matching targets in different batches claims each independently."""
-        one = self.library.add_work("SharedTitle")
-        two = self.library.add_work(one)  # its title is the first Work's id
-        alpha = self.library.add_work("Alpha")
-        self.library.add_work("Alpha")
+        one = works_fixtures.add_work(self.db, self.ctx, self.storage, "SharedTitle")
+        two = works_fixtures.add_work(self.db, self.ctx, self.storage, one)  # its title is the first Work's id
+        alpha = works_fixtures.add_work(self.db, self.ctx, self.storage, "Alpha")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Alpha")
         kant = people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
         people_fixtures.add_person(self.db, self.ctx, "Other", "Kant")
         people_fixtures.add_person(self.db, self.ctx, "Pat", "SharedTitle")
         people_fixtures.add_person(self.db, self.ctx, "", "Solo")
         text = f"[[{one}]] [[SharedTitle]] [[Alpha]] [[{two}]] [[Kant]] [[Solo]] [[nobody]] [[{alpha}]]"
-        expected = self.library.resolve_wiki_links(text)
+        expected = library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, text))
         self.assertIn(link("works", one, "SharedTitle"), expected)
         self.assertEqual(expected.count(link("works", alpha, "Alpha")), 2)
         self.assertIn(link("people", kant, "Immanuel Kant"), expected)
         reversed_text = " ".join(reversed(text.split(" ")))
-        reversed_expected = self.library.resolve_wiki_links(reversed_text)
+        reversed_expected = library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, reversed_text))
         for chunk in (1, 2, 3, 5):
             with self.subTest(chunk=chunk), mock.patch.object(wiki_links, "LOOKUP_CHUNK", chunk):
-                self.assertEqual(self.library.resolve_wiki_links(text), expected)
-                self.assertEqual(self.library.resolve_wiki_links(reversed_text), reversed_expected)
+                self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, text)), expected)
+                self.assertEqual(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, reversed_text)), reversed_expected)
 
 
 class SnapshotTests(WikiLinkTestCase):
     def test_the_work_detail_and_its_links_are_one_snapshot(self) -> None:
-        target = self.library.add_work("Target")
-        noted = self.library.add_work("Noted", text_content="See [[Target]] and [[Later]].")
+        target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
+        noted = works_fixtures.add_work(self.db, self.ctx, self.storage, "Noted", text_content="See [[Target]] and [[Later]].")
         original = queries.work
         changed: list[bool] = []
 
@@ -160,19 +164,19 @@ class SnapshotTests(WikiLinkTestCase):
             if not changed:
                 # Committed by another transaction after the Work was read,
                 # before its links are looked up.
-                self.library.update_work_metadata(target, {"title": "Renamed"})
-                self.library.add_work("Later")
+                work_commands.update_metadata(self.db, self.ctx, target, {"title": "Renamed"})
+                works_fixtures.add_work(self.db, self.ctx, self.storage, "Later")
                 changed.append(True)
             return found
 
         with mock.patch.object(queries, "work", side_effect=work_then_a_concurrent_edit):
-            detail = self.library.get_work(noted)
+            detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted)
         self.assertEqual(changed, [True])
         assert detail is not None
         self.assertEqual(detail["html_content"],
                          f"See {link('works', target, 'Target')} and {_UNRESOLVED.format(raw='Later')}.")
         later = self.sql("SELECT id FROM prks.works WHERE title = 'Later'")[0]["id"]
-        self.assertEqual(require(self.library.get_work(noted))["html_content"],
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted))["html_content"],
                          f"See {_UNRESOLVED.format(raw='Target')} and {link('works', later, 'Later')}.")
 
 
@@ -180,25 +184,25 @@ class BatchingTests(WikiLinkTestCase):
     def test_text_without_markers_looks_nothing_up(self) -> None:
         for text in ("", "plain", "[single] ]]"):
             with self.subTest(text=text):
-                out, seen = self.lookups(lambda t=text: self.library.resolve_wiki_links(t))
+                out, seen = self.lookups(lambda t=text: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, t)))
                 self.assertEqual((out, seen), (text, []))
 
     def test_repeated_markers_cost_one_lookup_per_table(self) -> None:
-        self.library.add_work("Alpha")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Alpha")
         people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
         text = " ".join(["[[Alpha]]"] * 100 + ["[[Kant]]"] * 100 + ["[[nobody]]"] * 100)
-        _, seen = self.lookups(lambda: self.library.resolve_wiki_links(text))
+        _, seen = self.lookups(lambda: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, text)))
         self.assertEqual(seen, ["works", "persons"])
-        _, seen = self.lookups(lambda: self.library.resolve_wiki_links("[[Alpha]] " * 100))
+        _, seen = self.lookups(lambda: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Alpha]] " * 100)))
         self.assertEqual(seen, ["works"])
 
     def test_more_occurrences_of_the_same_markers_add_no_lookups(self) -> None:
-        self.library.add_work("Alpha")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Alpha")
         people_fixtures.add_person(self.db, self.ctx, "Immanuel", "Kant")
         for repeat in (1, 10, 500):
             with self.subTest(repeat=repeat):
                 out, seen = self.lookups(
-                    lambda r=repeat: self.library.resolve_wiki_links("[[Alpha]] [[Kant]] [[nobody]] " * r))
+                    lambda r=repeat: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, "[[Alpha]] [[Kant]] [[nobody]] " * r)))
                 self.assertEqual(seen, ["works", "persons"])
                 self.assertEqual(out.count("wiki-link-unresolved"), repeat)
 
@@ -207,10 +211,10 @@ class BatchingTests(WikiLinkTestCase):
         rows = ", ".join(
             f"('{self.actor.library_id}', 'P-{uuid.uuid4().hex.upper()}', '', 'Person {i}')" for i in range(300))
         self.sql(f"INSERT INTO prks.persons (library_id, id, first_name, last_name) VALUES {rows}")
-        works = [self.library.add_work(f"Work {i}") for i in range(0, 300, 3)]
+        works = [works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {i}") for i in range(0, 300, 3)]
         names = [f"Work {i}" if i % 3 == 0 else f"Person {i}" if i % 3 == 1 else f"Gone {i}"
                  for i in range(chunk * 2 + 7)]
-        out, seen = self.lookups(lambda: self.library.resolve_wiki_links(" ".join(f"[[{n}]]" for n in names)))
+        out, seen = self.lookups(lambda: library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, " ".join(f"[[{n}]]" for n in names))))
         rest = len(names) - len(works)
         self.assertEqual(seen, ["works"] * 3 + ["persons"] * -(-rest // chunk))
         self.assertEqual(out.count('href="#/works/'), len(works))
@@ -218,10 +222,10 @@ class BatchingTests(WikiLinkTestCase):
 
     def test_lookups_probe_indexes_instead_of_scanning_the_library(self) -> None:
         for i in range(400):
-            self.library.add_work(f"Work {i}")
+            works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {i}")
         with facade_context.acting_as(self.other_actor().context):
             for _ in range(600):  # one title, common in another Library
-                self.library.add_work("Work 7")
+                works_fixtures.add_work(self.db, self.ctx, self.storage, "Work 7")
         rows = ", ".join(
             f"('{self.actor.library_id}', 'P-{uuid.uuid4().hex.upper()}', '', 'Person {i}')" for i in range(4000))
         self.sql(f"INSERT INTO prks.persons (library_id, id, first_name, last_name) VALUES {rows}")
@@ -249,7 +253,7 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
         self.ids: dict[str, str] = {}
 
     def work(self, label: str, title: str) -> str:
-        self.ids[label] = self.labels.name(self.library.add_work(title), f"<W {label}>")
+        self.ids[label] = self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, title), f"<W {label}>")
         return self.ids[label]
 
     def person(self, label: str, last_name: str, first_name: str = "") -> str:
@@ -258,7 +262,7 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
 
     def render(self, template: str) -> str:
         """The labelled HTML for ``template``, its ``{label}`` filled by that row's id."""
-        return str(self.labels.show(self.library.resolve_wiki_links(template.format(**self.ids))))
+        return str(self.labels.show(library_query(self.db, self.ctx, lambda scope: wiki_links.render(scope, template.format(**self.ids)))))
 
     @staticmethod
     def link(kind: str, label: str, name: str) -> str:
@@ -297,7 +301,7 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
         # The earlier Work answers to the later Work's id by its title.
         early = self.work("early", "placeholder")
         late = self.work("late", "Late title")
-        self.library.update_work_metadata(early, {"title": late})
+        work_commands.update_metadata(self.db, self.ctx, early, {"title": late})
         # A Person named by a Work's id: the Work still wins.
         self.person("named_by_id", early)
         # The earlier Work's title is an id here, so it reads as its label.
@@ -323,7 +327,7 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
     def test_text_without_markers_is_unchanged(self) -> None:
         for text in ("", "plain", "[single] brackets ]]", "[[open only"):
             with self.subTest(text=text):
-                self.assertEqual(self.library.resolve_wiki_links(text), text)
+                self.assertEqual(library_query(self.db, self.ctx, lambda scope, text=text: wiki_links.render(scope, text)), text)
 
     def test_names_and_ids_are_escaped(self) -> None:
         self.work("script", '<script>"x"</script>')
@@ -355,9 +359,9 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
         self.seed()
         noted = self.work("noted", "Noted")
         text = "Notes on [[Alpha]], [[Kant]], [[Shared]], [[nobody]] and [[{noted}]]. [[Alpha]] again."
-        self.library.update_work_metadata(noted, {"text_content": text.format(**self.ids)})
-        self.assertEqual(self.labels.show(require(self.library.get_work(noted))["html_content"]), (
+        work_commands.update_metadata(self.db, self.ctx, noted, {"text_content": text.format(**self.ids)})
+        self.assertEqual(self.labels.show(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted))["html_content"]), (
             f"Notes on {self.link('works', 'alpha1', 'Alpha')}, {self.link('people', 'kant1', 'Immanuel Kant')}, "
             f"{self.link('works', 'shared_w', 'Shared')}, {_UNRESOLVED.format(raw='nobody')} and "
             f"{self.link('works', 'noted', 'Noted')}. {self.link('works', 'alpha1', 'Alpha')} again."))
-        self.assertNotIn("html_content", require(self.library.get_work(self.work("plain", "Plain"))))
+        self.assertNotIn("html_content", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work("plain", "Plain"))))

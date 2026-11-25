@@ -28,6 +28,8 @@ from tests.library_adapter import call_route
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 from backend.domain.saved_views import commands as saved_view_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _ALL = {"mode": "all", "q": "culture", "tag": "", "author": "", "publisher": ""}
 _ADVANCED = {"mode": "advanced", "q": "", "tag": "", "author": "Adorno", "publisher": ""}
@@ -147,11 +149,11 @@ class CrudTests(SavedViewTestCase):
         self.assertEqual(saved_view_commands.all_views(self.db, self.ctx), [kept])
 
     def test_deleting_a_view_leaves_the_works_it_finds(self) -> None:
-        work_id = self.library.add_work("Kept Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Kept Work")
         view = self.create("Everything", {**_ALL, "q": "kept"})
         saved_view_commands.delete(self.db, self.ctx, view["id"])
         self.assertIsNone(saved_view_commands.view(self.db, self.ctx, view["id"]))
-        work = self.library.get_work(work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert work is not None
         self.assertEqual(work["title"], "Kept Work")
         self.assertEqual(self.count("works"), 1)

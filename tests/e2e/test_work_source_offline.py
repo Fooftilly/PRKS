@@ -20,7 +20,6 @@ import os
 import unittest
 
 from backend.domain.works import source_rules
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import PLAYLIST_VIDEO_ONE_TITLE, WORK_A_TITLE, seed_playlists_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
@@ -223,7 +222,8 @@ class OfflineWorkSourceTests(unittest.TestCase):
                 scope, require(source._target(scope, work_id, for_update=True)), desired))
 
     def columns(self, server, work_id):
-        row = self.db_for(server).get_work(work_id)
+        from backend.domain.works import work_commands
+        row = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work_id))
         return {k: row[k] for k in ('source_kind', 'provider', 'provider_id', 'source_url')}
 
     def conflicts(self, page, count):
@@ -365,6 +365,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         """The server clears `thumb_url` when the identity changes. A cached
         row that keeps it shows video A's picture on a card that says video B
         -- a lie the user can see, in the one place they are looking."""
+        from backend.domain.works import work_commands
         server, page, _context = self.start()
         work = server.ids['playlist_video_one']
         self.db_for(server).execute(
@@ -384,7 +385,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         self.url(page, WATCH_TWO)
         self.save(page)
         self.pending(page, 0)
-        self.assertIsNone(self.db_for(server).get_work(work)['thumb_url'])
+        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_url'])
         cached = self.cached_work(page, work)
         self.assertIsNone(cached['thumb_url'],
                           'the previous video\'s image is gone from the cache too')

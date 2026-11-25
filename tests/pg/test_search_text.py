@@ -24,6 +24,9 @@ from backend.storage.objects import LocalFilesystemStorage
 from backend.pdf.pdf_text import PDFTextExtractionError, PDFTextExtractorUnavailable
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_search_refresh import SearchTestCase
+from backend.domain.works import work_commands
+from tests import works_fixtures
+from backend.domain.annotations import annotation_commands
 
 
 def pdf_bytes(text: str) -> bytes:
@@ -68,7 +71,7 @@ class TextTestCase(SearchTestCase):
             outcomes.append(run_job(self.db, job, registry=registry, lease=LEASE))
 
     def pdf_work(self, title: str, text: str, name: str = "p.pdf") -> str:
-        return self.library.add_work(title, file_path=self.store_pdf(name, pdf_bytes(text)))
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, title, file_path=self.store_pdf(name, pdf_bytes(text)))
 
     def asset(self, work_id: str) -> dict[str, Any]:
         return self.sql("SELECT a.id, a.content_sha256 FROM prks.assets a JOIN prks.manifestations m"
@@ -110,8 +113,8 @@ class ExtractionTests(TextTestCase):
         self.assertEqual(self.found("absent"), [])
 
     def test_a_work_without_a_pdf_queues_nothing(self) -> None:
-        self.library.add_work("Plain")
-        self.library.add_work("Video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain")
+        works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         self.assertEqual(self.queued(), [])
 
     def test_greek_pdf_text_folds_case_sigma_and_accents(self) -> None:
@@ -124,7 +127,7 @@ class ExtractionTests(TextTestCase):
 
     def test_an_empty_pdf_is_empty_and_an_unreadable_one_failed(self) -> None:
         empty = self.pdf_work("Empty", "", "e.pdf")
-        broken = self.library.add_work("Broken", file_path=self.store_pdf("b.pdf", b"%PDF-1.4 not a pdf"))
+        broken = works_fixtures.add_work(self.db, self.ctx, self.storage, "Broken", file_path=self.store_pdf("b.pdf", b"%PDF-1.4 not a pdf"))
         self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED, Outcome.SUCCEEDED])
         self.assertEqual([(r["status"], r["text"]) for r in self.rows(empty)], [("empty", "")])
         self.assertEqual([(r["status"], r["text"]) for r in self.rows(broken)], [("failed", "")])
@@ -182,7 +185,7 @@ class CommandTests(TextTestCase):
     def test_a_replace_drops_the_old_text_and_queues_the_new(self) -> None:
         work = self.pdf_work("Paper", "first version")
         self.run_jobs()
-        self.library._replace_work_pdf(work, lambda handle: handle.write(pdf_bytes("second edition")))
+        annotation_commands.replace_pdf(self.db, self.ctx, works_fixtures.objects(self.storage), work, lambda handle: handle.write(pdf_bytes("second edition")))
         self.assertEqual(self.rows(work), [])
         self.assertEqual(self.queued(), [self.asset(work)["id"]])
         self.run_jobs()
@@ -192,13 +195,13 @@ class CommandTests(TextTestCase):
     def test_a_deleted_work_leaves_no_text(self) -> None:
         work = self.pdf_work("Paper", "doomed words")
         self.run_jobs()
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.assertEqual(self.all_rows(), 0)
 
     def test_a_job_for_a_deleted_asset_writes_nothing(self) -> None:
         work = self.pdf_work("Paper", "words")
         [job] = self.queued()
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.run_jobs()
         self.assertEqual(self.scalar("SELECT state FROM prks.jobs WHERE payload->>'asset_id' = %s", job),
                          "succeeded")
@@ -260,7 +263,7 @@ class OrderingTests(TextTestCase):
         def extract_then_replace(path: str) -> tuple[str, bool]:
             if not replaced.is_set():
                 replaced.set()
-                self.library._replace_work_pdf(self.work, lambda handle: handle.write(pdf_bytes("new words")))
+                annotation_commands.replace_pdf(self.db, self.ctx, works_fixtures.objects(self.storage), self.work, lambda handle: handle.write(pdf_bytes("new words")))
             return search_text.extract_pdf(path)
 
         self.command(lambda scope: search_text.queue.enqueue_library_job(

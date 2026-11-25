@@ -38,6 +38,8 @@ from backend.domain.organization import folder_commands
 from backend.domain.organization import links
 from backend.domain.organization import tag_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 CAP = 10 * 1024 * 1024
 
@@ -477,7 +479,7 @@ class EditTests(QueueTestCase):
     def test_a_work_tag_edit_never_takes_a_draft_tag(self) -> None:
         item = self.ready()
         tag = tag_commands.create(self.db, self.ctx, "staged only")["id"]
-        work = self.library.add_work("Unrelated")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Unrelated")
         tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.edit(item["id"], 0, {"tags": [{"id": tag}]})
         tag_commands.untag_work(self.db, self.ctx, work, tag)
@@ -498,7 +500,7 @@ class ImportTests(QueueTestCase):
         key = self.row(item["id"])["object_locator"]
         done = self.import_(item["id"])
         self.assertTrue(done.created)
-        work = self.library.get_work(done.work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, done.work_id)
         assert work is not None
         self.assertEqual((work["title"], work["status"], work["abstract"], work["year"], work["journal"]),
                          ("On Computable Numbers", "Planned", "A", "1936", "PLMS"))
@@ -529,7 +531,7 @@ class ImportTests(QueueTestCase):
 
     def test_no_target_folder_files_the_work_in_uncategorized_and_names_it_after_the_file(self) -> None:
         done = self.import_(self.ready(filename="Some Paper.pdf")["id"])
-        work = self.library.get_work(done.work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, done.work_id)
         assert work is not None
         self.assertEqual(work["title"], "Some Paper")
         (filed,) = self.sql("SELECT f.title FROM prks.folder_files ff JOIN prks.folders f ON f.id = ff.folder_id"
@@ -542,7 +544,7 @@ class ImportTests(QueueTestCase):
         again = self.import_(item["id"])
         self.assertEqual((again.work_id, again.created), (done.work_id, False))
         self.assertEqual(self.count("works"), 1)
-        self.library.delete_work_record(done.work_id)
+        work_commands.delete(self.db, self.ctx, done.work_id)
         refused = self.assert_refused(items.WORK_DELETED, lambda: self.import_(item["id"]))
         assert refused.item is not None
         self.assertEqual((refused.item["status"], refused.item["imported_work_id"]), ("imported", None))
@@ -641,7 +643,7 @@ class ImportRaceTests(QueueTestCase):
         request = items.parse_update({"title": "Edited"})
         _after, waited = self.hold_then(lambda scope: items.update(scope, item["id"], 0, request),
                                         lambda: self.import_(item["id"]))
-        work = self.library.get_work(waited.work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, waited.work_id)
         assert work is not None
         self.assertEqual(work["title"], "Edited")
 

@@ -30,6 +30,7 @@ from backend.domain.maintenance.backup import BackupFailed, BackupResult
 from backend.domain.objects import lifecycle
 from tests.pg.test_objects_lifecycle import ObjectsTestCase
 from backend.storage.objects import StorageKey
+from backend.domain.works import work_commands
 
 VERSION = "0.8.0-test"
 
@@ -357,7 +358,7 @@ class ExclusionTests(BackupTestCase):
         try:
             # The Work is deleted after the snapshot: its key is now claimed,
             # but settle cannot take the objects lock while the copy runs.
-            self.library.delete_work_record(work_id)
+            work_commands.delete(self.db, self.ctx, work_id)
             self.assertEqual(lifecycle.settle(self.db, self.objects, obj.key), lifecycle.Settled.BUSY)
             self.assertTrue(self.stored(obj.key.name))
         finally:

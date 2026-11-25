@@ -21,6 +21,8 @@ import psycopg
 
 from tests.pg.harness import PostgresTestCase, fetch_one
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 def new_id(prefix: str) -> str:
@@ -556,7 +558,7 @@ class WorkDeleteTombstonesRolesTests(WorksFacadeTestCase):
     """The listed role cascade: the Work delete removes the roles and tombstones their scopes."""
 
     def test_deleting_a_work_tombstones_its_role_scopes(self) -> None:
-        work_id = self.library.add_work("Credited")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Credited")
         library_id = self.sql("SELECT library_id FROM prks.works WHERE id = %s", (work_id,))[0]["library_id"]
         person_id = new_id("P")
         scope_id = f'["{work_id}","{person_id}","Author"]'
@@ -565,7 +567,7 @@ class WorkDeleteTombstonesRolesTests(WorksFacadeTestCase):
         self.sql(INSERT_ROLE, (library_id, work_id, person_id, "Author", 0, None, None))
         self.sql("INSERT INTO prks.entity_revisions (library_id, scope_type, scope_id, revision) "
                  "VALUES (%s, 'work-person-role', %s, 2)", (library_id, scope_id))
-        self.assertIsNotNone(self.library.delete_work_record(work_id))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, work_id))
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.roles WHERE work_id = %s", (work_id,))[0]["n"], 0)
         self.assertEqual(self.sql("SELECT revision FROM prks.entity_revisions WHERE scope_id = %s",
                                   (scope_id,))[0]["revision"], 3)

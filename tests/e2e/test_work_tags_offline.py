@@ -416,12 +416,13 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertEqual([r['id'] for r in db.run(library_query, lambda scope: links.tags_of(scope, links.WORK, w))], [server.ids['assigned']])
 
     def test_missing_work_is_terminal_and_stays_discoverable(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page)
         self.pending(page, 1)
         db = self.db_for(server)
-        db.delete_work_record(server.ids['work_a'])
+        db.run(work_commands.delete, server.ids['work_a'])
         self.reconnect(page, context)
         operation = self.sole_conflict(page)
         self.assertEqual(operation['server_result']['code'], 'ENTITY_NOT_FOUND')

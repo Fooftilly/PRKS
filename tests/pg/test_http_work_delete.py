@@ -22,6 +22,8 @@ from tests.library_adapter import TestLibrary
 from tests import acting_context as facade_context
 from tests.pg.http_fixtures import HttpAuthTestCase
 from tests.pg.test_search_text import pdf_bytes
+from tests import works_fixtures
+from tests.acting_context import current_context
 
 
 class WorkDeleteHttpTests(HttpAuthTestCase):
@@ -51,7 +53,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
         with open(os.path.join(self.storage.pdfs_dir, name), "wb") as handle:
             handle.write(pdf_bytes(title))
         with self.acting():
-            return self.facade.add_work(title, file_path=f"/api/pdfs/{name}")
+            return works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, title, file_path=f"/api/pdfs/{name}")
 
     def thumb(self, work_id: str, page: int, ext: str = "webp") -> str:
         assert self.storage is not None
@@ -121,7 +123,7 @@ class WorkDeleteHttpTests(HttpAuthTestCase):
 
     def test_a_work_without_artifacts_or_a_missing_work_deletes_cleanly(self) -> None:
         with self.acting():
-            plain = self.facade.add_work("No file")
+            plain = works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "No file")
         self.delete(plain)
         self.assertFalse(self.work_exists(plain))
         self.delete("W-MISSING")

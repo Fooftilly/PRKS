@@ -21,6 +21,9 @@ from urllib.parse import urlencode
 
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
+from backend.domain.annotations import annotation_commands
+from tests.acting_context import current_context
+from tests.narrowing import require
 
 
 def row(ann_id: str, contents: str) -> dict[str, Any]:
@@ -35,7 +38,7 @@ class AnnotationHttpTestCase(ServerApiTestCase):
 
     def materialization(self, work_id: str) -> dict[str, Any]:
         with self.acting():
-            return self.facade.get_work_pdf_materialization(work_id)
+            return require(annotation_commands.materialization(self.facade.database, current_context(), work_id))
 
     def post_annotations(self, work_id: str, body: dict[str, Any]):
         payload = dict(body)

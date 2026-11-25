@@ -62,7 +62,7 @@ def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
     from backend.domain.research import reindex
     from tests.acting_context import current_context
 
-    library_command(db._database, current_context(), Capability.EDIT_LIBRARY,
+    library_command(db.database, current_context(), Capability.EDIT_LIBRARY,
                     lambda scope: reindex.reindex_work(scope, work_id))
 
 
@@ -79,6 +79,7 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     it: on PostgreSQL the Work's create adopts the bytes as an immutable
     Asset, so they must be final by then.
     """
+    from tests import works_fixtures
     from backend.domain.research import note_commands
     from backend.domain.people import role_commands
     from tests import people_fixtures
@@ -94,20 +95,8 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     if prepare_related_pdf is not None:
         prepare_related_pdf(dest_pdf_b)
     db = open_library(cfg)
-    work_a = db.add_work(
-        title=WORK_A_TITLE,
-        text_content="Initial research notes.",
-        file_path="/api/pdfs/%s" % PDF_NAME,
-        doc_type="book",
-        status="In Progress",
-    )
-    work_b = db.add_work(
-        title=WORK_B_TITLE,
-        text_content="Related notes.",
-        file_path="/api/pdfs/e2e-related.pdf",
-        doc_type="article",
-        status="Not Started",
-    )
+    work_a = works_fixtures.add_work(db.database, current_context(), db.storage, WORK_A_TITLE, status="In Progress", text_content="Initial research notes.", file_path="/api/pdfs/%s" % PDF_NAME, doc_type="book")
+    work_b = works_fixtures.add_work(db.database, current_context(), db.storage, WORK_B_TITLE, status="Not Started", text_content="Related notes.", file_path="/api/pdfs/e2e-related.pdf", doc_type="article")
     person_id = people_fixtures.add_person(db.database, current_context(), PERSON_FIRST, PERSON_LAST, about="E2E fixture author used for People profile and graph focus.", link_wikipedia="https://example.com/wiki/e2e-author", birth_date="1903", death_date="1969")
     role_commands.add(db.database, current_context(), person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
@@ -141,6 +130,7 @@ def seed_work_people_library(storage_root: str) -> dict:
     test about one branch cannot pass because another happened to supply the
     same string.
     """
+    from tests import works_fixtures
     from tests import people_fixtures
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
@@ -149,19 +139,13 @@ def seed_work_people_library(storage_root: str) -> dict:
     ed = people_fixtures.add_person(db.database, current_context(), "Ed", "Smith")
 
     # No linked Author: `author_text` is what the credit shows today.
-    people_work = db.add_work(
-        title=PEOPLE_WORK_TITLE, author_text="Text Author", doc_type="article",
-        file_path=_managed_pdf(cfg, "e2e-people.pdf"))
+    people_work = works_fixtures.add_work(db.database, current_context(), db.storage, PEOPLE_WORK_TITLE, file_path=_managed_pdf(cfg, "e2e-people.pdf"), author_text="Text Author", doc_type="article")
     # A linked Author AND `author_text`, so removing the Author must reveal it.
-    credited = db.add_work(
-        title=PEOPLE_CREDITED_TITLE, author_text="Text Author", doc_type="article",
-        file_path=_managed_pdf(cfg, "e2e-credited.pdf"))
+    credited = works_fixtures.add_work(db.database, current_context(), db.storage, PEOPLE_CREDITED_TITLE, file_path=_managed_pdf(cfg, "e2e-credited.pdf"), author_text="Text Author", doc_type="article")
     people_fixtures.insert_initial_role(db.database, current_context(), credited, jane, "Author", order_index=0)
     # An Author and an Editor with NO `author_text`, so removing the Author
     # must fall through to the Editor rather than to an empty credit.
-    editor_work = db.add_work(
-        title=PEOPLE_EDITOR_TITLE, doc_type="article",
-        file_path=_managed_pdf(cfg, "e2e-editor.pdf"))
+    editor_work = works_fixtures.add_work(db.database, current_context(), db.storage, PEOPLE_EDITOR_TITLE, file_path=_managed_pdf(cfg, "e2e-editor.pdf"), doc_type="article")
     people_fixtures.insert_initial_role(db.database, current_context(), editor_work, jane, "Author", order_index=0)
     people_fixtures.insert_initial_role(db.database, current_context(), editor_work, ed, "Editor", order_index=1)
 
@@ -466,6 +450,7 @@ def seed_playlists_library(storage_root: str) -> dict:
     uncached detail" is testable, and `work_a` stays outside every Playlist so
     the member-vs-non-member coherence boundary can be asserted.
     """
+    from tests import works_fixtures
     from backend.domain.organization import playlist_commands
     ids = seed_people_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
@@ -476,25 +461,8 @@ def seed_playlists_library(storage_root: str) -> dict:
     # the real library. A fixture that left it blank would be testing a row
     # shape the product cannot produce -- and video IDENTITY is
     # provider + provider_id, so tests of it would be testing nothing.
-    video_one = db.add_work(
-        title=PLAYLIST_VIDEO_ONE_TITLE,
-        doc_type="online",
-        source_kind="video",
-        source_url="https://www.youtube.com/watch?v=e2e0000001",
-        provider="youtube",
-        provider_id="e2e0000001",
-        author_text=PLAYLIST_CHANNEL,
-        published_date=PLAYLIST_VIDEO_ONE_DATE,
-    )
-    video_two = db.add_work(
-        title=PLAYLIST_VIDEO_TWO_TITLE,
-        doc_type="online",
-        source_kind="video",
-        source_url="https://www.youtube.com/watch?v=e2e0000002",
-        provider="youtube",
-        provider_id="e2e0000002",
-        author_text=PLAYLIST_CHANNEL,
-    )
+    video_one = works_fixtures.add_work(db.database, current_context(), db.storage, PLAYLIST_VIDEO_ONE_TITLE, published_date=PLAYLIST_VIDEO_ONE_DATE, author_text=PLAYLIST_CHANNEL, doc_type="online", source_kind="video", source_url="https://www.youtube.com/watch?v=e2e0000001", provider="youtube", provider_id="e2e0000001")
+    video_two = works_fixtures.add_work(db.database, current_context(), db.storage, PLAYLIST_VIDEO_TWO_TITLE, author_text=PLAYLIST_CHANNEL, doc_type="online", source_kind="video", source_url="https://www.youtube.com/watch?v=e2e0000002", provider="youtube", provider_id="e2e0000002")
     playlist_a = playlist_commands.create(db.database, current_context(), PLAYLIST_A_TITLE, PLAYLIST_A_DESCRIPTION, PLAYLIST_A_URL)
     playlist_b = playlist_commands.create(db.database, current_context(), PLAYLIST_B_TITLE, "Never opened while online.")
     playlist_commands.add_item(db.database, current_context(), playlist_a, video_one)

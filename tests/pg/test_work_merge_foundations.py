@@ -34,6 +34,7 @@ from backend.domain.organization import folder_commands
 from backend.domain.organization import tag_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from tests import works_fixtures
 
 T = TypeVar("T")
 _PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -95,7 +96,7 @@ class LifecycleTests(MergeTestCase):
         return self.command(lambda scope: lifecycle.resolve(scope, work_id), isolation=Isolation.READ_COMMITTED)
 
     def test_live_unknown_and_merged_ids(self) -> None:
-        source, target = self.library.add_work("Source"), self.library.add_work("Target")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
         self.assertEqual(self.resolve(source), {"state": lifecycle.ACTIVE})
         self.assertEqual(self.resolve(new_work_id()), {"state": lifecycle.UNKNOWN})
         self.merged(source, target)
@@ -103,7 +104,7 @@ class LifecycleTests(MergeTestCase):
         self.assertEqual(self.resolve(target), {"state": lifecycle.ACTIVE})
 
     def test_a_merge_flattens_the_works_merged_into_its_source(self) -> None:
-        first, second, third = (self.library.add_work(title) for title in ("A", "B", "C"))
+        first, second, third = (works_fixtures.add_work(self.db, self.ctx, self.storage, title) for title in ("A", "B", "C"))
         self.merged(first, second)
         self.merged(second, third)
         rows = self.sql("SELECT work_id, target_work_id FROM prks.sync_work_lifecycle ORDER BY work_id")
@@ -124,12 +125,12 @@ class LifecycleTests(MergeTestCase):
     def test_another_librarys_merged_id_is_unknown(self) -> None:
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            source, target = self.library.add_work("Theirs"), self.library.add_work("Their target")
+            source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Their target")
         self.merged_as(other.context, source, target)
         self.assertEqual(self.resolve(source), {"state": lifecycle.UNKNOWN})
 
     def test_a_work_is_merged_away_once_and_never_into_itself(self) -> None:
-        source, target, other = (self.library.add_work(title) for title in ("S", "T", "O"))
+        source, target, other = (works_fixtures.add_work(self.db, self.ctx, self.storage, title) for title in ("S", "T", "O"))
         self.merged(source, target)
         with self.refused_by("23505"):
             self.command(lambda scope: lifecycle.mark_merged(scope, source, other))
@@ -139,7 +140,7 @@ class LifecycleTests(MergeTestCase):
 
 class SyncGateTests(MergeTestCase):
     def test_every_operation_naming_a_merged_work_is_refused_and_ledgered(self) -> None:
-        source, target = self.library.add_work("Source"), self.library.add_work("Target")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
         tag = tag_commands.create(self.db, self.ctx, "Tag")["id"]
         self.merged(source, target)
         before = self.snapshot()
@@ -164,7 +165,7 @@ class SyncGateTests(MergeTestCase):
         self.assertTrue(all(row["status"] == "WORK_MERGED" and row["http_status"] == 409 for row in ledger))
 
     def test_a_merged_works_operation_is_refused_even_while_its_dependency_is_pending(self) -> None:
-        source, target, live = (self.library.add_work(t) for t in ("Source", "Target", "Live"))
+        source, target, live = (works_fixtures.add_work(self.db, self.ctx, self.storage, t) for t in ("Source", "Target", "Live"))
         self.merged(source, target)
         pending = str(uuid.uuid4())  # a valid op_id the server has not acknowledged
         data = self.envelope("SET_WORK_METADATA_FIELD", source, {"field": "title", "value": "Stale"}, 0,
@@ -179,12 +180,12 @@ class SyncGateTests(MergeTestCase):
                                 depends_on=[pending])
         self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(require(self.library.get_work(live))["title"], "Live")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, live))["title"], "Live")
 
     def test_playlist_reorder_with_a_merged_payload_work_is_terminal_and_ledgered(self) -> None:
         # REORDER_PLAYLIST_ITEMS has entity_type=playlist and a Playlist id
         # in the envelope; the Work ids only appear inside work_ids.
-        source, target, live = (self.library.add_work(t) for t in ("Source", "Target", "Live"))
+        source, target, live = (works_fixtures.add_work(self.db, self.ctx, self.storage, t) for t in ("Source", "Target", "Live"))
         self.merged(source, target)
         playlist_id = generate("PL")
         create = self.envelope("CREATE_PLAYLIST", playlist_id, {
@@ -216,7 +217,7 @@ class SyncGateTests(MergeTestCase):
         self.assertEqual((status, result["code"]), (200, "ACKNOWLEDGED"))
 
     def test_a_live_work_is_held_against_a_merge_while_an_operation_applies(self) -> None:
-        work_id = self.library.add_work("Live")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Live")
         held, release = threading.Event(), threading.Event()
 
         def hold(scope: LibraryScope) -> None:
@@ -238,7 +239,7 @@ class SyncGateTests(MergeTestCase):
     def test_a_create_of_an_id_another_library_merged_away_is_refused(self) -> None:
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            source, target = self.library.add_work("Theirs"), self.library.add_work("Their target")
+            source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Their target")
         self.merged_as(other.context, source, target)
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.envelope("CREATE_WORK", source, create_payload()))
@@ -252,7 +253,7 @@ class SyncGateTests(MergeTestCase):
     def test_two_deletes_of_one_work_queue_at_the_gate_instead_of_deadlocking(self) -> None:
         # Both holding FOR KEY SHARE and upgrading to delete_work's FOR UPDATE
         # would deadlock (40P01), and a READ COMMITTED delete answers 503.
-        work_id = self.library.add_work("Deleted twice")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Deleted twice")
         entered, release = threading.Event(), threading.Event()
         delete_work = commands.delete_work
 
@@ -285,7 +286,7 @@ class SyncGateTests(MergeTestCase):
 
     def test_only_the_delete_takes_the_work_for_update_at_the_gate(self) -> None:
         self.assertEqual(lifecycle.LOCKS_FOR_UPDATE, frozenset({"DELETE_WORK"}))
-        work_id = self.library.add_work("Live")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Live")
         held, release = threading.Event(), threading.Event()
 
         def hold(scope: LibraryScope) -> None:
@@ -306,37 +307,37 @@ class SyncGateTests(MergeTestCase):
 
 class PrepareRefusalTests(MergeTestCase):
     def test_a_self_merge_a_missing_work_and_another_librarys_work_are_refused(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         self.assertEqual(self.refused(work_id, work_id),
                          (400, {"code": "MERGE_SAME_WORK", "work_id": work_id}))
         missing = new_work_id()
         self.assertEqual(self.refused(missing, work_id), (404, {"code": "ENTITY_NOT_FOUND", "work_id": missing}))
         self.assertEqual(self.refused(work_id, missing), (404, {"code": "ENTITY_NOT_FOUND", "work_id": missing}))
         with facade_context.acting_as(self.other_actor().context):
-            theirs = self.library.add_work("Theirs")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         # Indistinguishable from an id that exists nowhere.
         self.assertEqual(self.refused(theirs, work_id), (404, {"code": "ENTITY_NOT_FOUND", "work_id": theirs}))
         self.assertEqual(self.refused(work_id, theirs), (404, {"code": "ENTITY_NOT_FOUND", "work_id": theirs}))
 
     def test_a_merged_source_or_target_is_refused_with_its_target(self) -> None:
-        gone, survivor, other = (self.library.add_work(title) for title in ("Gone", "Survivor", "Other"))
+        gone, survivor, other = (works_fixtures.add_work(self.db, self.ctx, self.storage, title) for title in ("Gone", "Survivor", "Other"))
         self.merged(gone, survivor)
         merged = (409, {"code": "WORK_MERGED", "work_id": gone, "target_work_id": survivor})
         self.assertEqual(self.refused(gone, other), merged)
         self.assertEqual(self.refused(other, gone), merged)
 
     def test_a_deleted_work_reads_as_missing(self) -> None:
-        deleted, target = self.library.add_work("Deleted"), self.library.add_work("Target")
-        self.library.delete_work_record(deleted, claim_pdf=False)
+        deleted, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Deleted"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
+        work_commands.delete(self.db, self.ctx, deleted, claim_pdf=False)
         self.assertEqual(self.refused(deleted, target), (404, {"code": "ENTITY_NOT_FOUND", "work_id": deleted}))
 
     def test_it_runs_only_serializable(self) -> None:
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         with self.assertRaisesRegex(RuntimeError, "SERIALIZABLE"):
             self.command(lambda scope: merge.prepare(scope, source, target), isolation=Isolation.READ_COMMITTED)
 
     def test_authorization_and_the_epoch_are_checked_first(self) -> None:
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         with self.assertRaises(AccessRefused) as caught:
             self.prepare(source, target, self.reader_context())
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -351,8 +352,8 @@ class PlanTests(MergeTestCase):
         return str(self.sql("SELECT primary_manifestation_id AS m FROM prks.works WHERE id = %s", (work_id,))[0]["m"])
 
     def test_the_plan_reads_every_affected_row_and_writes_nothing(self) -> None:
-        source = self.library.add_work("Source title", author_text="Source, A.")
-        target = self.library.add_work("Target title", abstract="Target abstract", author_text="Target, B.")
+        source = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source title", author_text="Source, A.")
+        target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Target title", abstract="Target abstract", author_text="Target, B.")
         own_title = self.add_manifestation(source, title="Its own title")
         shared, only_source = tag_commands.create(self.db, self.ctx, "Shared")["id"], tag_commands.create(self.db, self.ctx, "Only")["id"]
         for work_id, tag in ((source, shared), (target, shared), (source, only_source)):
@@ -366,10 +367,10 @@ class PlanTests(MergeTestCase):
         here, there = folder_commands.create(self.db, self.ctx, "Here"), folder_commands.create(self.db, self.ctx, "There")
         folder_commands.move_work(self.db, self.ctx, source, here)
         folder_commands.move_work(self.db, self.ctx, target, there)
-        self.library.update_work_metadata(source, {"text_content": "Source research", "private_notes": "mine",
+        work_commands.update_metadata(self.db, self.ctx, source, {"text_content": "Source research", "private_notes": "mine",
                                                    "status": "Completed"})
-        self.library.update_work_metadata(target, {"text_content": "Target research"})
-        self.library.mark_work_opened(target)
+        work_commands.update_metadata(self.db, self.ctx, target, {"text_content": "Target research"})
+        work_commands.mark_opened(self.db, self.ctx, target)
         before = self.snapshot()
 
         plan = self.prepare(source, target)
@@ -403,7 +404,7 @@ class PlanTests(MergeTestCase):
         self.assertFalse(any(target in scope_id for _, scope_id in plan.source_scopes))
 
     def test_the_plan_names_every_citing_argument_and_the_citations_that_collapse(self) -> None:
-        source, target = self.library.add_work("Source"), self.library.add_work("Target")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Source"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Target")
         pinned = self.add_manifestation(source)
         both, only_source, pinned_only, only_target = (
             "A-" + uuid.uuid4().hex.upper() for _ in range(4))
@@ -426,7 +427,7 @@ class PlanTests(MergeTestCase):
         self.assertEqual(plan.citations_collapsed, ((both, "514a"),))
 
     def test_a_plain_pair_has_nothing_to_choose_and_nothing_blocked(self) -> None:
-        source, target = self.library.add_work("Same"), self.library.add_work("Same")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "Same"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Same")
         plan = self.prepare(source, target)
         self.assertEqual((plan.frozen, plan.shows_target, plan.choices, plan.blocked), ((), (), (), ()))
         self.assertEqual(plan.manifestation_ids, (self.primary(source),))
@@ -434,14 +435,14 @@ class PlanTests(MergeTestCase):
     def test_a_free_text_author_on_one_side_is_kept_without_a_choice(self) -> None:
         for source_text, target_text in (("Only, S.", ""), ("", "Only, T.")):
             with self.subTest(source=source_text, target=target_text):
-                source = self.library.add_work("S", author_text=source_text)
-                target = self.library.add_work("T", author_text=target_text)
+                source = works_fixtures.add_work(self.db, self.ctx, self.storage, "S", author_text=source_text)
+                target = works_fixtures.add_work(self.db, self.ctx, self.storage, "T", author_text=target_text)
                 plan = self.prepare(source, target)
                 self.assertEqual(plan.author_text, merge.Side(source_text, target_text))
                 self.assertNotIn("author_text", plan.choices)
 
     def test_the_plan_lists_every_declined_work_pair_naming_the_source(self) -> None:
-        source, target, other, unrelated = (self.library.add_work(t) for t in ("S", "T", "O", "U"))
+        source, target, other, unrelated = (works_fixtures.add_work(self.db, self.ctx, self.storage, t) for t in ("S", "T", "O", "U"))
         manifestations = sorted((self.primary(source), self.primary(target)))
         rows = [("work", *sorted((source, target))), ("work", *sorted((source, other))),
                 ("work", *sorted((other, unrelated))), ("manifestation", *manifestations)]
@@ -454,7 +455,7 @@ class PlanTests(MergeTestCase):
         self.assertEqual(self.prepare(unrelated, target).duplicate_decisions, (tuple(sorted((other, unrelated))),))
 
     def test_two_merges_of_one_pair_queue_on_the_works(self) -> None:
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         held, release = threading.Event(), threading.Event()
 
         def hold(scope: LibraryScope) -> None:
@@ -476,7 +477,7 @@ class PlanTests(MergeTestCase):
     def test_a_tag_added_after_the_snapshot_fails_the_merge_and_its_retry_sees_it(self) -> None:
         # §7.1: a row that joins the source after the merge read the set is
         # caught by SSI, because the writer is SERIALIZABLE (PEER_WRITERS).
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         tag = tag_commands.create(self.db, self.ctx, "Late")["id"]
         snapshot_taken, added = threading.Event(), threading.Event()
         plans: list[merge.MergePlan] = []
@@ -572,7 +573,7 @@ class IsolationTests(MergeTestCase):
                 self.assertIs(protocol._HANDLERS[operation].isolation, Isolation.SERIALIZABLE)
 
     def test_a_note_written_through_the_work_patch_runs_serializable(self) -> None:
-        work_id = self.library.add_work("Noted")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Noted")
         seen: list[Isolation] = []
         real = work_commands.library_command
 
@@ -581,8 +582,8 @@ class IsolationTests(MergeTestCase):
             return real(*args, **kwargs)
 
         with mock.patch.object(work_commands, "library_command", traced):
-            self.library.update_work_metadata(work_id, {"text_content": "A note"})
-            self.library.update_work_metadata(work_id, {"title": "Renamed"})
+            work_commands.update_metadata(self.db, self.ctx, work_id, {"text_content": "A note"})
+            work_commands.update_metadata(self.db, self.ctx, work_id, {"title": "Renamed"})
         self.assertEqual(seen, [Isolation.SERIALIZABLE, Isolation.READ_COMMITTED])
 
 
@@ -590,7 +591,7 @@ class OwnershipTests(MergeTestCase):
     """The database facts a merge's writes rely on (§4.1): no partial state commits."""
 
     def test_a_work_cannot_lose_its_primary_manifestation(self) -> None:
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
 
         def move_primary(scope: LibraryScope) -> None:
             scope.execute("UPDATE prks.manifestations SET work_id = %(target)s WHERE library_id = %(library_id)s"
@@ -598,20 +599,20 @@ class OwnershipTests(MergeTestCase):
 
         with self.refused_by("23503"):
             self.command(move_primary)  # checked at COMMIT: the source's pointer names a moved row
-        self.assertEqual(require(self.library.get_work(source))["id"], source)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, source))["id"], source)
 
     def test_a_work_with_manifestations_cannot_be_deleted(self) -> None:
-        work_id = self.library.add_work("W")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with self.refused_by("23503"):
             self.command(lambda scope: scope.execute(
                 "DELETE FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s",
                 {"work_id": work_id}))
-        self.assertIsNotNone(self.library.get_work(work_id))
+        self.assertIsNotNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
 
     def test_a_manifestation_cannot_move_to_another_librarys_work(self) -> None:
-        work_id = self.library.add_work("Mine")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")
         with facade_context.acting_as(self.other_actor().context):
-            theirs = self.library.add_work("Theirs")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         extra = self.add_manifestation(work_id)
         with self.refused_by("23503"):
             self.command(lambda scope: scope.execute(
@@ -620,8 +621,8 @@ class OwnershipTests(MergeTestCase):
                 {"theirs": theirs, "extra": extra}))
 
     def test_a_moved_manifestation_carries_its_assets_and_scoped_roles(self) -> None:
-        source = self.library.add_work("S")
-        target = self.library.add_work("T")
+        source = works_fixtures.add_work(self.db, self.ctx, self.storage, "S")
+        target = works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         extra = self.add_manifestation(source)
         asset = "AS-" + uuid.uuid4().hex.upper()
         self.sql("INSERT INTO prks.assets (library_id, id, manifestation_id, work_id, kind, provider, provider_id,"
@@ -639,7 +640,7 @@ class OwnershipTests(MergeTestCase):
                          target)
 
     def test_a_failure_after_the_first_merge_write_leaves_both_works(self) -> None:
-        source, target = self.library.add_work("S"), self.library.add_work("T")
+        source, target = works_fixtures.add_work(self.db, self.ctx, self.storage, "S"), works_fixtures.add_work(self.db, self.ctx, self.storage, "T")
         before = self.snapshot()
 
         def partial(scope: LibraryScope) -> None:

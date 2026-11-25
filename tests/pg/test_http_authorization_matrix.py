@@ -46,6 +46,7 @@ from tests import people_fixtures
 from backend.domain.people import person_commands
 from backend.storage.objects import LocalFilesystemStorage
 from tests.narrowing import require
+from tests import works_fixtures
 
 _API_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backend", "api")
 
@@ -177,7 +178,7 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         Image.new("RGB", (4, 4), (200, 30, 30)).save(portrait, format="JPEG")
         with self.acting(cookie):
             self.ids = {
-                "work": self.facade.add_work("Matrix Work", file_path=f"/api/pdfs/{name}"),
+                "work": works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Matrix Work", file_path=f"/api/pdfs/{name}"),
                 "pdf": name,
                 "tag": tag_commands.create(self.facade.database, current_context(), "Seeded tag")["id"],
                 "person": people_fixtures.add_person(self.facade.database, current_context(), "Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),

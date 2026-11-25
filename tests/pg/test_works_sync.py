@@ -41,6 +41,8 @@ from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
 from backend.domain.research import concept_commands
 from backend.domain.research import note_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _OTHER_VIDEO = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -109,13 +111,13 @@ class SyncTestCase(MutationTestCase):
 
 class LedgerTests(SyncTestCase):
     def test_one_op_id_sent_concurrently_applies_once(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         data = self.title_op(work_id, "Once", 0)
         results = self.concurrently([lambda: self.send(data) for _ in range(6)])
         self.assertTrue(all(result == results[0] for result in results), results)
         self.assertEqual(results[0][1]["server_revision"], 1)
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(require(self.library.get_work_metadata_state(work_id))["fields"]["title"]["revision"], 1)
+        self.assertEqual(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["title"]["revision"], 1)
 
     def test_a_create_sent_concurrently_applies_once(self) -> None:
         data = self.envelope("CREATE_WORK", "W-" + uuid.uuid4().hex.upper(), create_payload())
@@ -125,7 +127,7 @@ class LedgerTests(SyncTestCase):
         self.assertEqual((self.count("works"), len(self.ledger()), len(self.filing.filed)), (1, 1, 1))
 
     def test_the_ledger_is_read_before_the_epoch(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         data = self.title_op(work_id, "Before", 0)
         first = self.send(data)
         self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
@@ -138,25 +140,25 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(len(self.ledger()), 1)
 
     def test_an_op_id_of_another_account_or_library_is_never_disclosed(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         data = self.title_op(work_id, "Mine", 0)
         self.send(data)
         other = self.other_actor()
         self.assertEqual(self.send(dict(data, device_id=str(other.context.device_id)), other.context),
                          (409, {"code": "OP_ID_REUSE"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Mine")
 
     def test_the_device_must_be_the_users(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         other = self.other_actor()
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Stolen", 0, device_id=str(other.context.device_id)))
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"]), ([], "Work"))
 
     def test_a_new_device_is_bound_to_the_user_that_first_presents_it(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         device = str(uuid.uuid4())
         status, _result = self.send(self.title_op(work_id, "From a new browser", 0, device_id=device))
         self.assertEqual(status, 200)
@@ -164,13 +166,13 @@ class LedgerTests(SyncTestCase):
                          [{"user_id": self.actor.context.user_id}])
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            other_work = self.library.add_work("Theirs")
+            other_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(other_work, "Stolen", 0, device_id=device), other.context)
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
 
     def test_a_reader_cannot_send_operations(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         reader = self.reader_context()
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Read only", 0), reader)
@@ -191,7 +193,7 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(self.send(data)[1]["changed"], True)
 
     def test_families_without_a_handler_are_not_ported(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         # Every SQLite family has a handler now; one without is refused, typed.
         with mock.patch.dict(protocol._HANDLERS), self.assertRaises(NotPortedError):
             del protocol._HANDLERS["MARK_WORK_OPENED"]
@@ -201,7 +203,7 @@ class LedgerTests(SyncTestCase):
         self.assertEqual(self.ledger(), [])
 
     def test_the_ledger_row(self) -> None:
-        work_id = self.library.add_work("Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
         data = self.envelope("DELETE_WORK", work_id, {})
         status, result = self.send(data)
         self.assertEqual((status, result["file_path"]), (200, "/api/pdfs/p.pdf"))
@@ -219,7 +221,7 @@ class LedgerTests(SyncTestCase):
 
 class ConcurrentOperationTests(SyncTestCase):
     def test_writers_of_one_field_on_one_base(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         results = self.concurrently([
             (lambda value=value: self.send(self.title_op(work_id, value, 0))) for value in "ABCDE"
         ])
@@ -228,7 +230,7 @@ class ConcurrentOperationTests(SyncTestCase):
         self.assertEqual(len(self.ledger()), 5)
 
     def test_opens_from_many_devices_keep_the_latest(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         moments = ["2026-09-11T10:00:00.%03dZ" % ms for ms in (5, 900, 250, 640, 1)]
         results = self.concurrently([
             (lambda moment=moment: self.send(self.envelope("MARK_WORK_OPENED", work_id, {},
@@ -236,11 +238,11 @@ class ConcurrentOperationTests(SyncTestCase):
             for moment in moments
         ])
         self.assertTrue(all(result[0] == 200 for result in results))
-        self.assertEqual(require(self.library.get_work(work_id))["last_opened_at"], "2026-09-11 10:00:00.900")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["last_opened_at"], "2026-09-11 10:00:00.900")
 
     def test_a_delete_and_an_edit_of_one_work(self) -> None:
         for _ in range(5):
-            work_id = self.library.add_work("Work")
+            work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
             results = self.concurrently([
                 lambda work_id=work_id: self.send(self.envelope("DELETE_WORK", work_id, {})),
                 lambda work_id=work_id: self.send(self.title_op(work_id, "Edited", 0)),
@@ -262,7 +264,7 @@ class CreateWorkTests(SyncTestCase):
         self.assertEqual(self.send(self.envelope("CREATE_WORK", work_id, create_payload()))[1]["changed"], True)
         again = self.send(self.envelope("CREATE_WORK", work_id, create_payload(title="Other")))
         self.assertEqual((again[0], again[1]["changed"]), (200, False))
-        self.assertEqual(require(self.library.get_work(work_id))["title"], "A talk")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "A talk")
         self.assertEqual(self.filing.filed, [work_id])
 
     def test_concurrent_creates_of_one_id_make_one_work(self) -> None:
@@ -299,7 +301,7 @@ class CreateWorkTests(SyncTestCase):
         self.send(self.envelope("CREATE_WORK", work_id, create_payload()))
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            self.assertIsNone(self.library.get_work(work_id))
+            self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
         data = dict(self.envelope("CREATE_WORK", work_id, create_payload()),
                     device_id=str(other.context.device_id))
         # Ids are unique across Libraries: the other Library is refused, unledgered.
@@ -323,7 +325,7 @@ def every_edit(case: SyncTestCase, work_id: str, base: int) -> list[dict[str, An
 
 class DeleteAgainstPendingTests(SyncTestCase):
     def test_operations_queued_before_a_delete_find_nothing(self) -> None:
-        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", source_url=_VIDEO)
         self.assertEqual(self.send(self.title_op(work_id, "Seen", 0))[0], 200)
         self.assertEqual(self.send(self.envelope("DELETE_WORK", work_id, {}))[1]["changed"], True)
         tombstoned = self.revisions_of(work_id)
@@ -338,7 +340,7 @@ class DeleteAgainstPendingTests(SyncTestCase):
 
     def test_a_delete_racing_each_kind_of_edit(self) -> None:
         for index in range(5):
-            work_id = self.library.add_work("Work", source_url=_VIDEO)
+            work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", source_url=_VIDEO)
             edit = every_edit(self, work_id, 0)[index]
             results = self.concurrently([
                 lambda work_id=work_id: self.send(self.envelope("DELETE_WORK", work_id, {})),
@@ -363,7 +365,7 @@ class DeleteAgainstPendingTests(SyncTestCase):
                          ["changed"], True)
         status, result = self.send(self.title_op(work_id, "Queued before the delete", 1))
         self.assertEqual((status, result["code"], result["current_revision"]), (409, "REVISION_CONFLICT", 2))
-        self.assertEqual(require(self.library.get_work(work_id))["title"], "Again")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Again")
         self.assertEqual(self.send(self.title_op(work_id, "Seen after", 2))[1]["server_revision"], 3)
 
 
@@ -389,7 +391,7 @@ class RecreatedWorkTests(SyncTestCase):
         """A PDF Work under ``work_id``: every field, both notes and an Asset to hold thumb_page."""
         name = "again-%s.pdf" % uuid.uuid4().hex
         self.store_pdf(name, b"%PDF-1.4\n")
-        objects = self.library._objects()
+        objects = works_fixtures.objects(self.storage)
         self.run_command(lambda scope: commands.create_work(scope, commands.NewWork(
             work_id=work_id, manifestation_id=generate("MF"), title="Again",
             bibliographic={"doc_type": "article"}, asset_id=generate("AS"),
@@ -399,19 +401,19 @@ class RecreatedWorkTests(SyncTestCase):
     def deleted_and_recreated(self) -> str:
         work_id = "W-" + uuid.uuid4().hex.upper()
         self.recreate(work_id)
-        self.assertIsNotNone(self.library.delete_work_record(work_id))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, work_id))
         self.recreate(work_id)
         return work_id
 
     def test_a_stale_base_0_edit_of_any_field_conflicts_with_the_recreated_work(self) -> None:
         work_id = self.deleted_and_recreated()
-        before = self.library.get_work(work_id)
+        before = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         for field in sorted(metadata_rules.SYNCED_FIELDS):
             with self.subTest(field=field):
                 status, result = self.field(work_id, field, _STALE_VALUES.get(field, "Stale"), 0)
                 self.assertEqual((status, result["code"], result["current_revision"]),
                                  (409, "REVISION_CONFLICT", 1))
-        self.assertEqual(self.library.get_work(work_id), before)
+        self.assertEqual(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), before)
         # A base observed after the recreation is current and applies.
         for field in sorted(metadata_rules.SYNCED_FIELDS):
             with self.subTest(field=field):
@@ -435,7 +437,7 @@ class RecreatedWorkTests(SyncTestCase):
         self.send(self.envelope("DELETE_WORK", work_id, {}))
         self.assertEqual(self.send(self.envelope("CREATE_WORK", work_id, create_payload(title="Again")))[1]
                          ["changed"], True)
-        before = self.library.get_work(work_id)
+        before = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         expected = {"SET_WORK_METADATA_FIELD": "REVISION_CONFLICT", "SET_WORK_RESEARCH_NOTE": "REVISION_CONFLICT",
                     "SET_WORK_PRIVATE_NOTE": "REVISION_CONFLICT", "SET_WORK_SOURCE": "SOURCE_REVISION_CONFLICT"}
         stale = [data for data in every_edit(self, work_id, 0) if data["operation"] in expected]
@@ -444,7 +446,7 @@ class RecreatedWorkTests(SyncTestCase):
                 status, result = self.send(data)
                 self.assertEqual((status, result["code"], result["current_revision"]),
                                  (409, expected[data["operation"]], 1))
-        self.assertEqual(self.library.get_work(work_id), before)
+        self.assertEqual(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), before)
         for data in every_edit(self, work_id, 1):
             if data["operation"] in expected:
                 with self.subTest(operation=data["operation"]):
@@ -458,40 +460,40 @@ class RecreatedWorkTests(SyncTestCase):
         self.recreate(work_id)
         self.assertEqual(self.field(work_id, "title", "One", 0)[1]["server_revision"], 1)
         self.assertEqual(self.field(work_id, "title", "Two", 1)[1]["server_revision"], 2)
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id, {title: 3}))
         self.recreate(work_id)
         self.assertEqual(self.field(work_id, "title", "Three", 2)[1]["code"], "REVISION_CONFLICT")
         self.assertEqual(self.field(work_id, "title", "Three", 3)[1]["server_revision"], 4)
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         # Each delete moves every scope on by exactly one: never back, never twice.
         self.assertEqual(self.revisions_of(work_id),
                          {**{key: 2 for key in commands.work_scopes(work_id)}, title: 5})
 
     def test_deleting_an_absent_work_changes_no_revision(self) -> None:
         work_id = self.deleted_and_recreated()
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         tombstoned = self.revisions_of(work_id)
         total = self.count("entity_revisions")
-        self.assertIsNone(self.library.delete_work_record(work_id))
+        self.assertIsNone(work_commands.delete(self.db, self.ctx, work_id))
         self.assertEqual(self.send(self.envelope("DELETE_WORK", work_id, {}))[1]["changed"], False)
         self.assertEqual(self.revisions_of(work_id), tombstoned)
         never = "W-" + uuid.uuid4().hex.upper()
-        self.assertIsNone(self.library.delete_work_record(never))
+        self.assertIsNone(work_commands.delete(self.db, self.ctx, never))
         self.assertEqual(self.revisions_of(never), {})
         self.assertEqual(self.count("entity_revisions"), total)
 
     def test_a_delete_tombstones_only_its_own_work_in_its_own_library(self) -> None:
-        work_id = self.library.add_work("Deleted")
-        neighbour = self.library.add_work("Neighbour")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Deleted")
+        neighbour = works_fixtures.add_work(self.db, self.ctx, self.storage, "Neighbour")
         self.field(neighbour, "title", "Kept", 0)
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         self.run_command(lambda scope: commands.delete_work(scope, theirs) and None, other.context)
         their_rows = self.sql("SELECT scope_type, scope_id, revision FROM prks.entity_revisions"
                               " WHERE library_id = %s ORDER BY 1, 2", (other.library_id,))
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         self.assertEqual(self.revisions_of(work_id), self.tombstoned(work_id))
         self.assertEqual(self.revisions_of(neighbour), {("work-field", '["%s","title"]' % neighbour): 1})
         self.assertEqual(self.sql("SELECT scope_type, scope_id, revision FROM prks.entity_revisions"
@@ -501,7 +503,7 @@ class RecreatedWorkTests(SyncTestCase):
             (work_id, '["' + work_id + '"%'))}, {self.actor.library_id})
 
     def test_concurrent_deletes_tombstone_each_scope_once(self) -> None:
-        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", source_url=_VIDEO)
         self.field(work_id, "title", "Edited", 0)
         results = self.concurrently([
             (lambda: self.send(self.envelope("DELETE_WORK", work_id, {}))) for _ in range(4)
@@ -511,7 +513,7 @@ class RecreatedWorkTests(SyncTestCase):
                          self.tombstoned(work_id, {("work-field", '["%s","title"]' % work_id): 2}))
 
     def test_an_edit_of_a_never_edited_scope_waits_for_the_delete(self) -> None:
-        work_id = self.library.add_work("Work", source_url=_VIDEO)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", source_url=_VIDEO)
         deleted, edit = self.hold_work_then(
             lambda scope: commands.delete_work(scope, work_id),
             lambda scope: notes.apply_note_operation(scope, notes.rules.RESEARCH_OPERATION, work_id, "late", 0))
@@ -522,7 +524,7 @@ class RecreatedWorkTests(SyncTestCase):
 
 class IsolationTests(SyncTestCase):
     def test_another_library_cannot_change_a_work_by_sync(self) -> None:
-        work_id = self.library.add_work("Mine", source_url=_VIDEO, private_notes="kept")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", source_url=_VIDEO, private_notes="kept")
         other = self.other_actor()
         device = str(other.context.device_id)
         for data in every_edit(self, work_id, 0):
@@ -531,7 +533,7 @@ class IsolationTests(SyncTestCase):
                 self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
         deleted = self.send(self.envelope("DELETE_WORK", work_id, {}, device_id=device), other.context)
         self.assertEqual(deleted, (200, {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": False}))
-        work = self.library.get_work(work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert work is not None
         self.assertEqual((work["title"], work["private_notes"], work["last_opened_at"]), ("Mine", "kept", None))
         self.assertEqual(self.revisions_of(work_id), {})
@@ -539,7 +541,7 @@ class IsolationTests(SyncTestCase):
         self.assertEqual({row["library_id"] for row in self.ledger()}, {other.library_id})
 
     def test_a_worker_without_a_person_cannot_send_operations(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         lease_id = uuid.uuid4()
         (job,) = self.sql(
             "INSERT INTO prks.jobs (library_id, library_epoch, kind, state, lease_id, locked_until)"
@@ -550,7 +552,7 @@ class IsolationTests(SyncTestCase):
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Job", 0), worker)
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"]), ([], "Work"))
 
 
 class EpochTests(SyncTestCase):
@@ -564,14 +566,14 @@ class EpochTests(SyncTestCase):
         return RequestContext.for_session(valid, epoch=epoch, device_id=self.actor.device_id)
 
     def test_an_operation_of_the_old_epoch_applies_once_resent_for_the_new_one(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         self.sql("UPDATE prks.libraries SET epoch = epoch + 1 WHERE id = %s", (self.actor.library_id,))
         for data in every_edit(self, work_id, 0) + [self.envelope("DELETE_WORK", work_id, {})]:
             with self.subTest(operation=data["operation"]):
                 with self.assertRaises(AccessRefused) as caught:
                     self.send(data)
                 self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
-        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"]), ([], "Work"))
         self.assertEqual(self.revisions_of(work_id), {})
         # The op_id was not burnt: the client resends it for the new epoch.
         data = self.title_op(work_id, "Resent", 0)
@@ -580,7 +582,7 @@ class EpochTests(SyncTestCase):
         self.assertEqual(self.send(data, self.context_at(2))[1]["server_revision"], 1)
 
     def test_a_newer_epoch_than_the_librarys_is_refused(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         with self.assertRaises(AccessRefused) as caught:
             self.send(self.title_op(work_id, "Ahead", 0), self.context_at(2))
         self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
@@ -597,32 +599,32 @@ class FailureTests(SyncTestCase):
         return mock.patch.dict(protocol._HANDLERS, {operation: broken})
 
     def test_an_edit_that_fails_after_writing_leaves_nothing_and_retries(self) -> None:
-        work_id = self.library.add_work("Work")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
         data = self.title_op(work_id, "Once", 0)
         with self.failing_after("SET_WORK_METADATA_FIELD", work_metadata.HANDLER):
             with self.assertRaises(RuntimeError):
                 self.send(data)
-        self.assertEqual((self.ledger(), require(self.library.get_work(work_id))["title"]), ([], "Work"))
+        self.assertEqual((self.ledger(), require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"]), ([], "Work"))
         self.assertEqual(self.revisions_of(work_id), {})
         self.assertEqual(self.send(data)[1]["server_revision"], 1)
         self.assertEqual(self.send(data)[1]["server_revision"], 1)  # and then replays
 
     def test_a_delete_that_fails_after_deleting_leaves_the_work(self) -> None:
-        work_id = self.library.add_work("Work", source_url=_VIDEO, private_notes="kept")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work", source_url=_VIDEO, private_notes="kept")
         data = self.envelope("DELETE_WORK", work_id, {})
         with self.failing_after("DELETE_WORK", work_lifecycle.DELETE_HANDLER):
             with self.assertRaises(RuntimeError):
                 self.send(data)
-        self.assertEqual(require(self.library.get_work(work_id))["private_notes"], "kept")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["private_notes"], "kept")
         self.assertEqual((self.ledger(), self.revisions_of(work_id)), ([], {}))
         self.assertEqual(self.send(data)[1]["changed"], True)
-        self.assertIsNone(self.library.get_work(work_id))
+        self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
 
 
 class NoteConflictTests(SyncTestCase):
     def test_writers_of_one_note_on_one_base(self) -> None:
         for operation in ("SET_WORK_RESEARCH_NOTE", "SET_WORK_PRIVATE_NOTE"):
-            work_id = self.library.add_work("Work")
+            work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work")
             results = self.concurrently([
                 (lambda text=text, operation=operation, work_id=work_id:
                  self.send(self.envelope(operation, work_id, {"text": text}, 0)))
@@ -635,7 +637,7 @@ class NoteConflictTests(SyncTestCase):
                 losers = [result[1] for result in results if result[1]["code"] != "ACKNOWLEDGED"]
                 # Every loser is told the winner's revision, and nothing overwrote the winner.
                 self.assertTrue(all(loser["current_revision"] == winner["server_revision"] for loser in losers))
-                state = self.library.get_work_notes_state(work_id)
+                state = work_commands.notes_state(self.db, self.ctx, work_id)
                 key = "research_note_revision" if operation == "SET_WORK_RESEARCH_NOTE" else "private_note_revision"
                 assert state is not None
                 self.assertEqual(state[key], 1)
@@ -646,14 +648,14 @@ class OpenSyncTests(SyncTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.work = self.library.add_work("Opened work")
+        self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Opened work")
 
     def opened(self, occurred_at: str, work_id: Optional[str] = None, **changes: Any) -> dict[str, Any]:
         return self.envelope("MARK_WORK_OPENED", work_id or self.work, {}, occurred_at=occurred_at,
                              created_at=occurred_at, **changes)
 
     def opened_at(self, work_id: Optional[str] = None) -> Optional[str]:
-        return require(self.library.get_work(work_id or self.work))["last_opened_at"]
+        return require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id or self.work))["last_opened_at"]
 
     def test_the_latest_event_wins_whatever_the_arrival_order_or_zone(self) -> None:
         self.assertIsNone(self.opened_at())
@@ -666,12 +668,12 @@ class OpenSyncTests(SyncTestCase):
                 status, result = self.send(self.opened(older))
                 self.assertEqual((status, result["changed"], result["effective_opened_at"]),
                                  (200, False, "2026-09-11 11:00:00.000"))
-        mirror = self.library.add_work("Mirror")
+        mirror = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mirror")
         for occurred in ("2026-09-11T15:00:00+02:00", "2026-09-11T12:00:00Z"):
             self.send(self.opened(occurred, mirror))
         self.assertEqual(self.opened_at(mirror), "2026-09-11 13:00:00.000")
         # Offline for years is no reason to refuse the event.
-        old = self.library.add_work("Old")
+        old = works_fixtures.add_work(self.db, self.ctx, self.storage, "Old")
         self.assertEqual(self.send(self.opened("2019-01-02T03:04:05Z", old))[1]["changed"], True)
         self.assertEqual(self.opened_at(old), "2019-01-02 03:04:05.000")
 
@@ -681,7 +683,7 @@ class OpenSyncTests(SyncTestCase):
         self.assertTrue(result["changed"])
         self.assertLess(result["effective_opened_at"],
                         open_rules.format_moment(datetime.now(timezone.utc) + timedelta(minutes=1)))
-        other = self.library.add_work("Precise")
+        other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Precise")
         for millis in (0, 250, 900):
             moment = datetime(2026, 9, 11, 12, 0, 0, millis * 1000, tzinfo=timezone.utc)
             self.send(self.opened(moment.isoformat(), other))
@@ -704,7 +706,7 @@ class OpenSyncTests(SyncTestCase):
         original = self.send(data)
         row = original[1]["recent_item"]
         self.assertEqual((row["id"], row["last_opened_at"]), (self.work, "2026-09-11 10:00:00.000"))
-        self.assertEqual([row], [item for item in self.library.get_recent_browse() if item["id"] == self.work])
+        self.assertEqual([row], [item for item in work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir) if item["id"] == self.work])
         self.send(self.opened("2026-09-11T18:00:00Z"))
         self.assertEqual(self.send(data), original)
         self.assertEqual(self.opened_at(), "2026-09-11 18:00:00.000")
@@ -712,15 +714,15 @@ class OpenSyncTests(SyncTestCase):
         self.assertEqual((self.opened_at(), len(self.ledger())), ("2026-09-11 18:00:00.000", 2))
 
     def test_the_direct_open_shares_the_register_and_a_read_stays_pure(self) -> None:
-        self.assertTrue(self.library.mark_work_opened(self.work))
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, self.work))
         self.assertRegex(self.opened_at() or "", r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}$")
         tomorrow = open_rules.format_moment(datetime.now(timezone.utc) + timedelta(days=1))
         self.sql("UPDATE prks.works SET last_opened_at = %s::timestamptz WHERE id = %s", (tomorrow + "+00", self.work))
-        self.assertTrue(self.library.mark_work_opened(self.work))
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, self.work))
         self.assertEqual(self.opened_at(), tomorrow)
-        self.assertFalse(self.library.mark_work_opened(generate("W")))
-        self.library.get_work(self.work)
-        self.library.get_work(self.work)
+        self.assertFalse(work_commands.mark_opened(self.db, self.ctx, generate("W")))
+        work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work)
+        work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work)
         self.assertEqual(self.opened_at(), tomorrow)
 
 
@@ -729,7 +731,7 @@ class NoteSyncTests(SyncTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.work = self.library.add_work("Noted work")
+        self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Noted work")
 
     def note_op(self, kind: str, text: Any, base: Optional[int] = 0, work_id: Optional[str] = None,
              **changes: Any) -> dict[str, Any]:
@@ -737,15 +739,15 @@ class NoteSyncTests(SyncTestCase):
         return self.envelope(operation, work_id or self.work, {"text": text}, base, **changes)
 
     def state(self) -> tuple[int, int]:
-        state = self.library.get_work_notes_state(self.work)
+        state = work_commands.notes_state(self.db, self.ctx, self.work)
         assert state is not None
         return state["research_note_revision"], state["private_note_revision"]
 
     def test_the_two_notes_advance_their_own_revisions_on_either_path(self) -> None:
-        fresh = self.library.add_work("Untouched")
-        self.assertEqual(self.library.get_work_notes_state(fresh),
+        fresh = works_fixtures.add_work(self.db, self.ctx, self.storage, "Untouched")
+        self.assertEqual(work_commands.notes_state(self.db, self.ctx, fresh),
                          {"work_id": fresh, "research_note_revision": 0, "private_note_revision": 0})
-        self.assertIsNone(self.library.get_work_notes_state(generate("W")))
+        self.assertIsNone(work_commands.notes_state(self.db, self.ctx, generate("W")))
         self.send(self.note_op("research", "Research A"))
         self.send(self.note_op("private", "Private A"))
         self.assertEqual(self.state(), (1, 1))
@@ -753,10 +755,10 @@ class NoteSyncTests(SyncTestCase):
         self.assertEqual(self.state(), (2, 1))
         self.send(self.note_op("private", "Private B", 1))
         self.assertEqual(self.state(), (2, 2))
-        work = self.library.get_work(self.work)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work)
         assert work is not None
         self.assertEqual((work["text_content"], work["private_notes"]), ("Research B", "Private B"))
-        self.library.update_work_metadata(self.work, {"private_notes": "Reminder via PATCH"})
+        work_commands.update_metadata(self.db, self.ctx, self.work, {"private_notes": "Reminder via PATCH"})
         self.assertEqual(self.state(), (2, 3))
         note_commands.save(self.db, self.ctx, self.work, "Research via PATCH")
         self.assertEqual(self.state(), (3, 3))
@@ -792,7 +794,7 @@ class NoteSyncTests(SyncTestCase):
         over_private = "p" * (note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES + 1)
         self.assertEqual(self.send(self.note_op("private", over_private))[0], 400)
         with self.assertRaises(ValueError):
-            self.library.update_work_metadata(self.work, {"private_notes": over_private})
+            work_commands.update_metadata(self.db, self.ctx, self.work, {"private_notes": over_private})
         self.assertEqual(self.send(self.note_op("research", "x", None))[1]["code"], "INVALID_BASE_REVISION")
         extra = self.note_op("research", "x")
         extra["payload"]["extra"] = 1
@@ -802,7 +804,7 @@ class NoteSyncTests(SyncTestCase):
         # The Research Note is the large aggregate: past the generic 64 KiB envelope cap it still lands.
         large = "r" * (64 * 1024 + 1)
         self.assertEqual(self.send(self.note_op("research", large))[0], 200)
-        self.assertEqual(len(require(self.library.get_work(self.work))["text_content"]), 64 * 1024 + 1)
+        self.assertEqual(len(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["text_content"]), 64 * 1024 + 1)
         at_limit = "q" * note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES
         self.assertEqual(self.send(self.note_op("private", at_limit))[0], 200)
         missing = generate("W")
@@ -823,19 +825,20 @@ class SourceSyncTests(SyncTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.work = self.library.add_work("Clip", source_kind="video", source_url=_WATCH % "AAA",
-                                          provider="youtube", provider_id="AAA", thumb_url="https://img/AAA.jpg")
+        self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Clip", source_kind="video", source_url=_WATCH % "AAA", thumb_url="https://img/AAA.jpg", provider="youtube", provider_id="AAA")
 
     def source_op(self, url: str, base: Optional[int] = 0, work_id: Optional[str] = None) -> dict[str, Any]:
         return self.envelope("SET_WORK_SOURCE", work_id or self.work, {"source": {"kind": "video", "url": url}}, base)
 
     def columns(self, work_id: Optional[str] = None) -> dict[str, Any]:
-        row = self.library.get_work(work_id or self.work)
+        row = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id or self.work)
         assert row is not None
         return {key: row[key] for key in ("source_kind", "provider", "provider_id", "source_url", "thumb_url")}
 
     def revision(self, work_id: Optional[str] = None) -> int:
-        return self.library.get_work_source_state(work_id or self.work)["revision"]
+        state = work_commands.source_state(self.db, self.ctx, work_id or self.work)
+        assert isinstance(state, dict), state
+        return state["revision"]
 
     def test_refused_envelopes_write_nothing_and_are_never_ledgered(self) -> None:
         extra = self.source_op(_WATCH % "BBB")
@@ -854,7 +857,7 @@ class SourceSyncTests(SyncTestCase):
         self.assertEqual((self.revision(), self.columns()["source_url"], self.columns()["thumb_url"]),
                          (0, _WATCH % "AAA", "https://img/AAA.jpg"))
         status, result = self.send(self.source_op(_WATCH % "BBB"))
-        row = self.library.get_work(self.work)
+        row = work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work)
         assert row is not None
         self.assertEqual((status, result["changed"], result["source_url"], result["provider_id"], result["provider"],
                           result["source_kind"], result["thumb_url"], result["urldate"]),
@@ -867,7 +870,7 @@ class SourceSyncTests(SyncTestCase):
         self.assertEqual((status, result["changed"], result["source_url"], result["server_revision"]),
                          (200, False, _WATCH % "BBB", 1))
         # The source is its own scope: no metadata field moved.
-        fields = require(self.library.get_work_metadata_state(self.work))["fields"]
+        fields = require(work_commands.metadata_state(self.db, self.ctx, self.work))["fields"]
         self.assertEqual({entry["revision"] for entry in fields.values()}, {0})
         self.assertEqual(self.send(self.source_op(_WATCH % ("B" * source_rules.MAX_PROVIDER_ID_CHARS), 1))[0],
                          200)
@@ -896,16 +899,16 @@ class SourceSyncTests(SyncTestCase):
         self.assertEqual(self.send(reused), (409, {"code": "OP_ID_REUSE"}))
 
     def test_creation_derives_or_refuses_and_advances_nothing(self) -> None:
-        made = self.library.add_work("Derived", source_kind="video", source_url="https://youtu.be/NNN")
+        made = works_fixtures.add_work(self.db, self.ctx, self.storage, "Derived", source_kind="video", source_url="https://youtu.be/NNN")
         self.assertEqual((self.columns(made)["provider"], self.columns(made)["provider_id"],
                           self.columns(made)["source_url"]), ("youtube", "NNN", "https://youtu.be/NNN"))
         self.assertEqual((self.revision(made), self.revisions_of(made)), (0, {}))
-        kindless = self.library.add_work("Kindless", source_url=_WATCH % "KKK")
+        kindless = works_fixtures.add_work(self.db, self.ctx, self.storage, "Kindless", source_url=_WATCH % "KKK")
         self.assertEqual(self.columns(kindless)["source_kind"], "video")
         self.assertEqual(self.send(self.source_op(_WATCH % "LLL", 0, kindless))[1]["code"], "ACKNOWLEDGED")
-        spaced = self.library.add_work("Ok", source_kind=" VIDEO ", source_url=_WATCH % "AAA")
+        spaced = works_fixtures.add_work(self.db, self.ctx, self.storage, "Ok", source_kind=" VIDEO ", source_url=_WATCH % "AAA")
         self.assertEqual(self.columns(spaced)["source_kind"], "video")
-        self.assertIsNone(self.columns(self.library.add_work("Bare"))["source_kind"])
+        self.assertIsNone(self.columns(works_fixtures.add_work(self.db, self.ctx, self.storage, "Bare"))["source_kind"])
         for fields in ({"source_kind": "video", "source_url": _WATCH % "BBB", "provider": "youtube",
                         "provider_id": "AAA"},
                        {"source_kind": "video", "source_url": _WATCH % "BBB", "provider": "vimeo"},
@@ -918,7 +921,7 @@ class SourceSyncTests(SyncTestCase):
                        {"source_url": "https://example.com/clip"},
                        *({"source_kind": kind, "source_url": _WATCH % "AAA"} for kind in ("web", "audio", "html"))):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
-                self.library.add_work("Refused", **fields)
+                works_fixtures.add_work(self.db, self.ctx, self.storage, "Refused", **fields)
 
     def test_a_file_makes_a_pdf_and_its_url_stays_provenance(self) -> None:
         for label, url, kind in (("inferred", "https://example.org/paper.pdf", ""),
@@ -926,19 +929,17 @@ class SourceSyncTests(SyncTestCase):
                                  ("explicit, YouTube-shaped", _WATCH % "AAA", "pdf")):
             with self.subTest(case=label):
                 path = self.store_pdf("%s.pdf" % uuid.uuid4().hex, b"%PDF-1.4\n")
-                columns = self.columns(self.library.add_work("Paper", file_path=path, source_url=url,
-                                                             source_kind=kind))
+                columns = self.columns(works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=path, source_kind=kind, source_url=url))
                 self.assertEqual((columns["source_kind"], columns["provider"] or None,
                                   columns["provider_id"] or None, columns["source_url"]), ("pdf", None, None, url))
         path = self.store_pdf("refused.pdf", b"%PDF-1.4\n")
         for kind in ("pdf", ""):
             with self.subTest(kind=kind), self.assertRaises(ValueError):
-                self.library.add_work("Filed", file_path=path, source_kind=kind,
-                                      source_url="https://example.org/p.pdf", provider_id="AAA")
-        pdf = self.library.add_work("Paper", file_path=path)
+                works_fixtures.add_work(self.db, self.ctx, self.storage, "Filed", file_path=path, source_kind=kind, source_url="https://example.org/p.pdf", provider_id="AAA")
+        pdf = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=path)
         self.assertEqual(self.send(self.source_op(_WATCH % "BBB", 0, pdf))[1]["code"],
                          "UNSUPPORTED_SOURCE_TRANSITION")
-        self.assertEqual((self.columns(pdf)["source_kind"], require(self.library.get_work(pdf))["file_path"]),
+        self.assertEqual((self.columns(pdf)["source_kind"], require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, pdf))["file_path"]),
                          ("pdf", "/api/pdfs/refused.pdf"))
 
     def test_a_patch_never_writes_the_identity(self) -> None:
@@ -946,18 +947,18 @@ class SourceSyncTests(SyncTestCase):
                               ("thumb_url", "https://img/CCC.jpg")):
             with self.subTest(column=column):
                 with self.assertRaises(ValueError) as caught:
-                    self.library.update_work_metadata(self.work, {column: value})
+                    work_commands.update_metadata(self.db, self.ctx, self.work, {column: value})
                 self.assertIn(column, str(caught.exception))
                 self.assertIn("SET_WORK_SOURCE", str(caught.exception))
         with self.assertRaises(ValueError) as caught:
-            self.library.update_work_metadata(self.work, {"source_kind": "video", "provider": "youtube",
+            work_commands.update_metadata(self.db, self.ctx, self.work, {"source_kind": "video", "provider": "youtube",
                                                           "provider_id": "BBB", "title": "Renamed too"})
         for column in ("provider", "provider_id", "source_kind"):
             self.assertIn(column, str(caught.exception))
-        self.assertEqual((self.columns()["provider_id"], require(self.library.get_work(self.work))["title"], self.revision()),
+        self.assertEqual((self.columns()["provider_id"], require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["title"], self.revision()),
                          ("AAA", "Clip", 0))
-        self.library.update_work_metadata(self.work, {"title": "Renamed", "year": "2021"})
-        self.assertEqual(require(self.library.get_work(self.work))["title"], "Renamed")
+        work_commands.update_metadata(self.db, self.ctx, self.work, {"title": "Renamed", "year": "2021"})
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["title"], "Renamed")
 
 
 _MISSING_WORK = "W-" + "E" * 32
@@ -992,7 +993,7 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
                     (404, {"code": "ENTITY_NOT_FOUND", "work_id": "<unknown id>"}))
         self.answer(self.op("MARK_WORK_OPENED", work_id, {"unexpected": True}), (400, {"code": "INVALID_ENVELOPE"}))
         self.answer(self.op("MARK_WORK_OPENED", work_id, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
-        self.answer(self.library.get_recent_browse(), [{"id": "<W work>", "last_opened_at": "<ms>"}])
+        self.answer(work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir), [{"id": "<W work>", "last_opened_at": "<ms>"}])
 
     def test_metadata_fields(self) -> None:
         work_id = self.add("work", title="Work")
@@ -1027,9 +1028,9 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
             (_MISSING_WORK, {"field": "title", "value": "Ghost"}, 0,
              (404, {"code": "ENTITY_NOT_FOUND", "field": "title", "work_id": "<unknown id>"})),
         ])
-        self.answer(self.library.get_work(work_id), {"title": "Renamed", "status": "Paused", "doc_type": "book",
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"title": "Renamed", "status": "Paused", "doc_type": "book",
                                                      "year": "1999", "abstract": "x" * 900})
-        self.answer(self.library.get_work(video), {"source_url": _VIDEO, "thumb_url": None})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, video), {"source_url": _VIDEO, "thumb_url": None})
 
     def test_notes(self) -> None:
         work_id = self.add("work", title="Work", private_notes="first")
@@ -1056,8 +1057,8 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
         self.answer(self.op("SET_WORK_RESEARCH_NOTE", work_id, {"text": "bell\x07"}, 3),
                     (400, {"code": "INVALID_ENVELOPE"}))
         self.answer(self.op("SET_WORK_RESEARCH_NOTE", work_id, {"text": "x"}), (400, {"code": "INVALID_BASE_REVISION"}))
-        self.answer(self.library.get_work(work_id), {"text_content": "", "private_notes": None})
-        self.answer(self.library.get_work_notes_state(work_id),
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"text_content": "", "private_notes": None})
+        self.answer(work_commands.notes_state(self.db, self.ctx, work_id),
                     {"private_note_revision": 3, "research_note_revision": 3, "work_id": "<W work>"})
 
     def test_sources(self) -> None:
@@ -1091,11 +1092,11 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
             (video, source(_VIDEO), None, (400, {"code": "INVALID_BASE_REVISION"})),
         ])
         # A replaced video is accessed today.
-        self.assertRegex(require(self.library.get_work(video))["urldate"], r"^\d{4}-\d\d-\d\d$")
-        self.answer(self.library.get_work(video), {"source_url": _OTHER_VIDEO, "provider_id": "9bZkp7q19f0",
+        self.assertRegex(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, video))["urldate"], r"^\d{4}-\d\d-\d\d$")
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, video), {"source_url": _OTHER_VIDEO, "provider_id": "9bZkp7q19f0",
                                                    "thumb_url": None})
-        self.answer(self.library.get_work(plain), {"source_kind": None, "source_url": None})
-        self.answer(self.library.get_work(pdf), {"source_kind": "pdf", "file_path": "/api/pdfs/a.pdf"})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, plain), {"source_kind": None, "source_url": None})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, pdf), {"source_kind": "pdf", "file_path": "/api/pdfs/a.pdf"})
 
     def test_deletes(self) -> None:
         plain = self.add("plain", title="Plain")
@@ -1112,7 +1113,7 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
         self.assertEqual(self.op("DELETE_WORK", plain, {}, 0), (400, {"code": "INVALID_BASE_REVISION"}))
         self.assertEqual(self.op("SET_WORK_METADATA_FIELD", plain, {"field": "title", "value": "Late"}, 0),
                          (404, {"code": "ENTITY_NOT_FOUND", "field": "title", "work_id": "<W plain>"}))
-        self.assertEqual(self.library.get_all_works(), [])
+        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])
 
     def test_the_ledger(self) -> None:
         work_id = self.add("work", title="Work")
@@ -1135,7 +1136,7 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
         self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, {"field": "title", "value": "Fixed"}, 1,
                                  op_id=fresh), (200, {**applied[1], "server_revision": 2}))
         self.assertEqual(self.op("NOT_AN_OPERATION", work_id, {}, 0), (400, {"code": "INVALID_ENVELOPE"}))
-        self.answer(self.library.get_work(work_id), {"title": "Fixed"})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"title": "Fixed"})
 
     def test_dependencies(self) -> None:
         work_id = self.add("work", title="Work")
@@ -1157,4 +1158,4 @@ class AnswerTests(SyncTestCase, WorksAnswerTestCase):
         self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, issue, 0, depends_on=[refused]), unsatisfied)
         self.assertEqual(self.op("SET_WORK_METADATA_FIELD", work_id, issue, 0,
                                  depends_on=[str(uuid.uuid4()).upper(), str(uuid.uuid4())]), unsatisfied)
-        self.answer(self.library.get_work(work_id), {"title": "First", "year": "2001", "issue": ""})
+        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"title": "First", "year": "2001", "issue": ""})

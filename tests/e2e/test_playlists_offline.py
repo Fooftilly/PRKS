@@ -587,6 +587,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         non-revision-aware mutation path for one field silently overwrites the
         conflicts the durable one detects.
         """
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         ids = server.ids
         work = ids['playlist_video_one']
@@ -628,7 +629,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertEqual(work_writes, [], 'no Work write of any kind left the browser')
         o._wait_content_contains(page, 'Renamed while disconnected')
         self.assertEqual(
-            self.db_for(server).get_work(work)['title'], PLAYLIST_VIDEO_ONE_TITLE,
+            require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], PLAYLIST_VIDEO_ONE_TITLE,
             'the server has not been told anything yet')
 
         self.online(page, context)
@@ -639,7 +640,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             message='the Title operation never retired',
         )
         self.assertEqual(work_writes, [], 'and synchronizing still used no Work PATCH')
-        self.assertEqual(self.db_for(server).get_work(work)['title'], 'Renamed while disconnected')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], 'Renamed while disconnected')
         titles = page.evaluate("() => fetchWorks().then(ws => ws.map(w => w.title))")
         self.assertIn('Renamed while disconnected', titles)
 

@@ -28,6 +28,8 @@ from backend.domain.works import commands
 from tests.pg.test_works_facade import WorksFacadeTestCase
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class SearchTestCase(WorksFacadeTestCase):
@@ -169,8 +171,7 @@ class FoldingTests(SearchTestCase):
 
 class RefreshTests(SearchTestCase):
     def test_a_row_holds_the_displayed_metadata_people_and_research_note(self) -> None:
-        work = self.library.add_work("Republic", abstract="On understatement", author_text="Plato, trans.",
-                                     text_content="Notes on Trešnja", private_notes="secret plans")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Republic", abstract="On understatement", text_content="Notes on Trešnja", author_text="Plato, trans.", private_notes="secret plans")
         person = people_fixtures.add_person(self.db, self.ctx, "Σωκράτης", "Athenaios", aliases="Socrates, Sokrat")
         role_commands.add(self.db, self.ctx, person, work, "Author")
         self.assertEqual(self.refresh(work), [work])
@@ -189,7 +190,7 @@ class RefreshTests(SearchTestCase):
         self.assertNotIn("secret", row["text_norm"])
 
     def test_title_people_abstract_and_notes_carry_their_weights(self) -> None:
-        work = self.library.add_work("Alpha", abstract="Gamma", author_text="Beta", text_content="Delta")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Alpha", abstract="Gamma", text_content="Delta", author_text="Beta")
         self.refresh(work)
         row = self.row(work)
         assert row is not None
@@ -203,8 +204,7 @@ class RefreshTests(SearchTestCase):
             return [prefix + "".join(code) for code in itertools.islice(codes, 30000)]
 
         title, people, abstract, note = (corpus(p) for p in "qxyz")
-        work = self.library.add_work(" ".join(title), abstract=" ".join(abstract),
-                                     text_content=" ".join(note), author_text=" ".join(people))
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, " ".join(title), abstract=" ".join(abstract), text_content=" ".join(note), author_text=" ".join(people))
         self.assertEqual(self.refresh(work), [work])
         for words in (title, people, abstract, note):
             self.assertTrue(self.matches(work, words[0]))
@@ -214,7 +214,7 @@ class RefreshTests(SearchTestCase):
         self.assertTrue(row["text_norm"].endswith(note[-1]))  # the infix fallback keeps all of it
 
     def test_the_primary_manifestation_overrides_title_and_abstract(self) -> None:
-        work = self.library.add_work("Work title", abstract="Work abstract")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work title", abstract="Work abstract")
         self.sql("UPDATE prks.manifestations SET title = 'Version title', abstract = 'Version abstract'"
                  " WHERE id = (SELECT primary_manifestation_id FROM prks.works WHERE id = %s)", (work,))
         self.refresh(work)
@@ -225,8 +225,8 @@ class RefreshTests(SearchTestCase):
         self.assertNotIn("work", row["text_norm"])
 
     def test_people_are_the_works_credits(self) -> None:
-        work = self.library.add_work("Credits")
-        other = self.library.add_work("Elsewhere")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Credits")
+        other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Elsewhere")
         credited = people_fixtures.add_person(self.db, self.ctx, "Ana", "Author")
         uncredited = people_fixtures.add_person(self.db, self.ctx, "Uma", "Unlinked")
         role_commands.add(self.db, self.ctx, credited, work, "Translator")
@@ -237,7 +237,7 @@ class RefreshTests(SearchTestCase):
         self.assertEqual(row["people_norm"], "ana author")
 
     def test_a_refresh_recomputes_an_existing_row(self) -> None:
-        work = self.library.add_work("Before")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Before")
         self.refresh(work)
         self.sql("UPDATE prks.works SET title = 'After' WHERE id = %s", (work,))
         self.refresh(work)
@@ -248,10 +248,10 @@ class RefreshTests(SearchTestCase):
         self.assertEqual(self.scalar("SELECT count(*) FROM derived.work_search"), 1)
 
     def test_ids_of_another_library_or_unknown_get_no_row(self) -> None:
-        mine = self.library.add_work("Mine")
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")
         other_actor = self.other_actor()
         self.bind(other_actor.context)
-        theirs = self.library.add_work("Theirs")
+        theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
         self.bind(self.actor.context)
         missing = "W-" + "E" * 32
         before = self.row(theirs)
@@ -263,7 +263,7 @@ class RefreshTests(SearchTestCase):
         self.assertIsNone(self.row(missing))
 
     def test_a_refresh_of_a_gone_work_deletes_its_row(self) -> None:
-        work = self.library.add_work("Gone")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Gone")
         self.refresh(work)
         # A row left behind (say, by a rebuild batch that read the Work
         # before it was deleted) is removed by the next refresh naming it.
@@ -274,16 +274,16 @@ class RefreshTests(SearchTestCase):
         self.assertIsNotNone(self.row(work))
 
     def test_delete_work_deletes_the_row(self) -> None:
-        work = self.library.add_work("Deleted")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Deleted")
         self.refresh(work)
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.assertIsNone(self.row(work))
         # A refresh whose list still names it never recreates it.
         self.assertEqual(self.refresh(work), [])
         self.assertIsNone(self.row(work))
 
     def test_another_librarys_row_is_never_touched(self) -> None:
-        work = self.library.add_work("Shared id space")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Shared id space")
         self.refresh(work)
         other_actor = self.other_actor()
         library_command(self.db, other_actor.context, Capability.EDIT_LIBRARY,
@@ -295,7 +295,7 @@ class RefreshOrderingTests(SearchTestCase):
     """The lock order of §8.3, with deterministic pause points."""
 
     def test_a_delete_that_locks_first_makes_the_refresh_skip_the_work(self) -> None:
-        work = self.library.add_work("Delete first")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Delete first")
         self.refresh(work)
         with self.paused(lambda scope: commands.delete_work(scope, work)):
             thread, out = self.started(lambda scope: refresh.refresh_work_search(scope, [work]))
@@ -305,7 +305,7 @@ class RefreshOrderingTests(SearchTestCase):
         self.assertIsNone(self.row(work))
 
     def test_a_refresh_that_locks_first_makes_the_delete_wait_then_remove_the_row(self) -> None:
-        work = self.library.add_work("Refresh first")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Refresh first")
         with self.paused(lambda scope: refresh.refresh_work_search(scope, [work])):
             thread, out = self.started(lambda scope: commands.delete_work(scope, work))
             self.wait_for_lock_waiter()
@@ -315,7 +315,7 @@ class RefreshOrderingTests(SearchTestCase):
         self.assertIsNone(self.row(work))
 
     def test_a_later_input_change_waits_and_recomputes_after_the_slower_refresh(self) -> None:
-        work = self.library.add_work("Old title")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Old title")
         self.refresh(work)
 
         def rename(scope: LibraryScope) -> list[str]:
@@ -336,7 +336,7 @@ class RefreshOrderingTests(SearchTestCase):
         self.assertEqual(row["title_norm"], "new title")
 
     def test_a_first_refresh_racing_another_inserts_one_row(self) -> None:
-        work = self.library.add_work("Two first refreshes")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Two first refreshes")
         with self.paused(lambda scope: refresh.refresh_work_search(scope, [work])):
             thread, out = self.started(lambda scope: refresh.refresh_work_search(scope, [work]))
             self.wait_for_lock_waiter()

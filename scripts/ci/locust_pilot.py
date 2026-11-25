@@ -85,21 +85,25 @@ def command(binary: str, origin: str, csv_prefix: str) -> list[str]:
 def seeder(extra: int) -> Callable[[str], dict[str, Any]]:
     def seed(storage_root: str) -> dict[str, Any]:
         from backend.domain.organization import tag_commands
+        from backend.domain.works import work_commands
         from backend.storage.config import StorageConfig
+        from tests import works_fixtures
         from tests.acting_context import current_context
         from tests.e2e.fixtures import open_library
         from tests.ux_tour.fixtures import seed_ux_tour_library
 
         ids = seed_ux_tour_library(storage_root)
-        db = open_library(StorageConfig.for_testing(storage_root))
+        storage = StorageConfig.for_testing(storage_root)
+        db = open_library(storage).database
+        ctx = current_context()
         ids["load_works"] = [
-            db.add_work(title=f"{SEARCH_TERM} load work {index:03d}", abstract="Synthetic load fixture.",
-                        doc_type="article", status="Planned")
+            works_fixtures.add_work(db, ctx, storage, f"{SEARCH_TERM} load work {index:03d}",
+                                    abstract="Synthetic load fixture.", doc_type="article", status="Planned")
             for index in range(extra)
         ]
         # The whole seeded library, so a catalog or tag list missing any fixture fails.
-        ids["catalog_size"] = len(db.get_all_works())
-        ids["tag_count"] = len(tag_commands.all_tags(db.database, current_context()))
+        ids["catalog_size"] = len(work_commands.catalog(db, ctx, works_fixtures.pdfs_dir(storage)))
+        ids["tag_count"] = len(tag_commands.all_tags(db, ctx))
         return ids
 
     return seed

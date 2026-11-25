@@ -39,6 +39,7 @@ from backend.storage.objects import LocalFilesystemStorage, StorageKey
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_backup_export import BackupTestCase
 from backend.domain.organization import tag_commands
+from backend.domain.works import work_commands
 
 
 class RestoreTestCase(BackupTestCase):
@@ -360,7 +361,7 @@ class ObjectIsolationTests(RestoreTestCase):
         """A backup naming the key, which the Library then no longer names or claims."""
         work = self.create(self.obj)
         archive = self.backup().path
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.assertIs(self.settle(self.obj.key), Settled.REMOVED)
         self.assertEqual(self.claims(), {})
         return archive

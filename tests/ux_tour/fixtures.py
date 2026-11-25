@@ -49,6 +49,7 @@ UX_PDF_NAME = "e2e-ux-tour.pdf"
 
 
 def seed_ux_tour_library(storage_root: str) -> dict:
+    from tests import works_fixtures
     from backend.domain.research import argument_commands
     from backend.domain.research import concept_commands
     from backend.domain.research import position_commands
@@ -79,16 +80,9 @@ def seed_ux_tour_library(storage_root: str) -> dict:
     os.makedirs(cfg.pdfs_dir, exist_ok=True)
     dest_pdf_c = os.path.join(cfg.pdfs_dir, UX_PDF_NAME)
     shutil.copy2(str(MINIMAL_PDF), dest_pdf_c)
-    work_c = db.add_work(
-        title=WORK_C_TITLE,
-        text_content="Third UX tour work notes.",
-        file_path="/api/pdfs/%s" % UX_PDF_NAME,
-        doc_type="book",
-        status="Completed",
-        publisher=PUBLISHER_NAME,
-    )
+    work_c = works_fixtures.add_work(db.database, current_context(), db.storage, WORK_C_TITLE, status="Completed", text_content="Third UX tour work notes.", file_path="/api/pdfs/%s" % UX_PDF_NAME, publisher=PUBLISHER_NAME, doc_type="book")
     publisher_commands.create(db.database, current_context(), PUBLISHER_NAME)
-    work_d = db.add_work(title=WORK_D_TITLE, doc_type="article", status="Planned")
+    work_d = works_fixtures.add_work(db.database, current_context(), db.storage, WORK_D_TITLE, status="Planned", doc_type="article")
     ids["work_c"] = work_c
     ids["work_d"] = work_d
     ids["publisher"] = PUBLISHER_NAME

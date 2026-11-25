@@ -159,7 +159,7 @@ class PostgresLibraryLegTests(unittest.TestCase):
         current = {row["work_id"]: row["current"] for row in states}
         self.assertIs(current.get(ids["work_a"]), True, "the index is the current note's")
 
-    def test_the_seeds_call_only_methods_the_test_library_has(self) -> None:
+    def test_the_seeds_reach_only_what_the_test_library_has(self) -> None:
         import ast
 
         from tests.e2e import fixtures
@@ -167,13 +167,12 @@ class PostgresLibraryLegTests(unittest.TestCase):
 
         with open(fixtures.__file__, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
-        called = {
-            node.func.attr for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name) and node.func.value.id == "db"
+        reached = {
+            node.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "db"
         }
-        self.assertTrue(called)
-        self.assertEqual(sorted(name for name in called if not hasattr(TestLibrary, name)), [])
+        self.assertTrue(reached)
+        self.assertEqual(sorted(name for name in reached if not hasattr(TestLibrary, name)), [])
 
     def test_the_people_seeds_fill_the_postgresql_library(self) -> None:
         from tests.e2e import fixtures

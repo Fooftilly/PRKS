@@ -148,8 +148,9 @@ def _server_work_title(server, work_id):
     """The title the server actually stores, read from the database rather
     than from the page -- the point of a durable-first assertion is that the
     two can legitimately disagree until an operation is acknowledged."""
+    from backend.domain.works import work_commands
     from tests.e2e.library_store import library_for
-    return library_for(server).get_work(work_id)["title"]
+    return require(library_for(server).run(work_commands.detail, library_for(server).pdfs_dir, work_id))["title"]
 
 
 def _wait_queue_drained(page):

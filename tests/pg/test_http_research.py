@@ -29,6 +29,7 @@ from tests.narrowing import require
 from backend.domain.research import argument_commands
 from backend.domain.research import concept_commands
 from tests.acting_context import current_context
+from tests import works_fixtures
 
 _MISSING_ARGUMENT = "A-" + "0" * 32
 
@@ -79,7 +80,7 @@ class ResearchHttpTestCase(HttpAuthTestCase):
 
     def work(self, title: str) -> str:
         with self.acting():
-            return self.facade.add_work(title)
+            return works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, title)
 
     def primary(self, work_id: str) -> str:
         return self.run_sql("SELECT primary_manifestation_id AS id FROM prks.works WHERE id = %s",

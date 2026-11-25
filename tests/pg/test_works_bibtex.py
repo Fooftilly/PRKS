@@ -24,6 +24,8 @@ from tests.pg.test_works_facade import WorksFacadeTestCase
 from backend.domain.settings import commands as settings_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 _ENTRY = ("@book{Lovelace1843,\n"
           "  title = {Notes},\n"
@@ -35,7 +37,7 @@ _ENTRY = ("@book{Lovelace1843,\n"
 
 class BibtexTestCase(WorksFacadeTestCase):
     def book(self) -> str:
-        work_id = self.library.add_work("Notes", doc_type="book", year="1843", publisher="Taylor")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Notes", year="1843", publisher="Taylor", doc_type="book")
         role_commands.add(self.db, self.ctx, people_fixtures.add_person(self.db, self.ctx, "Ada", "Lovelace"), work_id, "Author")
         return work_id
 
@@ -44,12 +46,12 @@ class AuthorizationTests(BibtexTestCase):
     def test_a_reader_exports(self) -> None:
         work_id = self.book()
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(self.library.generate_bibtex(work_id), _ENTRY)
+            self.assertEqual(work_commands.bibtex(self.db, self.ctx, work_id), _ENTRY)
 
     def test_an_unbound_call_is_refused(self) -> None:
         work_id = self.book()
         with self.assertRaises(facade_context.NoRequestContext):
-            contextvars.Context().run(self.library.generate_bibtex, work_id)
+            contextvars.Context().run(lambda: work_commands.bibtex(self.db, self.ctx, work_id))
 
     def test_a_removed_member_is_refused(self) -> None:
         work_id = self.book()
@@ -58,7 +60,7 @@ class AuthorizationTests(BibtexTestCase):
                  (self.actor.library_id,))
         with facade_context.acting_as(reader):
             with self.assertRaises(AccessRefused) as caught:
-                self.library.generate_bibtex(work_id)
+                work_commands.bibtex(self.db, self.ctx, work_id)
         # Its session ends with the membership.
         self.assertIs(caught.exception.refusal, Refusal.NOT_AUTHENTICATED)
 
@@ -68,21 +70,21 @@ class IsolationTests(BibtexTestCase):
         mine = self.book()
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs", year="2000")
-            self.assertEqual(self.library.generate_bibtex(mine), "")
-            self.assertEqual(self.library.generate_bibtex(theirs),
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", year="2000")
+            self.assertEqual(work_commands.bibtex(self.db, self.ctx, mine), "")
+            self.assertEqual(work_commands.bibtex(self.db, self.ctx, theirs),
                              "@article{Unknown2000,\n  title = {Theirs},\n  year = {2000},\n}")
-        self.assertEqual(self.library.generate_bibtex(theirs), "")
-        self.assertEqual(self.library.generate_bibtex(mine), _ENTRY)
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, theirs), "")
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, mine), _ENTRY)
 
     def test_each_library_exports_with_its_own_profile(self) -> None:
         mine = self.book()
         other = self.other_actor()
         with facade_context.acting_as(other.context):
             settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"author": False, "publisher": False}})
-        self.assertEqual(self.library.generate_bibtex(mine), _ENTRY)
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, mine), _ENTRY)
         settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"year": False}})
-        self.assertEqual(self.library.generate_bibtex(mine), _ENTRY.replace("  year = {1843},\n", ""))
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, mine), _ENTRY.replace("  year = {1843},\n", ""))
 
     def test_credits_are_read_from_this_library_only(self) -> None:
         # Another Library's role rows on a Work with the same id would be a
@@ -124,7 +126,7 @@ class CitationExportTests(BibtexTestCase):
 
     def test_works_that_share_a_citation_key_get_distinct_keys(self) -> None:
         first, second, third = self.book(), self.book(), self.book()
-        untitled = [self.library.add_work("No credit"), self.library.add_work("No credit either")]
+        untitled = [works_fixtures.add_work(self.db, self.ctx, self.storage, "No credit"), works_fixtures.add_work(self.db, self.ctx, self.storage, "No credit either")]
         text = self.cite(self.actor.context, [first, second, third, *untitled], "bibtex")["text"]
         keys = [line.split("{", 1)[1].rstrip(",") for line in text.splitlines() if line.startswith("@")]
         self.assertEqual(keys, ["Lovelace1843", "Lovelace1843a", "Lovelace1843b",
@@ -136,21 +138,20 @@ class CitationExportTests(BibtexTestCase):
 class MissingTests(BibtexTestCase):
     def test_missing_deleted_and_unstorable_ids_export_nothing(self) -> None:
         deleted = self.book()
-        self.assertIsNotNone(self.library.delete_work_record(deleted))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, deleted))
         for work_id in (deleted, "W-" + "0" * 32, "", "W-\x00", "\x00", "nonsense"):
             with self.subTest(work_id=repr(work_id)):
-                self.assertEqual(self.library.generate_bibtex(work_id), "")
+                self.assertEqual(work_commands.bibtex(self.db, self.ctx, work_id), "")
 
     def test_an_id_holding_nul_never_reaches_the_database(self) -> None:
         with mock.patch.object(citation, "bibtex_inputs", side_effect=AssertionError("queried")):
-            self.assertEqual(self.library.generate_bibtex(self.book() + "\x00"), "")
+            self.assertEqual(work_commands.bibtex(self.db, self.ctx, self.book() + "\x00"), "")
 
 
 class AuthorTextTests(BibtexTestCase):
     def test_the_author_text_fallback_escapes_special_characters(self) -> None:
-        work_id = self.library.add_work("Escaped Credit", author_text="  Doe, A%na {X}; ; Testerson, B  ",
-                                        year="2026", doc_type="book")
-        bibtex = self.library.generate_bibtex(work_id)
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Escaped Credit", author_text="  Doe, A%na {X}; ; Testerson, B  ", year="2026", doc_type="book")
+        bibtex = work_commands.bibtex(self.db, self.ctx, work_id)
         self.assertIn("@book{Doe2026,", bibtex)
         self.assertIn(r"author = {Doe, A\%na \{X\} and Testerson, B}", bibtex)
 
@@ -168,15 +169,15 @@ class SnapshotTests(BibtexTestCase):
                 # Committed by another transaction after this read's first
                 # statement, before the record, profile and credits are read.
                 role_commands.add(self.db, self.ctx, person_id, work_id, "Editor")
-                self.library.update_work_metadata(work_id, {"title": "Renamed"})
+                work_commands.update_metadata(self.db, self.ctx, work_id, {"title": "Renamed"})
                 settings_commands.patch(self.db, self.ctx, {"bibtex_export_fields": {"publisher": False}})
                 changed.append(True)
             return found
 
         with mock.patch.object(citation, "citation_target", side_effect=target_then_a_concurrent_edit):
-            self.assertEqual(self.library.generate_bibtex(work_id), _ENTRY)
+            self.assertEqual(work_commands.bibtex(self.db, self.ctx, work_id), _ENTRY)
         self.assertEqual(changed, [True])
-        self.assertEqual(self.library.generate_bibtex(work_id), (
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, work_id), (
             "@book{Lovelace1843,\n"
             "  title = {Renamed},\n"
             "  author = {Lovelace, Ada},\n"
@@ -203,7 +204,7 @@ class CitationTargetTests(BibtexTestCase):
         self.assertEqual(target(), primary)
         self.sql("UPDATE prks.works SET citation_manifestation_id = %s WHERE id = %s", (cited, work_id))
         self.assertEqual(target(), cited)
-        self.assertEqual(self.library.generate_bibtex(work_id), (
+        self.assertEqual(work_commands.bibtex(self.db, self.ctx, work_id), (
             "@misc{Lovelace1900,\n"
             "  title = {Cited},\n"
             "  author = {Lovelace, Ada},\n"
@@ -218,7 +219,7 @@ class AnswerTests(BibtexTestCase):
 
     def work(self, label: str, **fields: Any) -> str:
         fields.setdefault("title", label)
-        return self.library.add_work(**fields)
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, **fields)
 
     def person(self, label: str, first_name: str = "", last_name: str = "") -> str:
         del label  # names the Person in the test only
@@ -249,7 +250,7 @@ class AnswerTests(BibtexTestCase):
                  (manifestation_id, self.actor.library_id, work))
 
     def bibtex(self, work: str) -> str:
-        entry = self.library.generate_bibtex(work)
+        entry = work_commands.bibtex(self.db, self.ctx, work)
         self.assertIsInstance(entry, str)
         return entry
 
@@ -368,7 +369,7 @@ class AnswerTests(BibtexTestCase):
         inferred = self.work("Inferred")
         for patch, lines in (({"doc_type": "online"}, ()), ({"journal": "J"}, fields[1:]),
                              ({"publisher": "P"}, fields)):
-            self.library.update_work_metadata(inferred, patch)
+            work_commands.update_metadata(self.db, self.ctx, inferred, patch)
             self.edited_on(inferred, "2001-02-03")
             self.assertEqual(self.bibtex(inferred), entry("online", "Inferred", *lines, accessed))
 
@@ -634,7 +635,7 @@ class AnswerTests(BibtexTestCase):
 
     def test_missing_deleted_and_unstorable_works_export_nothing(self) -> None:
         deleted = self.work("Deleted", year="2000")
-        self.assertIsNotNone(self.library.delete_work_record(deleted))
+        self.assertIsNotNone(work_commands.delete(self.db, self.ctx, deleted))
         for work in (deleted, _MISSING_WORK, "", "W-\x00", "\x00", "nonsense"):
             with self.subTest(work=repr(work)):
                 self.assertEqual(self.bibtex(work), "")

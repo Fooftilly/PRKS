@@ -35,6 +35,8 @@ from tests.narrowing import require
 from backend.domain.research import argument_commands
 from backend.domain.research import concept_commands
 from backend.domain.research import note_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class ResearchIndexTestCase(ResearchSyncTestCase):
@@ -125,7 +127,7 @@ class MentionTests(ResearchIndexTestCase):
         ethics = self.concept("Ethics")
         concept_commands.replace_aliases(self.db, self.ctx, ethics, ["Morals"])
         argument = self.argument("Claim")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         text = (f"On [[concept:ethics]] and [[concept:MORALS]], see [[argument:{argument}|the claim]];"
                 " `[[concept:Code]]` and \\[[concept:Escaped]] are not references; [[argument:A-gone]].")
         self.research_note(work, text)
@@ -149,7 +151,7 @@ class MentionTests(ResearchIndexTestCase):
 
     def test_a_note_creates_the_concepts_it_names_once_each(self) -> None:
         existing = self.concept("Virtue")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:  New   idea ]] [[concept:virtue]] [[concept:NEW IDEA]]"
                                  " `[[concept:Code]]`")
         concepts = self.concept_ids()
@@ -167,9 +169,9 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual(len(self.concept_ids()), 2)
 
     def test_a_patch_and_a_sync_research_note_share_concepts_revision_and_index(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         note_commands.save(self.db, self.ctx, work, "See [[concept:Culture Industry]].")
-        self.assertEqual(require(self.library.get_work_notes_state(work))["research_note_revision"], 1)
+        self.assertEqual(require(work_commands.notes_state(self.db, self.ctx, work))["research_note_revision"], 1)
         status, result = self.send(self.envelope("SET_WORK_RESEARCH_NOTE", work,
                                                  {"text": "Also [[concept:Mass Culture]]."}, 1,
                                                  entity_type="work"))
@@ -181,17 +183,17 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual([row["id"] for row in self.refs(work)["concepts"]], [concepts["Mass Culture"]])
 
     def test_a_private_note_creates_no_concept_and_no_mention(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         status, _ = self.send(self.envelope("SET_WORK_PRIVATE_NOTE", work,
                                             {"text": "Remind me: [[concept:Should Not Exist]]."}, 0,
                                             entity_type="work"))
         self.assertEqual(status, 200)
         self.run_jobs()
         self.assertEqual((self.concept_ids(), self.mentions(work)["concepts"]), ({}, []))
-        self.assertEqual(require(self.library.get_work(work))["private_notes"], "Remind me: [[concept:Should Not Exist]].")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["private_notes"], "Remind me: [[concept:Should Not Exist]].")
 
     def test_a_failed_note_write_rolls_back_its_concepts_and_job(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
 
         def failing(scope: LibraryScope) -> None:
             notes.set_note(scope, work, notes.RESEARCH, "[[concept:Rolled back]]")
@@ -203,7 +205,7 @@ class MentionTests(ResearchIndexTestCase):
 
     def test_a_work_created_with_a_note_and_a_cleared_note_are_indexed(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W", text_content="[[concept:Ethics]]")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W", text_content="[[concept:Ethics]]")
         self.assertEqual(self.refs(work)["pending"], True)
         self.run_jobs()
         self.assertEqual(self.mentions(work)["concepts"], [(ethics, 0, 18)])
@@ -213,18 +215,18 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual(self.mentions(work), {"concepts": [], "arguments": [], "state": reindex.content_hash("")})
         self.assertEqual(self.refs(work), {"concepts": [], "arguments": [], "pending": False})
         # A Work created with a note naming an unknown Concept creates it, as a note write does.
-        novel = self.library.add_work("Novel", text_content="[[concept:Novel topic]]")
+        novel = works_fixtures.add_work(self.db, self.ctx, self.storage, "Novel", text_content="[[concept:Novel topic]]")
         self.run_jobs()
         self.assertEqual(self.mentions(novel)["concepts"], [(self.concept_ids()["Novel topic"], 0, 23)])
         # A Work never given a note has nothing to wait for.
-        self.assertEqual(self.refs(self.library.add_work("Plain"))["pending"], False)
+        self.assertEqual(self.refs(works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain"))["pending"], False)
         self.assertIsNone(self.refs("W-" + "0" * 32))
 
 
 class JobTests(ResearchIndexTestCase):
     def test_running_the_job_again_or_twice_changes_nothing(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]] and [[concept:Ethics]]")
         self.research_note(work, "[[concept:Ethics]] once")
         self.assertEqual(self.queued(), [work, work])  # never coalesced
@@ -238,7 +240,7 @@ class JobTests(ResearchIndexTestCase):
 
     def test_a_job_run_again_after_its_commit_changes_nothing(self) -> None:
         self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]]")
         job = queue.claim(self.db, "lost-worker", lease=LEASE)
         assert job is not None
@@ -261,7 +263,7 @@ class JobTests(ResearchIndexTestCase):
 class ConcurrencyTests(ResearchIndexTestCase):
     def test_a_note_edited_while_a_reindex_of_the_old_note_is_paused(self) -> None:
         old, new = self.concept("Old"), self.concept("New")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Old]]")
         self.run_jobs()
         with self.paused_reindex(work):
@@ -278,7 +280,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_first_note_created_while_a_reindex_that_found_no_note_is_paused(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with self.paused_reindex(work):
             # No note row to wait on: the note commits while the reindex is open.
             self.research_note(work, "[[concept:Ethics]]")
@@ -290,7 +292,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_work_deleted_while_a_reindex_of_it_is_paused_leaves_no_rows(self) -> None:
         self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]]")
         with self.paused_reindex(work):
             # The delete waits for the Work row the reindex holds FOR KEY SHARE.
@@ -304,7 +306,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_reindex_that_starts_during_a_delete_writes_nothing(self) -> None:
         self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]]")
         self.run_jobs()
 
@@ -322,11 +324,11 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_stale_reindex_after_the_delete_cannot_recreate_rows(self) -> None:
         self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Ethics]]")
         stale = queue.claim(self.db, "slow-worker", lease=LEASE)  # the note's job, not yet run
         assert stale is not None
-        self.library.delete_work_record(work)
+        work_commands.delete(self.db, self.ctx, work)
         self.assertEqual(self.run_jobs(), [Outcome.SUCCEEDED])  # the delete's job
         self.assertIs(run_job(self.db, stale, lease=LEASE), Outcome.SUCCEEDED)
         self.assertEqual(self.derived_rows(work), 0)
@@ -369,7 +371,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_concept_delete_after_a_note_write_holds_it_is_refused(self) -> None:
         topic = self.concept("Topic")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with self.note_paused_at_its_hold(work, "[[concept:Topic]]", before=False) as written:
             # The note has resolved Topic by holding it: the delete waits for the note.
             deleter, deleted = self.in_thread(lambda: self.delete_concept_as_actor(topic))
@@ -385,7 +387,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 
     def test_a_concept_deleted_before_a_note_write_holds_it_is_created_again(self) -> None:
         topic = self.concept("Topic")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         with self.note_paused_at_its_hold(work, "[[concept:Topic]]", before=True) as written:
             # The note has parsed its references but holds nothing yet: the delete commits.
             concept_commands.delete(self.db, self.ctx, topic)
@@ -402,7 +404,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
         # both. Taking them in opposite orders on the key index would deadlock,
         # so the rename waits on the Library's key lock before it writes any.
         other = self.concept("Other")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         held, release = threading.Event(), threading.Event()
 
         def note(scope: LibraryScope) -> None:
@@ -439,7 +441,7 @@ class ConcurrencyTests(ResearchIndexTestCase):
 class FenceTests(ResearchIndexTestCase):
     def test_the_research_ack_does_not_wait_for_the_index(self) -> None:
         ethics = self.concept("Ethics")
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         data = self.envelope("SET_WORK_RESEARCH_NOTE", work, {"text": "[[concept:Ethics]]"}, 0,
                              entity_type="work")
         acked = self.send(data)
@@ -465,13 +467,13 @@ class FenceTests(ResearchIndexTestCase):
 
 class IsolationTests(ResearchIndexTestCase):
     def test_libraries_index_their_own_notes(self) -> None:
-        ours = self.library.add_work("Ours")
+        ours = works_fixtures.add_work(self.db, self.ctx, self.storage, "Ours")
         self.research_note(ours, "[[concept:Shared name]]")
         other = self.other_actor()
         from tests import acting_context as facade_context
 
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs")
             library_command(self.db, other.context, Capability.EDIT_LIBRARY,
                             lambda scope: notes.set_note(scope, theirs, notes.RESEARCH, "[[concept:Shared name]]"))
             their_concept = self.concept_ids()["Shared name"]
@@ -493,7 +495,7 @@ class IsolationTests(ResearchIndexTestCase):
 
 class EncodedReferenceTests(ResearchIndexTestCase):
     def test_an_escaped_concept_delimiter_indexes_one_full_name(self) -> None:
-        work = self.library.add_work("Escaped Concept")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Escaped Concept")
         self.research_note(work, "See [[concept-encoded:Category%5D%5D%20Theory]] here.")
         self.run_jobs()
         concepts = self.concept_ids()
@@ -516,16 +518,16 @@ class ResearchNetworkTests(ResearchIndexTestCase):
                             (concept_id,))[0]["n"])
 
     def test_a_note_creates_its_concept_once_whatever_the_spelling(self) -> None:
-        work = self.library.add_work("Dialectic")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Dialectic")
         self.research_note(work, "Adorno's account of [[concept:Culture Industry]] depends upon standardization.")
         (concept,) = concept_commands.catalog(self.db, self.ctx)
         self.assertEqual((concept["name"], concept["description"]), ("Culture Industry", ""))
         self.research_note(work, "Same idea as [[concept:culture industry]] and [[concept:  Culture   Industry  ]].")
         self.assertEqual([item["id"] for item in concept_commands.catalog(self.db, self.ctx)], [concept["id"]])
-        self.assertIn("[[concept:culture industry]]", require(self.library.get_work(work))["text_content"])
+        self.assertIn("[[concept:culture industry]]", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["text_content"])
 
     def test_the_last_reference_going_keeps_the_concept(self) -> None:
-        a, b = self.library.add_work("A"), self.library.add_work("B")
+        a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B")
         self.research_note(a, "See [[concept:Culture Industry]].")
         self.research_note(b, "Also [[concept:Culture Industry]].")
         self.run_jobs()
@@ -540,7 +542,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.assertIsNotNone(concept_commands.detail(self.db, self.ctx, concept["id"]))
 
     def test_renames_aliases_and_collisions(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Culture Industry]]")
         (concept,) = concept_commands.catalog(self.db, self.ctx)
         concept_commands.update(self.db, self.ctx, concept["id"], name="Cultural Industry")
@@ -570,7 +572,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.refused("concept_cycle", partial(concept_commands.replace_parents, self.db, self.ctx), a, [a])
 
     def test_a_referenced_concept_refuses_its_delete_whatever_the_index_says(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "[[concept:Culture Industry]]")
         (concept,) = concept_commands.catalog(self.db, self.ctx)
         # The reindex job has not run: the canonical note is the guard, not the index.
@@ -582,14 +584,14 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.assertIsNotNone(concept_commands.detail(self.db, self.ctx, concept["id"]))
 
     def test_code_escapes_private_notes_and_unknown_arguments_create_nothing(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         self.research_note(work, "code `[[concept:Culture Industry]]` and \\[[concept:Mass Culture]] [[argument:A-MISSING]]")
-        self.library.update_work_metadata(work, {"private_notes": "[[concept:Secret Idea]]"})
+        work_commands.update_metadata(self.db, self.ctx, work, {"private_notes": "[[concept:Secret Idea]]"})
         self.research_note(work, "public prose only")
         self.assertEqual((concept_commands.catalog(self.db, self.ctx), argument_commands.catalog(self.db, self.ctx)), ([], []))
 
     def test_argument_sources_targets_responses_and_cycles(self) -> None:
-        w1, w2 = self.library.add_work("Work One"), self.library.add_work("Work Two")
+        w1, w2 = works_fixtures.add_work(self.db, self.ctx, self.storage, "Work One"), works_fixtures.add_work(self.db, self.ctx, self.storage, "Work Two")
         pos = self.position("Mass-produced culture necessarily standardizes experience.")
         a = argument_commands.create(self.db, self.ctx, name="Standardization argument", kind="argument", main_text="Adorno argues cultural commodities become standardized.", sources=[{"work_id": w1, "pages": "94–136"}, {"work_id": w2, "pages": "§3"}], targets=[{"type": "position", "id": pos, "verdict_id": "supports"}])
         self.assertEqual((a["kind"], len(a["sources"]), a["sources"][0]["pages"], a["targets"][0]["verdict_id"]),
@@ -612,7 +614,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.assertIn("verdict", caught.exception.code)
 
     def test_a_noted_or_answered_argument_refuses_its_delete_whatever_the_index_says(self) -> None:
-        work = self.library.add_work("W")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         argument = self.argument("Linked")
         self.research_note(work, "See [[argument:%s|label]]." % argument)
         self.refused("argument_in_use", partial(argument_commands.delete, self.db, self.ctx), argument)  # before the reindex

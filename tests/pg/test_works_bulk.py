@@ -27,19 +27,21 @@ from tests.narrowing import require
 from backend.domain.identity.library_scope import library_query
 from backend.domain.organization import folder_commands
 from backend.domain.organization import tag_commands
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class BulkTestCase(FolderTestCase):
     def bulk(self, action: str, work_ids: list[str], **body: Any) -> dict[str, Any]:
-        return self.library.bulk_update_works({"action": action, "work_ids": work_ids, **body})
+        return work_commands.bulk_update(self.db, self.ctx, {"action": action, "work_ids": work_ids, **body})
 
     def refused_bulk(self, http_status: int, message: str, action: str, work_ids: Any, **body: Any) -> None:
         with self.assertRaises(BulkWorkError) as caught:
-            self.library.bulk_update_works({"action": action, "work_ids": work_ids, **body})
+            work_commands.bulk_update(self.db, self.ctx, {"action": action, "work_ids": work_ids, **body})
         self.assertEqual((caught.exception.http_status, str(caught.exception)), (http_status, message))
 
     def status_of(self, work_id: str) -> tuple[str, int]:
-        state = self.library.get_work_metadata_state(work_id)
+        state = work_commands.metadata_state(self.db, self.ctx, work_id)
         assert state is not None
         return state["fields"]["status"]["value"], state["fields"]["status"]["revision"]
 
@@ -86,10 +88,10 @@ class BulkTestCase(FolderTestCase):
 
 class ActionTests(BulkTestCase):
     def test_set_status_advances_only_the_works_that_change(self) -> None:
-        a = self.library.add_work("A", status="Paused")
-        b = self.library.add_work("B", status="Paused")
-        done = self.library.add_work("Done", status="Completed")
-        other = self.library.add_work("Other", status="Paused")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A", status="Paused")
+        b = works_fixtures.add_work(self.db, self.ctx, self.storage, "B", status="Paused")
+        done = works_fixtures.add_work(self.db, self.ctx, self.storage, "Done", status="Completed")
+        other = works_fixtures.add_work(self.db, self.ctx, self.storage, "Other", status="Paused")
         before = self.sql("SELECT id, updated_at FROM prks.works WHERE id IN (%s, %s)", (done, other))
         result = self.bulk("set_status", [b, a, done, a], status="Completed")
         self.assertEqual(result, {"status": "updated", "action": "set_status", "requested": 3, "updated": 3,
@@ -110,7 +112,7 @@ class ActionTests(BulkTestCase):
 
     def test_move_folder_files_moves_and_clears_through_the_work_folder_scope(self) -> None:
         x, y = self.folder("X"), self.folder("Y")
-        a, b, c = (self.library.add_work(t) for t in "ABC")
+        a, b, c = (works_fixtures.add_work(self.db, self.ctx, self.storage, t) for t in "ABC")
         for work_id in (a, b, c):
             folder_commands.move_work(self.db, self.ctx, work_id, x)
         folder_commands.move_work(self.db, self.ctx, b, y)
@@ -132,7 +134,7 @@ class ActionTests(BulkTestCase):
         self.assertEqual([self.work_folder(w)[1] for w in (a, b)], [3, 3])
 
     def test_tag_actions_are_idempotent_and_advance_only_changed_links(self) -> None:
-        a, b, c = (self.library.add_work(t) for t in "ABC")
+        a, b, c = (works_fixtures.add_work(self.db, self.ctx, self.storage, t) for t in "ABC")
         t1, t2 = self.tag("T1"), self.tag("T2")
         tag_commands.tag_work(self.db, self.ctx, a, t1)
         tag_commands.tag_work(self.db, self.ctx, c, t1)
@@ -158,7 +160,7 @@ class ActionTests(BulkTestCase):
 
 class RefusalTests(BulkTestCase):
     def test_an_invalid_body_is_refused_before_the_database_is_reached(self) -> None:
-        work = self.library.add_work("W", status="Planned")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W", status="Planned")
         cases: list[tuple[Any, str]] = [
             ([], "JSON object body required"),
             ("x", "JSON object body required"),
@@ -184,15 +186,15 @@ class RefusalTests(BulkTestCase):
         with mock.patch.object(bulk, "apply", side_effect=AssertionError("reached the database")):
             for body, message in cases:
                 with self.subTest(message=message), self.assertRaises(BulkWorkError) as caught:
-                    self.library.bulk_update_works(body)
+                    work_commands.bulk_update(self.db, self.ctx, body)
                 self.assertEqual((caught.exception.http_status, str(caught.exception)), (400, message))
         self.assertEqual(self.snapshot(), before)
 
     def test_a_missing_work_folder_or_tag_refuses_with_404_and_writes_nothing(self) -> None:
-        a, b = self.library.add_work("A", status="Paused"), self.library.add_work("B", status="Paused")
+        a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A", status="Paused"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B", status="Paused")
         folder, tag = self.folder("F"), self.tag("T")
-        gone_work = self.library.add_work("Gone")
-        self.library.delete_work_record(gone_work)
+        gone_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Gone")
+        work_commands.delete(self.db, self.ctx, gone_work)
         gone_tag, merged = self.tag("Deleted"), self.tag("Merged")
         tag_commands.delete(self.db, self.ctx, gone_tag)
         tag_commands.merge(self.db, self.ctx, merged, tag)
@@ -217,7 +219,7 @@ class RefusalTests(BulkTestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_an_id_holding_nul_is_missing_and_never_reaches_a_query(self) -> None:
-        a = self.library.add_work("A", status="Paused")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A", status="Paused")
         folder, tag = self.folder("F"), self.tag("T")
         before = self.snapshot()
         works = "One or more selected files no longer exist."
@@ -235,7 +237,7 @@ class RefusalTests(BulkTestCase):
         self.assertEqual(self.snapshot(), before)
 
     def test_a_failure_on_a_later_work_rolls_back_every_earlier_one(self) -> None:
-        works = sorted(self.library.add_work(t, status="Paused") for t in "ABC")
+        works = sorted(works_fixtures.add_work(self.db, self.ctx, self.storage, t, status="Paused") for t in "ABC")
         x, y = self.folder("X"), self.folder("Y")
         tag = self.tag("T")
         for work_id in works:
@@ -263,11 +265,11 @@ class RefusalTests(BulkTestCase):
 
 class IsolationAndRoleTests(BulkTestCase):
     def test_another_librarys_works_folders_and_tags_are_missing(self) -> None:
-        mine = self.library.add_work("Mine", status="Paused")
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", status="Paused")
         my_tag = self.tag("Mine")
         other = self.other_actor()
         with facade_context.acting_as(other.context):
-            theirs = self.library.add_work("Theirs", status="Paused")
+            theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", status="Paused")
             their_folder = folder_commands.create(self.db, self.ctx, "Theirs")
             their_tag = tag_commands.create(self.db, self.ctx, "Theirs")["id"]
         before = self.snapshot()
@@ -279,14 +281,14 @@ class IsolationAndRoleTests(BulkTestCase):
         self.assertEqual(self.snapshot(), before)
         # Their own action changes their Works only.
         with facade_context.acting_as(other.context):
-            self.library.bulk_update_works({"action": "set_status", "work_ids": [theirs], "status": "Completed"})
+            work_commands.bulk_update(self.db, self.ctx, {"action": "set_status", "work_ids": [theirs], "status": "Completed"})
             self.assertEqual(self.status_of(theirs), ("Completed", 1))
             self.refused_bulk(404, "One or more selected files no longer exist.", "add_tags", [mine],
                               tag_ids=[their_tag])
         self.assertEqual(self.status_of(mine), ("Paused", 0))
 
     def test_a_reader_is_refused_and_an_editor_may_act(self) -> None:
-        work, tag = self.library.add_work("W", status="Paused"), self.tag("T")
+        work, tag = works_fixtures.add_work(self.db, self.ctx, self.storage, "W", status="Paused"), self.tag("T")
         before = self.snapshot()
         with facade_context.acting_as(self.member_context("reader")):
             for action, body in (("set_status", {"status": "Completed"}), ("move_folder", {"folder_id": None}),
@@ -303,7 +305,7 @@ class IsolationAndRoleTests(BulkTestCase):
 
 class StaleOperationTests(BulkTestCase):
     def test_operations_from_before_a_bulk_action_conflict_and_converge_like_single_edits(self) -> None:
-        work = self.library.add_work("W", status="Paused")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W", status="Paused")
         x, y = self.folder("X"), self.folder("Y")
         tag = self.tag("T")
         folder_commands.move_work(self.db, self.ctx, work, x)
@@ -330,7 +332,7 @@ class StaleOperationTests(BulkTestCase):
 
 class ConcurrencyTests(BulkTestCase):
     def test_overlapping_bulk_actions_in_any_order_serialize_without_deadlock(self) -> None:
-        works = [self.library.add_work(f"W{i}", status="Paused") for i in range(12)]
+        works = [works_fixtures.add_work(self.db, self.ctx, self.storage, f"W{i}", status="Paused") for i in range(12)]
         tag_ids = [self.tag(f"T{i}") for i in range(4)]
         rng = random.Random(631)
         calls = []
@@ -381,7 +383,7 @@ class ConcurrencyTests(BulkTestCase):
         return results
 
     def test_a_bulk_action_waiting_on_an_edit_reruns_against_it(self) -> None:
-        a, b = self.library.add_work("A", status="Paused"), self.library.add_work("B", status="Paused")
+        a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A", status="Paused"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B", status="Paused")
 
         def edit(scope: Any) -> Any:
             return metadata.apply_field_operation(scope, a, "status", "Planned", 0)
@@ -392,7 +394,7 @@ class ConcurrencyTests(BulkTestCase):
         self.assertEqual([self.status_of(w) for w in (a, b)], [("Completed", 2), ("Completed", 1)])
 
     def test_an_edit_waiting_on_a_bulk_action_decides_after_it(self) -> None:
-        a = self.library.add_work("A", status="Paused")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A", status="Paused")
         holder, contender = self.race(self.held_bulk("set_status", [a], status="Completed"),
                                       lambda: self.send("SET_WORK_METADATA_FIELD", a,
                                                         {"field": "status", "value": "Planned"}, 0),
@@ -400,12 +402,12 @@ class ConcurrencyTests(BulkTestCase):
         self.assertIsNone(holder)
         self.assertEqual((contender[0], contender[1]["code"]), (409, "REVISION_CONFLICT"))
         holder, contender = self.race(self.held_bulk("set_status", [a], status="Planned"),
-                                      lambda: self.library.update_work_metadata(a, {"status": "In Progress"}),
+                                      lambda: work_commands.update_metadata(self.db, self.ctx, a, {"status": "In Progress"}),
                                       serializable=True)
         self.assertEqual(self.status_of(a), ("In Progress", 3))
 
     def test_a_bulk_action_waiting_on_a_delete_of_a_selected_work_writes_nothing(self) -> None:
-        a, b = self.library.add_work("A"), self.library.add_work("B")
+        a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B")
         tag = self.tag("T")
         holder, contender = self.race(lambda scope: commands.delete_work(scope, a) is not None,
                                       lambda: self.bulk("add_tags", [b, a], tag_ids=[tag]))
@@ -416,17 +418,17 @@ class ConcurrencyTests(BulkTestCase):
         self.assertEqual((self.tag_ids(b), self.revisions("work-tag")), ([], {}))
 
     def test_a_delete_waiting_on_a_bulk_action_removes_what_it_wrote(self) -> None:
-        a = self.library.add_work("A")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A")
         tag = self.tag("T")
         holder, contender = self.race(self.held_bulk("add_tags", [a], tag_ids=[tag]),
-                                      lambda: self.library.delete_work_record(a) is not None,
+                                      lambda: work_commands.delete(self.db, self.ctx, a) is not None,
                                       serializable=True)
         self.assertEqual((holder, contender), (None, True))
         self.assertEqual((self.count("work_tags"), self.revisions("work-tag")),
                          (0, {links.WORK.scope_id(a, tag): 2}))
 
     def test_a_bulk_tag_action_waiting_on_a_tag_delete_or_merge_writes_nothing(self) -> None:
-        a = self.library.add_work("A")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A")
         keep = self.tag("Keep")
         for kind in ("delete", "merge"):
             with self.subTest(kind=kind):
@@ -445,7 +447,7 @@ class ConcurrencyTests(BulkTestCase):
                 self.assertEqual((self.tag_ids(a), self.revisions("work-tag")), ([], {}))
 
     def test_a_tag_merge_waiting_on_a_bulk_add_moves_the_new_links(self) -> None:
-        a, b = self.library.add_work("A"), self.library.add_work("B")
+        a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B")
         source, target = self.tag("Source"), self.tag("Target")
         holder, contender = self.race(self.held_bulk("add_tags", [a, b], tag_ids=[source]),
                                       lambda: tag_commands.merge(self.db, self.ctx, source, target),
@@ -456,7 +458,7 @@ class ConcurrencyTests(BulkTestCase):
         self.assert_integrity()
 
     def test_a_bulk_move_and_a_delete_of_its_folder_queue(self) -> None:
-        a = self.library.add_work("A")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A")
         doomed, kept = self.folder("Doomed"), self.folder("Kept")
         holder, contender = self.race(lambda scope: folders.delete(scope, doomed),
                                       lambda: self.bulk("move_folder", [a], folder_id=doomed))
@@ -470,7 +472,7 @@ class ConcurrencyTests(BulkTestCase):
         self.assertEqual((self.filed(), self.work_folder(a)), ([(a, kept)], (kept, 1)))
 
     def test_a_bulk_move_waiting_on_a_single_move_reruns_against_it(self) -> None:
-        a = self.library.add_work("A")
+        a = works_fixtures.add_work(self.db, self.ctx, self.storage, "A")
         x, y = self.folder("X"), self.folder("Y")
 
         def move(scope: Any) -> bool:

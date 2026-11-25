@@ -19,13 +19,14 @@ from backend.domain.organization import links
 from tests.pg.test_tags_sync import TagSyncTestCase
 from backend.domain.identity.library_scope import library_query
 from backend.domain.organization import tag_commands
+from tests import works_fixtures
 
 _BASES = ("current", "stale", "future")
 
 
 class WorkTagPropertyTests(TagSyncTestCase):
     def pair(self) -> tuple[str, str]:
-        return self.library.add_work("Property work"), self.create_tag("Property " + uuid.uuid4().hex)
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, "Property work"), self.create_tag("Property " + uuid.uuid4().hex)
 
     def state(self, work_id: str, tag_id: str) -> tuple[bool, int]:
         present = any(row["id"] == tag_id for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work_id)))

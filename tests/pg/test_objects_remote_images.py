@@ -32,6 +32,7 @@ from tests import acting_context as facade_context
 from tests.pg.jobs_fixtures import LEASE
 from tests.pg.test_works_mutations import MutationTestCase
 from backend.domain.research import concept_commands
+from tests import works_fixtures
 
 THUMB = "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
 FIGURE = "https://example.org/figures/graph.png"
@@ -56,11 +57,10 @@ class RemoteImageTestCase(MutationTestCase):
         self.fetched: list[str] = []
 
     def video(self, url: str = THUMB) -> str:
-        return self.library.add_work("A talk", source_kind="video",
-                                     source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", thumb_url=url)
+        return works_fixtures.add_work(self.db, self.ctx, self.storage, "A talk", source_kind="video", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ", thumb_url=url)
 
     def noted(self, text: str) -> str:
-        work_id = self.library.add_work("A paper")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "A paper")
         self.sql("INSERT INTO prks.work_notes (library_id, work_id, kind, body) VALUES (%s, %s, 'research', %s)",
                  (self.actor.library_id, work_id, text))
         return work_id

@@ -14,11 +14,11 @@ import time
 import unittest
 from typing import TYPE_CHECKING
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -133,13 +133,14 @@ class _WorkNotesPage(_PageBase):
 class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
 
     def test_offline_research_note_survives_reload_and_creates_a_concept_on_ack(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        original = self.db_for(server).get_work(work)['text_content']
+        original = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content']
         self.offline(page, context)
         self.set_notes(page, 'See [[concept:Culture Industry]].')
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 1)
-        self.assertEqual(self.db_for(server).get_work(work)['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
                          original)
 
         page.reload(wait_until='domcontentloaded')
@@ -148,7 +149,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
-        self.assertEqual(self.db_for(server).get_work(work)['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
                          'See [[concept:Culture Industry]].')
         names = {row['name'] for row in self.db_for(server).query(
             postgres='SELECT name FROM prks.concepts')}
@@ -157,6 +158,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
 
     def test_private_notes_are_independent_of_research_and_do_not_create_concepts(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         selector = '#prks-private-notes-work-' + work
@@ -183,8 +185,8 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
         self.pending(page, 'SET_WORK_PRIVATE_NOTE', 0)
         db = self.db_for(server)
-        self.assertEqual(db.get_work(work)['text_content'], 'Research B')
-        self.assertEqual(db.get_work(work)['private_notes'],
+        self.assertEqual(require(db.run(work_commands.detail, db.pdfs_dir, work))['text_content'], 'Research B')
+        self.assertEqual(require(db.run(work_commands.detail, db.pdfs_dir, work))['private_notes'],
                          'Remind me: [[concept:Should Not Exist]].')
         names = {row['name'] for row in db.query(postgres='SELECT name FROM prks.concepts')}
         self.assertNotIn('Should Not Exist', names)
@@ -196,6 +198,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         reads "All changes saved" before B is acknowledged, and a reload keeps
         B. The browser stays "online": only the sync POST is refused.
         """
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         page.wait_for_function(
@@ -237,7 +240,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         last_saving = len(log) - 1 - log[::-1].index('Saving...')
         self.assertNotIn('All changes saved', log[:last_saving],
                          'saved was claimed while B was unsent: %r' % log)
-        self.assertEqual(self.db_for(server).get_work(work)['text_content'], 'Body A then B')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'], 'Body A then B')
 
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('.CodeMirror')
@@ -249,6 +252,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         Compact conflict shape (no note body fields) is owned by Node
         `handlerContract` and Python `test_compact_conflict_results_omit_note_bodies`.
         """
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.offline(page, context)
@@ -262,7 +266,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
             return row && row.server_result;
         })""")
         self.assertEqual(result['code'], 'REVISION_CONFLICT')
-        self.assertEqual(self.db_for(server).get_work(work)['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
                          'Other device wrote C')
 
 
@@ -337,7 +341,8 @@ class _RecoveryPage(_WorkNotesPage):
         page.wait_for_selector('.CodeMirror')
 
     def server_text(self, server, work):
-        return self.db_for(server).get_work(work)['text_content']
+        from backend.domain.works import work_commands
+        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content']
 
     def wait_server_text(self, page, work, text):
         wait_for_async(
@@ -1010,7 +1015,8 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
             .filter(r => r.operation === 'SET_WORK_PRIVATE_NOTE').map(r => r.payload.text))""")
 
     def server_reminder(self, server, work):
-        return self.db_for(server).get_work(work)['private_notes'] or ''
+        from backend.domain.works import work_commands
+        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['private_notes'] or ''
 
     def set_server_reminder(self, server, work, text):
         from backend.domain.works import notes
@@ -1185,6 +1191,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             .filter(r => r.operation === 'DELETE_WORK').map(r => ({ status: r.status, attempts: r.attempt_count })))""")
 
     def test_reminders_typed_before_a_delete_stay_until_the_ack_then_are_removed(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         # Offline: the Reminders row the delete cancels was never sent, so the
@@ -1218,12 +1225,12 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             message='the delete request did not replace the unsent Reminders row')
         # Requested, not acknowledged: the draft stays.
         self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
-        self.assertIsNotNone(self.db_for(server).get_work(work))
+        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))
 
         self.reconnect(page, context)
         wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
                        timeout=30000, message='the delete was never acknowledged')
-        self.assertIsNone(self.db_for(server).get_work(work))
+        self.assertIsNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))
         wait_for_async(
             page,
             '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',
@@ -1307,6 +1314,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self._retry_after_interrupted_cleanup(hold_session=False, drop_first_answer=True)
 
     def _retry_after_interrupted_cleanup(self, hold_session, drop_first_answer=False):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         # The delete was acknowledged here, but the browser stopped before the cleanup: the Work
@@ -1327,7 +1335,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
                 }],
             }));
         }""", work)
-        self.db_for(server).delete_work_record(work)
+        self.db_for(server).run(work_commands.delete, work)
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
@@ -1375,6 +1383,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.assertIsNone(tab.evaluate("(workId) => localStorage.getItem(window.prksEditorRecovery.scopeNames().deletedWorkPrefix + workId)", work))
 
     def test_drafts_of_a_work_missing_on_the_server_are_kept_on_the_next_load(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.hold_reminder_saves(page)
@@ -1382,7 +1391,7 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
         self.wait_reminder_recorded(page, work, ' Elsewhere')
         # The server no longer has the Work (deleted elsewhere, or another library on this
         # origin); this tab closes before its save. This device never saw it deleted.
-        self.db_for(server).delete_work_record(work)
+        self.db_for(server).run(work_commands.delete, work)
         self.close_tab(page)
         tab = context.new_page()
         tab.on('dialog', lambda d: (self.dialogs.append(d.type), d.accept()))
@@ -1482,6 +1491,7 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
                 pass
 
     def test_a_closed_tab_draft_of_a_work_deleted_elsewhere_is_viewed_copied_downloaded_then_discarded(self):
+        from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
         self.hold_saves(page)
@@ -1492,7 +1502,7 @@ class EditorRecoveryDiagnosticsTests(_RecoveryPage, unittest.TestCase):
         self.type_reminder(page, server, ' Reminder too')
         self.wait_reminder_recorded(page, work, ' Reminder too')
         # The Work is deleted elsewhere: its page can no longer be opened.
-        self.db_for(server).delete_work_record(work)
+        self.db_for(server).run(work_commands.delete, work)
         self.close_tab(page)
         tab = self.folders_tab(context, server)
         probes = []

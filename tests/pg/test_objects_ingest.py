@@ -35,6 +35,8 @@ from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 from tests.pg.test_objects_lifecycle import ObjectsTestCase
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 RAW = b"%PDF-1.7\n% the bytes as uploaded\n%%EOF\n"
 LINEARIZED = b"%PDF-1.7\n%\x80\x80\x80\x80\n/Linearized 1\n% qpdf output\n%%EOF\n"
@@ -256,15 +258,15 @@ class IsolationTests(IngestTestCase):
     def test_a_reader_cannot_upload_and_writes_nothing(self) -> None:
         with facade_context.acting_as(self.reader_context()):
             with self.assertRaises(AccessRefused):
-                self.library._add_work_with_pdf("paper.pdf", writer(RAW), title="Refused")
+                works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "paper.pdf", writer(RAW), title="Refused")
         self.assertEqual((self.keys(), self.count("works")), (set(), 0))
 
 
 class FacadeTests(IngestTestCase):
     def test_an_upload_creates_the_work_in_one_command(self) -> None:
-        work_id = self.library._add_work_with_pdf("Paper One.pdf", writer(RAW), title="Uploaded",
+        work_id = works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "Paper One.pdf", writer(RAW), title="Uploaded",
                                                   year="2024")
-        work = self.library.get_work(work_id)
+        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
         assert work is not None
         self.assertEqual((work["title"], work["year"]), ("Uploaded", "2024"))
         asset = self.asset(work_id)
@@ -274,18 +276,18 @@ class FacadeTests(IngestTestCase):
 
     def test_an_upload_refused_before_storing_writes_nothing(self) -> None:
         with self.assertRaises(ValueError):
-            self.library._add_work_with_pdf("clip.pdf", writer(RAW), title="Video",
+            works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "clip.pdf", writer(RAW), title="Video",
                                             source_kind="video", source_url="https://youtu.be/dQw4w9WgXcQ")
         with self.assertRaises(TypeError):
-            self.library._add_work_with_pdf("paper.pdf", writer(RAW), file_path="/api/pdfs/x.pdf")
+            works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "paper.pdf", writer(RAW), file_path="/api/pdfs/x.pdf")
         with self.assertRaises(TypeError):
-            self.library._add_work_with_pdf("paper.pdf", writer(RAW), title="T", colour="red")
+            works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "paper.pdf", writer(RAW), title="T", colour="red")
         self.assertEqual(self.keys(), set())
 
     def test_a_create_refused_after_storing_leaves_only_orphans(self) -> None:
         with mock.patch.object(commands, "create_work", side_effect=RuntimeError("refused")):
             with self.assertRaises(RuntimeError):
-                self.library._add_work_with_pdf("paper.pdf", writer(RAW), title="Lost")
+                works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "paper.pdf", writer(RAW), title="Lost")
         self.assertEqual(len(self.keys()), 2)
         self.assertEqual((self.count("works"), self.claims()), (0, {}))
         self.assertEqual(self.sweep(), 2)

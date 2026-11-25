@@ -35,6 +35,7 @@ from backend.domain.people import person_commands
 from backend.domain.people import publisher_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from tests import works_fixtures
 
 _MISSING_GROUP = "PG-" + "0" * 32
 
@@ -334,7 +335,7 @@ class PhantomScopeTests(PeopleFacadeTestCase):
 
 class DeletionTests(PeopleFacadeTestCase):
     def link_role(self, person_id: str) -> str:
-        work_id = self.library.add_work("Linked")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Linked")
         role_commands.add(self.db, self.ctx, person_id, work_id, "Author")
         return work_id
 
@@ -720,7 +721,7 @@ class PublisherCatalogTests(CatalogTestCase):
 
     def works(self, *labels: str) -> None:
         for i, label in enumerate(labels):
-            self.library.add_work(f"Work {label!r} {i}", publisher=label)
+            works_fixtures.add_work(self.db, self.ctx, self.storage, f"Work {label!r} {i}", publisher=label)
 
     def by_id(self) -> dict[str, dict[str, Any]]:
         return {row["id"]: row for row in publisher_commands.in_use(self.db, self.ctx)}
@@ -967,7 +968,7 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
         self.labels.name(publisher_commands.create(self.db, self.ctx, "beta press")["id"], "<R beta>")
         publisher_commands.delete(self.db, self.ctx, penguin)
         for title, publisher in (("one", "Verso"), ("two", " verso books "), ("three", "Unknown"), ("four", "")):
-            self.library.add_work(title, publisher=publisher)
+            works_fixtures.add_work(self.db, self.ctx, self.storage, title, publisher=publisher)
         self.answer(publisher_commands.in_use(self.db, self.ctx), [
             {"aliases": [], "id": "<R beta>", "name": "beta press", "work_count": 0},
             {"aliases": ["Verso Books"], "id": "<R Verso>", "name": "Verso", "work_count": 2}])

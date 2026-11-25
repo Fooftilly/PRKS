@@ -20,6 +20,8 @@ from tests.pg.test_search_refresh import SearchTestCase
 from backend.domain.people import person_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.works import work_commands
+from tests import works_fixtures
 
 
 class CommandRefreshTests(SearchTestCase):
@@ -29,44 +31,43 @@ class CommandRefreshTests(SearchTestCase):
         return str(row[column])
 
     def test_a_created_work_has_its_row(self) -> None:
-        work = self.library.add_work("Created", abstract="Its abstract", author_text="Its author",
-                                     text_content="Its note")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Created", abstract="Its abstract", text_content="Its note", author_text="Its author")
         self.assertEqual(self.norm(work, "text_norm"), "created its author its abstract its note")
         self.assertTrue(self.matches(work, "creat"))
 
     def test_initial_roles_are_in_the_row(self) -> None:
-        work = self.library.add_work("With people")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "With people")
         person = people_fixtures.add_person(self.db, self.ctx, "Ana", "Initial")
         role_commands.insert_initial(self.db, self.ctx, work, [{"person_id": person, "role_type": "Author"}])
         self.assertEqual(self.norm(work, "people_norm"), "ana initial")
 
     def test_title_abstract_and_author_text_changes_refresh_the_row(self) -> None:
-        work = self.library.add_work("Old")
-        self.library.update_work_metadata(work, {"title": "Πολιτεία", "abstract": "Infix understatement",
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Old")
+        work_commands.update_metadata(self.db, self.ctx, work, {"title": "Πολιτεία", "abstract": "Infix understatement",
                                                  "author_text": "Plato"})
         self.assertEqual(self.norm(work, "title_norm"), "πολιτεια")
         self.assertEqual(self.norm(work, "text_norm"), "πολιτεια plato infix understatement")
         self.assertTrue(self.matches(work, "ΠΟΛΙΤ"))
 
     def test_a_field_search_does_not_read_leaves_the_row_alone(self) -> None:
-        work = self.library.add_work("Steady")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Steady")
         before = self.sql("SELECT updated_at FROM derived.work_search WHERE work_id = %s", (work,))
-        self.library.update_work_metadata(work, {"status": "In Progress", "year": "1999"})
+        work_commands.update_metadata(self.db, self.ctx, work, {"status": "In Progress", "year": "1999"})
         after = self.sql("SELECT updated_at FROM derived.work_search WHERE work_id = %s", (work,))
         self.assertEqual(before, after)
         self.assertEqual(metadata.SEARCHED_WORK_COLUMNS, {"title", "abstract", "author_text"})
 
     def test_a_research_note_change_refreshes_the_row_and_a_private_note_does_not(self) -> None:
-        work = self.library.add_work("Noted")
-        self.library.update_work_metadata(work, {"text_content": "Trešnja in bloom"})
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Noted")
+        work_commands.update_metadata(self.db, self.ctx, work, {"text_content": "Trešnja in bloom"})
         self.assertIn("tresnja in bloom", self.norm(work, "text_norm"))
-        self.library.update_work_metadata(work, {"private_notes": "hidden words"})
+        work_commands.update_metadata(self.db, self.ctx, work, {"private_notes": "hidden words"})
         self.assertNotIn("hidden", self.norm(work, "text_norm"))
-        self.library.update_work_metadata(work, {"text_content": ""})
+        work_commands.update_metadata(self.db, self.ctx, work, {"text_content": ""})
         self.assertEqual(self.norm(work, "text_norm"), "noted")
 
     def test_role_link_and_unlink_refresh_the_row(self) -> None:
-        work = self.library.add_work("Linked")
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Linked")
         person = people_fixtures.add_person(self.db, self.ctx, "Λόγος", "Writer")
         role_commands.add(self.db, self.ctx, person, work, "Author")
         self.assertEqual(self.norm(work, "people_norm"), "λογοσ writer")
@@ -75,9 +76,9 @@ class CommandRefreshTests(SearchTestCase):
         self.assertEqual(self.norm(work, "people_norm"), "")
 
     def test_a_person_rename_or_alias_change_refreshes_every_credited_work(self) -> None:
-        first = self.library.add_work("First")
-        second = self.library.add_work("Second")
-        unrelated = self.library.add_work("Unrelated")
+        first = works_fixtures.add_work(self.db, self.ctx, self.storage, "First")
+        second = works_fixtures.add_work(self.db, self.ctx, self.storage, "Second")
+        unrelated = works_fixtures.add_work(self.db, self.ctx, self.storage, "Unrelated")
         person = people_fixtures.add_person(self.db, self.ctx, "Old", "Name")
         role_commands.add(self.db, self.ctx, person, first, "Author")
         role_commands.add(self.db, self.ctx, person, second, "Editor")
@@ -87,8 +88,8 @@ class CommandRefreshTests(SearchTestCase):
         self.assertEqual(self.norm(unrelated, "people_norm"), "")
 
     def test_a_credit_promoted_into_an_alias_reaches_every_credited_work(self) -> None:
-        first = self.library.add_work("First")
-        second = self.library.add_work("Second")
+        first = works_fixtures.add_work(self.db, self.ctx, self.storage, "First")
+        second = works_fixtures.add_work(self.db, self.ctx, self.storage, "Second")
         person = people_fixtures.add_person(self.db, self.ctx, "Fyodor", "Dostoevsky")
         role_commands.add(self.db, self.ctx, person, first, "Author")
         role_commands.add(self.db, self.ctx, person, second, "Author", "Ф. М. Достоевский")
@@ -98,8 +99,8 @@ class CommandRefreshTests(SearchTestCase):
         self.assertIn(promoted, self.norm(second, "people_norm").split("\n"))
 
     def test_a_deleted_work_has_no_row(self) -> None:
-        work = self.library.add_work("Doomed")
-        self.library.delete_work_record(work)
+        work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Doomed")
+        work_commands.delete(self.db, self.ctx, work)
         self.assertIsNone(self.row(work))
 
 
@@ -108,8 +109,8 @@ class FanOutRaceTests(SearchTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.first = self.library.add_work("First")
-        self.second = self.library.add_work("Second")
+        self.first = works_fixtures.add_work(self.db, self.ctx, self.storage, "First")
+        self.second = works_fixtures.add_work(self.db, self.ctx, self.storage, "Second")
         self.person = people_fixtures.add_person(self.db, self.ctx, "Before", "Rename")
         role_commands.add(self.db, self.ctx, self.person, self.first, "Author")
 

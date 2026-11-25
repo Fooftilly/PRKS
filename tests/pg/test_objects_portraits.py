@@ -37,6 +37,7 @@ from tests.narrowing import require
 from backend.domain.people import person_commands
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from tests import works_fixtures
 
 URL = "https://example.org/ada.png"
 OTHER_URL = "https://example.org/ada-2.png"
@@ -276,7 +277,7 @@ class PersonChangeTests(PortraitTestCase):
         person_id = self.person()
         self.cache(person_id)
         named = self.locator(person_id)
-        work_id = self.library.add_work("Paper")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper")
         role_commands.add(self.db, self.ctx, person_id, work_id, "Author")
         with self.assertRaises(ValueError):
             person_commands.delete_if_unlinked(self.db, self.ctx, person_id)

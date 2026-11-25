@@ -36,6 +36,7 @@ from tests.pg.test_objects_lifecycle import DAY, ObjectsTestCase
 from tests.pg.test_objects_portraits import URL, image
 from tests import people_fixtures
 from backend.domain.people import person_commands
+from backend.domain.works import work_commands
 
 LEASE = timedelta(seconds=30)
 WAIT = 30.0
@@ -429,7 +430,7 @@ class SchedulingTests(ObjectJobsTestCase):
         works = [self.work_with(first), self.work_with(second)]
         self.assertEqual(self.jobs_of(jobs.CLEANUP_KIND), [])
         for work_id in works:
-            self.library.delete_work_record(work_id)
+            work_commands.delete(self.db, self.ctx, work_id)
         self.assertEqual(len(self.jobs_of(jobs.CLEANUP_KIND, "queued")), 1, "deduplicated while queued")
 
     def test_a_rolled_back_release_enqueues_nothing(self) -> None:
@@ -623,7 +624,7 @@ class WorkerTests(ObjectJobsTestCase):
         self.start_worker(self.attached())
         obj = self.put()
         work_id = self.work_with(obj)
-        self.library.delete_work_record(work_id)
+        work_commands.delete(self.db, self.ctx, work_id)
         self.wait_until(lambda: not self.stored(obj.key.name), "the worker to settle the claim")
         self.wait_until(lambda: self.claims() == {}, "the claim to be gone")
 

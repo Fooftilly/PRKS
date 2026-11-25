@@ -37,6 +37,8 @@ from tests.pg.search_corpus import QUERIES, WORKS, JudgedQuery
 from backend.domain.people import role_commands
 from tests import people_fixtures
 from tests.acting_context import current_context
+from backend.domain.search import search_commands
+from tests import works_fixtures
 
 BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "search_ranking_baseline.json")
 
@@ -54,8 +56,7 @@ def load(library: Any, sql: Callable[[LiteralString, dict[str, Any]], Any]) -> d
     people: dict[tuple[str, str], str] = {}
     ids: dict[str, str] = {}
     for minute, work in enumerate(WORKS):
-        work_id = library.add_work(work.title, abstract=work.abstract, text_content=work.notes,
-                                   author_text=work.author_text)
+        work_id = works_fixtures.add_work(library.database, current_context(), library.storage, work.title, abstract=work.abstract, text_content=work.notes, author_text=work.author_text)
         for name in work.people:
             if name not in people:
                 people[name] = people_fixtures.add_person(library.database, current_context(), *name)
@@ -68,7 +69,7 @@ def load(library: Any, sql: Callable[[LiteralString, dict[str, Any]], Any]) -> d
 def ranked_keys(library: Any, ids: dict[str, str], text: str) -> list[str]:
     """The corpus keys ``search_works`` lists for ``text``, in order."""
     keys = {work_id: key for key, work_id in ids.items()}
-    return [keys[row["id"]] for row in library.search_works(text)]
+    return [keys[row["id"]] for row in works_fixtures.summaries(library.database, current_context(), library.storage, lambda scope: search_commands.keyword_rows(scope, text, '', ''))]
 
 
 @dataclass(frozen=True)

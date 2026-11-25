@@ -44,6 +44,7 @@ from backend.domain.works import metadata
 from tests.pg.crash_point_child import KILLED_EXIT
 from tests.pg.test_processing_queue import QueueTestCase, pdf
 from tests.pg.test_works_sync import SyncTestCase
+from tests import works_fixtures
 
 _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Large enough that the store reads it in several chunks, so "mid_write" is mid-stream.
@@ -264,7 +265,7 @@ class DroppedConnectionTests(SyncTestCase):
     """The server ends the session in the middle of a sync write (§7.1), as a failover or restart does."""
 
     def test_a_write_whose_connection_drops_commits_nothing_and_the_retry_applies_once(self) -> None:
-        work_id = self.library.add_work("Before")
+        work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Before")
         data = self.title_op(work_id, "After", 0)
         real_set_field = metadata.apply_field_operation
 
