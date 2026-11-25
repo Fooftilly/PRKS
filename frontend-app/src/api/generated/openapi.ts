@@ -10,6 +10,121 @@
  */
 
 export interface paths {
+    "/api/backups/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download a published backup archive */
+        get: operations["downloadBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backups/progress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Make a backup and stream its progress
+         * @description Queues the Library's backup job, or follows the one already queued or running.
+         */
+        post: operations["backupProgress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backups/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore a staged archive over the Library */
+        post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/backups/stage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload a backup archive and verify it for a restore */
+        post: operations["stageBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/citation-styles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Library's imported CSL styles */
+        get: operations["listCitationStyles"];
+        put?: never;
+        /**
+         * Import a CSL style
+         * @description Needs the Library owner.
+         */
+        post: operations["importCitationStyle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/citation-styles/{style_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                style_id: string;
+            };
+            cookie?: never;
+        };
+        /** An imported style's CSL text */
+        get: operations["getCitationStyle"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete an imported style
+         * @description Needs the Library owner.
+         */
+        delete: operations["deleteCitationStyle"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/citations": {
         parameters: {
             query?: never;
@@ -24,6 +139,23 @@ export interface paths {
          * @description Changes nothing. Each Work is cited from its citation Manifestation. Ids this Library has no Work for are listed in `missing` and left out.
          */
         post: operations["exportCitations"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/client-errors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log a browser error as metadata only */
+        post: operations["reportClientError"];
         delete?: never;
         options?: never;
         head?: never;
@@ -337,6 +469,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/remote-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The Library's saved copy of a remote image it names
+         * @description On a miss an editor fetches and saves the copy; a reader is served it uncached.
+         */
+        get: operations["getRemoteImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/saved-views": {
         parameters: {
             query?: never;
@@ -379,6 +531,27 @@ export interface paths {
         patch: operations["updateSavedView"];
         trace?: never;
     };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The Library's settings */
+        get: operations["getSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change some of the Library's settings
+         * @description Every key is checked before any is written. Needs the Library owner.
+         */
+        patch: operations["updateSettings"];
+        trace?: never;
+    };
     "/api/storage-status": {
         parameters: {
             query?: never;
@@ -393,6 +566,74 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sync/operations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Apply one durable operation, exactly once
+         * @description The operation, its effects and its ledger row commit in one transaction.
+         */
+        post: operations["postSyncOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/healthz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Liveness: the process answers
+         * @description Public: no session, no I/O.
+         */
+        get: operations["healthz"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Liveness: the process answers (headers only)
+         * @description Public: no session, no I/O.
+         */
+        head: operations["healthzHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readiness: database, schema, setup and storage root are ready
+         * @description Public: no session.
+         */
+        get: operations["readyz"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Readiness: database, schema, setup and storage root are ready (headers only)
+         * @description Public: no session.
+         */
+        head: operations["readyzHead"];
         patch?: never;
         trace?: never;
     };
@@ -419,6 +660,182 @@ export interface components {
              * @default null
              */
             message?: string | null;
+        };
+        /** @description ``GET``/``PATCH /api/settings``: the Library's settings, defaults filled in. */
+        AppSettings: {
+            /**
+             * Annotation Author
+             * @description The name PDF annotations are signed with; empty when unset.
+             */
+            annotation_author: string;
+            bibtex_export_fields: components["schemas"]["BibtexExportFields"];
+            /**
+             * Citation Style
+             * @description A shipped style id or an imported style's id.
+             */
+            citation_style: string;
+        };
+        /** @description ``PATCH /api/settings``: the keys sent change; the others are kept. */
+        AppSettingsPatch: {
+            /**
+             * Annotation Author
+             * @description At most 500 characters, no NUL; null or empty clears it.
+             * @default null
+             */
+            annotation_author?: string | null;
+            bibtex_export_fields?: components["schemas"]["BibtexExportFieldsPatch"];
+            /**
+             * Citation Style
+             * @description A shipped style id or one this Library imported.
+             */
+            citation_style?: string;
+        };
+        /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
+        BackupProgressLine: {
+            /**
+             * Error
+             * @description `failed` only: what to tell the user.
+             * @default null
+             */
+            error?: string | null;
+            /**
+             * Filename
+             * @description `ready` only: the archive's file name.
+             * @default null
+             */
+            filename?: string | null;
+            /** Percent */
+            percent: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "snapshot" | "objects" | "ready" | "failed";
+            /**
+             * Token
+             * @description `ready` only: the download token.
+             * @default null
+             */
+            token?: string | null;
+            /**
+             * Warnings
+             * @description `ready` only.
+             * @default null
+             */
+            warnings?: string[] | null;
+        };
+        /** @description A backup or restore refusal: ``reason`` is the stable code. */
+        BackupRefusal: {
+            /**
+             * Code
+             * @default null
+             */
+            code?: string | null;
+            /** Error */
+            error: string;
+            /**
+             * Message
+             * @default null
+             */
+            message?: string | null;
+            /**
+             * Reason
+             * @default null
+             */
+            reason?: string | null;
+            /**
+             * Request Id
+             * @default null
+             */
+            request_id?: string | null;
+        };
+        /** @description ``POST /api/backups/stage``: the verified archive's summary and the token a restore names. */
+        BackupStaged: {
+            summary: components["schemas"]["StagedSummary"];
+            /** Token */
+            token: string;
+            /** Verified */
+            verified: boolean;
+            /** Warnings */
+            warnings: string[];
+        };
+        /** @description Which optional BibTeX lines are exported (the title and entry shell always are). */
+        BibtexExportFields: {
+            /** Abstract */
+            abstract: boolean;
+            /** Afterword */
+            afterword: boolean;
+            /** Author */
+            author: boolean;
+            /** Doi */
+            doi: boolean;
+            /** Edition */
+            edition: boolean;
+            /** Editor */
+            editor: boolean;
+            /** Foreword */
+            foreword: boolean;
+            /** Introduction */
+            introduction: boolean;
+            /** Isbn */
+            isbn: boolean;
+            /** Journal */
+            journal: boolean;
+            /** Location */
+            location: boolean;
+            /** Number */
+            number: boolean;
+            /** Pages */
+            pages: boolean;
+            /** Publisher */
+            publisher: boolean;
+            /** Translator */
+            translator: boolean;
+            /** Url */
+            url: boolean;
+            /** Volume */
+            volume: boolean;
+            /** Year */
+            year: boolean;
+        };
+        /** @description The BibTeX lines to turn on or off; the others keep their value. */
+        BibtexExportFieldsPatch: {
+            /** Abstract */
+            abstract?: boolean;
+            /** Afterword */
+            afterword?: boolean;
+            /** Author */
+            author?: boolean;
+            /** Doi */
+            doi?: boolean;
+            /** Edition */
+            edition?: boolean;
+            /** Editor */
+            editor?: boolean;
+            /** Foreword */
+            foreword?: boolean;
+            /** Introduction */
+            introduction?: boolean;
+            /** Isbn */
+            isbn?: boolean;
+            /** Journal */
+            journal?: boolean;
+            /** Location */
+            location?: boolean;
+            /** Number */
+            number?: boolean;
+            /** Pages */
+            pages?: boolean;
+            /** Publisher */
+            publisher?: boolean;
+            /** Translator */
+            translator?: boolean;
+            /** Url */
+            url?: boolean;
+            /** Volume */
+            volume?: boolean;
+            /** Year */
+            year?: boolean;
         };
         /** @description ``format: bibtex``: each found Work's entry, separated by a blank line. */
         CitationsBibtex: {
@@ -453,6 +870,105 @@ export interface components {
             format: "csl-json" | "bibtex";
             /** Work Ids */
             work_ids: string[];
+        };
+        /** @description ``GET /api/citation-styles/:id``: the style's CSL text, for the browser's formatter. */
+        CitationStyle: {
+            /** Csl */
+            csl: string;
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+        };
+        CitationStyleDeleted: {
+            /**
+             * Deleted
+             * @description The deleted style's id.
+             */
+            deleted: string;
+        };
+        /** @description ``POST /api/citation-styles``: the CSL file's text; the domain checks it is a usable style. */
+        CitationStyleImportRequest: {
+            /** Csl */
+            csl: string;
+        };
+        CitationStyleList: {
+            /**
+             * Styles
+             * @description The Library's imported styles by title.
+             */
+            styles: components["schemas"]["CitationStyleSummary"][];
+        };
+        /** @description An imported CSL style: ``GET /api/citation-styles`` rows and an import's answer. */
+        CitationStyleSummary: {
+            /**
+             * Created At
+             * @description ISO 8601 timestamp.
+             */
+            created_at: string;
+            /**
+             * Id
+             * @description `custom-` and 32 hex digits.
+             */
+            id: string;
+            /** Title */
+            title: string;
+        };
+        ClientErrorLogged: {
+            /**
+             * Request Id
+             * @description This report's own request id, as logged.
+             */
+            request_id: string;
+            /**
+             * Status
+             * @description Always `logged`.
+             */
+            status: string;
+        };
+        ClientErrorReport: {
+            /**
+             * Column
+             * @description Source column, 0 to 1,000,000; else left out.
+             * @default null
+             */
+            column?: unknown;
+            /**
+             * Error Name
+             * @description An error class name; anything else is logged as Error.
+             * @default null
+             */
+            error_name?: unknown;
+            /**
+             * Http Status
+             * @description An HTTP status, 100 to 599; else left out.
+             * @default null
+             */
+            http_status?: unknown;
+            /**
+             * Kind
+             * @description A known error kind; anything else is logged as client_error.
+             * @default null
+             */
+            kind?: unknown;
+            /**
+             * Line
+             * @description Source line, 0 to 1,000,000; else left out.
+             * @default null
+             */
+            line?: unknown;
+            /**
+             * Request Id
+             * @description The failed request's id, when there was one.
+             * @default null
+             */
+            request_id?: unknown;
+            /**
+             * Source
+             * @description A known source or an asset basename; else unknown.
+             * @default null
+             */
+            source?: unknown;
         };
         CslDate: {
             /** Date-Parts */
@@ -1279,6 +1795,34 @@ export interface components {
             /** Work Count */
             work_count: number;
         };
+        /** @description ``POST /api/backups/restore``: the new epoch fences the browser's earlier pending work. */
+        Restored: {
+            /** Epoch */
+            epoch: number;
+            /** Objects Held */
+            objects_held: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "restored";
+            /** Warnings */
+            warnings: string[];
+        };
+        RestoreRequest: {
+            /**
+             * Confirm
+             * @description Must be `RESTORE`.
+             * @default null
+             */
+            confirm?: string | null;
+            /**
+             * Token
+             * @description The staged archive's token.
+             * @default null
+             */
+            token?: string | null;
+        };
         /** @description One Saved View: GET list rows, GET by id, POST and PATCH bodies. */
         SavedView: {
             /** Created At */
@@ -1355,6 +1899,21 @@ export interface components {
             name?: string | null;
             /** @default null */
             search?: components["schemas"]["SavedViewSearchInput"] | null;
+        };
+        StagedSummary: {
+            /** Annotations */
+            annotations: number | null;
+            /**
+             * Created At
+             * @description When the archive was made, from its manifest.
+             */
+            created_at: string | null;
+            /** Pdf Files */
+            pdf_files: number;
+            /** Persons */
+            persons: number | null;
+            /** Works */
+            works: number | null;
         };
         /** @description The database half of the Library (storage-architecture §9.2), read-only. */
         StorageDatabase: {
@@ -1495,8 +2054,86 @@ export interface components {
             objects: components["schemas"]["StorageObjects"] | null;
             root: components["schemas"]["StorageRoot"];
         };
+        /** @description One durable operation. Every key is required; ``normalize_envelope`` checks the values. */
+        SyncOperation: {
+            /**
+             * Base Revision
+             * @description The revision the change was made at, or null.
+             */
+            base_revision: number | null;
+            /**
+             * Created At
+             * @description ISO 8601 instant with a time zone.
+             */
+            created_at: string;
+            /**
+             * Depends On
+             * @description Up to 16 op_ids that must be ledgered first.
+             */
+            depends_on: string[];
+            /**
+             * Device Id
+             * @description The device's UUID.
+             */
+            device_id: string;
+            /**
+             * Entity Id
+             * @description 1-200 characters, no surrounding space.
+             */
+            entity_id: string;
+            /**
+             * Entity Type
+             * @description The entity type the operation is registered with.
+             */
+            entity_type: string;
+            /**
+             * Occurred At
+             * @description ISO 8601 instant with a time zone.
+             */
+            occurred_at: string;
+            /**
+             * Op Id
+             * @description A UUID the device minted for this operation.
+             */
+            op_id: string;
+            /**
+             * Operation
+             * @description A registered operation name, e.g. `MARK_WORK_OPENED`.
+             */
+            operation: string;
+            /**
+             * Payload
+             * @description The family's payload.
+             */
+            payload: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * @description The ledgered result: ``ACKNOWLEDGED`` with the family's fields, or a refusal code.
+         *
+         *     A retry with the same ``op_id`` and body answers the same status and result.
+         */
+        SyncResult: {
+            /**
+             * Code
+             * @description `ACKNOWLEDGED`, or a refusal such as `REVISION_CONFLICT`, `INVALID_ENVELOPE`, `OP_ID_REUSE`, `UNSATISFIED_DEPENDENCY`.
+             */
+            code: string;
+        } & {
+            [key: string]: unknown;
+        };
     };
     responses: {
+        /** @description The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiErrorEnvelope"];
+            };
+        };
         /** @description PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
         EpochChanged: {
             headers: {
@@ -1567,9 +2204,23 @@ export interface components {
     pathItems: never;
 }
 export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
+export type AppSettings = components['schemas']['AppSettings'];
+export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
+export type BackupProgressLine = components['schemas']['BackupProgressLine'];
+export type BackupRefusal = components['schemas']['BackupRefusal'];
+export type BackupStaged = components['schemas']['BackupStaged'];
+export type BibtexExportFields = components['schemas']['BibtexExportFields'];
+export type BibtexExportFieldsPatch = components['schemas']['BibtexExportFieldsPatch'];
 export type CitationsBibtex = components['schemas']['CitationsBibtex'];
 export type CitationsCslJson = components['schemas']['CitationsCslJson'];
 export type CitationsRequest = components['schemas']['CitationsRequest'];
+export type CitationStyle = components['schemas']['CitationStyle'];
+export type CitationStyleDeleted = components['schemas']['CitationStyleDeleted'];
+export type CitationStyleImportRequest = components['schemas']['CitationStyleImportRequest'];
+export type CitationStyleList = components['schemas']['CitationStyleList'];
+export type CitationStyleSummary = components['schemas']['CitationStyleSummary'];
+export type ClientErrorLogged = components['schemas']['ClientErrorLogged'];
+export type ClientErrorReport = components['schemas']['ClientErrorReport'];
 export type CslDate = components['schemas']['CslDate'];
 export type CslItem = components['schemas']['CslItem'];
 export type CslName = components['schemas']['CslName'];
@@ -1618,18 +2269,24 @@ export type PublisherCreated = components['schemas']['PublisherCreated'];
 export type PublisherCreateRequest = components['schemas']['PublisherCreateRequest'];
 export type PublisherDeleted = components['schemas']['PublisherDeleted'];
 export type PublisherInUse = components['schemas']['PublisherInUse'];
+export type Restored = components['schemas']['Restored'];
+export type RestoreRequest = components['schemas']['RestoreRequest'];
 export type SavedView = components['schemas']['SavedView'];
 export type SavedViewCreateRequest = components['schemas']['SavedViewCreateRequest'];
 export type SavedViewDeleted = components['schemas']['SavedViewDeleted'];
 export type SavedViewSearch = components['schemas']['SavedViewSearch'];
 export type SavedViewSearchInput = components['schemas']['SavedViewSearchInput'];
 export type SavedViewUpdateRequest = components['schemas']['SavedViewUpdateRequest'];
+export type StagedSummary = components['schemas']['StagedSummary'];
 export type StorageDatabase = components['schemas']['StorageDatabase'];
 export type StorageFilesystem = components['schemas']['StorageFilesystem'];
 export type StorageIdentity = components['schemas']['StorageIdentity'];
 export type StorageObjects = components['schemas']['StorageObjects'];
 export type StorageRoot = components['schemas']['StorageRoot'];
 export type StorageStatus = components['schemas']['StorageStatus'];
+export type SyncOperation = components['schemas']['SyncOperation'];
+export type SyncResult = components['schemas']['SyncResult'];
+export type ResponseBadRequest = components['responses']['BadRequest'];
 export type ResponseEpochChanged = components['responses']['EpochChanged'];
 export type ResponseEpochRequired = components['responses']['EpochRequired'];
 export type ResponseForbidden = components['responses']['Forbidden'];
@@ -1639,6 +2296,333 @@ export type ResponseUnavailable = components['responses']['Unavailable'];
 export type ResponseUnsupportedMediaType = components['responses']['UnsupportedMediaType'];
 export type $defs = Record<string, never>;
 export interface operations {
+    downloadBackup: {
+        parameters: {
+            query: {
+                /** @description The `ready` line's token. */
+                token: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The archive. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    /** @description attachment; filename=... */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/octet-stream": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No published archive with that token (unknown_token). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    backupProgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A JSON object, ignored. Send `{}`. */
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description One JSON object per line until `ready` (with the download token) or `failed`. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/x-ndjson": components["schemas"]["BackupProgressLine"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    restoreBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Restored. The answer carries the new PRKS-Library-Epoch. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Restored"];
+                };
+            };
+            /** @description No `confirm: RESTORE` (confirmation_required) or an unknown token (unknown_token). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The restore failed and nothing changed (`reason`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+            /** @description The archive could not be copied for the restore; nothing changed. */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+        };
+    };
+    stageBackup: {
+        parameters: {
+            query?: never;
+            header: {
+                "Content-Length": number;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description Verified; the token names it to the restore. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupStaged"];
+                };
+            };
+            /** @description A bad Content-Length (invalid_request), or an archive that failed verification (`reason`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The upload stalled (upload_timeout). */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            /** @description Larger than the upload limit (request_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            /** @description Not sent as application/octet-stream (unsupported_media_type). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupRefusal"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listCitationStyles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description By title. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationStyleList"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    importCitationStyle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CitationStyleImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Imported. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationStyleSummary"];
+                };
+            };
+            /** @description Not a usable independent CSL style, too large, or the Library holds the most styles. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getCitationStyle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                style_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The style. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationStyle"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such imported style. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deleteCitationStyle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                style_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; a Library setting that named it reads as the default. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CitationStyleDeleted"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such imported style. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     exportCitations: {
         parameters: {
             query?: never;
@@ -1670,6 +2654,38 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    reportClientError: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every field is optional; a value the log does not take is replaced, never refused. */
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClientErrorReport"];
+            };
+        };
+        responses: {
+            /** @description Logged. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClientErrorLogged"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["EpochChanged"];
@@ -2713,6 +3729,58 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    getRemoteImage: {
+        parameters: {
+            query: {
+                /** @description The image's http(s) URL as the Library names it. */
+                url: string;
+            };
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image (saved copies revalidate by ETag; an uncached copy may be kept an hour). */
+            200: {
+                headers: {
+                    /** @description private, no-cache or private, max-age=3600. */
+                    "Cache-Control"?: string;
+                    /** @description The saved copy's SHA-256, when saved. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description The browser holds the saved copy's bytes. */
+            304: {
+                headers: {
+                    /** @description Its SHA-256. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description A URL the Library does not name, not public http(s), or a failed fetch (IMAGE_NOT_AVAILABLE). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
     listSavedViews: {
         parameters: {
             query?: never;
@@ -2911,6 +3979,68 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    getSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every setting, its default when unset. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppSettings"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppSettingsPatch"];
+            };
+        };
+        responses: {
+            /** @description The settings as they now are. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppSettings"];
+                };
+            };
+            /** @description A refused value; nothing was written. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     getStorageStatus: {
         parameters: {
             query?: never;
@@ -2941,6 +4071,166 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
+            };
+        };
+    };
+    postSyncOperation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SyncOperation"];
+            };
+        };
+        responses: {
+            /** @description Acknowledged, or the ledgered answer to the same operation sent before. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            /** @description A malformed envelope or payload (its `code`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The entity does not exist (its `code`). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            /** @description A revision conflict, a reused op_id or another family refusal (its `code`). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SyncResult"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    healthz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alive. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": "ok";
+                };
+            };
+        };
+    };
+    healthzHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alive. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    readyz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": "ok";
+                };
+            };
+            /** @description Not ready (or no readiness check). */
+            503: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": "not ready";
+                };
+            };
+        };
+    };
+    readyzHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ready. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not ready (or no readiness check). */
+            503: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

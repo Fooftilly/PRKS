@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 
 from backend.runtime.log_safety import safe_error_type
+from backend.api_contract.operation import Header, Operation, ok
 from backend.web.http import Request, Response, bytes_response
 from backend.web.routing import route
 
@@ -38,9 +39,22 @@ def readyz(req: Request) -> Response:
     return _answer(ready)
 
 
+_TEXT = "text/plain"
+_NO_STORE = {"Cache-Control": Header("Always no-store.")}
+_HEALTHZ = Operation(
+    "healthz", "Liveness: the process answers", "probes",
+    {200: ok({"type": "string", "const": "ok"}, "Alive.", media_type=_TEXT, headers=_NO_STORE)},
+    description="Public: no session, no I/O.")
+_READYZ = Operation(
+    "readyz", "Readiness: database, schema, setup and storage root are ready", "probes",
+    {200: ok({"type": "string", "const": "ok"}, "Ready.", media_type=_TEXT, headers=_NO_STORE),
+     503: ok({"type": "string", "const": "not ready"}, "Not ready (or no readiness check).",
+             media_type=_TEXT, headers=_NO_STORE)},
+    description="Public: no session.")
+
 ROUTES = (
-    route("GET", "/healthz", healthz),
-    route("HEAD", "/healthz", healthz),
-    route("GET", "/readyz", readyz),
-    route("HEAD", "/readyz", readyz),
+    route("GET", "/healthz", healthz, contract=_HEALTHZ),
+    route("HEAD", "/healthz", healthz, contract=_HEALTHZ.head()),
+    route("GET", "/readyz", readyz, contract=_READYZ),
+    route("HEAD", "/readyz", readyz, contract=_READYZ.head()),
 )

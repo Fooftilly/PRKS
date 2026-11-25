@@ -98,3 +98,43 @@ class CitationsBibtex(BaseModel):
 
 CitationsResult = Annotated[Union[CitationsCslJson, CitationsBibtex], Field(discriminator="format")]
 
+
+
+class CitationStyleSummary(BaseModel):
+    """An imported CSL style: ``GET /api/citation-styles`` rows and an import's answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(description="`custom-` and 32 hex digits.")
+    title: str
+    created_at: str = Field(description="ISO 8601 timestamp.")
+
+
+class CitationStyleList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    styles: list[CitationStyleSummary] = Field(description="The Library's imported styles by title.")
+
+
+class CitationStyle(BaseModel):
+    """``GET /api/citation-styles/:id``: the style's CSL text, for the browser's formatter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+    csl: str
+
+
+class CitationStyleImportRequest(BaseModel):
+    """``POST /api/citation-styles``: the CSL file's text; the domain checks it is a usable style."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    csl: str
+
+
+class CitationStyleDeleted(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deleted: str = Field(description="The deleted style's id.")
