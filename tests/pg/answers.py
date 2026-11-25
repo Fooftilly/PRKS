@@ -9,8 +9,10 @@ becomes ``<unknown id>``, a timestamp becomes ``<s>`` (seconds) or ``<ms>``
 :func:`assert_answer` compares such an answer with the expected literal. A
 dict in the expected value lists the keys the test checks: the answer must
 hold each of them with the expected value, and may hold more, so a new field
-on a row does not break every test that spells the row out. An empty dict
-is the exception: ``{}`` means the answer's dict is empty.
+on a row does not break every test that spells the row out. A map that is a
+complete collection is the exception: an expected ``{}``, a map under a key in
+:data:`COLLECTIONS` (``known_absent``) and an :class:`Exact` map must hold
+exactly the expected keys.
 """
 
 from __future__ import annotations
@@ -62,16 +64,26 @@ def sort_keys(value: Any, keys: frozenset[str] | set[str]) -> Any:
     return value
 
 
-def _mismatch(actual: Any, expected: Any, path: str) -> str | None:
+# Answer keys whose maps are complete collections (id -> revision), never rows.
+COLLECTIONS: frozenset[str] = frozenset({"known_absent"})
+
+
+class Exact(dict):  # type: ignore[type-arg]
+    """An expected map that must hold exactly its keys (a complete collection)."""
+
+
+def _mismatch(actual: Any, expected: Any, path: str, exact: bool = False) -> str | None:
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             return f"{path}: expected a dict, got {actual!r}"
-        if not expected and actual:
-            return f"{path}: expected an empty dict, got {actual!r}"
+        if exact or not expected or isinstance(expected, Exact):
+            extra = [key for key in actual if key not in expected]
+            if extra:
+                return f"{path}: unexpected keys {extra!r} in {actual!r}"
         for key, item in expected.items():
             if key not in actual:
                 return f"{path}: missing key {key!r}"
-            found = _mismatch(actual[key], item, f"{path}[{key!r}]")
+            found = _mismatch(actual[key], item, f"{path}[{key!r}]", key in COLLECTIONS)
             if found:
                 return found
         return None
@@ -91,7 +103,8 @@ def _mismatch(actual: Any, expected: Any, path: str) -> str | None:
 def assert_answer(test: unittest.TestCase, actual: Any, expected: Any, msg: str = "") -> None:
     """``actual`` holds ``expected``: equal, except that dicts may carry keys ``expected`` leaves out.
 
-    An empty expected dict matches only an empty dict.
+    A complete collection (an expected ``{}``, a map under a :data:`COLLECTIONS`
+    key, an :class:`Exact` map) must hold exactly the expected keys.
     """
     found = _mismatch(actual, expected, "answer")
     if found:
