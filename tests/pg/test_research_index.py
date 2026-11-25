@@ -502,7 +502,9 @@ class EncodedReferenceTests(ResearchIndexTestCase):
         self.assertEqual([row["id"] for row in self.refs(work)["concepts"]], [concepts["Category]] Theory"]])
 
     def test_the_content_hash_names_the_text(self) -> None:
-        self.assertEqual(reindex.content_hash("abc"), reindex.content_hash("abc"))
+        # SHA-256 of the UTF-8 text, so the stored hash is stable across processes.
+        self.assertEqual(reindex.content_hash("abc"),
+                         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         self.assertNotEqual(reindex.content_hash("abc"), reindex.content_hash("abd"))
 
 
