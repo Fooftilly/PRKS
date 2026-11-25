@@ -177,6 +177,29 @@
             return !!domain && blockedDomains.has(String(domain));
         }
 
+        /* A reconcile starts a new domain generation so a GET already in
+         * flight cannot publish over its patch. A sweep still pending for
+         * the old generation would then never unblock the domain: it only
+         * settles its own generation. Carry its result to the new one. */
+        function advanceDomainGeneration(domain) {
+            const key = String(domain);
+            const next = currentDomainGeneration(key) + 1;
+            domainGeneration.set(key, next);
+            const pending = domainInvalidation.get(key);
+            if (pending && pending.promise && blockedDomains.has(key)) {
+                const promise = pending.promise.then(function (ok) {
+                    if (currentDomainGeneration(key) !== next) return ok;
+                    if (ok) {
+                        blockedDomains.delete(key);
+                        domainInvalidation.delete(key);
+                    }
+                    return ok;
+                });
+                domainInvalidation.set(key, { generation: next, promise: promise });
+            }
+            return next;
+        }
+
         /** A read may publish its result only from the domain generation it began in. */
         function domainCacheEligible(domain, capturedGeneration) {
             if (!domain) return true;
@@ -794,8 +817,7 @@
         async function reconcileGraphAuthorEdge(result) {
             if (result.role_type !== 'Author') return true;
             const kind = DOMAIN_RESEARCH_GRAPH_PEOPLE;
-            const token = currentDomainGeneration(kind) + 1;
-            domainGeneration.set(kind, token);
+            const token = advanceDomainGeneration(kind);
             const cached = await store.getEntity(kind, 'snapshot').catch(function () {
                 return undefined;
             });
@@ -911,8 +933,7 @@
                 }
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = await store.getList(listKey).catch(function () { return null; });
                 if (!cached) continue;   // a missing snapshot is nothing to patch
                 const rows = cached.value;
@@ -931,8 +952,7 @@
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
-                const token = currentDomainGeneration(spec.domain) + 1;
-                domainGeneration.set(spec.domain, token);
+                const token = advanceDomainGeneration(spec.domain);
                 const cached = await store.getEntitiesByKind(spec.kind)
                     .catch(function () { return null; });
                 // Nothing cached of this kind is nothing to reconcile; a FAILED
@@ -1117,8 +1137,7 @@
                 if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) return false;
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = await store.getList(listKey).catch(function () { return null; });
                 if (!cached) continue;   // a missing snapshot is nothing to patch
                 const rows = cached.value;
@@ -1139,8 +1158,7 @@
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
-                const token = currentDomainGeneration(spec.domain) + 1;
-                domainGeneration.set(spec.domain, token);
+                const token = advanceDomainGeneration(spec.domain);
                 const cached = await store.getEntitiesByKind(spec.kind)
                     .catch(function () { return null; });
                 if (!Array.isArray(cached)) return false;
@@ -1284,8 +1302,7 @@
                 const patches = root.prksWorkReferencePatches(kind, result.field, result.value);
                 if (!patches.length) continue;   // this field reaches no row of this kind
                 const domain = REFERENCE_DOMAINS[kind] || kind;
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = typeof store.getEntitiesByKind === 'function'
                     ? await store.getEntitiesByKind(kind).catch(function () { return null; })
                     : null;
@@ -1326,8 +1343,7 @@
 
         async function reconcileSummaryKind(result, spec) {
             if (typeof store.getEntitiesByKind !== 'function') return true;
-            const token = currentDomainGeneration(spec.domain) + 1;
-            domainGeneration.set(spec.domain, token);
+            const token = advanceDomainGeneration(spec.domain);
             const cached = await store.getEntitiesByKind(spec.kind).catch(function () { return null; });
             // Nothing cached of this kind is nothing to reconcile, not a
             // failure -- and one field is never enough to invent a snapshot.
@@ -1381,8 +1397,7 @@
         }
 
         async function reconcileProjectionList(result, domain, listKey) {
-            const token = currentDomainGeneration(domain) + 1;
-            domainGeneration.set(domain, token);
+            const token = advanceDomainGeneration(domain);
             const cached = await store.getList(listKey).catch(function () { return null; });
             // No snapshot is nothing to reconcile, not a failure: one field is
             // not enough to invent a catalog from, and the next authoritative
@@ -1414,8 +1429,7 @@
          */
         async function reconcileRecentOpen(result) {
             if (!store || !await store.isAvailable()) return false;
-            const token = currentDomainGeneration(DOMAIN_RECENT) + 1;
-            domainGeneration.set(DOMAIN_RECENT, token);
+            const token = advanceDomainGeneration(DOMAIN_RECENT);
             const cached = await store.getList(RECENT_LIST_KEY).catch(function () { return null; });
             if (!cached) return true;
             const rows = cached.value;
@@ -1437,8 +1451,7 @@
             if (!store || !await store.isAvailable()) return false;
             const person = result && result.person;
             if (!person || person.id !== result.person_id) return false;
-            const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-            domainGeneration.set(DOMAIN_PEOPLE, token);
+            const token = advanceDomainGeneration(DOMAIN_PEOPLE);
             const cached = await store.getList(PEOPLE_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = cached.value;
@@ -1487,8 +1500,7 @@
             if (!root.prksIsSupportedPersonField || !root.prksIsSupportedPersonField(field)) {
                 return false;
             }
-            const peopleToken = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-            domainGeneration.set(DOMAIN_PEOPLE, peopleToken);
+            const peopleToken = advanceDomainGeneration(DOMAIN_PEOPLE);
             const kinds = ['person', 'person-metadata-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
@@ -1563,8 +1575,7 @@
                 .catch(function () { return null; });
             const rows = cached && Array.isArray(cached.value) ? cached.value : null;
             if (rows) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const remaining = rows.filter(row => row && row.id !== id);
                 if (!await cacheListForDomain(PEOPLE_LIST_KEY, remaining,
                     DOMAIN_PEOPLE, token)) return false;
@@ -1591,8 +1602,7 @@
         }
 
         async function writeFolderRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_FOLDERS) + 1;
-            domainGeneration.set(DOMAIN_FOLDERS, token);
+            const token = advanceDomainGeneration(DOMAIN_FOLDERS);
             return cacheListForDomain(FOLDERS_LIST_KEY, rows, DOMAIN_FOLDERS, token);
         }
 
@@ -1747,8 +1757,7 @@
         }
 
         async function writePositionRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_POSITIONS) + 1;
-            domainGeneration.set(DOMAIN_POSITIONS, token);
+            const token = advanceDomainGeneration(DOMAIN_POSITIONS);
             return cacheListForDomain(POSITIONS_LIST_KEY, rows, DOMAIN_POSITIONS, token);
         }
 
@@ -2038,8 +2047,7 @@
         }
 
         async function writeConceptRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_CONCEPTS) + 1;
-            domainGeneration.set(DOMAIN_CONCEPTS, token);
+            const token = advanceDomainGeneration(DOMAIN_CONCEPTS);
             return cacheListForDomain(CONCEPTS_LIST_KEY, rows, DOMAIN_CONCEPTS, token);
         }
 
@@ -2268,8 +2276,7 @@
         }
 
         async function writePlaylistRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_PLAYLISTS) + 1;
-            domainGeneration.set(DOMAIN_PLAYLISTS, token);
+            const token = advanceDomainGeneration(DOMAIN_PLAYLISTS);
             return cacheListForDomain(PLAYLISTS_LIST_KEY, rows, DOMAIN_PLAYLISTS, token);
         }
 
@@ -2474,8 +2481,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 const merged = rows.filter(row => row && row.id !== tag.id)
                     .concat([Object.assign({ aliases: [] }, tag)]);
                 if (!await cacheListForDomain(TAGS_LIST_KEY, merged, DOMAIN_TAGS, token)) {
@@ -2499,8 +2505,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 if (!await cacheListForDomain(TAGS_LIST_KEY,
                     rows.filter(row => row && row.id !== id), DOMAIN_TAGS, token)) return false;
             }
@@ -2546,8 +2551,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 let sourceName = null;
                 const withoutSource = [];
                 for (let i = 0; i < rows.length; i += 1) {
@@ -2695,8 +2699,7 @@
         }
 
         async function writeGroupRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_PERSON_GROUPS) + 1;
-            domainGeneration.set(DOMAIN_PERSON_GROUPS, token);
+            const token = advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
             return cacheListForDomain(PERSON_GROUPS_LIST_KEY, rows,
                 DOMAIN_PERSON_GROUPS, token);
         }
@@ -2801,8 +2804,7 @@
                     .catch(function () { return null; });
                 const peopleRows = people && Array.isArray(people.value) ? people.value : null;
                 if (peopleRows) {
-                    const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                    domainGeneration.set(DOMAIN_PEOPLE, token);
+                    const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                     const patched = peopleRows.map(function (row) {
                         if (!row || !Array.isArray(row.groups)) return row;
                         if (!row.groups.some(g => g && g.id === id)) return row;
@@ -2866,8 +2868,7 @@
                 if (!await writeGroupRows(patched)) return false;
             }
             if (peopleRows && person) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const chip = { id: groupId, name: group ? String(group.name || '') : '' };
                 const patched = peopleRows.map(function (row) {
                     if (!row || row.id !== personId) return row;
@@ -2944,8 +2945,7 @@
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;
             if (peopleRows && peopleRows.some(row => row && Array.isArray(row.groups) &&
                     row.groups.some(g => g && g.id === id))) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const patched = peopleRows.map(function (row) {
                     if (!row || !Array.isArray(row.groups)) return row;
                     const without = row.groups.filter(g => !g || g.id !== id);
