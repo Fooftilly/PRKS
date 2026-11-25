@@ -138,6 +138,10 @@ class OfflineWorkTagTests(unittest.TestCase):
                     row.value.tags.some(t => t.id === added) &&
                     !row.value.tags.some(t => t.id === removed)))""",
             arg=[server.ids['work_a'], server.ids['tag'], server.ids['assigned']], timeout=8000, message="the synced Work was never cached")
+        # A row a read transaction can see may still be lost to an immediate
+        # teardown; same measured settle as test_offline._wait_entity_cached.
+        # prks-allow-wait-for-timeout: IndexedDB teardown durability, no page signal
+        page.wait_for_timeout(250)
         self.offline(page, context); page.reload()
         page.locator('#work-tags-list .work-tag-chip', has_text='Offline Existing').wait_for()
         page.locator('#work-tags-list .work-tag-chip', has_text='Initially Assigned').wait_for(state='detached')
