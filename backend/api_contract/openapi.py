@@ -43,7 +43,8 @@ _SHARED: dict[str, str] = {
     "UnsupportedMediaType": "No or another Content-Type than application/json (unsupported_media_type).",
     "NotAuthenticated": "No live session (not_authenticated).",
     "Forbidden": "The session's role lacks the route's capability, or the Origin is not allowed.",
-    "Unavailable": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
+    "Unavailable": "The Library is unavailable (unavailable).",
+    "UnavailableOrMaintenance": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
     "EpochRequired": "No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
     "BadRequest": ("The body is not one JSON object, or not JSON (invalid_request), or no or a "
                    "malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED)."),
@@ -128,8 +129,8 @@ def _shared_for(route: Any) -> dict[str, str]:
     shared: dict[str, str] = {}
     if route.pattern == "/api" or route.pattern.startswith("/api/"):
         shared.update({"401": "NotAuthenticated", "403": "Forbidden", "503": "Unavailable"})
-        if epoch_fenced(route.method, route.pattern):
-            shared.update({"400": "EpochRequired", "409": "EpochChanged"})
+        if epoch_fenced(route.method, route.pattern):  # library_command: the maintenance lock and epoch fence
+            shared.update({"400": "EpochRequired", "409": "EpochChanged", "503": "UnavailableOrMaintenance"})
     if route.body_kind is Body.JSON:
         bad = "BadRequest" if shared.get("400") == "EpochRequired" else "InvalidRequest"
         shared.update({"400": bad, "413": "RequestTooLarge", "415": "UnsupportedMediaType"})
