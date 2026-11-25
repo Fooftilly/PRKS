@@ -1829,7 +1829,7 @@ export interface components {
             folder_id: string | null;
             /**
              * Work Ids
-             * @description 1 to 500 Work ids; repeats count once.
+             * @description 1 to 500 entries; the limit counts repeats, which then count once.
              */
             work_ids: string[];
         };
@@ -1846,7 +1846,7 @@ export interface components {
             status: string;
             /**
              * Work Ids
-             * @description 1 to 500 Work ids; repeats count once.
+             * @description 1 to 500 entries; the limit counts repeats, which then count once.
              */
             work_ids: string[];
         };
@@ -1858,12 +1858,12 @@ export interface components {
             action: "add_tags" | "remove_tags";
             /**
              * Tag Ids
-             * @description The Tags to add or remove; at least one.
+             * @description The Tags to add or remove: 1 to 500 entries; the limit counts repeats.
              */
             tag_ids: string[];
             /**
              * Work Ids
-             * @description 1 to 500 Work ids; repeats count once.
+             * @description 1 to 500 entries; the limit counts repeats, which then count once.
              */
             work_ids: string[];
         };
