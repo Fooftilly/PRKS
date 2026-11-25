@@ -18,7 +18,6 @@ from tests.e2e.fixtures import (
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
-from backend.domain.organization import playlist_commands
 from tests.acting_context import current_context
 from tests.narrowing import require
 
@@ -150,6 +149,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         return library_for(server)
 
     def playlist(self, server, playlist_id):
+        from backend.domain.organization import playlist_commands
         store = self.db_for(server)
         return require(store.run(playlist_commands.detail, playlist_id, store.pdfs_dir))
 
@@ -245,6 +245,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertNotIn('No playlists yet.', body)
 
     def test_legitimately_empty_index_renders_its_empty_state(self):
+        from backend.domain.organization import playlist_commands
         def empty(root):
             ids = seed_playlists_library(root)
             db = open_library(StorageConfig.for_testing(root))
@@ -469,6 +470,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def test_the_creation_modal_creates_offline_from_every_surface(self):
         """Creating a playlist mints its id here, so the modal opens and saves
         with no server -- and the playlist is real immediately."""
+        from backend.domain.organization import playlist_commands
         server, page, context = self.start()
         self.index(page)
         page.wait_for_selector('.playlists-page')

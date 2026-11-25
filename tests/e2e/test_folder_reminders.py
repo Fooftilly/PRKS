@@ -17,7 +17,6 @@ from tests.e2e.fixtures import seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
-from backend.domain.organization import folder_commands
 from tests.acting_context import current_context
 from tests.narrowing import require
 
@@ -44,6 +43,7 @@ def tearDownModule():
 
 
 def seed(root):
+    from backend.domain.organization import folder_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
     ids['folder_a'] = folder_commands.create(db.database, current_context(), FOLDER_A_TITLE, 'Synthetic folder A.')
@@ -103,6 +103,7 @@ class _FolderRemindersPage(_PageBase):
             timeout=25000, message='Sync did not settle')
 
     def server_notes(self, server, folder_id):
+        from backend.domain.organization import folder_commands
         store = self.db(server)
         return require(store.run(folder_commands.detail, folder_id, store.pdfs_dir))['private_notes']
 
@@ -238,6 +239,7 @@ class FolderRemindersRecoveryTests(_FolderRemindersPage, unittest.TestCase):
             .map(r => r.payload.value))""")
 
     def set_server_notes(self, server, text):
+        from backend.domain.organization import folder_commands
         self.db(server).run(folder_commands.update, self.folder_id, {'private_notes': text})
 
     def wait_server_notes(self, page, text):

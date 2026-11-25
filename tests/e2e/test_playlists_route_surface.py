@@ -14,7 +14,6 @@ from tests.e2e.fixtures import (
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium
 from tests.e2e.fixtures import open_library
-from backend.domain.organization import playlist_commands
 from tests.acting_context import current_context
 
 
@@ -194,6 +193,7 @@ class PlaylistsRouteSurfaceTests(unittest.TestCase):
         self.assertEqual(observed["valid"]["accent"], "#123abc")
 
     def test_empty_index_offers_new_playlist_in_the_page(self):
+        from backend.domain.organization import playlist_commands
         def empty(root):
             ids = seed_playlists_library(root)
             db = open_library(StorageConfig.for_testing(root))

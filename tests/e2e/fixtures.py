@@ -7,9 +7,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from backend.storage.config import StorageConfig
-from backend.domain.organization import folder_commands
-from backend.domain.organization import playlist_commands
-from backend.domain.organization import tag_commands
 from tests.acting_context import current_context
 
 REPO = Path(__file__).resolve().parents[2]
@@ -497,6 +494,7 @@ def seed_playlists_library(storage_root: str) -> dict:
     uncached detail" is testable, and `work_a` stays outside every Playlist so
     the member-vs-non-member coherence boundary can be asserted.
     """
+    from backend.domain.organization import playlist_commands
     ids = seed_people_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
@@ -558,6 +556,8 @@ def seed_folders_library(storage_root: str) -> dict:
     also carries a tag so the right-panel tag list is part of the cached
     payload.
     """
+    from backend.domain.organization import folder_commands
+    from backend.domain.organization import tag_commands
     ids = seed_playlists_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
@@ -599,6 +599,7 @@ def seed_library_nav_folders(storage_root: str) -> dict:
         ├── AI
         └── Networking
     """
+    from backend.domain.organization import folder_commands
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
     research = folder_commands.create(db.database, current_context(), LIBRARY_NAV_RESEARCH, "Library nav root.", None)

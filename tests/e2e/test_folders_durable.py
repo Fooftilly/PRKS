@@ -18,7 +18,6 @@ from tests.e2e.fixtures import WORK_A_TITLE, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
 from tests.e2e.fixtures import open_library
-from backend.domain.organization import folder_commands
 from tests.acting_context import current_context
 
 
@@ -36,6 +35,7 @@ def tearDownModule():
 
 
 def seed(root):
+    from backend.domain.organization import folder_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
     ids['folder'] = folder_commands.create(db.database, current_context(), 'Durable Folder', 'Seeded description')
@@ -122,6 +122,7 @@ class DurableFolderTests(unittest.TestCase):
         return existing
 
     def folders_in_db(self, server):
+        from backend.domain.organization import folder_commands
         return {row['title']: row for row in self.db_for(server).run(folder_commands.catalog)}
 
     # ---- creation -----------------------------------------------------------
@@ -151,6 +152,7 @@ class DurableFolderTests(unittest.TestCase):
         self.assertIn('Double-click Folder', self.folders_in_db(server))
 
     def test_double_submit_new_folder_calls_create_once_online(self):
+        from backend.domain.organization import folder_commands
         server, page, _context = self.start()
         page.evaluate("() => prksOpenFolderModalFromLibrarySearch('Double-click Online')")
         page.wait_for_selector('#folder-modal:not(.hidden)')

@@ -7,9 +7,6 @@ from tests.e2e import test_offline as o
 from tests.e2e.fixtures import WORK_A_TITLE, open_library, seed_library
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
-from backend.domain.identity.library_scope import library_query
-from backend.domain.organization import links
-from backend.domain.organization import tag_commands
 from tests.acting_context import current_context
 
 
@@ -27,6 +24,7 @@ def tearDownModule():
 
 
 def seed(root):
+    from backend.domain.organization import tag_commands
     ids = seed_library(root)
     db = open_library(StorageConfig.for_testing(root))
     ids['tag'] = tag_commands.create(db.database, current_context(), 'Offline Existing')['id']
@@ -117,6 +115,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         page.wait_for_function("() => prksOfflineRuntimeState() === 'online'")
 
     def test_offline_add_remove_reload_restart_reconnect(self):
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page); self.remove(page); self.pending(page, 2)
@@ -152,6 +152,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertEqual(self.tag_operations(page), [])
 
     def test_revision_conflict_retains_intent_and_apply_creates_new_operation(self):
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
         db = library_for(server)
@@ -174,6 +177,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertEqual(list(ledger.values()), ['ACKNOWLEDGED'])
 
     def test_cache_clear_keeps_intent_and_syncs_without_base(self):
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
         server, page, context = self.start(); self.offline(page, context)
         self.add(page); self.pending(page, 1)
         self.clear_offline_cache(page)
@@ -247,6 +252,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         tag-options already carry: the id, a display snapshot and a base
         revision. Requiring the whole catalog for that would be an artificial
         dependency."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
         server, page, context = self.start()
         o._clear_cached_list(page, 'tags:index')
         self.offline(page, context)
@@ -262,6 +269,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         """The id is minted on this device, so it is a real Tag the moment it
         is written -- and the attachment that follows is ordered behind its
         creation by the generic dependency mechanism."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         seen = self.record_requests(page)
@@ -307,6 +317,8 @@ class OfflineWorkTagTests(unittest.TestCase):
         """Online and offline must travel the same road. If the editor called
         the canonical Work-Tag endpoints when connected, the offline path would
         be a separate, less-exercised implementation and the two would drift."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
         server, page, context = self.start()
         seen = self.record_requests(page)
         self.add(page)
@@ -325,6 +337,9 @@ class OfflineWorkTagTests(unittest.TestCase):
     # ---- Phase E: the conflict branches the browser run had not covered ----
 
     def test_revision_conflict_use_server_state(self):
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page)
@@ -353,6 +368,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         """A merge is a decision about Tag identity that the offline device did
         not participate in. Silently redirecting the pending intent to the
         merge target would apply a Tag the user never chose."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page)
@@ -377,6 +395,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         self.assertNotIn(source, [r['id'] for r in db.run(tag_commands.all_tags)])
 
     def test_tag_deleted_conflict_never_recreates_the_tag(self):
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page)
@@ -418,6 +439,9 @@ class OfflineWorkTagTests(unittest.TestCase):
         """The disposable cache can be cleared while a conflict is pending, so
         the Work editor that normally resolves it may simply not exist. The
         durable change must still be reachable and removable."""
+        from backend.domain.identity.library_scope import library_query
+        from backend.domain.organization import links
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         self.add(page)
@@ -447,6 +471,7 @@ class OfflineWorkTagTests(unittest.TestCase):
     def test_deleting_a_tag_offline_hides_it_and_reaches_the_server(self):
         """A tombstone, not a destruction: nothing acknowledged is discarded,
         so a server that refuses restores the Tag by doing nothing."""
+        from backend.domain.organization import tag_commands
         server, page, context = self.start()
         self.offline(page, context)
         page.evaluate("id => prksDeleteTagDurably(id)", server.ids['tag'])

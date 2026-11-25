@@ -41,7 +41,6 @@ from tests.e2e.fixtures import (
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from backend.storage.config import StorageConfig
-from backend.domain.organization import folder_commands
 from tests.acting_context import current_context
 
 GRAPH_CORE = "research-graph-core"
@@ -68,6 +67,7 @@ QUEUE_FOLDER_TITLE = "E2E Queue Folder"
 
 def seed_queue_library(storage_root: str) -> dict:
     """seed_library plus one folder the queue can file an import into."""
+    from backend.domain.organization import folder_commands
     ids = seed_library(storage_root)
     db = open_library(StorageConfig.for_testing(storage_root))
     ids["folder"] = folder_commands.create(db.database, current_context(), QUEUE_FOLDER_TITLE, "Imported Works land here.", None)

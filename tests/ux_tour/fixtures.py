@@ -28,10 +28,6 @@ from tests.e2e.fixtures import (
     open_library,
     seed_graph_context_library,
 )
-from backend.domain.organization import folder_commands
-from backend.domain.organization import playlist_commands
-from backend.domain.organization import tag_commands
-from backend.domain.saved_views import commands as saved_view_commands
 from tests.acting_context import current_context
 
 WORK_C_TITLE = "E2E UX Tour PDF Work"
@@ -53,6 +49,10 @@ UX_PDF_NAME = "e2e-ux-tour.pdf"
 
 
 def seed_ux_tour_library(storage_root: str) -> dict:
+    from backend.domain.organization import folder_commands
+    from backend.domain.organization import playlist_commands
+    from backend.domain.organization import tag_commands
+    from backend.domain.saved_views import commands as saved_view_commands
     ids = seed_graph_context_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
