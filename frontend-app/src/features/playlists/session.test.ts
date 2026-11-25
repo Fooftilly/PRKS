@@ -370,8 +370,8 @@ describe('Playlists route surface', () => {
 
   it('keeps a pending rename from being canceled and reopened under it (#974)', async () => {
     window.prksTabContextOwnsEntityRoute = () => true
-    let releaseRename: (value: unknown) => void = () => {}
-    window.prksSaveWorkFieldDurably = vi.fn(() => new Promise((resolve) => { releaseRename = resolve }))
+    let releaseRename: (value: null) => void = () => {}
+    window.prksSaveWorkFieldDurably = vi.fn(() => new Promise<null>((resolve) => { releaseRename = resolve }))
     window.renderPlaylistDetail = vi.fn()
     const pane = owner()
     pane.ui.playlistEditing = true
@@ -388,7 +388,7 @@ describe('Playlists route surface', () => {
     await nextTick()
     expect(el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')?.readOnly).toBe(true)
     expect(el.querySelector<HTMLButtonElement>('[data-pl-rename-cancel="W1"]')?.disabled).toBe(true)
-    releaseRename({})
+    releaseRename(null)
     await flushView()
     expect(el.querySelector('#prks-pl-rename-input-W1')).toBeNull()
   })
