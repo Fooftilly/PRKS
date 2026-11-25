@@ -1104,8 +1104,9 @@
                 observedAt: observedAtOf(envelope),
                 operationCreatedAt: createdAt,
             });
-            /* The source-state projection is a REVISION and nothing else, and
-             * it is the base the next edit is measured against. */
+            /* The source-state projection is the base the next edit is
+             * measured against: a revision WITH the source it belongs to, so
+             * the two are only ever written together. */
             const kinds = ['work', 'work-source-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
@@ -1133,7 +1134,7 @@
                 }
             }
             if (state) {
-                const next = Object.assign({}, state, { revision: result.server_revision });
+                const next = Object.assign({}, state, source, { revision: result.server_revision });
                 if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) return false;
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
