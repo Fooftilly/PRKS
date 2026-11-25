@@ -224,6 +224,8 @@ describe('SettingsExport BibTeX toggles', () => {
   })
 
   it('shows what PRKS holds after the last toggle patch fails', async () => {
+    /* The mount read brings this tab up to date: Author is off on PRKS. */
+    win.prksLoadAppSettings = vi.fn(async () => { bib.prksSetBibtexExportFieldsCache?.(server) })
     const wrapper = mount(SettingsExport)
     await flushPromises()
     win.prksPatchAppSettings = vi.fn(async () => { throw new Error('offline') }) as StyleWindow['prksPatchAppSettings']
@@ -233,7 +235,9 @@ describe('SettingsExport BibTeX toggles', () => {
     vi.advanceTimersByTime(450)
     await flushPromises()
     expect(isOn(wrapper, 'url')).toBe(true) // the failed toggle is not shown as saved
-    expect(bib.__prksBibtexExportFields?.url).toBe(true)
+    // The whole map goes back to what PRKS confirmed, Author included.
+    expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: true, url: true })
+    expect(['author', 'doi', 'url'].map((id) => isOn(wrapper, id))).toEqual([false, true, true])
     warn.mockRestore()
     wrapper.unmount()
   })
