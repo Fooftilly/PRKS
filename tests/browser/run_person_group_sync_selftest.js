@@ -815,6 +815,60 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 /* #783: two tabs open Edit at revision 0. Tab A saves; tab B's later Save is
  * still measured against revision 0, so the server sees a conflict instead of
  * B silently replacing A's description. */
+/* A pin read that failed must not strand the edit session: the refused Save
+ * pins again against the values the form showed, and the next Save uses it. */
+async function aFailedPinIsTakenAgainOnTheNextSave() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+    };
+    const alerts = [];
+    const current = baseAt({ name: 2, description: 0, parent_id: 0 }, { name: "Group R", description: "" });
+    let failing = true;
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (failing) throw new Error("stub failure");
+        if (kind === "person-group-state") {
+            const fields = {};
+            Object.keys(current).forEach((name) => { fields[name] = { revision: current[name].revision }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        const row = { id };
+        Object.keys(current).forEach((name) => { row[name] = current[name].value; });
+        return { value: row, source: "server" };
+    };
+    const r = {
+        tabId: "tab-r", destroyed: false,
+        ui: { personGroupEditing: false, personGroupEditSession: 0 },
+        lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-R" } },
+        getEntity: () => ({ id: "PG-R", name: "Group R", description: "", parent: null }),
+    };
+    const next = { name: "Group R renamed", description: "", parent_id: "", parent_name: "" };
+    try {
+        globalThis.openPersonGroupEdit(r);
+        assert.equal(await r.ui.personGroupEditPin.base, null, "the pin read failed");
+        failing = false;
+        const shown = r.ui.personGroupFieldBaseline;
+        const refused = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "a Save without a pin is refused");
+        assert.ok(alerts.some(m => m.indexOf("cannot be edited offline yet") !== -1));
+        const saved = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true, "the next Save uses the pin taken again");
+        const rows = (await store.listOperations())
+            .filter(row => row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-R");
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].base_revision, 2);
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
 async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
     const store = newStore();
     runtimeForStore(store);
@@ -1305,6 +1359,7 @@ async function main() {
     await aStaleGroupEditDoesNotCreateATypedParent();
     await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
     await aSaveUsesTheRevisionsPinnedWhenEditOpened();
+    await aFailedPinIsTakenAgainOnTheNextSave();
     console.log("All " + checks + " person group checks passed");
 }
 

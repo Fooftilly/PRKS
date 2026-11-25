@@ -5832,8 +5832,8 @@ class TabContextHostRootTests(_BrowserE2E):
         """A save still in flight when the tab has moved on must not repaint it.
 
         A Playlist save is durable, so what can still be in flight is the read
-        of the BASE the edit is measured against -- and it is delayed here the
-        way the PATCH used to be. The playlist is synchronized first on purpose:
+        of the BASE the edit is measured against. That base is pinned when Edit
+        opens and Save awaits it, so the read is held from Edit onwards. The playlist is synchronized first on purpose:
         the base of one this device created and has not sent is its own
         construction payload, which needs no read at all and so could not be
         delayed.
@@ -5853,8 +5853,6 @@ class TabContextHostRootTests(_BrowserE2E):
             arg=playlist_id,
         )
         page.wait_for_selector(".prks-playlist-detail")
-        page.locator("#prks-playlist-edit-btn").click()
-        page.wait_for_selector("#prks-playlist-edit-save")
         held = []
         state_path = "/api/playlists/" + playlist_id + "/sync-state"
 
@@ -5867,6 +5865,8 @@ class TabContextHostRootTests(_BrowserE2E):
 
         page.route("**/api/playlists/**", hold_playlist_base)
         try:
+            page.locator("#prks-playlist-edit-btn").click()
+            page.wait_for_selector("#prks-playlist-edit-save")
             page.fill("#prks-playlist-edit-desc", "Delayed stale response")
             page.locator("#prks-playlist-edit-save").click()
             deadline = time.time() + 8
@@ -6318,8 +6318,6 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#save-group-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
         group_id = _person_group_id_from_hash(page)
-        page.locator("#panel-content button", has_text="Edit group").click()
-        page.wait_for_selector("#gd-save-btn")
         # While CREATE_PERSON_GROUP is unsettled, acknowledgedGroupBase uses the
         # create payload at revision 0 and never GETs /sync-state — so the hold
         # below would miss. Wait until construction has retired, then warm the
@@ -6327,8 +6325,9 @@ class TabContextHostRootTests(_BrowserE2E):
         _wait_person_group_create_settled(page, group_id)
 
         # There is no Group PATCH any more: the save is durable. What it DOES
-        # await is the revision base it measures the edit against, so that read
-        # is the in-flight window this test needs.
+        # await is the revision base it measures the edit against, pinned when
+        # Edit opens, so Edit opens with the hold armed and that read is the
+        # in-flight window this test needs.
         sync_path = "/api/person-groups/%s/sync-state" % group_id
 
         def hold_group_state(route):
@@ -6344,6 +6343,8 @@ class TabContextHostRootTests(_BrowserE2E):
         try:
             _warm_person_group_sync_state(page, group_id)
             hold_active["on"] = True
+            page.locator("#panel-content button", has_text="Edit group").click()
+            page.wait_for_selector("#gd-save-btn")
             page.locator("#gd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -6378,13 +6379,12 @@ class TabContextHostRootTests(_BrowserE2E):
         page.fill("#group-name", "E2E Retry Group")
         page.locator("#save-group-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
-        page.locator("#panel-content button", has_text="Edit group").click()
-        page.wait_for_selector("#gd-save-btn")
 
         group_id = _person_group_id_from_hash(page)
         # Pending CREATE_PERSON_GROUP skips the /sync-state GET (revision 0 from
         # the create payload). Retire construction, warm a successful base read
-        # with the hold off, then arm — so the save's next GET is interceptable.
+        # with the hold off, then arm and open Edit -- the base is pinned there
+        # and Save awaits it, so that GET is the interceptable window.
         _wait_person_group_create_settled(page, group_id)
         held = []
         hold_active = {"on": False}
@@ -6404,11 +6404,13 @@ class TabContextHostRootTests(_BrowserE2E):
         page.route("**/api/person-groups/**", hold_then_fail_once)
         try:
             _warm_person_group_sync_state(page, group_id)
+            hold_active["on"] = True
+            page.locator("#panel-content button", has_text="Edit group").click()
+            page.wait_for_selector("#gd-save-btn")
             self.assertIsNone(page.locator("#gd-save-btn").get_attribute("aria-busy"))
             save_btn = page.locator("#gd-save-btn")
-            # Dirty a field so Save measures a real edit against the warmed base.
+            # Dirty a field so Save measures a real edit against the pinned base.
             page.fill("#gd-name", "E2E Retry Group Renamed")
-            hold_active["on"] = True
             save_btn.click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:

@@ -349,6 +349,8 @@ let created = 0;
 function prksPersonGroupEditSessionStill() { return true; }
 function prksDurableOperationsOrNone() { return Promise.resolve([]); }
 function prksPersonGroupEditPin() { return Promise.resolve(null); }
+let repins = 0;
+function prksReadPersonGroupEditPin() { repins += 1; return Promise.resolve(null); }
 function prksCreatePersonGroupDurably() { created += 1; return Promise.resolve({ entity_id: 'new-parent' }); }
 function prksEffectivePersonGroupCatalogue() { return Promise.resolve([]); }
 function prksAlertMessage() { return Promise.resolve(); }
@@ -367,6 +369,7 @@ savePersonGroupEditor(ctx, 'g1', {
 }, { name: 'Child', description: '', parent_id: '', parent_name: '' }, 2).then((result) => {
   if (created !== 0) throw new Error('unavailable save created a parent');
   if (!result || result.ok) throw new Error('unavailable save reported success');
+  if (repins !== 1 || !ctx.ui.personGroupEditPin) throw new Error('an unavailable save did not pin again for the next Save');
   process.stdout.write('ok');
 }).catch((error) => { console.error(error.stack || error); process.exit(1); });
 """,

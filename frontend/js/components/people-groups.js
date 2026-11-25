@@ -489,6 +489,19 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
     const pinned = await prksPersonGroupEditPin(ctx, groupId, session);
     if (!stillOwns()) return { ok: true, quiet: true };
     if (!pinned) {
+        /* A failed pin read must not strand this session: the next Save pins
+         * again against the values the form showed, so a field changed
+         * elsewhere meanwhile still reads as unknown rather than as a base. */
+        const fields = baseline || {};
+        ctx.ui.personGroupEditPin = {
+            groupId: String(groupId),
+            session: session,
+            base: prksReadPersonGroupEditPin(String(groupId), {
+                name: String(fields.name == null ? '' : fields.name),
+                description: String(fields.description == null ? '' : fields.description),
+                parent_id: String(fields.parent_id == null ? '' : fields.parent_id),
+            }),
+        };
         await prksAlertMessage(
             'This group cannot be edited offline yet. Open it once while connected to PRKS '
             + 'so its synchronization state is prepared.', 'Unavailable');
