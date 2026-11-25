@@ -253,6 +253,13 @@ class OpenApiDocumentTests(unittest.TestCase):
         description = doc["paths"]["/api/w"]["post"]["responses"]["409"]["description"]
         self.assertTrue(description.startswith("A conflict of its own. Also: "), description)
 
+    def test_an_optional_json_body_still_names_its_content_type(self) -> None:
+        for path, op in _operations(self.document).items():
+            body = op.get("requestBody")
+            if body and not body["required"] and "application/json" in body["content"]:
+                with self.subTest(path=path, op=op["operationId"]):
+                    self.assertIn("Content-Type: application/json", body["description"])
+
     def test_a_header_may_be_required(self) -> None:
         op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["get"]
         self.assertTrue(op["responses"]["206"]["headers"]["Content-Range"]["required"])
