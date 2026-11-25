@@ -79,6 +79,7 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     it: on PostgreSQL the Work's create adopts the bytes as an immutable
     Asset, so they must be final by then.
     """
+    from backend.domain.research import note_commands
     from backend.domain.people import role_commands
     from tests import people_fixtures
     if not MINIMAL_PDF.is_file():
@@ -111,7 +112,7 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     role_commands.add(db.database, current_context(), person_id, work_a, "Author")
     # Work nodes appear in the graph via explicit note markup / argument sources.
     seed_notes = "Initial research notes.\n\n[[concept:E2E Fixture Concept]]"
-    db.save_work_notes(work_a, seed_notes)
+    note_commands.save(db.database, current_context(), work_a, seed_notes)
     _sync_research(cfg, work_a, seed_notes, db)
     # Each managed PDF's create queued its text.extract job, which the
     # server's embedded worker runs (backend/domain/search/text.py).
@@ -240,23 +241,22 @@ def seed_imported_highlight_library(storage_root: str) -> dict:
 
 
 def seed_graph_context_library(storage_root: str) -> dict:
+    from backend.domain.research import argument_commands
+    from backend.domain.research import note_commands
+    from backend.domain.research import position_commands
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
     notes = "[[concept:%s]]\n\n[[concept:%s]]\n" % (GRAPH_CONCEPT_A, GRAPH_CONCEPT_B)
-    db.save_work_notes(ids["work_a"], notes)
+    note_commands.save(db.database, current_context(), ids["work_a"], notes)
     _sync_research(cfg, ids["work_a"], notes, db)
-    pos = db.create_position(GRAPH_UNRELATED_POSITION)
-    arg = db.create_argument(name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
+    pos = position_commands.create(db.database, current_context(), GRAPH_UNRELATED_POSITION)
+    arg = argument_commands.create(db.database, current_context(), name=GRAPH_UNRELATED_ARGUMENT, kind="argument")
     # Deliberately separate from GRAPH_UNRELATED_ARGUMENT and sourced to work_b (not work_a):
     # this gives tests a deterministic argument_source edge (e.g. relation-filter selection
     # regressions) without perturbing edge counts incident to work_a, which other graph tests
     # (e.g. the node-selection dimming test) assert exactly.
-    sourced_arg = db.create_argument(
-        name=GRAPH_SOURCED_ARGUMENT,
-        kind="argument",
-        sources=[{"work_id": ids["work_b"], "pages": "1-2"}],
-    )
+    sourced_arg = argument_commands.create(db.database, current_context(), name=GRAPH_SOURCED_ARGUMENT, kind="argument", sources=[{"work_id": ids["work_b"], "pages": "1-2"}])
     ids["position"] = pos["id"]
     ids["argument"] = arg["id"]
     ids["sourced_argument"] = sourced_arg["id"]
@@ -280,16 +280,18 @@ def seed_concepts_library(storage_root: str) -> dict:
     is testable), and a child Concept that is mentioned by Work A's research
     notes so a Concept -> Work mention link can be followed offline.
     """
+    from backend.domain.research import concept_commands
+    from backend.domain.research import note_commands
     ids = seed_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    parent = db.create_concept(CONCEPT_PARENT_NAME, "Parent concept definition.")
-    child = db.create_concept(CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
-    unvisited = db.create_concept(CONCEPT_UNVISITED_NAME, "Never opened while online.")
-    db.replace_concept_parents(child["id"], [parent["id"]])
-    db.replace_concept_aliases(child["id"], [CONCEPT_CHILD_ALIAS])
+    parent = concept_commands.create(db.database, current_context(), CONCEPT_PARENT_NAME, "Parent concept definition.")
+    child = concept_commands.create(db.database, current_context(), CONCEPT_CHILD_NAME, CONCEPT_CHILD_DEFINITION)
+    unvisited = concept_commands.create(db.database, current_context(), CONCEPT_UNVISITED_NAME, "Never opened while online.")
+    concept_commands.replace_parents(db.database, current_context(), child["id"], [parent["id"]])
+    concept_commands.replace_aliases(db.database, current_context(), child["id"], [CONCEPT_CHILD_ALIAS])
     notes = "Initial research notes.\n\n[[concept:%s]]\n" % CONCEPT_CHILD_NAME
-    db.save_work_notes(ids["work_a"], notes)
+    note_commands.save(db.database, current_context(), ids["work_a"], notes)
     _sync_research(cfg, ids["work_a"], notes, db)
     ids.update(
         {
@@ -321,16 +323,14 @@ def seed_positions_library(storage_root: str) -> dict:
     Concept fixtures alongside them so domain independence can be observed with
     two live domains at once.
     """
+    from backend.domain.research import argument_commands
+    from backend.domain.research import position_commands
     ids = seed_concepts_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    position_a = db.create_position(POSITION_A_NAME, POSITION_A_DESCRIPTION)
-    position_b = db.create_position(POSITION_B_NAME, "Never opened while online.")
-    argument = db.create_argument(
-        name=POSITION_ARGUMENT_NAME,
-        kind="argument",
-        targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}],
-    )
+    position_a = position_commands.create(db.database, current_context(), POSITION_A_NAME, POSITION_A_DESCRIPTION)
+    position_b = position_commands.create(db.database, current_context(), POSITION_B_NAME, "Never opened while online.")
+    argument = argument_commands.create(db.database, current_context(), name=POSITION_ARGUMENT_NAME, kind="argument", targets=[{"type": "position", "id": position_a["id"], "verdict_id": "supports"}])
     ids.update(
         {
             "position_a": position_a["id"],
@@ -363,35 +363,22 @@ def seed_arguments_library(storage_root: str) -> dict:
     single record therefore depends on five different canonical record families,
     which is exactly the coherence surface this milestone has to get right.
     """
+    from backend.domain.research import argument_commands
+    from backend.domain.research import note_commands
     ids = seed_positions_library(storage_root)
     cfg = StorageConfig.for_testing(storage_root)
     db = open_library(cfg)
-    target = db.create_argument(name=ARGUMENT_B_NAME, kind="argument")
-    stance = db.create_argument(
-        name=STANCE_NAME,
-        kind="stance",
-        main_text=STANCE_TEXT,
-        targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}],
-    )
-    unvisited = db.create_argument(name=ARGUMENT_UNVISITED_NAME, kind="argument")
-    argument_a = db.create_argument(
-        name=ARGUMENT_A_NAME,
-        kind="argument",
-        main_text=ARGUMENT_A_TEXT,
-        sources=[{"work_id": ids["work_a"], "pages": ARGUMENT_SOURCE_PAGES}],
-        targets=[
+    target = argument_commands.create(db.database, current_context(), name=ARGUMENT_B_NAME, kind="argument")
+    stance = argument_commands.create(db.database, current_context(), name=STANCE_NAME, kind="stance", main_text=STANCE_TEXT, targets=[{"type": "position", "id": ids["position_a"], "verdict_id": "holds"}])
+    unvisited = argument_commands.create(db.database, current_context(), name=ARGUMENT_UNVISITED_NAME, kind="argument")
+    argument_a = argument_commands.create(db.database, current_context(), name=ARGUMENT_A_NAME, kind="argument", main_text=ARGUMENT_A_TEXT, sources=[{"work_id": ids["work_a"], "pages": ARGUMENT_SOURCE_PAGES}], targets=[
             {"type": "position", "id": ids["position_a"], "verdict_id": "supports"},
             {"type": "argument", "id": target["id"], "verdict_id": "opposes"},
-        ],
-    )
-    response = db.create_argument(
-        name=ARGUMENT_C_NAME,
-        kind="argument",
-        targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}],
-    )
+        ])
+    response = argument_commands.create(db.database, current_context(), name=ARGUMENT_C_NAME, kind="argument", targets=[{"type": "argument", "id": argument_a["id"], "verdict_id": "opposes"}])
     # Work B's research notes mention Argument A, giving it a mention backlink.
     notes = "Related notes.\n\n[[argument:%s|%s]]\n" % (argument_a["id"], ARGUMENT_A_NAME)
-    db.save_work_notes(ids["work_b"], notes)
+    note_commands.save(db.database, current_context(), ids["work_b"], notes)
     _sync_research(cfg, ids["work_b"], notes, db)
     ids.update(
         {

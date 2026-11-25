@@ -49,6 +49,9 @@ UX_PDF_NAME = "e2e-ux-tour.pdf"
 
 
 def seed_ux_tour_library(storage_root: str) -> dict:
+    from backend.domain.research import argument_commands
+    from backend.domain.research import concept_commands
+    from backend.domain.research import position_commands
     from backend.domain.people import group_commands
     from backend.domain.people import publisher_commands
     from backend.domain.people import role_commands
@@ -121,20 +124,15 @@ def seed_ux_tour_library(storage_root: str) -> dict:
 
     # --- Concept parent/child hierarchy (in addition to the graph fixture's
     # Culture/Philosophy mentions already on work_a). ---
-    concept_parent = db.create_concept(CONCEPT_PARENT_NAME, "Root concept exercised by the UX tour.")
-    concept_child = db.create_concept(CONCEPT_CHILD_NAME, "Child concept exercised by the UX tour.")
-    db.replace_concept_parents(concept_child["id"], [concept_parent["id"]])
+    concept_parent = concept_commands.create(db.database, current_context(), CONCEPT_PARENT_NAME, "Root concept exercised by the UX tour.")
+    concept_child = concept_commands.create(db.database, current_context(), CONCEPT_CHILD_NAME, "Child concept exercised by the UX tour.")
+    concept_commands.replace_parents(db.database, current_context(), concept_child["id"], [concept_parent["id"]])
     ids["concept_parent"] = concept_parent["id"]
     ids["concept_child"] = concept_child["id"]
 
     # --- A Position with a supporting Stance (a kind='stance' Argument targeting it). ---
-    tour_position = db.create_position(TOUR_POSITION_NAME, "Position exercised by the UX tour.")
-    tour_stance = db.create_argument(
-        name=TOUR_STANCE_NAME,
-        kind="stance",
-        main_text="A stance supporting the UX tour position.",
-        targets=[{"type": "position", "id": tour_position["id"], "verdict_id": "holds"}],
-    )
+    tour_position = position_commands.create(db.database, current_context(), TOUR_POSITION_NAME, "Position exercised by the UX tour.")
+    tour_stance = argument_commands.create(db.database, current_context(), name=TOUR_STANCE_NAME, kind="stance", main_text="A stance supporting the UX tour position.", targets=[{"type": "position", "id": tour_position["id"], "verdict_id": "holds"}])
     ids["tour_position"] = tour_position["id"]
     ids["tour_stance"] = tour_stance["id"]
 

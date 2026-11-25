@@ -12,15 +12,14 @@ than faked here.
 import os
 import unittest
 
-from backend.storage.config import StorageConfig
 from tests.e2e import test_offline as o
 from tests.e2e.fixtures import (
     POSITION_A_NAME,
-    POSITION_ARGUMENT_NAME,
     seed_positions_library,
 )
 from tests.e2e.harness import AppServer, open_app_page, require_chromium, wait_for_async
 from tests.e2e.library_store import library_for
+from tests.narrowing import require
 
 
 def load_tests(loader, standard_tests, pattern):
@@ -174,6 +173,7 @@ class DurablePositionTests(unittest.TestCase):
     # ---- fields -------------------------------------------------------------
 
     def test_a_name_edited_offline_shows_and_lands(self):
+        from backend.domain.research import position_commands
         server, page, context = self.start()
         position = server.ids['position_a']
         self.prepare(page, position)
@@ -186,12 +186,13 @@ class DurablePositionTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        self.assertEqual(self.db_for(server).get_position(position)['name'],
+        self.assertEqual(require(self.db_for(server).run(position_commands.detail, position))['name'],
                          'Renamed Offline')
 
     def test_a_description_is_edited_independently_of_the_name(self):
         """The property this whole domain rests on: two decisions, two conflict
         units, so neither can refuse the other."""
+        from backend.domain.research import position_commands
         server, page, context = self.start()
         position = server.ids['position_a']
         self.prepare(page, position)
@@ -209,7 +210,7 @@ class DurablePositionTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.drained(page)
-        stored = self.db_for(server).get_position(position)
+        stored = require(self.db_for(server).run(position_commands.detail, position))
         self.assertEqual(stored['name'], 'Renamed too')
         self.assertEqual(stored['description'], 'Edited offline.')
 
@@ -217,6 +218,7 @@ class DurablePositionTests(unittest.TestCase):
     def test_one_conflicted_field_does_not_block_the_other(self):
         """A rename refused by the server must not make the description
         unsavable -- they are different decisions."""
+        from backend.domain.research import position_commands
         server, page, context = self.start()
         position = server.ids['position_a']
         self.prepare(page, position)
@@ -225,7 +227,7 @@ class DurablePositionTests(unittest.TestCase):
         # back, through the ORDINARY endpoint, so the name's revision actually
         # advances. A raw UPDATE would bypass the shared boundary and prove
         # nothing -- which is precisely why that boundary exists.
-        self.db_for(server).update_position(position, name='Renamed by another device')
+        self.db_for(server).run(position_commands.update, position, name='Renamed by another device')
         self.offline(page, context)
         page.evaluate("id => updatePosition(id, { name: 'Renamed offline' })", position)
         self.wait_for_family(page, 'SET_POSITION_FIELD')
@@ -251,7 +253,7 @@ class DurablePositionTests(unittest.TestCase):
             "() => prksSync.store.listOperations().then(rows => !rows.some("
             "  o => o.payload && o.payload.field === 'description'))",
             timeout=40000, message='the description operation never retired')
-        self.assertEqual(self.db_for(server).get_position(position)['description'],
+        self.assertEqual(require(self.db_for(server).run(position_commands.detail, position))['description'],
                          'Still savable.')
 
     def test_a_pending_rename_reaches_an_argument_that_targets_it(self):

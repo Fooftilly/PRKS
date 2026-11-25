@@ -26,6 +26,9 @@ from tests.pg.answers import AnswerAssertions
 from tests.pg.test_research_index import ResearchIndexTestCase
 from backend.domain.people import role_commands
 from tests import people_fixtures
+from backend.domain.research import argument_commands
+from backend.domain.research import concept_commands
+from backend.domain.research import position_commands
 
 
 class GraphReadTestCase(ResearchIndexTestCase):
@@ -111,7 +114,7 @@ class StaleRowTests(GraphReadTestCase):
         self.research_note(work, "[[concept:Temporary]]")
         self.run_jobs()
         self.research_note(work, "")  # the note no longer names it, so the delete is allowed
-        self.library.delete_concept(temp)
+        concept_commands.delete(self.db, self.ctx, temp)
         self.assertEqual(self.mentions(work)["concepts"][0][0], temp)  # stale until the job runs
         self.assertEqual(self.index.concept_mention_counts(), {})
         self.assertEqual(self.index.mention_count_for_concept(temp), 0)
@@ -125,7 +128,7 @@ class StaleRowTests(GraphReadTestCase):
         self.research_note(work, f"[[argument:{claim}]]")
         self.run_jobs()
         self.research_note(work, "")
-        self.library.delete_argument(claim)
+        argument_commands.delete(self.db, self.ctx, claim)
         self.assertEqual(self.index.argument_mention_counts(), {})
         self.assertEqual(self.index.mention_count_for_argument(claim), 0)
         self.assertEqual(self.index.argument_backlinks(claim, None), [])
@@ -158,7 +161,7 @@ class LargeNetworkTests(GraphReadTestCase):
         names = [f"Concept {n:03d}" for n in range(300)]
         ids = [self.concept(name) for name in names]
         for child, parent in zip(ids[1:], ids):
-            self.library.replace_concept_parents(child, [parent])
+            concept_commands.replace_parents(self.db, self.ctx, child, [parent])
         work = self.library.add_work("Index")
         self.research_note(work, " ".join(f"[[concept:{name}]] [[concept:{name.upper()}]]" for name in names))
         self.run_jobs()
@@ -198,7 +201,7 @@ class ProjectionTests(GraphReadTestCase):
 
     def network(self) -> dict[str, str]:
         parent, child = self.concept("Critical Theory"), self.concept(PRIVATE_CONCEPT)
-        self.library.replace_concept_parents(child, [parent])
+        concept_commands.replace_parents(self.db, self.ctx, child, [parent])
         pos = self.position("Standardization thesis")
         work_x, work_y = self.library.add_work(PRIVATE_WORK), self.library.add_work("Minima Moralia")
         arg1 = self.argument(PRIVATE_ARGUMENT, sources=[{"work_id": work_x, "pages": "12-14"}],
@@ -357,17 +360,14 @@ class AnswerTests(AnswerAssertions, GraphReadTestCase):
         name = self.labels.name
         theory = name(self.concept("Theory"), "<C Theory>")
         ethics = name(self.concept("Ethics"), "<C Ethics>")
-        self.library.replace_concept_aliases(ethics, ["Morals"])
-        self.library.replace_concept_parents(ethics, [theory])
+        concept_commands.replace_aliases(self.db, self.ctx, ethics, ["Morals"])
+        concept_commands.replace_parents(self.db, self.ctx, ethics, [theory])
         name(self.concept("Unmentioned"), "<C Unmentioned>")
-        thesis = name(self.library.create_position("Thesis", "")["id"], "<P Thesis>")
+        thesis = name(position_commands.create(self.db, self.ctx, "Thesis", "")["id"], "<P Thesis>")
         source = name(self.library.add_work("Source", doc_type="book"), "<W Source>")
         commentary = name(self.library.add_work("Commentary"), "<W Commentary>")
-        claim = name(self.library.create_argument(
-            name="Claim", kind="argument", sources=[{"work_id": source, "pages": "1-2"}],
-            targets=[{"type": "position", "id": thesis, "verdict_id": "supports"}])["id"], "<A Claim>")
-        reply = name(self.library.create_argument(
-            name="Reply", kind="stance", targets=[{"type": "argument", "id": claim, "verdict_id": "opposes"}])["id"],
+        claim = name(argument_commands.create(self.db, self.ctx, name="Claim", kind="argument", sources=[{"work_id": source, "pages": "1-2"}], targets=[{"type": "position", "id": thesis, "verdict_id": "supports"}])["id"], "<A Claim>")
+        reply = name(argument_commands.create(self.db, self.ctx, name="Reply", kind="stance", targets=[{"type": "argument", "id": claim, "verdict_id": "opposes"}])["id"],
             "<A Reply>")
         adorno = name(people_fixtures.add_person(self.db, self.ctx, "Theodor", "Adorno"), "<PE Adorno>")
         role_commands.add(self.db, self.ctx, adorno, source, "Author")
@@ -458,7 +458,7 @@ class AnswerTests(AnswerAssertions, GraphReadTestCase):
         # A note that stops naming a Concept lets it go; it then leaves the graph too.
         self.research_note(ids["Source"], "Only [[concept:Ethics]].")
         self.run_jobs()
-        self.library.delete_concept(ids["Theory"])
+        concept_commands.delete(self.db, self.ctx, ids["Theory"])
         self.assertEqual(self.labels.show(self.index.concept_mention_counts()), {"<C Ethics>": 1})
         self.assertNotIn("Theory", [node["label"] for node in self.graph()["nodes"]])
 

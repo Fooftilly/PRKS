@@ -39,6 +39,8 @@ from backend.sync.handlers import work_lifecycle, work_metadata
 from tests.pg.test_works_facade import WorksAnswerTestCase
 from tests.pg.test_works_mutations import MutationTestCase
 from tests.narrowing import require
+from backend.domain.research import concept_commands
+from backend.domain.research import note_commands
 
 _VIDEO = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 _OTHER_VIDEO = "https://www.youtube.com/watch?v=9bZkp7q19f0"
@@ -756,7 +758,7 @@ class NoteSyncTests(SyncTestCase):
         self.assertEqual((work["text_content"], work["private_notes"]), ("Research B", "Private B"))
         self.library.update_work_metadata(self.work, {"private_notes": "Reminder via PATCH"})
         self.assertEqual(self.state(), (2, 3))
-        self.library.save_work_notes(self.work, "Research via PATCH")
+        note_commands.save(self.db, self.ctx, self.work, "Research via PATCH")
         self.assertEqual(self.state(), (3, 3))
 
     def test_acknowledgements_and_conflicts_carry_sizes_never_prose(self) -> None:
@@ -784,7 +786,7 @@ class NoteSyncTests(SyncTestCase):
     def test_refusals_match_the_ordinary_path(self) -> None:
         control = "See [[concept:Bell\x07 Curve]]."
         with self.assertRaises(ResearchError) as caught:
-            self.library.save_work_notes(self.work, control)
+            note_commands.save(self.db, self.ctx, self.work, control)
         self.assertEqual(caught.exception.code, "invalid_text")
         self.assertEqual(self.send(self.note_op("research", control)), (400, {"code": "INVALID_ENVELOPE"}))
         over_private = "p" * (note_rules.MAX_PRIVATE_NOTE_UTF8_BYTES + 1)
@@ -796,7 +798,7 @@ class NoteSyncTests(SyncTestCase):
         extra["payload"]["extra"] = 1
         self.assertEqual(self.send(extra), (400, {"code": "INVALID_ENVELOPE"}))
         self.assertEqual(self.send(self.note_op("private", "x") | {"payload": {}}), (400, {"code": "INVALID_ENVELOPE"}))
-        self.assertEqual((self.ledger(), self.library.list_concepts(), self.state()), ([], [], (0, 0)))
+        self.assertEqual((self.ledger(), concept_commands.catalog(self.db, self.ctx), self.state()), ([], [], (0, 0)))
         # The Research Note is the large aggregate: past the generic 64 KiB envelope cap it still lands.
         large = "r" * (64 * 1024 + 1)
         self.assertEqual(self.send(self.note_op("research", large))[0], 200)
