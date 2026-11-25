@@ -121,6 +121,22 @@ async function cacheOrdering(family) {
         assert(await family.reconcile(offline, ackFor(family, 'X', 1, true), op));
         assert.deepEqual(await tagsOf(cache, family, 'X'), [tag.id], label + 'an agreeing detail is kept');
     }
+    /* The unproven detail must be GONE before the operation retires. A
+     * deletion that does not commit keeps the operation; its replay deletes. */
+    {
+        const { cache, offline } = setup();
+        const op = createdNow();
+        await later();
+        await cache.putEntity(family.kind, 'X', { id: 'X', tags: [] });
+        const deleteEntity = cache.deleteEntity;
+        cache.deleteEntity = async () => false;
+        assert.equal(await family.reconcile(offline, ackFor(family, 'X', 1, true), op), false,
+            label + 'a failed deletion keeps the operation retryable');
+        cache.deleteEntity = deleteEntity;
+        assert.equal(await family.reconcile(offline, ackFor(family, 'X', 1, true), op), true,
+            label + 'the replay retires once the deletion commits');
+        assert.equal(await tagsOf(cache, family, 'X'), null, label + 'the replay deleted the unproven detail');
+    }
     /* No operation (a resolved conflict's server state): unproven unless it agrees. */
     {
         const { cache, offline } = setup();
@@ -131,7 +147,7 @@ async function cacheOrdering(family) {
 }
 
 async function parkedWorkOwner() {
-    const fresh = { id: 'W', tags: [] };
+    const fresh = { id: 'W', tags: [], folder_id: 'SERVER-FOLDER' };
     let reads = 0;
     globalThis.prksOfflineReadEntity = async () => {
         reads += 1;
@@ -161,11 +177,15 @@ async function parkedWorkOwner() {
     /* Read after the operation (the newer detail): the server read wins. */
     const op = createdNow();
     await later();
-    const after = owner(core.observe({ id: 'W', tags: [] }, Date.now()));
+    const after = owner(core.observe({ id: 'W', tags: [], folder_id: 'PENDING-FOLDER' }, Date.now()));
     apply(after, ack, op);
     await flush();
     assert.equal(reads, 1, 'an unproven ACK re-reads the Work');
-    assert.equal(after.entity, fresh, 'the parked owner ends on the server read, not the older ACK');
+    assert.deepEqual(after.entity.tags, fresh.tags, 'the parked owner ends on the server links, not the older ACK');
+    assert.equal(after.entity.folder_id, 'PENDING-FOLDER',
+        'the re-read takes only the links: a pending Folder move on the held Work survives');
+    assert(core.observedAt(after.entity) >= core.observedAt(fresh),
+        'the merged Work carries the re-read time');
 
     /* A Work replaced while the re-read was in flight keeps its replacement. */
     const raced = owner({ id: 'W', tags: [] });

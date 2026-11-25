@@ -294,29 +294,6 @@ The five synthetic states are Folder library, Work detail with mounted notes/PDF
 The committed JSON stores a small 48×30 RGB sampling fingerprint per scene (zlib/base64, not a full screenshot). The pilot tolerates mild font-antialias variations and is aimed at meaningful visual shifts, not single-pixel precision; the pure unit test deliberately inverts a controlled synthetic image and proves comparison fails. Incomplete scenario readiness, missing baselines in check mode and malformed metadata fail closed. When capture fails, a bounded `prks-visual-failure.json` contains only a fixed stage label, exception **type** and completed scene names (never the raw Playwright exception, URL, selector, document text or Work id); the advisory job summary identifies the interrupted stage. For completed comparisons, each scene reports the exact triggering class: dimensions, mean color change, changed-pixel fraction, both thresholds, or within tolerance. To replay locally from the PRKS checkout root with the same pinned E2E dependencies and Chromium, run `repo="$(pwd)"; temp="$(mktemp -d)"; (cd "$temp" && python "$repo/scripts/ci/visual_regression.py" --mode check)`; check CI environment/commit parity before treating a difference as a regression. Reusing a temporary directory is safe: each capture removes only its prior candidate/results/failure JSON and five known synthetic scene PNGs before starting, so a stale success cannot hide a new failure. The runner does not retry captures or accept new baselines automatically. PNGs/artifacts are fixture-only, retained seven days, not committed and never sent to Argos. Avoid GitHub log dumps containing real file names/URLs; user library content must never be captured. Evaluate Argos adoption separately under #857 after measuring actionable findings, flake rate, runner-minutes and privacy safeguards.
 
 
-## OWASP ZAP — passive security pilot (#860)
-
-The manual [ZAP workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/zap-passive-pilot.yml) looks for runtime HTTP weaknesses that source scanners miss, such as missing security headers, cookie flags and information leaks. It is **passive only**. `scripts/ci/zap_passive_pilot.py` starts a disposable `AppServer --testing` on loopback in session-auth mode (its own database on the `PRKS_TEST_DATABASE_URL` server, an owner and one editor, the UX-tour synthetic library). It also starts a ZAP 2.17.0 container, pinned by digest, in daemon mode with `-silent` and the API bound to loopback, and switches ZAP to **safe mode**, so ZAP can neither spider nor attack. The pilot itself sends a fixed allowlist of requests through ZAP's proxy: anonymous, signed in as the owner, and signed in as the editor. The only non-GET route is `POST /api/login`, sent three times: one failed anonymous login, then the owner's and the editor's logins. ZAP's passive rules only watch that traffic. The official `zap-baseline.py` and `zap-api-scan.py` recipes are not used, because they spider or scan actively by default.
-
-A run fails (exit 1, listed under `problems`) when:
-
-- a request gets a different answer than the allowlist expects, for example the editor's `GET /api/backups/download` must be 403;
-- ZAP's history of completed exchanges (those with a response) is not exactly the pilot's own requests;
-- any Library content table changed.
-
-Alerts are advisory and do not fail the run. The summary holds the ZAP and PRKS versions, the image digest, each request's route template and answer, and per passive rule its id, name, risk, confidence, count and route templates. It holds no dynamic or private URL values, evidence, cookies or bodies; the fixed synthetic search query (`/api/search?q=Graph`) stays in its route. Triage verified findings into focused issues, or into private reporting under `SECURITY.md` when sensitive, before any check blocks. The existing HTTP auth and Origin/CSRF suites stay authoritative.
-
-Locally, with Docker and a disposable PostgreSQL 18 server that stays up while the pilot runs (the pilot refuses an inherited `PRKS_AUTH`, `PRKS_DATABASE_URL` or `PRKS_PUBLIC_ORIGIN`, so the command clears them):
-
-```bash
-docker pull "$(python -c 'from scripts.ci.zap_passive_pilot import ZAP_IMAGE; print(ZAP_IMAGE)')"
-env -u PRKS_AUTH -u PRKS_DATABASE_URL -u PRKS_PUBLIC_ORIGIN \
-  PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1 \
-  python scripts/ci/zap_passive_pilot.py --out zap-summary.json
-```
-
-The image is about 3.7 GB unpacked. Active scans stay out of scope: they need explicit manual authorization, a target allowlist, operation exclusions, time limits and a disposable reset.
-
 ## Schemathesis — bounded read-only API contract pilot (#855)
 
 PRKS's `/api/openapi.json` is **Positions-only**, not an application-wide contract. The opt-in [Schemathesis workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/schemathesis-readonly-pilot.yml) instead verifies `docs/api/openapi-publishers.json` against its Pydantic-generated builder and live `GET /api/openapi/publishers.json`. The test creates a **second, one-operation copy** containing only `GET /api/publishers` (`listPublishersInUse`); the published fragment's POST and DELETE routes are never passed to the scanner.
@@ -327,29 +304,6 @@ Locally, install the existing exact pins with `python scripts/ci/install_pinned_
 
 The workflow runs manually or for changes to the pilot/Publishers schema/dependency pins. Its only reported outcome is a small sanitized route/method/seed/elapsed/exit summary. On failure, reproduce from a new disposable test server with the fixed seed; use `python scripts/ci/schemathesis_pilot.py --debug-local` for full raw Schemathesis details **only on a private local machine**. The flag is rejected in GitHub Actions, and logs are sanitized by default. No generated payloads, raw request/response bodies, cookies, secrets, research documents, database paths or dynamic query strings are uploaded to CI artifacts. Before expanding API coverage, verify the real HTTP contract for the new family and require explicit allowlisting of every method/path. Existing deterministic Pydantic/openapi-core tests remain the primary contract gate.
 
-
-## Locust — bounded read-only load pilot (#859, #765 T08)
-
-The manual [Locust workflow](https://github.com/Fooftilly/PRKS/blob/master/.github/workflows/locust-readonly-pilot.yml) measures throughput and latency of the routes a browser uses while reading the library: `GET /api/works`, `GET /api/works/:id`, `GET /api/search`, `GET /api/tags` and `GET /api/research-graph`. It complements the single-user E2E suite; it is not a PR gate. Gating it on paths would need separate stability evidence and maintainer approval.
-
-`scripts/ci/locust_pilot.py` starts its own disposable `AppServer --testing` on loopback (its own database on the `PRKS_TEST_DATABASE_URL` server, loopback-owner session, the UX-tour synthetic library plus 8 (`small`) or 64 (`medium`) synthetic Works), checks each of the five routes once before any load, then runs `scripts/ci/locustfile_readonly.py` headless with 5 users, spawn rate 5, for 30 seconds. It refuses any target but `http://127.0.0.1:<its port>` and refuses an inherited `PRKS_AUTH` or `PRKS_DATABASE_URL`. Every answer is checked for its meaning (status 200, JSON, a catalog of exactly the seeded Works, the UX-tour fixtures included, the requested Work, the seeded search hits, exactly the seeded non-empty tag list, a non-empty graph), so a fast 4xx/5xx or an empty answer counts as a failure, never as a fast success.
-
-The JSON summary holds the tier, users/spawn/duration, PRKS and PostgreSQL versions, the library size, and per route the request and failure counts, p50, p95, max and requests per second. It also holds the load generator's own CPU share, so a saturated generator (above 0.8 of one CPU) is flagged instead of read as a slow server, and the `pg_stat_database` counters of the pilot's database over the run (commits, rollbacks, blocks hit/read, tuples returned/fetched). A run with a route never exercised, any failed request or a saturated generator exits 1 and lists why under `problems`. No titles, ids, bodies or URLs with values are recorded.
-
-Locally, the pilot needs a disposable PostgreSQL 18 server that keeps running between the two commands. `scripts/test-postgres` is not suitable here: it picks a random port and removes its server when its command exits. Start one separately instead, for example:
-
-```bash
-docker run -d --rm --name prks-locust-pg -p 127.0.0.1:55432:5432 \
-  -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18.6
-python scripts/ci/install_pinned_python.py locust
-export PRKS_TEST_DATABASE_URL=postgresql://postgres@127.0.0.1:55432/postgres PRKS_TESTING=1
-python scripts/ci/locust_pilot.py --tier small --out baseline.json
-# later, after a change, compare per-route p95 and throughput ratios:
-python scripts/ci/locust_pilot.py --tier small --compare baseline.json
-docker stop prks-locust-pg
-```
-
-`--compare` accepts only a summary of the same tier. Ratios within run-to-run noise (about ±20% on a laptop for these short runs) are not a regression; repeat both runs before drawing a conclusion. Write and contention workloads (an authenticated edit under CSRF) stay a separate, later experiment so the read-only baseline remains comparable.
 
 ## Schemathesis — bounded mutation scan of allowlisted families (fuzzing slice 2)
 

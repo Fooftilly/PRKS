@@ -1162,6 +1162,13 @@ async function prksReadDurableOperations() {
 
 /** Publish a successful operation list into the in-memory maps.
  *  A failed read must not call this: setPending([]) marks hydration ready and drops unsynced values. */
+/* Keep the read time of `from` on a Work copied from it (the shared
+ * `prksSyncReconcile` core stamps reads; a copy would otherwise lose it). */
+function prksCarryWorkObservation(from, to) {
+    const core = typeof window !== 'undefined' ? window.prksSyncReconcile : null;
+    if (from && to && core && typeof core.carryObservation === 'function') core.carryObservation(from, to);
+}
+
 function prksApplyReadWorkOperations(ops) {
     if (!Array.isArray(ops)) return false;
     if (typeof prksSetPendingWorkMetadata === 'function') prksSetPendingWorkMetadata(ops);
@@ -3730,6 +3737,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                                 })
                             );
                             if (!refreshed) return;
+                            prksCarryWorkObservation(base, refreshed.work);
                             if (refreshed.work) work = refreshed.work;
                             /* The first paint used the maps it already had.
                              * Refresh the selected panel so pending metadata
@@ -3932,6 +3940,11 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         effectiveWork: effectiveWork,
                         recordOpen: recordWorkOpen,
                     });
+                    /* The projection copies the Work. The copy keeps the time
+                     * of the read behind it, so a Tag ACK can prove the routed
+                     * Work older than its edit instead of re-reading it after
+                     * every link change (#1425). */
+                    prksCarryWorkObservation(offlineWork.value, workProjection.work);
                     const publishedWork = prksPublishWorkRouteProjection(ctx, generation, workProjection);
                     if (!publishedWork) return;
                     if (publishedWork.work) work = publishedWork.work;
