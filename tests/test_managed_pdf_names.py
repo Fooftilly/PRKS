@@ -24,7 +24,9 @@ class MintedNameTests(unittest.TestCase):
                 self.assertLessEqual(len(name.encode("utf-8")), 255)
 
     def test_two_mints_of_one_name_differ(self):
-        self.assertNotEqual(mint_managed_pdf_filename("same.pdf"), mint_managed_pdf_filename("same.pdf"))
+        first = mint_managed_pdf_filename("same.pdf")
+        second = mint_managed_pdf_filename("same.pdf")
+        self.assertNotEqual(first, second)
 
     def test_a_re_prefixed_name_stays_bounded(self):
         name = mint_managed_pdf_filename("x" * 250)
