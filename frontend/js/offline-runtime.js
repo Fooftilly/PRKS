@@ -3008,7 +3008,7 @@
              * a catalogue read after it already counts it, so an unproven
              * catalogue is dropped instead of counted twice. */
             if (group && countUncertain) {
-                const token = advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
+                advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
                 if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
             } else if (group && !await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS,
                 ackRevision, op, () => false,
@@ -3020,10 +3020,26 @@
                     });
                 }))) return false;
             const hasChip = row => Array.isArray(row.groups) && row.groups.some(g => g && g.id === groupId);
-            if (person && !await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
+            /* A chip needs the group's name. A replay after the catalogue was
+             * dropped finds it on the cached Group detail; with neither, the
+             * snapshots that would carry the chip are dropped rather than
+             * given a blank one. */
+            let groupName = group ? String(group.name || '') : null;
+            if (groupName === null) {
+                const detail = await store.getEntity('person-group', groupId).catch(function () { return null; });
+                if (detail && detail.value && detail.value.id === groupId) {
+                    groupName = String(detail.value.name || '');
+                }
+            }
+            if (present && groupName === null) {
+                if (person && !hasChip(person) && !await dropUnprovenList(PEOPLE_LIST_KEY)) return false;
+                const detail = await store.getEntity('person', personId).catch(function () { return null; });
+                if (detail && !(detail.value && hasChip(detail.value)) &&
+                    !await dropUnprovenEntity('person', personId)) return false;
+            } else if (person && !await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
                 peopleList => peopleList.every(row => !row || row.id !== personId || hasChip(row) === present),
                 peopleList => {
-                    const chip = { id: groupId, name: group ? String(group.name || '') : '' };
+                    const chip = { id: groupId, name: groupName || '' };
                     return peopleList.map(function (row) {
                         if (!row || row.id !== personId) return row;
                         const chips = Array.isArray(row.groups) ? row.groups : [];
@@ -3055,7 +3071,7 @@
                 next.member_count = remaining.length;
                 return next;
             })) return false;
-            if (!await patchProvenEntity('person', personId, ackRevision, op,
+            if (!(present && groupName === null) && !await patchProvenEntity('person', personId, ackRevision, op,
                 value => hasChip(value) === present,
                 function (value) {
                 if (!value || value.id !== personId) return null;
@@ -3064,8 +3080,7 @@
                 if (present) {
                     if (without.length !== chips.length) return null;
                     return Object.assign({}, value, {
-                        groups: chips.concat([{ id: groupId,
-                            name: group ? String(group.name || '') : '' }]),
+                        groups: chips.concat([{ id: groupId, name: groupName || '' }]),
                     });
                 }
                 if (without.length === chips.length) return null;
