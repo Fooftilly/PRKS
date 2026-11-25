@@ -5873,6 +5873,11 @@ class TabContextHostRootTests(_BrowserE2E):
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
             self.assertTrue(held, "Playlist base read was not intercepted")
+            # The hold is armed from Edit, so prove Save itself is waiting on it.
+            page.wait_for_function(
+                "() => { const b = document.querySelector('#prks-playlist-edit-save');"
+                " return !!b && b.textContent.indexOf('Saving') !== -1; }",
+                timeout=5000)
             page.evaluate("() => window.prksNavigate('#/folders')")
             page.wait_for_function("() => location.hash === '#/folders'")
             page.wait_for_selector(".prks-folder-library")
