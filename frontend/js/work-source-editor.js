@@ -222,7 +222,16 @@
         const typing = !!focused && typeof focused.matches === 'function' &&
             focused.matches('[data-prks-work-field="source_url"], #meta-video-url') &&
             focused.value !== String(url == null ? '' : url);
-        if (typing && owns(ctx, state)) return false;
+        /* Unsaved source text is kept after the field loses focus too: a
+         * draft that differs from its baseline is the user's, not the tab's
+         * copy of the server's. */
+        const ui = ctx && ctx.ui;
+        const draft = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaDraft;
+        const baseline = draft && ui.workMetaBaseline;
+        const unsaved = !!baseline && draft.source_url != null &&
+            String(draft.source_url) !== String(baseline.source_url == null ? '' : baseline.source_url) &&
+            String(draft.source_url) !== String(url == null ? '' : url);
+        if ((typing || unsaved) && owns(ctx, state)) return false;
         if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
             typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
             root.prksVueWorkMetadataEditorOwns(ctx)) {
@@ -348,6 +357,9 @@
     function showAcknowledgedWithQueue(ctx, state) {
         const held = ctx.getEntity('work');
         if (!state.acknowledged || !held || held.id !== state.workId) return;
+        /* No read time is carried: the source columns are newer than the
+         * held Work's read, so its time would not describe them. A later ACK
+         * the base revision cannot order is re-read instead (#1425). */
         ctx.setEntity('work', root.prksEffectiveWorkSource(Object.assign({}, held, state.acknowledged)));
     }
 
@@ -414,6 +426,15 @@
                 if (!(options && options.keep)) state.observed = null;
                 return true;
             }
+            /* "Use server" re-reads the Work into the offline cache first,
+             * for the cache only (the tab keeps its own Work beyond the
+             * source columns), so the source the editor then shows is one
+             * an offline reopen shows too. */
+            if (adopt) {
+                await refreshCachedWork(state.workId);
+                if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+                if (options && typeof options.still === 'function' && !options.still()) return false;
+            }
             const source = root.prksAcknowledgedWorkSource(stateResult.value);
             state.acknowledged = source;
             const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(source));
@@ -442,12 +463,10 @@
                 if (shown) ctx.setEntity('work', effective);
                 if (!writeInput(ctx, state, effective.source_url || '')) {
                     state.observed = adopt && state.observed ? baseOf(state.observed.revision, identity) : null;
-                    if (adopt) await refreshCachedWork(state.workId);
                     return true;
                 }
             }
             state.observed = baseOf(stateResult.value.revision, identity);
-            if (adopt) await refreshCachedWork(state.workId);
             return true;
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
@@ -562,8 +581,8 @@
             /* Measured against the base and the queue, never against the
              * tab's Work: that Work shows a queued replacement over the
              * acknowledged columns, and a save that cancelled the
-             * replacement leaves it naming a video nothing will send. */
-            await root.prksRefreshPendingWorkSources();
+             * replacement leaves it naming a video nothing will send. The
+             * queue view is current: every paint and every Save refreshes it. */
             if (currentIdentity(workId, state) === root.prksWorkSourceIdentity(source)) {
                 // The same video the user is already looking at, however it is
                 // spelled. Nothing to record. (Returning to the ACKNOWLEDGED
