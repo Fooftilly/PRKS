@@ -550,6 +550,30 @@ async function mountedSourceCorrectiveRead() {
         assert.equal(ctx.resources.workSourceEditor.observed, null, 'a bare revision never becomes a base');
         listeners.length = 0;
     }
+    /* The production fallback: a failed network read through the real
+     * readThroughEntity answers from IndexedDB without running the validator.
+     * A revision-only entry gives no base; a complete pair still does. */
+    {
+        for (const [cachedState, expected] of [
+            [{ work_id: 'W', revision: 2 }, null],
+            [stateOf(2, 'BBB'), { revision: 2, identity: identity('BBB') }],
+        ]) {
+            const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test',
+                indexedDB: createFakeIndexedDBFactory() });
+            const runtime = createPrksOfflineRuntime({ store: cache, window: null,
+                prksRequest: async () => { throw new TypeError('Failed to fetch'); } });
+            await cache.putEntity('work-source-state', 'W', cachedState);
+            globalThis.prksOfflineReadEntity = runtime.readThroughEntity;
+            const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('BBB') }, Date.now()));
+            globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+            const state = ctx.resources.workSourceEditor;
+            await state.preparing;
+            assert.deepEqual(state.observed, expected, expected
+                ? 'a complete cached pair still prepares offline'
+                : 'a cached revision without its source never becomes a base');
+        }
+        listeners.length = 0;
+    }
     /* A source state answered from the cache adopts nothing after an ACK and
      * keeps the ACK's base. */
     {
