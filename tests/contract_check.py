@@ -9,8 +9,9 @@ that, while a test server serves it:
   (a ``gzip`` Content-Encoding is undone first), and an answer with no body
   is one whose status documents none;
 - the JSON body of a request answered with ``2xx`` validates against the
-  route's request schema, so a request model is never stricter than what
-  the route accepts.
+  route's request schema, and a request answered with ``2xx`` without a
+  body is one whose body the contract marks optional, so a request model is
+  never stricter than what the route accepts.
 
 A violation, or an answer the checker cannot read, is recorded, not
 raised, so the route still answers as it would; :class:`ContractCheck` fails the test that saw it. Exceptions a route
@@ -88,11 +89,15 @@ class ContractCheck:
                 elif media == "application/json":
                     for err in self._schema_errors(content[media]["schema"], json.loads(payload)):
                         self.violations.append(f"{where}: answer {err}")
-            elif content:
-                self.violations.append(f"{where}: no body, but the contract documents {sorted(content)}")
+            elif "application/json" in content:  # an empty text answer (an empty BibTeX entry) is one
+                self.violations.append(f"{where}: no body, but the contract documents JSON")
         body = operation.get("requestBody")
-        if 200 <= response.status < 300 and body and not request.json_absent and request.json is not None:
-            schema = body["content"].get("application/json", {}).get("schema")
+        if body and "application/json" not in body["content"]:
+            body = None  # a byte stream (an upload) is not read as JSON
+        if 200 <= response.status < 300 and body and request.json_absent and body.get("required"):
+            self.violations.append(f"{where}: request had no body, but the contract requires one")
+        elif 200 <= response.status < 300 and body and not request.json_absent and request.json is not None:
+            schema = body["content"]["application/json"].get("schema")
             if schema is not None:
                 for err in self._schema_errors(schema, request.json):
                     self.violations.append(f"{where}: request {err}")

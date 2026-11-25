@@ -1091,7 +1091,7 @@
         ],
         "description": "A retry of a finished import answers with the same Work and creates nothing.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
@@ -1099,7 +1099,7 @@
               }
             }
           },
-          "description": "A JSON object, ignored. Send `{}`."
+          "description": "A JSON object, ignored; may be left out."
         },
         "responses": {
           "200": {
