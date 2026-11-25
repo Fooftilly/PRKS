@@ -298,6 +298,38 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(titles[0].payload.value, "Talks");
         assert.equal(titles[0].base_revision, 3);
     }
+    /* Nothing pending: the acknowledged title and URL alone. Whitespace the
+     * form trims still pins the raw stored text; a genuinely different stored
+     * value is not pinned, so a save from that form is refused as changed
+     * elsewhere instead of overwriting it. */
+    {
+        const store = newStore();
+        const state = { playlist_id: id, order_revision: 0, fields: Object.fromEntries(
+            globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name, { revision: name === "description" ? 0 : 2 }])) };
+        const previous = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async kind => (kind === "playlist-state"
+            ? { value: state, source: "server" }
+            : { value: { id, title: "  Lectures  ", description: "", original_url: " https://example.org/y " },
+                source: "server" });
+        const ops = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        assert.equal(ops.length, 0, "nothing is pending");
+        const trimmed = { title: "Lectures", description: "", original_url: "https://example.org/y" };
+        const pinned = await globalThis.prksPinPlaylistEditBase(id, trimmed, ops);
+        assert.deepEqual(pinned.title, { value: "  Lectures  ", revision: 2 },
+            "the trimmed title stands for the stored padded one");
+        assert.deepEqual(pinned.original_url, { value: " https://example.org/y ", revision: 2 },
+            "and the trimmed URL for the stored padded URL");
+        const edits = core.pinnedEdits(trimmed, Object.assign({}, trimmed, { title: "Talks" }), pinned);
+        assert.deepEqual(edits.unknown || [], [], "a new title is measured from the stored one");
+        assert.equal(edits.base.title.revision, 2);
+        const other = { title: "Other", description: "", original_url: "https://example.org/z" };
+        const stale = await globalThis.prksPinPlaylistEditBase(id, other, ops);
+        globalThis.prksOfflineReadEntity = previous;
+        assert.equal(stale.title, null, "a different stored title is not pinned");
+        assert.equal(stale.original_url, null, "nor a different stored URL");
+        const refused = core.pinnedEdits(other, Object.assign({}, other, { title: "Talks" }), stale);
+        assert.deepEqual(refused.unknown, ["title"], "a save from it is refused, never sent over the stored title");
+    }
 }
 
 /* ---- membership ---- */
