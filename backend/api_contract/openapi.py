@@ -30,7 +30,7 @@ from typing import Any, Iterable, Optional
 from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
-from backend.api_contract.operation import Operation, Param, Reply, RequestBody, Schema
+from backend.api_contract.operation import JSON, Operation, Param, Reply, RequestBody, Schema
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
@@ -113,11 +113,18 @@ def _reply(components: _Components, reply: Reply) -> dict[str, Any]:
     return out
 
 
+_OPTIONAL_JSON = "Left out, the request still sends Content-Type: application/json (else 415)."
+
+
 def _request(components: _Components, request: RequestBody) -> dict[str, Any]:
     out: dict[str, Any] = {"required": request.required,
                            "content": _content(components, request.media_type, request.schema)}
-    if request.description:
-        out["description"] = request.description
+    description = request.description
+    if not request.required and request.media_type == JSON:
+        # The dispatcher reads an optional JSON body only under the JSON Content-Type (#1424).
+        description = (f"{description} " if description else "") + _OPTIONAL_JSON
+    if description:
+        out["description"] = description
     return out
 
 

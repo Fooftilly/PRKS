@@ -2356,7 +2356,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description A JSON object, ignored; may be left out. */
+        /** @description A JSON object, ignored; may be left out. Left out, the request still sends Content-Type: application/json (else 415). */
         requestBody?: {
             content: {
                 "application/json": Record<string, never>;
@@ -2693,7 +2693,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description Every field is optional, and so is the body; a value the log does not take is replaced, never refused. */
+        /** @description Every field is optional, and so is the body; a value the log does not take is replaced, never refused. Left out, the request still sends Content-Type: application/json (else 415). */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["ClientErrorReport"];
@@ -3400,7 +3400,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description A JSON object, ignored; may be left out, but the request still sends Content-Type: application/json (else 415). */
+        /** @description A JSON object, ignored; may be left out. Left out, the request still sends Content-Type: application/json (else 415). */
         requestBody?: {
             content: {
                 "application/json": Record<string, never>;
@@ -4106,7 +4106,7 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        /** @description Left out: nothing changes. */
+        /** @description Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415). */
         requestBody?: {
             content: {
                 "application/json": components["schemas"]["AppSettingsPatch"];
