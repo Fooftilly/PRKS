@@ -157,7 +157,20 @@
         if (!live(ctx, state)) return;
         state.options = null;
         state.refreshing = true;
+        state.refreshTries = 0;
         state.preparing = prepare(ctx, state, { dedupe: false });
+    }
+    /* A corrective refresh takes only a server answer that agrees with the
+     * adopted links. A cached fallback still holds the delayed ACK's base, and
+     * two server reads can straddle another device's change: either would let
+     * an edit coalesce against the wrong base, so editing stays off. */
+    function consistentOptions(ctx, state, read) {
+        if (!read || read.source !== 'server' || !read.value) return false;
+        const owner = ctx.getEntity('work');
+        if (!owner || owner.id !== state.workId || !Array.isArray(owner.tags)) return false;
+        const shown = new Set(owner.tags.map(t => t.id));
+        const based = new Set(read.value.assigned.map(t => t.tag_id));
+        return shown.size === based.size && [...shown].every(id => based.has(id));
     }
     /**
      * One Tag-link ACK into this owner's Work, under the shared ordering rule
@@ -211,6 +224,21 @@
                 root.prksReadTagsIndex(),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (state.refreshing) {
+                const read = options.status === 'fulfilled' ? options.value : null;
+                if (!consistentOptions(ctx, state, read)) {
+                    state.options = null;
+                    // Another device may have moved a link between the reads: read again, a bounded number of times.
+                    if (read && read.source === 'server' && (state.refreshTries = (state.refreshTries || 0) + 1) < 3) {
+                        await (state.preparing = prepare(ctx, state, { dedupe: false }));
+                        return;
+                    }
+                    state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
+                    state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
+                    await paint(ctx, state);
+                    return;
+                }
+            }
             state.refreshing = false;
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
@@ -412,7 +440,8 @@
              * this Tag alone, and another Tag's base must never run ahead of
              * the chip it is measured against. */
             if (state.options) setOptionsBase(state.options, tagId, base.present, base.revision);
-            else state.options = read.value;
+            // A corrective refresh installs only options it proved consistent.
+            else if (!state.refreshing) state.options = read.value;
             return base;
         }
         if (outcome === 'settled') return null;

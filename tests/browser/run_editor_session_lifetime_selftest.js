@@ -686,6 +686,78 @@ async function tagAckReReadRefreshesOptions() {
     }
 }
 
+/* #1088 review: the corrective options read must not re-enable editing on a
+ * base that disagrees with the adopted links. A REMOVE ACK at revision 1, a
+ * Work re-read showing the Tag back at revision 2, then an options read that
+ * falls back to the cache the ACK just wrote (Tag absent at 1): editing stays
+ * off. A server answer that disagrees is read again, a bounded number of
+ * times, and editing stays off while it keeps disagreeing. */
+async function tagAckRefreshRejectsInconsistentOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-stale-options';
+    const ctx = mountTab('tag-stale-options');
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [tag] }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    let mode = 'cache';
+    let refreshReads = 0;
+    const stale = { assigned: [], known_absent: { 'tag-1': 1 } };
+    const fresh = { assigned: [{ tag_id: 'tag-1', relation_revision: 2 }], known_absent: {} };
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (!refreshed) return { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 0 }], known_absent: {} }, source: 'server' };
+        refreshReads += 1;
+        if (mode === 'cache') return { value: stale, source: 'cache' };
+        if (mode === 'disagree') return { value: stale, source: 'server' };
+        return { value: fresh, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previousRead(kind, id);
+        return { source: 'server', value: core.observe({ id: id, tags: [tag] }, Date.now()) };
+    };
+    function ack(revision) {
+        emitLive({
+            acknowledged: { work_id: workId, tag_id: 'tag-1', present: false, server_revision: revision, tag: tag },
+            operation: 'REMOVE_WORK_TAG',
+            op: op,
+        });
+    }
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        ack(1);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the adopted Work shows the re-added Tag', ctx.getEntity('work').tags.length, 1);
+        assertEq('a cached options fallback is not taken as the corrective base', state.options, null);
+        assertEq('the refresh stays open after the cached fallback', state.refreshing, true);
+
+        mode = 'disagree';
+        refreshReads = 0;
+        ack(1);
+        await flush();
+        // One read the ACK itself restarts, then at most three for the adopted Work.
+        assert('a disagreeing server answer is read again, a bounded number of times',
+            refreshReads >= 3 && refreshReads <= 4);
+        assertEq('a disagreeing server answer is not taken as the base', state.options, null);
+
+        mode = 'agree';
+        ack(1);
+        await flush();
+        assertEq('a server answer that agrees with the adopted links is taken', state.options, fresh);
+        assertEq('the refresh settles once consistent', state.refreshing, false);
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1111,6 +1183,7 @@ async function main() {
     assertEq('no unhandled rejection', unhandled.length, 0);
 
     await tagAckReReadRefreshesOptions();
+    await tagAckRefreshRejectsInconsistentOptions();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
