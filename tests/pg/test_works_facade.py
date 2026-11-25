@@ -527,8 +527,8 @@ class AnswerTests(WorksAnswerTestCase):
         # A file size is the Asset's byte_size (#1427): no catalogue read touches the data root,
         # and a file gone from the disk still reports the size the database holds.
         self.catalog()
-        opened = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
-        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened))
+        opened_id = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened_id))
         os.remove(os.path.join(self.storage.pdfs_dir, "f.pdf"))
         root = os.path.realpath(self.storage.root)
         touched: list[str] = []
