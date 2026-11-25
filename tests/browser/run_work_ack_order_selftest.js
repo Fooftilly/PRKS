@@ -590,18 +590,38 @@ async function mountedSourceCorrectiveRead() {
         await state.preparing;
         assert.equal(ctx.entity.provider_id, 'CCC');
         assert.equal(state.observed.revision, 1, 'a second prepare keeps the draft on its revision');
-        /* A reopened editor (a new metadata session) starts from what it
-         * reads, even with text typed while it prepares. */
+        /* A reopened editor seeds its baseline from the source it shows. A
+         * draft typed over the source the read returns takes that revision;
+         * the session alone never rebases a draft typed over another one. */
         ctx.ui.workMetaEditSession = 7;
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
         await state.preparing;
-        assert.equal(state.observed.revision, 2, 'a new session does not keep the closed one\'s base');
+        assert.equal(state.observed.revision, 1, 'a new session alone keeps the draft on its base');
+        ctx.ui.workMetaBaseline.source_url = WATCH('CCC');
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        assert.equal(state.observed.revision, 2, 'a draft typed over the read source takes its revision');
+        ctx.ui.workMetaBaseline.source_url = WATCH('ZZZ');
         state.observed = { revision: 1, identity: identity('CCC') };
         /* Without the draft the same prepare takes the server's revision. */
         ctx.ui.workMetaDraft.source_url = WATCH('ZZZ');
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
         await state.preparing;
         assert.equal(state.observed.revision, 2, 'a clean editor takes the newer revision');
+        listeners.length = 0;
+    }
+    /* A hidden pane (not the panel owner) with an unsaved draft: the read
+     * finds a newer source while the user is elsewhere. Returning remounts
+     * the same draft, so its Save must still conflict. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        ctx.ui = { workMetaDraftWorkId: 'W', workMetaDraft: { source_url: WATCH('typed') },
+            workMetaBaseline: { source_url: WATCH('ZZZ') } };
+        globalThis.prksOfflineReadEntity = answer(serverState(2, 'BBB'));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        assert.equal(ctx.entity.provider_id, 'BBB', 'the held Work shows the newer source');
+        assert.equal(state.observed.revision, 0, 'the hidden draft keeps the revision it was typed over');
         listeners.length = 0;
     }
     /* "Use server" on a conflict is the user's explicit choice: it replaces
