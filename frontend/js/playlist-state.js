@@ -464,12 +464,23 @@
     async function pinPlaylistEditBase(playlistId, shown, operations) {
         const read = await acknowledgedPlaylistBase(playlistId, operations);
         const pending = pendingFieldBases(operations, playlistId);
-        /* An empty title is shown as the default name. Compare the stored
-         * empty title, pending or read, as the value the form shows. */
-        const own = pending.title;
-        const stored = own ? own.value : (read && read.title ? read.title.value : null);
-        const compared = shown && shown.title === DEFAULT_TITLE && stored === ''
-            ? Object.assign({}, shown, { title: '' }) : shown;
+        /* The form shows a stored title and URL trimmed, and an empty title
+         * as the default name. A stored value, pending or read, that the form
+         * shows that way is compared as itself, so its raw text and revision
+         * stay the base a replacement or cancellation is measured from. */
+        if (!shown) return reconcileCore.pinEditBase(shown, read, pending);
+        const compared = Object.assign({}, shown);
+        ['title', 'original_url'].forEach(function (field) {
+            if (!(field in shown)) return;
+            const own = pending[field];
+            const stored = own ? own.value : (read && read[field] ? read[field].value : null);
+            if (typeof stored !== 'string') return;
+            const displayed = String(shown[field] == null ? '' : shown[field]).trim();
+            const trimmed = stored.trim();
+            if (trimmed === displayed || (field === 'title' && trimmed === '' && displayed === DEFAULT_TITLE)) {
+                compared[field] = stored;
+            }
+        });
         return reconcileCore.pinEditBase(compared, read, pending);
     }
 
