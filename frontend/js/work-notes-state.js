@@ -258,7 +258,8 @@
             operationCreatedAt: op.created_at,
         });
         if (plan === 'superseded') return;
-        if (plan === 'unproven') rereadNoteBody(ctx, work, field);
+        const fence = advanceNoteFence(work, field);
+        if (plan === 'unproven') rereadNoteBody(ctx, work, field, fence);
         if (op.operation === RESEARCH_OP) {
             work.text_content = text;
             const refs = event.acknowledged.research_refs;
@@ -287,20 +288,71 @@
         }
     }
 
+    /* Each accepted note ACK advances its field's fence on the Work it was
+     * written into. ACKs patch that Work in place, so the object alone cannot
+     * tell a re-read started before a later ACK from one started after it. */
+    const noteFences = new WeakMap();
+
+    function noteFence(work, field) {
+        const fences = noteFences.get(work);
+        return fences ? fences[field] || 0 : 0;
+    }
+
+    function advanceNoteFence(work, field) {
+        const fences = noteFences.get(work) || {};
+        fences[field] = (fences[field] || 0) + 1;
+        noteFences.set(work, fences);
+        return fences[field];
+    }
+
     /* An unproven ACK was written into this owner's Work: take the body the
-     * server holds now, unless the Work was replaced meanwhile. */
-    function rereadNoteBody(ctx, work, field) {
+     * server holds now, with the revision it belongs to, unless the Work was
+     * replaced or a later ACK for this note landed meanwhile.
+     *
+     * notes-state is read before the Work, so the body is never older than the
+     * revision paired with it. A save in between can only pair a newer body
+     * with an older revision, which conflicts; the reverse order could pair an
+     * older body with a newer revision and overwrite a save never shown. */
+    function rereadNoteBody(ctx, work, field, fence) {
         if (typeof root.prksOfflineReadEntity !== 'function') return;
+        const revisionKey = field === 'private_notes' ? 'private_note_revision' : 'research_note_revision';
+        const fresh = { dedupe: false };
         void reconcileCore.adoptFresh(
-            () => root.prksOfflineReadEntity('work', work.id, '/api/works/' + encodeURIComponent(work.id),
-                { validate: value => !!value && value.id === work.id }),
-            () => (ctx.destroyed ? null : ctx.getEntity && ctx.getEntity('work')),
+            async () => {
+                const state = await readState(work.id, { requestPolicy: fresh });
+                if (!state || state.source !== 'server' || !state.value) return null;
+                const read = await root.prksOfflineReadEntity('work', work.id,
+                    '/api/works/' + encodeURIComponent(work.id),
+                    { validate: value => !!value && value.id === work.id, requestPolicy: fresh });
+                if (!read || read.source !== 'server' || !read.value) return null;
+                return { source: 'server', value: { work: read.value, revision: state.value[revisionKey] } };
+            },
+            () => {
+                if (ctx.destroyed) return null;
+                const current = ctx.getEntity && ctx.getEntity('work');
+                return current === work && noteFence(work, field) === fence ? current : null;
+            },
             work,
-            fresh => {
-                const body = fresh[field] == null ? '' : String(fresh[field]);
-                work[field] = field === 'private_notes' ? (fresh[field] == null ? null : body) : body;
+            ({ work: read, revision }) => {
+                const body = read[field] == null ? '' : String(read[field]);
+                work[field] = field === 'private_notes' ? (read[field] == null ? null : body) : body;
+                /* The references are resolved against the body: B's text
+                 * never renders with the links resolved for A. */
+                if (field === 'text_content') {
+                    const refs = read.research_refs;
+                    if (refs && typeof refs === 'object' && !Array.isArray(refs)) work.research_refs = refs;
+                    else delete work.research_refs;
+                }
                 const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
                 if (canonical && canonical.id === work.id) canonical[field] = body;
+                /* The next save is measured against the body now shown. */
+                const base = ctx.getResource && ctx.getResource('workNotesObserved');
+                const slot = base ? (field === 'private_notes' ? base.private : base.research) : null;
+                if (slot) {
+                    slot.value = body;
+                    slot.revision = revision;
+                    slot.source = 'server';
+                }
             });
     }
 

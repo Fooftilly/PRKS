@@ -923,7 +923,8 @@
                     return patched;
                 });
                 if (!touched) continue;
-                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+                if (!await cacheListForDomain(listKey, merged, domain, token,
+                    observedAtOf(cached))) return false;
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
@@ -1124,7 +1125,10 @@
                 if (!row) continue;
                 const plan = planFor(row, cached);
                 if (plan === 'unproven') {
-                    await invalidateList(listKey);
+                    /* The domain token above already stops an in-flight GET
+                     * republishing it; a snapshot that could not be dropped
+                     * would still serve the old source offline. */
+                    if (await invalidateList(listKey) === false) return false;
                     continue;
                 }
                 if (plan !== 'apply') continue;
@@ -1217,8 +1221,8 @@
             if (work && !superseded) {
                 const plan = reconcileCore.planAck({
                     ackRevision: result.server_revision,
-                    agrees: (work[field] == null ? null : work[field]) === body ||
-                        (field !== 'private_notes' && work[field] === text),
+                    /* An absent body and an empty one are the same note. */
+                    agrees: (work[field] == null ? '' : String(work[field])) === (text || ''),
                     observedAt: observedAtOf(snapshots[0]),
                     operationCreatedAt: op.created_at,
                 });
@@ -1393,7 +1397,7 @@
             if (!patch) return true;
             const merged = rows.map(row => (row && row.id === result.work_id
                 ? Object.assign({}, row, patch) : row));
-            return cacheListForDomain(listKey, merged, domain, token);
+            return cacheListForDomain(listKey, merged, domain, token, observedAtOf(cached));
         }
 
         /* Reconcile an acknowledged open event into the cached Recent list.
@@ -1421,7 +1425,8 @@
             const merged = typeof root.prksMergeRecentOpen === 'function'
                 ? root.prksMergeRecentOpen(rows, result) : null;
             if (!merged) return false;
-            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token);
+            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token,
+                observedAtOf(cached));
         }
 
         async function reconcileCreatedPerson(result) {
