@@ -129,18 +129,17 @@ class _WorkNotesPage(_PageBase):
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row && row.value)",
             work_id)
 
-    def wait_cached_field(self, page, work_id, field, expected, timeout=8):
+    def wait_cached_field(self, page, work_id, field, expected):
         """The cached Work once it holds `expected`. An ACK whose cached Work
         was read after the edit was made cannot prove that copy, so it drops
         it and the open editor's corrective read stores the server's Work."""
-        deadline = time.time() + timeout
-        cached = None
-        while time.time() < deadline:
-            cached = self.cached_work(page, work_id)
-            if cached and cached.get(field) == expected:
-                return cached
-            page.wait_for_timeout(50)
-        return cached
+        wait_for_async(
+            page,
+            """([id, field, expected]) => window.createPrksOfflineStore().getEntity('work', id)
+                .then(row => !!(row && row.value && row.value[field] === expected))""",
+            arg=[work_id, field, expected], timeout=8000,
+            message="the cached Work never held the acknowledged note")
+        return self.cached_work(page, work_id)
 
 
 class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
