@@ -229,6 +229,22 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].base_revision, 3,
             "against the pinned revision: a server that moved on refuses it as a conflict");
     }
+    /* Another pane replaced the synced edit (Seminars -> Talks) before this
+     * form, opened on the unsent edit, returned to Lectures: the revert is a
+     * write measured from the ACK, not a silent cancellation. */
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        await store.savePlaylistFields(id, { title: "Talks" }, baseAt({ title: 4 }, { title: "Seminars" }));
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.status !== "acknowledged");
+        assert.equal(rows.length, 1, "the revert replaces the other pane's edit");
+        assert.equal(rows[0].payload.value, "Lectures");
+        assert.equal(rows[0].base_revision, 4, "measured against the shown edit's ACK");
+    }
     /* A title cleared offline shows as the default name: reopening Edit pins
      * it, so a new title replaces the unsent edit. */
     {

@@ -277,6 +277,52 @@ async function failuresAndReplays() {
             assert.equal(await cache.getList('people:index'), null, 'and so is the People index');
         }
     }
+    /* A People GET started before the ACK cannot republish its older rows. */
+    {
+        const { cache } = setup();
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+            await gate;
+            return { ok: true, status: 200, json: async () => [{ id: 'P', name: 'Ada', groups: [] }] };
+        } });
+        await cache.putList('people:index', [{ id: 'P', name: 'Ada', groups: [] }], '');
+        const reading = offline.readThroughList('people:index', '/api/people',
+            { domain: 'people', validate: Array.isArray });
+        await later();
+        const op = createdNow();
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+        release();
+        await reading;
+        await later(); await later();
+        assert.equal(await cache.getList('people:index'), null, 'the older People read is not published');
+    }
+    /* The replay after a first attempt dropped the catalogue and then failed
+     * to write the Person: the chip is named from the Group detail. */
+    {
+        const { cache, offline } = setup();
+        const person = { id: 'P', name: 'Ada', groups: [] };
+        await cache.putEntity('person', 'P', { ...person });
+        await cache.putEntity('person-group', 'G', { id: 'G', name: 'Group', members: [], member_count: 0 });
+        await later();
+        const op = createdNow();
+        await later();
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'Group', parent_id: null, member_count: 1 }], '');
+        const putEntity = cache.putEntity.bind(cache);
+        cache.putEntity = async (kind, ...rest) => {
+            if (kind === 'person') throw new Error('quota');
+            return putEntity(kind, ...rest);
+        };
+        const ackOf = { code: 'ACKNOWLEDGED', group_id: 'G', person_id: 'P', present: true, changed: true,
+            server_revision: 1 };
+        assert.equal(await offline.reconcilePersonGroupMember(ackOf, op), false, 'the Person write failed');
+        assert.equal(await cache.getList('person-groups:index'), null, 'after the catalogue was dropped');
+        cache.putEntity = putEntity;
+        assert(await offline.reconcilePersonGroupMember(ackOf, op), 'the replay retires');
+        assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Group' }],
+            'the replayed chip is named from the Group detail');
+    }
 }
 
 async function main() {

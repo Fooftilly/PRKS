@@ -502,6 +502,34 @@ async function mountedSourceCorrectiveRead() {
         assert.deepEqual(kinds, ['work-source-state'], 'a parked tab makes no second request');
         listeners.length = 0;
     }
+    /* The user is typing in the source field: the newer source is not shown,
+     * so the base stays the ACK's and a Save conflicts instead of overwriting. */
+    {
+        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
+        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        const state = ctx.resources.workSourceEditor;
+        await state.preparing;
+        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(2) : serverWork('CCC'));
+        globalThis.prksRightPanelOwnedBy = () => true;
+        globalThis.prksOwnerTabIsFocused = () => true;
+        globalThis.document = { activeElement: { matches: () => true, value: WATCH('typed') },
+            getElementById: () => null };
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
+            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        await flush(); await flush(); await flush();
+        delete globalThis.document;
+        globalThis.prksRightPanelOwnedBy = () => false;
+        globalThis.prksOwnerTabIsFocused = () => false;
+        assert.equal(state.observed.revision, 1, 'the focused field keeps the ACK base');
+        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(
+            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })));
+        assert.equal(ctx.entity.provider_id, 'CCC', 'the Work still takes the server source');
+        listeners.length = 0;
+    }
     /* A revision answered from the cache adopts nothing and keeps the ACK's base. */
     {
         globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
