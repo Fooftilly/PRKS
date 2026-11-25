@@ -34,7 +34,6 @@ from backend.api_contract.operation import Operation, Reply, RequestBody, Schema
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
 
 # The answers every route of a kind can send: components.responses.
@@ -115,12 +114,13 @@ def _request(components: _Components, request: RequestBody) -> dict[str, Any]:
 
 def _shared_for(route: Any) -> dict[str, str]:
     """``status -> components.responses name`` this route can send besides its own."""
+    from backend.api.session import epoch_fenced
     from backend.web.routing import Body
 
     shared: dict[str, str] = {}
     if route.pattern == "/api" or route.pattern.startswith("/api/"):
         shared.update({"401": "NotAuthenticated", "403": "Forbidden", "503": "Unavailable"})
-        if route.method not in _SAFE_METHODS:
+        if epoch_fenced(route.method, route.pattern):
             shared.update({"400": "EpochRequired", "409": "EpochChanged"})
     if route.body_kind is Body.JSON:
         bad = "BadRequest" if shared.get("400") == "EpochRequired" else "InvalidRequest"
@@ -142,7 +142,11 @@ def _operation(components: _Components, route: Any, contract: Operation, shared:
         out["requestBody"] = _request(components, contract.request)
     responses = {str(status): _reply(components, reply) for status, reply in contract.responses.items()}
     for status, name in _shared_for(route).items():
-        if status not in responses:
+        if status in responses:
+            continue
+        if route.method == "HEAD":
+            responses[status] = {"description": _SHARED[name]}  # a HEAD answer has no body
+        else:
             responses[status] = {"$ref": f"#/components/responses/{name}"}
             shared.add(name)
     out["responses"] = dict(sorted(responses.items()))

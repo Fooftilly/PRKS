@@ -16,6 +16,7 @@ from pathlib import Path
 from openapi_core import OpenAPI
 from pydantic import create_model
 
+from backend.api.session import epoch_fenced
 from backend.api import ROUTES
 from backend.api_contract.openapi import SchemaConflict, build_document, openapi_document, openapi_path, untyped
 from backend.api_contract.operation import Operation, ok
@@ -168,8 +169,18 @@ class OpenApiDocumentTests(unittest.TestCase):
                 continue
             with self.subTest(method=method, path=path):
                 self.assertTrue({"401", "403", "503"} <= set(op["responses"]))
-                if method not in ("GET", "HEAD"):
+                if epoch_fenced(method.upper(), path):
                     self.assertTrue({"400", "409"} <= set(op["responses"]))
+                else:
+                    self.assertNotIn("409", op["responses"])
+
+    def test_a_read_sent_as_post_documents_no_epoch_refusal(self) -> None:
+        for path in ("/api/citations", "/api/diagnostics/performance/reset"):
+            responses = self.document["paths"][path]["post"]["responses"]
+            with self.subTest(path=path):
+                self.assertNotIn("409", responses)
+                self.assertNotEqual(responses.get("400"), {"$ref": "#/components/responses/EpochRequired"})
+                self.assertNotEqual(responses.get("400"), {"$ref": "#/components/responses/BadRequest"})
 
     def test_shared_responses_are_published_only_when_used(self) -> None:
         refs = json.dumps(self.document["paths"])
@@ -205,8 +216,10 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_a_head_route_sends_no_body(self) -> None:
         op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["head"]
         self.assertEqual(op["operationId"], "getProcessingItemPdfHead")
-        for reply in op["responses"].values():
-            self.assertNotIn("content", reply)
+        for status, reply in op["responses"].items():
+            with self.subTest(status=status):
+                self.assertNotIn("$ref", reply)
+                self.assertNotIn("content", reply)
 
 
 if __name__ == "__main__":

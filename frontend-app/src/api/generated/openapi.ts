@@ -2656,7 +2656,6 @@ export interface operations {
             };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["Unavailable"];
@@ -2743,7 +2742,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                    "text/plain": string;
                 };
             };
             /** @description The database cannot be read (unavailable). */
@@ -2814,7 +2813,6 @@ export interface operations {
             };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["Unavailable"];
@@ -3492,8 +3490,20 @@ export interface operations {
                 };
                 content?: never;
             };
-            401: components["responses"]["NotAuthenticated"];
-            403: components["responses"]["Forbidden"];
+            /** @description No live session (not_authenticated). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session's role lacks the route's capability, or the Origin is not allowed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description No ready item with that id (ENTITY_NOT_FOUND). */
             404: {
                 headers: {
@@ -3508,7 +3518,13 @@ export interface operations {
                 };
                 content?: never;
             };
-            503: components["responses"]["Unavailable"];
+            /** @description The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     importProcessingItems: {

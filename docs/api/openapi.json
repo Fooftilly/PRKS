@@ -585,9 +585,6 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
-          "409": {
-            "$ref": "#/components/responses/EpochChanged"
-          },
           "413": {
             "$ref": "#/components/responses/RequestTooLarge"
           },
@@ -710,9 +707,9 @@
           "404": {
             "description": "The server runs without a jobs runtime (test servers only).",
             "content": {
-              "application/json": {
+              "text/plain": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                  "type": "string"
                 }
               }
             }
@@ -804,9 +801,6 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
-          },
-          "409": {
-            "$ref": "#/components/responses/EpochChanged"
           },
           "413": {
             "$ref": "#/components/responses/RequestTooLarge"
@@ -1801,10 +1795,10 @@
             "description": "The requested range."
           },
           "401": {
-            "$ref": "#/components/responses/NotAuthenticated"
+            "description": "No live session (not_authenticated)."
           },
           "403": {
-            "$ref": "#/components/responses/Forbidden"
+            "description": "The session's role lacks the route's capability, or the Origin is not allowed."
           },
           "404": {
             "description": "No ready item with that id (ENTITY_NOT_FOUND)."
@@ -1813,7 +1807,7 @@
             "description": "The range is outside the file."
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE)."
           }
         }
       }

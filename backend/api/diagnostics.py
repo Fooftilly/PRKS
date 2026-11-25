@@ -17,7 +17,7 @@ import logging
 from typing import Any
 
 from backend.api_contract.openapi import openapi_document
-from backend.api_contract.operation import Operation, Reply, body, error, ok
+from backend.api_contract.operation import Operation, Reply, body, error, ok, plain
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.client_errors import ClientErrorLogged, ClientErrorReport
 from backend.api_contract.jobs import JobDiagnostics
@@ -89,7 +89,7 @@ ROUTES: tuple[Route, ...] = (
         "getJobDiagnostics", "Job worker and queue diagnostics", _TAG,
         {200: ok(JobDiagnostics, "The embedded worker's state and process-local counters, and the "
                                  "queue's depth and oldest age by job kind and state."),
-         404: error("The server runs without a jobs runtime (test servers only)."),
+         404: plain("The server runs without a jobs runtime (test servers only)."),
          503: error("The database cannot be read (unavailable).")})),
     route("POST", "/api/client-errors", client_error, contract=Operation(
         "reportClientError", "Log a browser error as metadata only", _TAG,

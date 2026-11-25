@@ -104,5 +104,10 @@ def error(description: str, schema: Schema = ApiErrorEnvelope) -> Reply:
     return Reply(description, schema)
 
 
+def plain(description: str) -> Reply:
+    """A ``text/plain`` refusal from :func:`backend.web.http.error_response` (``"<status> <message>"``)."""
+    return Reply(description, {"type": "string"}, media_type="text/plain")
+
+
 def body(schema: Schema, description: str = "", **kwargs: Any) -> RequestBody:
     return RequestBody(schema, description, **kwargs)
