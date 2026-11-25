@@ -2781,10 +2781,11 @@
                 observedAt: observedAtOf(cached), operationCreatedAt: op && op.created_at,
             });
             if (plan === 'unproven') {
-                /* The domain token stops a GET already in flight, not a later
-                 * offline read: a snapshot that could not be dropped keeps the
-                 * operation queued. */
-                return await invalidateList(listKey) !== false;
+                /* The domain token stops a GET already in flight; a later
+                 * offline read skips the list while it is being dropped, and
+                 * a snapshot that could not be dropped keeps the operation
+                 * queued. */
+                return dropUnprovenList(listKey);
             }
             if (plan !== 'apply') return true;
             const next = mutate(cached.value);
@@ -2977,7 +2978,7 @@
             if (group && countUncertain) {
                 const token = currentDomainGeneration(DOMAIN_PERSON_GROUPS) + 1;
                 domainGeneration.set(DOMAIN_PERSON_GROUPS, token);
-                if (await invalidateList(PERSON_GROUPS_LIST_KEY) === false) return false;
+                if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
             } else if (group && !await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS,
                 ackRevision, op, () => false,
                 groupRows => groupRows.map(function (row) {
