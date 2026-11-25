@@ -622,6 +622,7 @@ async function mountedSourceCorrectiveRead() {
         await state.preparing;
         assert.equal(ctx.entity.provider_id, 'BBB', 'the held Work shows the newer source');
         assert.equal(state.observed.revision, 0, 'the hidden draft keeps the revision it was typed over');
+        assert.equal(state.observed.identity, identity('BBB'), 'and the identity the read returned');
         listeners.length = 0;
     }
     /* A queued replacement BBB is shown over the acknowledged ZZZ and the
@@ -640,6 +641,8 @@ async function mountedSourceCorrectiveRead() {
         await state.preparing;
         globalThis.prksEffectiveWorkSource = effective;
         assert.equal(state.observed.revision, 0, 'a queued video does not stand in for the read one');
+        assert.equal(state.observed.identity, identity('DDD'),
+            'paired with the read identity, so typing ZZZ back is a change to send, not a cancellation');
         listeners.length = 0;
     }
     /* "Use server" on a conflict is the user's explicit choice: it replaces

@@ -490,8 +490,14 @@
              * to the newer source while keeping that draft; taking the newer
              * revision here would let its Save replace a source the user
              * never saw instead of conflicting with it. */
+            /* Only the revision stays: the identity is the read one, since
+             * it decides whether a Save is a return to the server's video.
+             * Keeping the older identity would let a draft naming that older
+             * video cancel a queued replacement and queue nothing, leaving
+             * the newer server video in place without a conflict. */
             if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '') &&
                 !typedOver(ctx, state, identity)) {
+                state.observed = baseOf(state.observed.revision, identity);
                 return true;
             }
             state.observed = baseOf(stateResult.value.revision, identity);
