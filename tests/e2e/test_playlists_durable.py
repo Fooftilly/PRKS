@@ -200,7 +200,14 @@ class DurablePlaylistTests(unittest.TestCase):
         self.prepare_playlist(page, playlist)
         self.offline(page, context)
 
-        page.evaluate("id => updatePlaylist(id, { title: 'Renamed Offline' })", playlist)
+        # An edit session pins its base when Edit opens; the rename saves
+        # against that pin, as the editor does.
+        page.evaluate("""async id => {
+            const cached = await prksOfflineReadEntity(
+                'playlist', id, '/api/playlists/' + encodeURIComponent(id), {});
+            const base = await prksPinPlaylistEdit(id, { title: cached.value.title });
+            return updatePlaylist(id, { title: 'Renamed Offline' }, { base });
+        }""", playlist)
         self.wait_for_family(page, 'SET_PLAYLIST_FIELD')
         self.index(page)
         o._wait_content_contains(page, 'Renamed Offline')
