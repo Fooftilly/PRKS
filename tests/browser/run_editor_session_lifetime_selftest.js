@@ -718,10 +718,15 @@ async function tagAckRefreshRejectsInconsistentOptions() {
         return { value: stale, source: 'server' };
     };
     let workReads = 0;
+    let supersedeOnRead = false;
     let workTags = function () { return [tag]; };
     global.prksOfflineReadEntity = async function (kind, id) {
         if (kind !== 'work') return previousRead(kind, id);
         workReads += 1;
+        if (supersedeOnRead && workReads > 1) {
+            const live = ctx.getResource('workTagEditor');
+            if (live) live.readVersion += 1;
+        }
         return { source: 'server', value: core.observe({ id: id, tags: workTags() }, Date.now()) };
     };
     function ack(revision) {
@@ -749,6 +754,16 @@ async function tagAckRefreshRejectsInconsistentOptions() {
         assert('a disagreeing server answer is read again, a bounded number of times',
             refreshReads >= 3 && refreshReads <= 4);
         assertEq('a disagreeing server answer is not taken as the base', state.options, null);
+
+        // A retry superseded while its detail read is out never writes it.
+        workReads = 0;
+        supersedeOnRead = true;
+        workTags = function () { return workReads > 1 ? [] : [tag]; };
+        ctx.setEntity('work', core.observe({ ...work, tags: [tag] }, Date.now()));
+        ack(1);
+        await flush();
+        assertEq('a superseded link re-read leaves the held links', ctx.getEntity('work').tags.length, 1);
+        supersedeOnRead = false;
 
         // The detail was the older read: another device removed the Tag
         // after it. Reading both again makes them agree on the removal.

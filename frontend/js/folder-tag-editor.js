@@ -168,13 +168,14 @@
     }
     /* The links of the held Folder, read again from the server. Only the links
      * are taken, and only while this tab still holds the value it read past. */
-    async function rereadLinks(ctx, state) {
+    async function rereadLinks(ctx, state, readVersion) {
         const id = state.folderId;
         const held = ctx.getEntity('folder');
         if (!held || held.id !== id) return;
         await reconcileCore.adoptFresh(
             () => root.prksOfflineReadEntity('folder', id, '/api/folders/' + encodeURIComponent(id), { validate: v => !!(v && typeof v === 'object' && v.id === id), domain: 'folders', requestPolicy: { dedupe: false } }),
-            () => ctx.getEntity('folder'), held,
+            // A parked or superseded editor no longer owns the held links.
+            () => (live(ctx, state) && readVersion === state.readVersion ? ctx.getEntity('folder') : null), held,
             fresh => ctx.setEntity('folder', reconcileCore.carryObservation(fresh,
                 { ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags })));
     }
@@ -205,7 +206,7 @@
                     // Another device may have moved a link between the reads: read again, a bounded number of times.
                     if (read && read.source === 'server' && (state.refreshTries = (state.refreshTries || 0) + 1) < 3) {
                         // Either read may be the older one, so both are read again.
-                        await rereadLinks(ctx, state);
+                        await rereadLinks(ctx, state, readVersion);
                         if (!live(ctx, state) || readVersion !== state.readVersion) return;
                         await (state.preparing = prepare(ctx, state, { dedupe: false }));
                         return;
