@@ -847,8 +847,8 @@ async function serverRevisionsNeverPairWithCachedValues() {
     }
 }
 
-/* A pin read that failed must not strand the edit session: the refused Save
- * pins again against the values the form showed, and the next Save uses it. */
+/* A pin read that failed must not strand the edit session: a Save pins again
+ * against the values the form showed and uses that pin. */
 async function aFailedPinIsTakenAgainOnTheNextSave() {
     const store = newStore();
     runtimeForStore(store);
@@ -883,13 +883,19 @@ async function aFailedPinIsTakenAgainOnTheNextSave() {
     try {
         globalThis.openPersonGroupEdit(r);
         assert.equal(await r.ui.personGroupEditPin.base, null, "the pin read failed");
-        failing = false;
         const shown = r.ui.personGroupFieldBaseline;
+        /* Still unreadable: the Save pins again, fails again and is refused. */
+        failing = true;
         const refused = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
-        assert.equal(refused && refused.ok, false, "a Save without a pin is refused");
+        assert.equal(refused && refused.ok, false, "a Save that cannot pin is refused");
         assert.ok(alerts.some(m => m.indexOf("cannot be edited offline yet") !== -1));
+        /* Readable now (from the cache after a disconnect, say): the same
+         * Save pins again against what the form showed and goes through. */
+        failing = false;
+        alerts.length = 0;
         const saved = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
-        assert.equal(saved && saved.ok, true, "the next Save uses the pin taken again");
+        assert.equal(saved && saved.ok, true, "the Save uses the pin taken again");
+        assert.deepEqual(alerts, [], "with no refusal first");
         const rows = (await store.listOperations())
             .filter(row => row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-R");
         assert.equal(rows.length, 1);

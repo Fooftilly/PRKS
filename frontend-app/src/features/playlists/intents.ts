@@ -223,13 +223,19 @@ export function browserPlaylistIntents(
        * ones PRKS holds now: a field saved elsewhere meanwhile becomes a
        * revision conflict instead of being silently replaced (#894). */
       const pin = owner.ui?.playlistEditPin
-      const pinned = pin && pin.playlistId === playlistId && pin.session === session ? await pin.base : null
+      let pinned = pin && pin.playlistId === playlistId && pin.session === session ? await pin.base : null
       if (!sessionCurrent()) return { ok: true, message: '' }
       if (!pinned) {
-        // A failed pin read must not strand this session: the next Save pins
-        // again against what the form showed, so a field changed elsewhere
-        // meanwhile still reads as unknown rather than as a base.
+        // The pin read at open can fail (a disconnect while it was in
+        // flight). The Save pins again against what the form showed, so a
+        // field changed elsewhere meanwhile still reads as unknown rather
+        // than as a base.
         this.pinEditBase(playlistId, { ...baseline })
+        const repinned = owner.ui?.playlistEditPin
+        pinned = repinned ? await repinned.base : null
+        if (!sessionCurrent()) return { ok: true, message: '' }
+      }
+      if (!pinned) {
         return {
           ok: false,
           message:

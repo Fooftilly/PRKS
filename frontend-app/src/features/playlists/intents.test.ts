@@ -161,16 +161,20 @@ describe('Playlist intents', () => {
     expect(window.updatePlaylist).not.toHaveBeenCalled()
     expect(pane.ui?.playlistEditing).toBe(true)
 
+    // A failed pin does not strand the session: the Save pins again against
+    // the values the form showed, and is refused only when that fails too.
+    const pinPlaylist = window.prksPinPlaylistEdit as ReturnType<typeof vi.fn>
+    pinPlaylist.mockImplementationOnce(async () => null)
     pane.ui!.playlistEditPin = { playlistId: 'PL-1', session: 0, base: Promise.resolve(null) }
     const unavailable = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
     expect(unavailable.ok).toBe(false)
     expect(unavailable.message).toContain('cannot be changed offline yet')
-
-    // A failed pin does not strand the session: the next Save pins again
-    // against the values the form showed.
     expect(window.prksPinPlaylistEdit).toHaveBeenLastCalledWith('PL-1', shown)
+
+    pane.ui!.playlistEditPin = { playlistId: 'PL-1', session: 0, base: Promise.resolve(null) }
     const retried = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
     expect(retried.ok).toBe(true)
+    expect(window.prksPinPlaylistEdit).toHaveBeenLastCalledWith('PL-1', shown)
     expect(window.updatePlaylist).toHaveBeenCalledTimes(1)
   })
 
