@@ -557,6 +557,34 @@ async function mountedSourceCorrectiveRead() {
         assert.equal(ctx.entity.provider_id, 'CCC', 'the Work still takes the server source');
         listeners.length = 0;
     }
+    /* The same with focus moved to another field: unsaved source text is
+     * the user's, so the corrective read does not overwrite it either. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        globalThis.prksOfflineReadEntity = answer(serverState(2, 'CCC'));
+        globalThis.prksRightPanelOwnedBy = () => true;
+        globalThis.prksOwnerTabIsFocused = () => true;
+        const accepted = [];
+        globalThis.prksVueWorkMetadataEditorOwns = () => true;
+        globalThis.prksVueAcceptWorkMetadataField = (_ctx, field, value) => accepted.push([field, value]);
+        globalThis.document = { activeElement: null, getElementById: () => null };
+        ctx.ui = { workMetaDraftWorkId: 'W', workMetaDraft: { source_url: WATCH('typed') },
+            workMetaBaseline: { source_url: WATCH('ZZZ') } };
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
+        await flush(); await flush(); await flush();
+        delete globalThis.document;
+        delete globalThis.prksVueWorkMetadataEditorOwns;
+        delete globalThis.prksVueAcceptWorkMetadataField;
+        globalThis.prksRightPanelOwnedBy = () => false;
+        globalThis.prksOwnerTabIsFocused = () => false;
+        assert.deepEqual(accepted, [], 'the unsaved draft is not overwritten');
+        assert.equal(state.observed.revision, 1, 'and keeps the ACK revision, as a focused field does');
+        assert.equal(state.observed.identity, identity('CCC'));
+        listeners.length = 0;
+    }
     /* Reopened offline: the cached Work may be older or newer than the
      * cached source state (a delayed Work answer, a Work-role ACK refreshing
      * its read time). The base is the cached pair, and the tab shows the
@@ -908,10 +936,16 @@ async function sweepSurvivesReconcile() {
     assert.equal(offline.isDomainBlocked('recent'), true);
     globalThis.prksIsRecentIndexShape = Array.isArray;
     globalThis.prksMergeRecentOpen = (rows, result) => [{ id: result.work_id }, ...rows];
+    const swept = offline.currentDomainGeneration('recent');
     const reconciling = offline.reconcileRecentOpen({ work_id: 'W' });
+    for (let i = 0; i < 5; i += 1) await later();
+    const reconciled = offline.currentDomainGeneration('recent');
+    assert.ok(reconciled > swept, 'the reconcile starts a newer generation');
+    assert.equal(offline.isDomainBlocked('recent'), true, 'still blocked while the sweep runs');
     release();
     await reconciling;
     for (let i = 0; i < 5; i += 1) await later();
+    assert.equal(offline.currentDomainGeneration('recent'), reconciled);
     assert.equal(offline.isDomainBlocked('recent'), false, 'the finished sweep unblocks the newer generation');
 }
 
