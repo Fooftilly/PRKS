@@ -38,7 +38,8 @@ from backend.domain.works import source_rules
 from backend.api.common import objects, pdfs_dir, revalidated, text_field
 from backend.api_contract.citations import CitationsRequest, CitationsResult
 from backend.api_contract.errors import NotPortedEnvelope
-from backend.api_contract.operation import IF_NONE_MATCH, Header, Operation, Param, Reply, body, error, ok, plain
+from backend.api_contract.operation import Operation, Param, Reply, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
 from backend.api_contract.works import (
     BulkWorkRequest,
     BulkWorkResult,
@@ -556,8 +557,6 @@ def linearize_existing(req: Request) -> Response:
 
 
 _TAG = "works"
-_ETAG = Header("Opaque representation token for conditional GETs.")
-_NOT_MODIFIED = Reply("Not modified: If-None-Match matched the current ETag. Bodyless.", headers={"ETag": _ETAG})
 _MISSING = error("No Work with that id in this Library.")
 _MISSING_TEXT = plain("No Work with that id in this Library.")
 _NOT_PORTED = error("Not ported to PostgreSQL yet (not_ported).", NotPortedEnvelope)
@@ -565,10 +564,7 @@ _NOT_PORTED = error("Not ported to PostgreSQL yet (not_ported).", NotPortedEnvel
 
 def _revalidated(op_id: str, summary: str, schema: Any, description: str,
                  more: Optional[dict[int, Reply]] = None, params: tuple[Param, ...] = ()) -> Operation:
-    """A read answered with a representation ETag (``backend.api.common.revalidated``)."""
-    return Operation(op_id, summary, _TAG,
-                     {200: ok(schema, description, headers={"ETag": _ETAG}), 304: _NOT_MODIFIED, **(more or {})},
-                     params=(*params, IF_NONE_MATCH))
+    return revalidated_read(op_id, summary, _TAG, schema, description, more, params)
 
 
 _PROJECTION = Param("projection", schema={"type": "string", "enum": ["browse"]},

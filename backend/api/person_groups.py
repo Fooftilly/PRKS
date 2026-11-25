@@ -23,6 +23,18 @@ from __future__ import annotations
 from urllib.parse import unquote
 
 from backend.api.common import revalidated
+from backend.api_contract.operation import Operation, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.organization import Created, Done
+from backend.api_contract.people import (
+    GroupMemberRequest,
+    PersonGroupCard,
+    PersonGroupCreateRequest,
+    PersonGroupDetail,
+    PersonGroupPatch,
+    PersonGroupState,
+    PersonMembershipState,
+)
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -120,14 +132,36 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, {"status": "deleted"})
 
 
+_TAG = "person-groups"
+_REFUSED = error("A domain refusal, with its message (a blank or taken name, a cycle, no such group).")
+
+
 ROUTES = (
-    route("GET", "/api/person-groups", catalog),
-    route("POST", "/api/person-groups", create),
-    route("GET", "/api/person-groups/{group_id}", detail),
-    route("PATCH", "/api/person-groups/{group_id}", update),
-    route("DELETE", "/api/person-groups/{group_id}", delete),
-    route("GET", "/api/person-groups/{group_id}/sync-state", sync_state),
-    route("POST", "/api/person-groups/{group_id}/members", add_member),
-    route("DELETE", "/api/person-groups/{group_id}/members/{person_id}", remove_member),
-    route("GET", "/api/persons/{person_id}/group-state", person_state),
+    route("GET", "/api/person-groups", catalog, contract=revalidated_read(
+        "listPersonGroups", "Every Person group with its counts", _TAG, list[PersonGroupCard],
+        "Every group, by name.")),
+    route("POST", "/api/person-groups", create, contract=Operation(
+        "createPersonGroup", "Create a Person group", _TAG,
+        {200: ok(Created, "Created."), 400: _REFUSED}, request=body(PersonGroupCreateRequest))),
+    route("GET", "/api/person-groups/{group_id}", detail, contract=Operation(
+        "getPersonGroup", "A group with its children, members and parent", _TAG,
+        {200: ok(PersonGroupDetail, "The group."), 404: plain("No group with that id.")})),
+    route("PATCH", "/api/person-groups/{group_id}", update, contract=Operation(
+        "updatePersonGroup", "Change a group's fields", _TAG,
+        {200: ok(Done, "Updated."), 400: _REFUSED},
+        request=body(PersonGroupPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", "/api/person-groups/{group_id}", delete, contract=Operation(
+        "deletePersonGroup", "Delete a group", _TAG, {200: ok(Done, "Deleted."), 400: _REFUSED})),
+    route("GET", "/api/person-groups/{group_id}/sync-state", sync_state, contract=revalidated_read(
+        "getPersonGroupSyncState", "A group's field and membership revisions", _TAG, PersonGroupState,
+        "The revisions only, tombstones included.", {404: error("No group with that id.")})),
+    route("POST", "/api/person-groups/{group_id}/members", add_member, contract=Operation(
+        "addPersonGroupMember", "Put a Person in a group", _TAG,
+        {200: ok(Done, "Added."), 400: _REFUSED}, request=body(GroupMemberRequest))),
+    route("DELETE", "/api/person-groups/{group_id}/members/{person_id}", remove_member, contract=Operation(
+        "removePersonGroupMember", "Take a Person out of a group", _TAG,
+        {200: ok(Done, "Removed (or was not a member).")})),
+    route("GET", "/api/persons/{person_id}/group-state", person_state, contract=revalidated_read(
+        "getPersonGroupState", "A Person's group membership revisions", _TAG, PersonMembershipState,
+        "The revisions only, tombstones included.", {404: error("No Person with that id.")})),
 )

@@ -115,3 +115,15 @@ def plain(description: str) -> Reply:
 
 def body(schema: Schema, description: str = "", **kwargs: Any) -> RequestBody:
     return RequestBody(schema, description, **kwargs)
+
+
+ETAG = Header("Opaque representation token for conditional GETs.")
+NOT_MODIFIED = Reply("Not modified: If-None-Match matched the current ETag. Bodyless.", headers={"ETag": ETAG})
+
+
+def revalidated(op_id: str, summary: str, tag: str, schema: Schema, description: str,
+                more: Optional[Mapping[int, Reply]] = None, params: tuple[Param, ...] = ()) -> Operation:
+    """A read answered with a representation ETag (``backend.api.common.revalidated``): 200 or 304."""
+    return Operation(op_id, summary, tag,
+                     {200: ok(schema, description, headers={"ETag": ETAG}), 304: NOT_MODIFIED, **(more or {})},
+                     params=(*params, IF_NONE_MATCH))

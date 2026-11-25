@@ -25,6 +25,20 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.api.common import optional_pdfs_dir, revalidated
+from backend.api_contract.operation import Operation, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.organization import (
+    Created,
+    Done,
+    PlaylistCard,
+    PlaylistCreateRequest,
+    PlaylistDetail,
+    PlaylistItemRequest,
+    PlaylistPatch,
+    PlaylistReorderRequest,
+    PlaylistState,
+    WorkPlaylistState,
+)
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -138,15 +152,40 @@ def remove_item(req: Request) -> Response:
     return json_response(req, 200, {"status": "removed"})
 
 
+_TAG = "playlists"
+
+
 ROUTES = (
-    route("GET", "/api/playlists", catalog),
-    route("POST", "/api/playlists", create),
-    route("GET", "/api/playlists/{playlist_id}", detail),
-    route("PATCH", "/api/playlists/{playlist_id}", update),
-    route("DELETE", "/api/playlists/{playlist_id}", delete),
-    route("GET", "/api/playlists/{playlist_id}/sync-state", sync_state),
-    route("POST", "/api/playlists/{playlist_id}/items", post_item),
-    route("DELETE", "/api/playlists/{playlist_id}/items/{work_id}", remove_item),
-    route("POST", "/api/playlists/{playlist_id}/reorder", reorder),
-    route("GET", "/api/works/{work_id}/playlist-state", work_state),
+    route("GET", "/api/playlists", catalog, contract=revalidated_read(
+        "listPlaylists", "Every Playlist with its item count", _TAG, list[PlaylistCard],
+        "Every Playlist, last changed first.")),
+    route("POST", "/api/playlists", create, contract=Operation(
+        "createPlaylist", "Create a Playlist", _TAG, {200: ok(Created, "Created.")},
+        request=body(PlaylistCreateRequest, "Left out: an empty Playlist.", required=False))),
+    route("GET", "/api/playlists/{playlist_id}", detail, contract=Operation(
+        "getPlaylist", "A Playlist with its Works in order", _TAG,
+        {200: ok(PlaylistDetail, "The Playlist."), 404: plain("No Playlist with that id.")})),
+    route("PATCH", "/api/playlists/{playlist_id}", update, contract=Operation(
+        "updatePlaylist", "Change a Playlist's fields", _TAG, {200: ok(Done, "Updated.")},
+        request=body(PlaylistPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", "/api/playlists/{playlist_id}", delete, contract=Operation(
+        "deletePlaylist", "Delete a Playlist and release its Works", _TAG, {200: ok(Done, "Deleted.")})),
+    route("GET", "/api/playlists/{playlist_id}/sync-state", sync_state, contract=revalidated_read(
+        "getPlaylistSyncState", "A Playlist's field and order revisions", _TAG, PlaylistState,
+        "The revisions only.", {404: error("No Playlist with that id.")})),
+    route("POST", "/api/playlists/{playlist_id}/items", post_item, contract=Operation(
+        "addPlaylistItem", "Put a Work in a Playlist, optionally at a position", _TAG,
+        {200: ok(Done, "Added."), 400: error("No ``work_id``, or no such Playlist or Work.")},
+        request=body(PlaylistItemRequest))),
+    route("DELETE", "/api/playlists/{playlist_id}/items/{work_id}", remove_item, contract=Operation(
+        "removePlaylistItem", "Take a Work out of a Playlist", _TAG,
+        {200: ok(Done, "Removed (or was not in it).")})),
+    route("POST", "/api/playlists/{playlist_id}/reorder", reorder, contract=Operation(
+        "reorderPlaylist", "Rewrite a Playlist's order", _TAG,
+        {200: ok(Done, "Reordered."),
+         400: error("``work_ids`` is not an array, or not exactly the member Works.")},
+        request=body(PlaylistReorderRequest, "Left out: an empty order.", required=False))),
+    route("GET", "/api/works/{work_id}/playlist-state", work_state, contract=revalidated_read(
+        "getWorkPlaylistState", "Which Playlist a Work is in, and its revision", _TAG, WorkPlaylistState,
+        "The Work's Playlist (empty for none) and the revision.", {404: error("No Work with that id.")})),
 )
