@@ -1057,16 +1057,31 @@
             return true;
         }
 
-        async function reconcileWorkSource(result) {
+        /* One acknowledged source identity, under the shared ordering rule
+         * (#1425, #1106). The `work-source-state` revision decides first: an
+         * ACK older than it is superseded and NOTHING is patched -- not the
+         * Work, not a browse row, not an embedded summary -- because every one
+         * of them may already show the newer video. Otherwise each record that
+         * carries source columns is patched only when it agrees or its read
+         * predates the operation; a record that cannot be proven is dropped
+         * for the next read to refetch, never overwritten with an older video.
+         * The four identity columns are always written together, per row. */
+        async function reconcileWorkSource(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
             const source = result.source;
-            if (!source) return false;
+            if (!source || !reconcileCore.isRevision(result.server_revision)) return false;
+            const createdAt = op && op.created_at;
+            const agreesWith = row => Object.keys(source).every(column =>
+                !Object.prototype.hasOwnProperty.call(row, column) || row[column] === source[column]);
+            const planFor = (row, envelope) => reconcileCore.planAck({
+                ackRevision: result.server_revision,
+                agrees: agreesWith(row),
+                observedAt: observedAtOf(envelope),
+                operationCreatedAt: createdAt,
+            });
             /* The source-state projection is a REVISION and nothing else, and
-             * it is the base the next edit is measured against. Leaving it at
-             * the old number means a second change is created against a
-             * revision the server has already moved past -- and the user's own
-             * previous edit becomes the thing they conflict with. */
+             * it is the base the next edit is measured against. */
             const kinds = ['work', 'work-source-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
@@ -1076,22 +1091,27 @@
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
             const work = snapshots[0] && snapshots[0].value;
             const state = snapshots[1] && snapshots[1].value;
-            if (work) {
-                const patched = patchedWithSource(work, source);
-                if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0])) {
-                    return false;
-                }
+            if (state && reconcileCore.isRevision(state.revision) && reconcileCore.decideAck({
+                ackRevision: result.server_revision, heldRevision: state.revision,
+            }) === 'superseded') {
+                return true;
             }
-            if (state && Number.isSafeInteger(result.server_revision)) {
-                // An acknowledgement older than the cache has been superseded;
-                // applying it would move the base backwards.
-                if (!Number.isSafeInteger(state.revision) ||
-                    state.revision <= result.server_revision) {
-                    const next = Object.assign({}, state, { revision: result.server_revision });
-                    if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) {
+            if (work) {
+                const plan = planFor(work, snapshots[0]);
+                if (plan === 'unproven') {
+                    markEntityChanged('work', id);
+                    await invalidateEntity('work', id);
+                } else if (plan === 'apply') {
+                    const patched = patchedWithSource(work, source);
+                    if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0],
+                        observedAtOf(snapshots[0]))) {
                         return false;
                     }
                 }
+            }
+            if (state) {
+                const next = Object.assign({}, state, { revision: result.server_revision });
+                if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) return false;
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
                 const token = currentDomainGeneration(domain) + 1;
@@ -1100,10 +1120,16 @@
                 if (!cached) continue;   // a missing snapshot is nothing to patch
                 const rows = cached.value;
                 if (!Array.isArray(rows)) return false;
-                if (!rows.some(row => row && row.id === id)) continue;
-                const merged = rows.map(row => (row && row.id === id
-                    ? (patchedWithSource(row, source) || row) : row));
-                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+                const row = rows.find(r => r && r.id === id);
+                if (!row) continue;
+                const plan = planFor(row, cached);
+                if (plan === 'unproven') {
+                    await invalidateList(listKey);
+                    continue;
+                }
+                if (plan !== 'apply') continue;
+                const merged = rows.map(r => (r && r.id === id ? (patchedWithSource(r, source) || r) : r));
+                if (!await cacheListForDomain(listKey, merged, domain, token, observedAtOf(cached))) return false;
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
@@ -1112,22 +1138,28 @@
                 const cached = await store.getEntitiesByKind(spec.kind)
                     .catch(function () { return null; });
                 if (!Array.isArray(cached)) return false;
-                for (const row of cached) {
-                    if (!row || !row.value) continue;
-                    const summaries = spec.rows(row.value);
+                for (const envelope of cached) {
+                    if (!envelope || !envelope.value) continue;
+                    const summaries = spec.rows(envelope.value);
                     if (!Array.isArray(summaries)) continue;
-                    let touched = false;
+                    if (!summaries.some(summary => summary && summary.id === id)) continue;
+                    const plans = summaries.filter(summary => summary && summary.id === id)
+                        .map(summary => planFor(summary, envelope));
+                    if (plans.includes('unproven')) {
+                        markEntityChanged(spec.kind, envelope.id);
+                        await invalidateEntity(spec.kind, envelope.id);
+                        continue;
+                    }
+                    if (!plans.includes('apply')) continue;
                     summaries.forEach(function (summary, index) {
                         if (!summary || summary.id !== id) return;
                         const patched = patchedWithSource(summary, source);
-                        if (!patched) return;
-                        summaries[index] = patched;
-                        touched = true;
+                        if (patched) summaries[index] = patched;
                     });
-                    if (!touched) continue;
-                    const entityToken = currentEntityGeneration(spec.kind, row.id) + 1;
-                    entityCoherence.set(entityKey(spec.kind, row.id), entityToken);
-                    if (!await cacheEntityIfCurrent(spec.kind, row.id, row.value, entityToken)) {
+                    const entityToken = currentEntityGeneration(spec.kind, envelope.id) + 1;
+                    entityCoherence.set(entityKey(spec.kind, envelope.id), entityToken);
+                    if (!await cacheEntityIfCurrent(spec.kind, envelope.id, envelope.value, entityToken,
+                        observedAtOf(envelope))) {
                         return false;
                     }
                 }
@@ -1172,26 +1204,44 @@
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
             const work = snapshots[0] && snapshots[0].value;
             const state = snapshots[1] && snapshots[1].value;
-            if (work) {
-                const nextWork = Object.assign({}, work);
-                nextWork[field] = field === 'private_notes' ? (text || null) : text;
-                if (fenceResearch && result.research_refs &&
-                    typeof result.research_refs === 'object' &&
-                    !Array.isArray(result.research_refs)) {
-                    nextWork.research_refs = result.research_refs;
-                }
-                if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0])) return false;
-            }
-            if (state) {
-                if (typeof root.prksNoteStateShape === 'function' &&
-                    !root.prksNoteStateShape(state, id)) return false;
-                const current = state[revisionKey];
-                if (!Number.isSafeInteger(current) || current <= result.server_revision) {
-                    const next = Object.assign({}, state);
-                    next[revisionKey] = result.server_revision;
-                    if (!await cacheEntityIfCurrent('work-notes-state', id, next, tokens[1])) {
-                        return false;
+            if (state && typeof root.prksNoteStateShape === 'function' &&
+                !root.prksNoteStateShape(state, id)) return false;
+            /* Shared ordering rule (#1425, #1105): the notes-state revision
+             * decides first. An older ACK patches neither the revision nor the
+             * cached body, which may already be another device's newer text. */
+            const superseded = !!state && reconcileCore.isRevision(state[revisionKey]) &&
+                reconcileCore.decideAck({
+                    ackRevision: result.server_revision, heldRevision: state[revisionKey],
+                }) === 'superseded';
+            const body = field === 'private_notes' ? (text || null) : text;
+            if (work && !superseded) {
+                const plan = reconcileCore.planAck({
+                    ackRevision: result.server_revision,
+                    agrees: (work[field] == null ? null : work[field]) === body ||
+                        (field !== 'private_notes' && work[field] === text),
+                    observedAt: observedAtOf(snapshots[0]),
+                    operationCreatedAt: op.created_at,
+                });
+                if (plan === 'unproven') {
+                    markEntityChanged('work', id);
+                    await invalidateEntity('work', id);
+                } else {
+                    const nextWork = Object.assign({}, work);
+                    nextWork[field] = body;
+                    if (fenceResearch && result.research_refs &&
+                        typeof result.research_refs === 'object' &&
+                        !Array.isArray(result.research_refs)) {
+                        nextWork.research_refs = result.research_refs;
                     }
+                    if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0],
+                        observedAtOf(snapshots[0]))) return false;
+                }
+            }
+            if (state && !superseded) {
+                const next = Object.assign({}, state);
+                next[revisionKey] = result.server_revision;
+                if (!await cacheEntityIfCurrent('work-notes-state', id, next, tokens[1])) {
+                    return false;
                 }
             }
             const canonicalAdvanced =
@@ -2962,11 +3012,11 @@
         }
 
         /** Same publication gate as cacheEntityForDomain, for a named list snapshot. */
-        function cacheListForDomain(listKey, value, domain, domainToken) {
+        function cacheListForDomain(listKey, value, domain, domainToken, observedAt) {
             if (!store || typeof store.putList !== 'function') return Promise.resolve(false);
             if (!domainCacheEligible(domain, domainToken)) return Promise.resolve(false);
             try {
-                return Promise.resolve(store.putList(listKey, value, ''))
+                return Promise.resolve(store.putList(listKey, value, '', observedAt))
                     .then(function (ok) {
                         if (!ok) return false;
                         if (domainCacheEligible(domain, domainToken)) return true;
@@ -3502,7 +3552,7 @@
         prksOfflineReconcileWorkTag: (result, op) => production.reconcileWorkTag(result, op),
         prksOfflineReconcileFolderTag: (result, op) => production.reconcileFolderTag(result, op),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
-        prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
+        prksOfflineReconcileWorkSource: (result, op) => production.reconcileWorkSource(result, op),
         prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),
         prksOfflineReconcilePrivateNote: (result, op) =>
             production.reconcilePrivateNote(result, op),

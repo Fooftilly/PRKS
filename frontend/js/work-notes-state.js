@@ -9,6 +9,10 @@
 (function (root) {
     'use strict';
 
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
+
     const RESEARCH_KIND = 'work-research-note';
     const PRIVATE_KIND = 'work-private-note';
     const RESEARCH_OP = 'SET_WORK_RESEARCH_NOTE';
@@ -239,6 +243,22 @@
         const rev = event.acknowledged.server_revision;
         if (!Number.isSafeInteger(rev) || rev < 0) return;
         const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+        const observed = ctx.getResource && ctx.getResource('workNotesObserved');
+        const held = observed ? (op.operation === RESEARCH_OP ? observed.research : observed.private) : null;
+        const field = op.operation === RESEARCH_OP ? 'text_content' : 'private_notes';
+        /* Shared ordering rule (#1425, #1105). The observed base's revision
+         * proves an older ACK superseded: the Work body, canonical body and
+         * base all stay on the newer text. Without a base, the Work body is
+         * proven by its read time; an unproven body is patched and re-read. */
+        const plan = reconcileCore.planAck({
+            ackRevision: rev,
+            heldRevision: held && reconcileCore.isRevision(held.revision) ? held.revision : null,
+            agrees: (work[field] == null ? '' : String(work[field])) === text,
+            observedAt: reconcileCore.observedAt(work),
+            operationCreatedAt: op.created_at,
+        });
+        if (plan === 'superseded') return;
+        if (plan === 'unproven') rereadNoteBody(ctx, work, field);
         if (op.operation === RESEARCH_OP) {
             work.text_content = text;
             const refs = event.acknowledged.research_refs;
@@ -265,6 +285,23 @@
                 slot.source = 'server';
             }
         }
+    }
+
+    /* An unproven ACK was written into this owner's Work: take the body the
+     * server holds now, unless the Work was replaced meanwhile. */
+    function rereadNoteBody(ctx, work, field) {
+        if (typeof root.prksOfflineReadEntity !== 'function') return;
+        void reconcileCore.adoptFresh(
+            () => root.prksOfflineReadEntity('work', work.id, '/api/works/' + encodeURIComponent(work.id),
+                { validate: value => !!value && value.id === work.id }),
+            () => (ctx.destroyed ? null : ctx.getEntity && ctx.getEntity('work')),
+            work,
+            fresh => {
+                const body = fresh[field] == null ? '' : String(fresh[field]);
+                work[field] = field === 'private_notes' ? (fresh[field] == null ? null : body) : body;
+                const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+                if (canonical && canonical.id === work.id) canonical[field] = body;
+            });
     }
 
     /**

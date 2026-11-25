@@ -388,11 +388,14 @@ async function reconciliation() {
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
+    // Operations created after every record above was cached.
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const sent = { created_at: new Date().toISOString() };
     // Exactly the shape an acknowledgement carries.
     const ack = { work_id: 'W-1', source: { source_kind: 'video', provider: 'youtube',
         provider_id: 'BBB', source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' },
         server_revision: 5 };
-    assert.equal(await offline.reconcileWorkSource(ack), true);
+    assert.equal(await offline.reconcileWorkSource(ack, sent), true);
 
     const coherent = row => {
         assert.equal(row.provider_id, 'BBB');
@@ -425,7 +428,7 @@ async function reconciliation() {
     assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5);
 
     // An acknowledgement older than the cache has been superseded.
-    await offline.reconcileWorkSource(Object.assign({}, ack, { server_revision: 2 }));
+    await offline.reconcileWorkSource(Object.assign({}, ack, { server_revision: 2 }), sent);
     assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5,
         'the base never moves backwards');
 
@@ -433,7 +436,7 @@ async function reconciliation() {
     await cache.deleteEntity('folder', 'F1');
     assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 6,
         source: { source_kind: 'video', provider: 'youtube', provider_id: 'CCC',
-            source_url: WATCH('CCC'), thumb_url: null, urldate: '2026-09-13' } }), true);
+            source_url: WATCH('CCC'), thumb_url: null, urldate: '2026-09-13' } }, sent), true);
 
     /* An UNREADABLE cache is a different answer: the operation must be
      * replayed rather than retired believing it patched what it could not
@@ -464,8 +467,9 @@ async function reconciliation() {
         prksRequest: async () => { throw new Error('no reads in convergent scenario'); },
     });
     globalThis.prksOfflineReconcileWorkSource =
-        result => convergentRuntime.reconcileWorkSource(result);
-    const asked = op('W-1', SHORT('BBB'));
+        (result, sentOp) => convergentRuntime.reconcileWorkSource(result, sentOp);
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const asked = Object.assign(op('W-1', SHORT('BBB')), { created_at: new Date().toISOString() });
     const convergentAck = {
         work_id: 'W-1', code: 'ACKNOWLEDGED', changed: false, server_revision: 1,
         provider: 'youtube', provider_id: 'BBB', source_kind: 'video',
@@ -474,7 +478,7 @@ async function reconciliation() {
     };
     assert.equal(globalThis.prksWorkSourceSyncHandler.isResult(convergentAck, asked), true,
         'handler accepts the stored spelling even though it is not the URL asked');
-    assert.equal(await globalThis.prksWorkSourceSyncHandler.reconcile(convergentAck), true);
+    assert.equal(await globalThis.prksWorkSourceSyncHandler.reconcile(convergentAck, asked), true);
     const converged = (await convergentCache.getEntity('work', 'W-1')).value;
     assert.equal(converged.source_url, WATCH('BBB'),
         'the stored spelling, never the URL this device asked for');
@@ -502,9 +506,11 @@ async function staleRead() {
     const reading = offline.readThroughList('works-browse:index', '/api/works?projection=browse',
         { domain: 'works-browse', validate: rows => Array.isArray(rows) });
     await settle();
+    await new Promise(resolve => setTimeout(resolve, 3));
     assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 1,
         source: { source_kind: 'video', provider: 'youtube', provider_id: 'BBB',
-            source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' } }), true);
+            source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' } },
+    { created_at: new Date().toISOString() }), true);
     release();
     await reading;
     await settle();

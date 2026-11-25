@@ -907,7 +907,12 @@ async function reconciliation() {
         prksRequest: async () => { throw new Error('no reads in this scenario'); },
     });
 
-    const researchOp = { operation: RESEARCH, entity_id: 'W-1', payload: { text: 'B [[concept:New]]' } };
+    /* The operations were created after the Work was cached: the reconcile
+     * core proves the cached body older than each ACK by that order. */
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const createdAt = new Date().toISOString();
+    const researchOp = { operation: RESEARCH, entity_id: 'W-1', payload: { text: 'B [[concept:New]]' },
+        created_at: createdAt };
     const researchAck = { work_id: 'W-1', note_kind: RESEARCH_KIND, code: 'ACKNOWLEDGED',
         changed: true, server_revision: 2, value_omitted: true };
     const conceptsBefore = offline.currentDomainGeneration('concepts');
@@ -926,7 +931,7 @@ async function reconciliation() {
     assert.ok(offline.currentDomainGeneration('research-graph-core') > graphBefore);
     assert.ok(offline.currentDomainGeneration('research-graph-people') > peopleGraphBefore);
 
-    const privateOp = { operation: PRIVATE, entity_id: 'W-1', payload: { text: 'Q' } };
+    const privateOp = { operation: PRIVATE, entity_id: 'W-1', payload: { text: 'Q' }, created_at: createdAt };
     const privateAck = { work_id: 'W-1', note_kind: PRIVATE_KIND, code: 'ACKNOWLEDGED',
         changed: true, server_revision: 3, value_omitted: true };
     const conceptsMid = offline.currentDomainGeneration('concepts');

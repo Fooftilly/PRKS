@@ -23,6 +23,14 @@ class WorkSourceSyncFrontendTests(unittest.TestCase):
             cwd=ROOT, capture_output=True, text=True, timeout=60)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_source_and_note_ack_ordering(self):
+        # #1106 / #1105: an older ACK never replaces a newer source or note body.
+        result = subprocess.run(
+            ['node', str(ROOT / 'tests/browser/run_work_ack_order_selftest.js')],
+            cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ACK ordering checks passed', result.stdout)
+
     def test_one_parser_on_both_sides_of_the_boundary(self):
         """The client and the server decide separately what a YouTube URL
         means. If they disagree, one accepts an identity the other refuses --

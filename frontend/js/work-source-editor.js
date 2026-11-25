@@ -8,6 +8,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const unavailable = 'Video source not available offline for this file yet. Connect once and open Edit metadata to prepare it.';
 
@@ -231,15 +234,17 @@
      * edit -- on a Work nobody else touched. The cached projection is patched
      * by the runtime; this is the same fact for the editor that is open.
      */
-    function acceptAck(ctx, state, ack) {
+    function acceptAck(ctx, state, ack, op) {
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         if (!Number.isSafeInteger(ack.server_revision)) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (state.observed && state.observed.revision > ack.server_revision) return;
+        /* Shared ordering rule (#1425, #1106): the observed base's revision
+         * can prove the ACK superseded; the Work is proven by its read time.
+         * An unproven Work is patched, then the whole base is re-read. */
+        const plan = applySourceAck(ctx, ack, op, state.observed ? state.observed.revision : null);
+        if (plan === 'superseded') return;
         state.observed = baseOf(ack.server_revision,
             root.prksWorkSourceIdentity(root.prksAcknowledgedWorkSource(ack)));
-        ctx.setEntity('work', Object.assign({}, ctx.getEntity('work'),
-            root.prksAcknowledgedWorkSource(ack)));
         /* Only the owner of the shared panel may write the panel, and only
          * inside it: this Work's acknowledgement must never be published into
          * whichever Work's editor happens to be on screen. */
@@ -247,14 +252,41 @@
          * and stored nothing of ours; showing what we asked for would claim a
          * value the server does not have. */
         writeInput(ctx, state, ack.source_url);
+        if (plan === 'unproven') {
+            void readBase(ctx, state, { adopt: true })
+                .then(read => (read && live(ctx, state) ? safePaint(ctx, state) : null))
+                .catch(() => null);
+        }
+    }
+
+    /* One source ACK into this owner's Work under `applyOwnerAck`. `reread`
+     * false leaves the re-read to the caller (the mounted editor re-reads its
+     * whole base); a parked owner re-reads the Work alone. */
+    function applySourceAck(ctx, ack, op, heldRevision, reread) {
+        const columns = root.prksAcknowledgedWorkSource(ack);
+        return reconcileCore.applyOwnerAck({
+            ackRevision: ack.server_revision,
+            heldRevision,
+            operationCreatedAt: op && op.created_at,
+        }, {
+            get: () => {
+                const work = ctx.getEntity('work');
+                return work && work.id === ack.work_id ? work : null;
+            },
+            set: value => ctx.setEntity('work', value),
+            agrees: work => Object.keys(columns).every(column => work[column] === columns[column]),
+            patch: work => Object.assign({}, work, columns),
+            read: () => (reread ? root.prksOfflineReadEntity('work', ack.work_id,
+                '/api/works/' + encodeURIComponent(ack.work_id),
+                { validate: value => !!value && value.id === ack.work_id }) : Promise.resolve(null)),
+        });
     }
 
     /** Entity-only source acknowledgement for a parked owner. No observed base, no paint. */
-    function applyWorkSourceEntityAck(ctx, ack) {
+    function applyWorkSourceEntityAck(ctx, ack, op) {
         if (!ctx || !ack || typeof root.prksAcknowledgedWorkSource !== 'function') return;
-        const work = ctx.getEntity('work');
-        if (!work || work.id !== ack.work_id) return;
-        ctx.setEntity('work', Object.assign({}, work, root.prksAcknowledgedWorkSource(ack)));
+        if (!Number.isSafeInteger(ack.server_revision)) return;
+        applySourceAck(ctx, ack, op, null, true);
     }
 
     function sourceStateShape(workId) {
@@ -365,7 +397,7 @@
             }
             stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation && event.operation !== 'SET_WORK_SOURCE') return;
-                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
+                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged, event.op);
                 void safePaint(ctx, next);
             });
             stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
