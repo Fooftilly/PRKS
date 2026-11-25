@@ -201,11 +201,69 @@ async function groupMembership() {
     }
 }
 
+/* A snapshot that could not be dropped keeps the operation queued; catalogue
+ * writes from creation ACKs keep the read time of the rows around them; a
+ * count no projection can remember is never patched. */
+async function failuresAndReplays() {
+    {
+        const { cache, offline } = setup();
+        const op = createdNow({ payload: { value: 'old' } });
+        await later();
+        await cache.putList('folders:index', [{ id: 'F', title: 'T', description: 'new', parent_id: null }], '');
+        cache.deleteList = async () => { throw new Error('quota'); };
+        assert.equal(await offline.reconcileFolderField(folderAck(1), op), false,
+            'an unproven index that could not be dropped keeps the operation queued');
+    }
+    {
+        const { cache, offline } = setup();
+        const op = createdNow({ payload: { value: 'old' } });
+        await later();
+        await cache.putEntity('folder', 'F', { id: 'F', title: 'T', description: 'new' });
+        cache.deleteEntity = async () => { throw new Error('quota'); };
+        assert.equal(await offline.reconcileFolderField(folderAck(1), op), false,
+            'an unproven detail that could not be dropped keeps the operation queued');
+    }
+    {
+        const { cache, offline } = setup();
+        const readAt = Date.now() - 60000;
+        await cache.putList('folders:index', [{ id: 'A', title: 'Other', parent_id: null }], '', readAt);
+        await later();
+        const op = createdNow({ payload: { value: 'described' } });
+        await later();
+        assert(await offline.reconcileCreatedFolder({ folder_id: 'F', changed: false,
+            folder: { id: 'F', title: 'New', description: '', parent_id: null } }));
+        assert.equal((await cache.getList('folders:index')).observedAt, readAt,
+            'a created row does not make the catalogue newer');
+        assert(await offline.reconcileFolderField(folderAck(1), op));
+        const rows = (await cache.getList('folders:index')).value;
+        assert.deepEqual(rows.map(row => row.id), ['A', 'F'], 'the catalogue survives the follow-up edit');
+        assert.equal(rows[1].description, 'described');
+    }
+    {
+        const { cache, offline } = setup();
+        const readAt = Date.now() - 60000;
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'G', parent_id: null, member_count: 0 },
+            { id: 'H', name: 'H', parent_id: null, member_count: 0 }], '', readAt);
+        await later();
+        const op = createdNow();
+        await later();
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: false,
+            group: { id: 'N', name: 'N', parent_id: null, member_count: 0 } }));
+        assert.equal((await cache.getList('person-groups:index')).observedAt, readAt,
+            'a created Group does not make the catalogue newer');
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+        assert.equal(await cache.getList('person-groups:index'), null,
+            'with no membership projection to remember the ACK, the count is dropped, not patched');
+    }
+}
+
 async function main() {
     await folderField();
     await workFiling();
     await groupField();
     await groupMembership();
+    await failuresAndReplays();
     console.log('All ' + checks + ' Folder and Person Group ACK ordering checks passed');
 }
 
