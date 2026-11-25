@@ -105,6 +105,11 @@ UNTYPED = frozenset({
 })
 
 
+#: Operations that answer only 501 until they are ported to PostgreSQL; a ported
+#: one leaves this set and documents its success.
+_NOT_PORTED = frozenset({"linearizeExistingPdfs"})
+
+
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
     return {(method.upper(), path): op for path, item in document["paths"].items()
             for method, op in item.items() if method != "parameters"}
@@ -131,9 +136,12 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_each_operation_names_a_success_and_its_path_parameters(self) -> None:
         for (method, path), op in _operations(self.document).items():
             with self.subTest(method=method, path=path):
-                # A route not ported to PostgreSQL yet answers only 501 (pre-1.0 policy).
-                self.assertTrue(any(status.startswith("2") or status == "501" for status in op["responses"]),
-                                op["responses"])
+                if op["operationId"] in _NOT_PORTED:
+                    # Not ported to PostgreSQL yet: it answers only 501 (pre-1.0 policy).
+                    self.assertIn("501", op["responses"])
+                    self.assertFalse([s for s in op["responses"] if s.startswith("2")], op["responses"])
+                else:
+                    self.assertTrue(any(status.startswith("2") for status in op["responses"]), op["responses"])
                 names = {p["name"] for p in self.document["paths"][path].get("parameters", [])}
                 self.assertEqual(names, set(re.findall(r"\{(\w+)\}", path)))
 

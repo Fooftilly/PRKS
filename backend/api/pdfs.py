@@ -18,7 +18,7 @@ import logging
 import os
 from typing import BinaryIO
 
-from backend.api_contract.operation import BINARY, PDF, Operation, Param, Reply, ok, plain
+from backend.api_contract.operation import BINARY, PDF, Header, Operation, Param, Reply, ok, plain
 from backend.web.byte_range import parse_byte_range
 from backend.pdf.managed_pdf_names import safe_pdf_path_under_dir
 from backend.web.http import Request, Response, Write, error_response
@@ -107,13 +107,26 @@ def managed_pdf(req: Request) -> Response:
     return pdf_response(req, file_size, stream)
 
 
+_LENGTH = Header("The bytes in this answer.", {"type": "integer", "minimum": 0}, required=True)
+_ACCEPT_RANGES = Header("Always `bytes`.", {"type": "string", "enum": ["bytes"]}, required=True)
+_NO_STORE_HEADER = Header("`no-store, max-age=0, must-revalidate`.", required=True)
+#: The answers of :func:`pdf_response`, shared by every route that streams a PDF through it.
+PDF_RANGE_REPLIES: dict[int, Reply] = {
+    200: ok(BINARY, "The whole file.", media_type=PDF, headers={
+        "Accept-Ranges": _ACCEPT_RANGES, "Cache-Control": _NO_STORE_HEADER, "Content-Length": _LENGTH}),
+    206: ok(BINARY, "The requested range.", media_type=PDF, headers={
+        "Accept-Ranges": _ACCEPT_RANGES, "Cache-Control": _NO_STORE_HEADER, "Content-Length": _LENGTH,
+        "Content-Range": Header("The range sent, as `bytes <first>-<last>/<size>`.", required=True)}),
+    416: Reply("The range is outside the file.", headers={
+        "Content-Range": Header("The file size, as `bytes */<size>`.", required=True)}),
+}
+RANGE = Param("Range", "header", description=(
+    "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."))
+
 _PDF = Operation(
     "getManagedPdf", "A managed PDF of this Library, with Range support", "works",
-    {200: ok(BINARY, "The whole file.", media_type=PDF),
-     206: ok(BINARY, "The requested range.", media_type=PDF),
-     404: plain("No managed PDF of this Library by that name."),
-     416: Reply("The range is outside the file.")},
-    params=(Param("Range", "header", description="One byte range, e.g. ``bytes=0-65535``."),))
+    {**PDF_RANGE_REPLIES, 404: plain("No managed PDF of this Library by that name.")},
+    params=(RANGE,))
 
 ROUTES = (
     route("GET", "/api/pdfs/{filename:path}", managed_pdf, contract=_PDF),

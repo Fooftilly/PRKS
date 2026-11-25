@@ -37,6 +37,7 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, unquote
 
+from backend.api.pdfs import PDF_RANGE_REPLIES, RANGE
 from backend.api_contract.operation import BINARY, PDF, Header, Operation, Param, Reply, body, error, ok
 from backend.api_contract.processing_items import (
     ProcessingImportRequest,
@@ -354,13 +355,8 @@ def _refusal(description: str) -> Reply:
 _NOT_FOUND = _refusal("No such item in this Library (ENTITY_NOT_FOUND).")
 _PDF = Operation(
     "getProcessingItemPdf", "A ready item's PDF as uploaded, with Range support", _TAG,
-    {200: ok(BINARY, "The whole file.", media_type=PDF),
-     206: ok(BINARY, "The requested range.", media_type=PDF,
-             headers={"Content-Range": Header("The range sent, as `bytes <first>-<last>/<size>`.",
-                                              required=True)}),
-     404: _refusal("No ready item with that id (ENTITY_NOT_FOUND)."),
-     416: Reply("The range is outside the file.")},
-    params=(Param("Range", "header", description="One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."),))
+    {**PDF_RANGE_REPLIES, 404: _refusal("No ready item with that id (ENTITY_NOT_FOUND).")},
+    params=(RANGE,))
 
 ROUTES = (
     route("GET", COLLECTION, queue, contract=Operation(

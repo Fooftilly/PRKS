@@ -976,12 +976,39 @@
             "schema": {
               "type": "string"
             },
-            "description": "One byte range, e.g. ``bytes=0-65535``."
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
           }
         ],
         "responses": {
           "200": {
             "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            },
             "content": {
               "application/pdf": {
                 "schema": {
@@ -993,6 +1020,40 @@
           },
           "206": {
             "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
             "content": {
               "application/pdf": {
                 "schema": {
@@ -1019,7 +1080,16 @@
             }
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -1040,15 +1110,76 @@
             "schema": {
               "type": "string"
             },
-            "description": "One byte range, e.g. ``bytes=0-65535``."
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
           }
         ],
         "responses": {
           "200": {
-            "description": "The whole file."
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            }
           },
           "206": {
-            "description": "The requested range."
+            "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "401": {
             "description": "No live session (not_authenticated)."
@@ -1060,7 +1191,16 @@
             "description": "No managed PDF of this Library by that name."
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "description": "The Library is unavailable (unavailable)."
@@ -2074,6 +2214,33 @@
         "responses": {
           "200": {
             "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            },
             "content": {
               "application/pdf": {
                 "schema": {
@@ -2086,6 +2253,31 @@
           "206": {
             "description": "The requested range.",
             "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
               "Content-Range": {
                 "description": "The range sent, as `bytes <first>-<last>/<size>`.",
                 "schema": {
@@ -2120,7 +2312,16 @@
             }
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -2146,11 +2347,63 @@
         ],
         "responses": {
           "200": {
-            "description": "The whole file."
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            }
           },
           "206": {
             "description": "The requested range.",
             "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "`no-store, max-age=0, must-revalidate`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
               "Content-Range": {
                 "description": "The range sent, as `bytes <first>-<last>/<size>`.",
                 "schema": {
@@ -2170,7 +2423,16 @@
             "description": "No ready item with that id (ENTITY_NOT_FOUND)."
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "description": "The Library is unavailable (unavailable)."
@@ -3547,7 +3809,26 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/BulkWorkRequest"
+                "discriminator": {
+                  "mapping": {
+                    "add_tags": "#/components/schemas/BulkTags",
+                    "move_folder": "#/components/schemas/BulkMoveFolder",
+                    "remove_tags": "#/components/schemas/BulkTags",
+                    "set_status": "#/components/schemas/BulkSetStatus"
+                  },
+                  "propertyName": "action"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BulkSetStatus"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BulkMoveFolder"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BulkTags"
+                  }
+                ]
               }
             }
           }
@@ -4950,29 +5231,19 @@
         },
         "type": "object"
       },
-      "BulkWorkRequest": {
-        "description": "``POST /api/works/bulk``: one action on up to 500 Works, all or nothing.",
+      "BulkMoveFolder": {
         "properties": {
-          "action": {
-            "enum": [
-              "set_status",
-              "move_folder",
-              "add_tags",
-              "remove_tags"
-            ],
-            "title": "Action",
-            "type": "string"
-          },
           "work_ids": {
+            "description": "1 to 500 Work ids; repeats count once.",
             "items": {
               "type": "string"
             },
             "title": "Work Ids",
             "type": "array"
           },
-          "status": {
-            "description": "set_status: the new status.",
-            "title": "Status",
+          "action": {
+            "const": "move_folder",
+            "title": "Action",
             "type": "string"
           },
           "folder_id": {
@@ -4984,12 +5255,65 @@
                 "type": "null"
               }
             ],
-            "default": null,
-            "description": "move_folder: the Folder; null: Uncategorized.",
+            "description": "The Folder; null: Uncategorized. Required (null included); an empty string is refused.",
             "title": "Folder Id"
+          }
+        },
+        "required": [
+          "work_ids",
+          "action",
+          "folder_id"
+        ],
+        "type": "object"
+      },
+      "BulkSetStatus": {
+        "properties": {
+          "work_ids": {
+            "description": "1 to 500 Work ids; repeats count once.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "action": {
+            "const": "set_status",
+            "title": "Action",
+            "type": "string"
+          },
+          "status": {
+            "description": "The new status, one of the Work statuses.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_ids",
+          "action",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BulkTags": {
+        "properties": {
+          "work_ids": {
+            "description": "1 to 500 Work ids; repeats count once.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "action": {
+            "enum": [
+              "add_tags",
+              "remove_tags"
+            ],
+            "title": "Action",
+            "type": "string"
           },
           "tag_ids": {
-            "description": "add_tags and remove_tags: the Tags.",
+            "description": "The Tags to add or remove; at least one.",
             "items": {
               "type": "string"
             },
@@ -4998,8 +5322,9 @@
           }
         },
         "required": [
+          "work_ids",
           "action",
-          "work_ids"
+          "tag_ids"
         ],
         "type": "object"
       },
@@ -5021,7 +5346,7 @@
             "type": "integer"
           },
           "updated": {
-            "description": "The Works whose state changed.",
+            "description": "Equal to ``requested``: every selected Work, changed or not.",
             "title": "Updated",
             "type": "integer"
           }
@@ -5775,8 +6100,23 @@
         ],
         "type": "object"
       },
-      "MetadataFieldState": {
+      "MetadataFieldRevision": {
         "additionalProperties": false,
+        "description": "A field measured in bytes: its revision alone, never its value.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MetadataFieldValue": {
+        "additionalProperties": false,
+        "description": "A small field: its revision and its current value.",
         "properties": {
           "revision": {
             "title": "Revision",
@@ -5794,12 +6134,12 @@
                 "type": "null"
               }
             ],
-            "description": "The current value; left out for the fields measured in bytes (title, abstract, ...).",
             "title": "Value"
           }
         },
         "required": [
-          "revision"
+          "revision",
+          "value"
         ],
         "type": "object"
       },
@@ -9578,8 +9918,16 @@
             "type": "string"
           },
           "published_date": {
-            "title": "Published Date",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: none (the New File form sends null for no date).",
+            "title": "Published Date"
           },
           "publisher": {
             "title": "Publisher",
@@ -9623,14 +9971,28 @@
             "type": "string"
           },
           "file_name": {
-            "description": "The uploaded file's name; sent with file_b64.",
-            "title": "File Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The uploaded file's name; sent with file_b64. Null: no upload.",
+            "title": "File Name"
           },
           "file_b64": {
-            "description": "The uploaded PDF, base64 encoded.",
-            "title": "File B64",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The uploaded PDF, base64 encoded. Null: no upload.",
+            "title": "File B64"
           },
           "source_kind": {
             "description": "``pdf`` or ``video``; inferred when left out.",
@@ -10201,6 +10563,91 @@
         ],
         "type": "object"
       },
+      "WorkMetadataFields": {
+        "additionalProperties": false,
+        "description": "Every synchronized field (``metadata_rules.SYNCED_FIELDS``), each one present.",
+        "properties": {
+          "abstract": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "author_text": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "citation_style": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "doc_type": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "doi": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "edition": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "isbn": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "journal": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "location": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "pages": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "published_date": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "publisher": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "source_url": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "thumb_page": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "title": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "year": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          }
+        },
+        "required": [
+          "abstract",
+          "author_text",
+          "citation_style",
+          "doc_type",
+          "doi",
+          "edition",
+          "isbn",
+          "issue",
+          "journal",
+          "location",
+          "pages",
+          "published_date",
+          "publisher",
+          "source_url",
+          "status",
+          "thumb_page",
+          "title",
+          "volume",
+          "year"
+        ],
+        "type": "object"
+      },
       "WorkMetadataState": {
         "additionalProperties": false,
         "description": "``GET /api/works/:id/metadata-state``: each synchronized field's revision.",
@@ -10210,11 +10657,7 @@
             "type": "string"
           },
           "fields": {
-            "additionalProperties": {
-              "$ref": "#/components/schemas/MetadataFieldState"
-            },
-            "title": "Fields",
-            "type": "object"
+            "$ref": "#/components/schemas/WorkMetadataFields"
           }
         },
         "required": [
