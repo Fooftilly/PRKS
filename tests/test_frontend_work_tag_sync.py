@@ -11,6 +11,13 @@ class WorkTagSyncFrontendTests(unittest.TestCase):
                                 cwd=ROOT, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_tag_link_ack_ordering(self):
+        # #1088: an older Tag-link ACK never replaces a newer Work/Folder detail.
+        result = subprocess.run(['node', str(ROOT / 'tests/browser/run_tag_link_ack_order_selftest.js')],
+                                cwd=ROOT, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('Tag link ACK ordering checks passed', result.stdout)
+
     def test_no_second_tag_catalog_cache(self):
         for path in (ROOT / 'frontend/js').rglob('*.js'):
             self.assertNotIn('__prksAllTagsCache', path.read_text(), str(path))

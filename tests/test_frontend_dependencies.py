@@ -133,6 +133,7 @@ class FrontendDependencyTests(unittest.TestCase):
             "prks-owner-resource",
             "prks-editor-recovery",
             "prks-route-model",
+            "prks-sync-reconcile",
         ):
             self.assertIn(name, names)
 

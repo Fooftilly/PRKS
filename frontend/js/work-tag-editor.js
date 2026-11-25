@@ -1,6 +1,9 @@
 /* Work Tags UI. The TabContext owns the observed base and editor lifetime. */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
     const unavailable = 'Tag editing not available offline for this Work yet. Connect once and open the Tags panel to prepare it.';
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
@@ -135,15 +138,46 @@
             input.placeholder = input.disabled ? 'Tags unavailable' : 'Search tags or add…';
         }
     }
-    function acceptAck(ctx, state, ack) {
+    /* `op` is the acknowledged operation when there is one: its creation time
+     * is what proves the Work this tab holds older than the ACK (#1088). */
+    function acceptAck(ctx, state, ack, op) {
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (state.options && root.prksWorkTagBase(state.options, ack.tag_id).revision > ack.server_revision) return;
-        const work = ctx.getEntity('work');
-        const tags = work.tags.filter(t => t.id !== ack.tag_id);
-        if (ack.present) tags.push(ack.tag);
-        ctx.setEntity('work', { ...work, tags });
+        const held = state.options ? root.prksWorkTagBase(state.options, ack.tag_id).revision : null;
+        const plan = applyWorkTagAck(ctx, ack, op, held, () => {
+            if (live(ctx, state)) void paint(ctx, state).catch(() => {});
+        });
+        if (plan === 'superseded') return;
         if (state.options) setOptionsBase(state.options, ack.tag_id, ack.present, ack.server_revision);
+    }
+    /**
+     * One Tag-link ACK into this owner's Work, under the shared ordering rule
+     * (`prksSyncReconcile.applyOwnerAck`): an older ACK never replaces a newer
+     * link, and a Work this tab cannot prove older than the ACK is patched and
+     * then re-read from the server, whose answer wins.
+     */
+    function applyWorkTagAck(ctx, ack, op, heldRevision, adopted) {
+        return reconcileCore.applyOwnerAck({
+            ackRevision: ack.server_revision,
+            heldRevision,
+            operationCreatedAt: op && op.created_at,
+        }, {
+            get: () => {
+                const work = ctx.getEntity('work');
+                return work && work.id === ack.work_id && Array.isArray(work.tags) ? work : null;
+            },
+            set: value => ctx.setEntity('work', value),
+            agrees: work => work.tags.some(t => t.id === ack.tag_id) === !!ack.present,
+            patch: work => {
+                const tags = work.tags.filter(t => t.id !== ack.tag_id);
+                if (ack.present) tags.push(ack.tag);
+                return { ...work, tags };
+            },
+            read: () => root.prksOfflineReadEntity('work', ack.work_id,
+                '/api/works/' + encodeURIComponent(ack.work_id),
+                { validate: value => !!value && value.id === ack.work_id }),
+            adopted,
+        });
     }
     function setOptionsBase(options, tagId, present, revision) {
         options.assigned = options.assigned.filter(t => t.tag_id !== tagId);
@@ -152,13 +186,9 @@
         else if (revision) options.known_absent[tagId] = revision;
     }
     /** Entity-only tag acknowledgement for a parked owner. No options, no paint. */
-    function applyWorkTagEntityAck(ctx, ack) {
-        if (!ctx || !ack) return;
-        const work = ctx.getEntity('work');
-        if (!work || work.id !== ack.work_id || !Array.isArray(work.tags)) return;
-        const tags = work.tags.filter(t => t.id !== ack.tag_id);
-        if (ack.present) tags.push(ack.tag);
-        ctx.setEntity('work', { ...work, tags });
+    function applyWorkTagEntityAck(ctx, ack, op) {
+        if (!ctx || !ack || !Number.isSafeInteger(ack.server_revision)) return;
+        applyWorkTagAck(ctx, ack, op, null, null);
     }
     async function prepare(ctx, state) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
@@ -274,7 +304,7 @@
                  * an in-flight prepare() and leaves the picker disabled with no
                  * catalog and nothing to retry it. */
                 if (event.acknowledged && ['ADD_WORK_TAG', 'REMOVE_WORK_TAG'].includes(event.operation)) {
-                    acceptAck(ctx, next, event.acknowledged);
+                    acceptAck(ctx, next, event.acknowledged, event.op);
                 }
                 void paint(ctx, next).catch(() => {});
             });
@@ -401,7 +431,8 @@
             (work.tags || []).find(t => t.id === tagId) ||
             (state.catalog || []).find(t => t.id === tagId);
         if (!base.present || tag) {
-            applyWorkTagEntityAck(ctx, { work_id: state.workId, tag_id: tagId, present: base.present, tag });
+            applyWorkTagEntityAck(ctx, { work_id: state.workId, tag_id: tagId, present: base.present,
+                server_revision: base.revision, tag }, op);
         }
         return base;
     }

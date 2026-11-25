@@ -71,6 +71,19 @@ PDF annotations on an already-available managed PDF are local-first
 (metadata durable ops; PDF bytes stay in Cache Storage `prks-pdf-v3:<scope>:<epoch>`).
 New PDF binary ingestion remains connection-required.
 
+**ACK ordering goes through one core.** Every family merges an
+acknowledgement into what the page holds through `prksSyncReconcile`
+(`frontend-app/src/sync/reconcile.ts`, built to `frontend/js/sync-reconcile.js`).
+An ACK replaces a held value only when that value is provably not newer: a
+value with its own revision compares revisions; a value without one (a detail,
+a row) is proven by its read finishing before the operation was created
+(`observedAt` on cache envelopes, `observe`/`carryObservation` in memory).
+Otherwise the cache drops the value and a live owner re-reads it
+(`applyOwnerAck`). Pending overlays fold the queue with `overlay`. Never
+hand-write another revision comparison in a family. Ported so far: Tag links
+(Work and Folder). See *ACK ordering: one shared core* in
+`docs/local-first-sync.md`.
+
 A family becomes durable only by being *implemented* as one — a semantic
 operation with validation, a revision or an explicit "no base revision" rule,
 reconciliation and named refusals. See *Adding a family: the four shapes and

@@ -22,6 +22,7 @@
     "build:owner-resource": "node scripts/build-owner-resource.mjs",
     "build:editor-recovery": "node scripts/build-editor-recovery.mjs",
     "build:route-model": "node scripts/build-route-model.mjs",
+    "build:sync-reconcile": "node scripts/build-sync-reconcile.mjs",
     "storybook": "storybook dev -p 6006 --no-open --disable-telemetry",
     "build-storybook": "storybook build --output-dir storybook-static --disable-telemetry"
   },

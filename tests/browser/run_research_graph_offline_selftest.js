@@ -35,6 +35,7 @@ function environment() {
         prksRequest:(...args)=>request(...args)};
     ctx.window = ctx;
     vm.createContext(ctx);
+    vm.runInContext(read('frontend/js/sync-reconcile.js'),ctx);
     vm.runInContext(runtime,ctx);
     vm.runInContext(api,ctx);
     vm.runInContext(app.slice(app.indexOf('async function prksOfflineDetailFetch'),app.indexOf('const PRKS_CONCEPTS_LIST_KEY')),ctx);

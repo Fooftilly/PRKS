@@ -192,7 +192,7 @@
         }
         if (op === 'ADD_WORK_TAG' || op === 'REMOVE_WORK_TAG') {
             if (ctx.getResource('workTagEditor')) return;
-            if (typeof root.prksApplyWorkTagEntityAck === 'function') root.prksApplyWorkTagEntityAck(ctx, ack);
+            if (typeof root.prksApplyWorkTagEntityAck === 'function') root.prksApplyWorkTagEntityAck(ctx, ack, event.op);
             return;
         }
         if (op === 'SET_WORK_SOURCE') {

@@ -1,6 +1,9 @@
 /* Folder Tags UI. The TabContext owns the observed base and editor lifetime. */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
     const unavailable = 'Tag editing not available offline for this Folder yet. Connect once and open the Tags panel to prepare it.';
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
@@ -108,14 +111,39 @@
             input.placeholder = input.disabled ? 'Tags unavailable' : 'Search tags or add…';
         }
     }
-    function acceptAck(ctx, state, ack) {
+    /* One Tag-link ACK into this owner's Folder, under the shared ordering
+     * rule (`prksSyncReconcile.applyOwnerAck`, #1088): an older ACK never
+     * replaces a newer link, and a Folder this tab cannot prove older than the
+     * ACK (by `op`'s creation time) is patched, then re-read from the server. */
+    function acceptAck(ctx, state, ack, op) {
         if (!live(ctx, state) || ack.folder_id !== state.folderId) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (state.options && root.prksFolderTagBase(state.options, ack.tag_id).revision > ack.server_revision) return;
-        const work = ctx.getEntity('folder');
-        const tags = work.tags.filter(t => t.id !== ack.tag_id);
-        if (ack.present) tags.push(ack.tag);
-        ctx.setEntity('folder', { ...work, tags });
+        const plan = reconcileCore.applyOwnerAck({
+            ackRevision: ack.server_revision,
+            heldRevision: state.options ? root.prksFolderTagBase(state.options, ack.tag_id).revision : null,
+            operationCreatedAt: op && op.created_at,
+        }, {
+            get: () => {
+                const folder = ctx.getEntity('folder');
+                return folder && folder.id === ack.folder_id && Array.isArray(folder.tags) ? folder : null;
+            },
+            set: value => ctx.setEntity('folder', value),
+            agrees: folder => folder.tags.some(t => t.id === ack.tag_id) === !!ack.present,
+            patch: folder => {
+                const tags = folder.tags.filter(t => t.id !== ack.tag_id);
+                if (ack.present) tags.push(ack.tag);
+                return { ...folder, tags };
+            },
+            read: () => root.prksOfflineReadEntity('folder', ack.folder_id,
+                '/api/folders/' + encodeURIComponent(ack.folder_id), {
+                    validate: v => !!(v && typeof v === 'object' && v.id === ack.folder_id),
+                    domain: 'folders',
+                }),
+            adopted: () => {
+                if (live(ctx, state)) void paint(ctx, state).catch(() => {});
+            },
+        });
+        if (plan === 'superseded') return;
         if (state.options) {
             state.options.assigned = state.options.assigned.filter(t => t.tag_id !== ack.tag_id);
             delete state.options.known_absent[ack.tag_id];
@@ -234,7 +262,7 @@
                  * an in-flight prepare() and leaves the picker disabled with no
                  * catalog and nothing to retry it. */
                 if (event.acknowledged && ['ADD_FOLDER_TAG', 'REMOVE_FOLDER_TAG'].includes(event.operation)) {
-                    acceptAck(ctx, next, event.acknowledged);
+                    acceptAck(ctx, next, event.acknowledged, event.op);
                 }
                 void paint(ctx, next).catch(() => {});
             });

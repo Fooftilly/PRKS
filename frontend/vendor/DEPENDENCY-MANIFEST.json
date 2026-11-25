@@ -207,6 +207,17 @@
       "version": "1"
     },
     {
+      "name": "prks-sync-reconcile",
+      "runtime_files": [
+        {
+          "path": "/js/sync-reconcile.js",
+          "sha256": "dae1e3d4dfe72582708454c9d65b05372e898a4d0259a93f2d4278ee6933cb94"
+        }
+      ],
+      "source_category": "frontend-app:sync-reconcile",
+      "version": "1"
+    },
+    {
       "name": "prks-tab-leave",
       "runtime_files": [
         {
