@@ -188,7 +188,7 @@ export function overlay<T, Op extends QueuedOperation>(
   match: (op: Op) => boolean,
   apply: (value: T, op: Op) => T,
 ): T {
-  return pendingFor(operations, match).reduce(apply, base)
+  return pendingFor(operations, match).reduce((value, op) => apply(value, op), base)
 }
 
 /* When each in-memory value was read. Keyed by object identity, so a value
@@ -255,10 +255,10 @@ export function applyOwnerAck<T extends object>(
   const next = carryObservation(value, owner.patch(value))
   owner.set(next)
   if (plan === 'unproven') {
-    void adoptFresh(owner.read, owner.get, next, (fresh) => {
+    adoptFresh(owner.read, owner.get, next, (fresh) => {
       owner.set(fresh)
       if (owner.adopted) owner.adopted(fresh)
-    })
+    }).catch(() => false)
   }
   return plan
 }
