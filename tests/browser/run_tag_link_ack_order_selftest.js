@@ -202,8 +202,31 @@ async function parkedWorkOwner() {
     assert.deepEqual(other.entity.tags, [], 'an ACK for another Work is ignored');
 }
 
+/* A dropped Work is re-read while the server is reachable, so the device
+ * keeps the Work offline after it syncs. */
+async function droppedWorkIsRefilled() {
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
+    const paths = [];
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async path => {
+            paths.push(path);
+            return { ok: true, status: 200, json: async () => ({ id: 'X', title: 'Server', tags: [tag] }) };
+        } });
+    const op = createdNow();
+    await later();
+    await cache.putEntity('work', 'X', { id: 'X', tags: [] });
+    const work = FAMILIES[0];
+    assert.equal(await work.reconcile(offline, ackFor(work, 'X', 1, true), op), true);
+    for (let i = 0; i < 20 && !(await cache.getEntity('work', 'X')); i += 1) await later();
+    assert.deepEqual(paths, ['/api/works/X'], 'the dropped Work is re-read once');
+    const row = await cache.getEntity('work', 'X');
+    assert.ok(row, 'and cached again');
+    assert.deepEqual(row.value.tags.map(t => t.id), [tag.id], 'with the server links');
+}
+
 async function main() {
     for (const family of FAMILIES) await cacheOrdering(family);
+    await droppedWorkIsRefilled();
     await parkedWorkOwner();
     console.log('All ' + checks + ' Tag link ACK ordering checks passed');
 }
