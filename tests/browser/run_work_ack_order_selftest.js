@@ -471,8 +471,8 @@ async function mountedSourceCorrectiveRead() {
         ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
         listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
         await flush(); await flush(); await flush();
-        assert.deepEqual(reads, [['work-source-state', false]],
-            'one fresh source-state read, never a separately read Work');
+        assert.deepEqual(reads, [['work-source-state', false], ['work', false]],
+            'the base is one fresh source-state read; the Work is re-read after it, for the cache only');
         assert.deepEqual(state.observed, { revision: 2, identity: identity('CCC') },
             'the revision with the source it belongs to');
         assert.equal(ctx.entity.provider_id, 'CCC', 'the mounted owner shows the server video');
@@ -548,6 +548,30 @@ async function mountedSourceCorrectiveRead() {
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
         await ctx.resources.workSourceEditor.preparing;
         assert.equal(ctx.resources.workSourceEditor.observed, null, 'a bare revision never becomes a base');
+        listeners.length = 0;
+    }
+    /* Reloaded offline with a queued replacement: the tab shows the pending
+     * video over the acknowledged one, so preparing keeps it on screen and
+     * measures a Save against the acknowledged pair. An untouched Save is
+     * then the queued video again, never a return to the server's. */
+    {
+        const BBB = 'b'.repeat(11);
+        globalThis.prksSetPendingWorkSources([{ operation: 'SET_WORK_SOURCE', entity_type: 'work',
+            entity_id: 'W', status: 'pending', payload: { source: { kind: 'video', url: WATCH(BBB) } } }]);
+        try {
+            globalThis.prksOfflineReadEntity = answer({ value: stateOf(1, 'AAA'), source: 'cache' });
+            const shown = globalThis.prksEffectiveWorkSource({ id: 'W', title: 'Clip', ...video('AAA') });
+            assert.equal(shown.provider_id, BBB, 'the route publishes the queued video');
+            const ctx = mountedOwner(core.observe(shown, Date.now()));
+            globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+            const state = ctx.resources.workSourceEditor;
+            await state.preparing;
+            assert.equal(ctx.entity.provider_id, BBB, 'the queued video stays on screen');
+            assert.deepEqual(state.observed, { revision: 1, identity: identity('AAA') },
+                'measured against the acknowledged pair');
+        } finally {
+            globalThis.prksSetPendingWorkSources([]);
+        }
         listeners.length = 0;
     }
     /* The production fallback: a failed network read through the real

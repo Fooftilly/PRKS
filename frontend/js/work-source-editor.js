@@ -347,6 +347,17 @@
      * `options.adopt` says this read follows a discard, so its result replaces
      * what the tab is holding rather than merely establishing a base.
      */
+    /* "Use server" invalidated the cached Work with the source state. The
+     * base never comes from it, but reopening the Work offline needs a
+     * detail snapshot, so a fresh one is read back into the cache. A failure
+     * leaves the Work to the next online read. */
+    async function refreshCachedWork(workId) {
+        try {
+            await root.prksOfflineReadEntity('work', workId, '/api/works/' + encodeURIComponent(workId),
+                { validate: value => !!value && value.id === workId, requestPolicy: { dedupe: false } });
+        } catch (_) { /* the next online read repopulates it */ }
+    }
+
     async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         const adopt = !!(options && options.adopt);
@@ -392,17 +403,27 @@
              * conflicts with the newer source instead of overwriting it. The
              * identity is the newer one, so a draft naming the ACK's video is
              * a change to send (and conflict), not a match that cancels. */
+            /* What the tab shows is that acknowledged source with this
+             * device's own unsent change over it, exactly as the Work route
+             * publishes it: a queued replacement stays on screen, so an
+             * untouched Save never reads as a return to the server's video. */
             const held = ctx.getEntity('work');
             const shown = held && held.id === state.workId ? held : null;
-            const differs = !!shown && root.prksWorkSourceIdentity(root.prksWorkSourceOf(shown)) !== identity;
+            const acknowledged = Object.assign({}, shown || { id: state.workId }, source);
+            const effective = typeof root.prksEffectiveWorkSource === 'function'
+                ? root.prksEffectiveWorkSource(acknowledged) : acknowledged;
+            const identityOf = work => root.prksWorkSourceIdentity(root.prksWorkSourceOf(work));
+            const differs = !!shown && identityOf(shown) !== identityOf(effective);
             if (adopt || differs) {
-                if (shown) ctx.setEntity('work', Object.assign({}, shown, source));
-                if (!writeInput(ctx, state, source.source_url || '')) {
+                if (shown) ctx.setEntity('work', effective);
+                if (!writeInput(ctx, state, effective.source_url || '')) {
                     state.observed = adopt && state.observed ? baseOf(state.observed.revision, identity) : null;
+                    if (adopt) await refreshCachedWork(state.workId);
                     return true;
                 }
             }
             state.observed = baseOf(stateResult.value.revision, identity);
+            if (adopt) await refreshCachedWork(state.workId);
             return true;
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
