@@ -36,7 +36,7 @@ from backend.domain.identity import sessions
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.maintenance import tables
 from tests import acting_context as facade_context
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_http_processing import ProcessingHttpTestCase
 from tests.pg.test_search_text import pdf_bytes
@@ -148,7 +148,7 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         self.addCleanup(setattr, module, "library", previous)
         storage = module.storage
         assert storage is not None
-        self.facade = TestLibrary(self.db, storage=storage)
+        self.facade = PostgresLibrary(self.db, storage=storage)
         module.library = self.facade
         self.serve()
         owner_cookie = self.session_cookie()

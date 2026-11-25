@@ -1,7 +1,7 @@
 """The Processing queue's HTTP routes (L-PR-1 #636; ``docs/postgresql-architecture.md`` §11.5).
 
 ``backend/api/processing.py`` served from PostgreSQL the way the cutover will
-bind it (:class:`~tests.library_adapter.TestLibrary` as ``server.db``): a
+bind it (:class:`~backend.library.PostgresLibrary` as ``server.db``): a
 signed-in owner uploads raw PDFs with an ``Idempotency-Key``, pages the
 queue, edits drafts at a revision, previews the bytes with ``Range``, imports
 one item or a batch, and deletes. Answers decided before the body was read
@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 from backend.api import processing as processing_api
 from backend.api_contract import processing_items as contract
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 
 _MISSING = "PI-" + "0" * 32
@@ -53,7 +53,7 @@ class ProcessingHttpTestCase(HttpAuthTestCase):
         module = self.app
         previous = module.library
         self.addCleanup(setattr, module, "library", previous)
-        module.library = TestLibrary(self.db, storage=module.storage)
+        module.library = PostgresLibrary(self.db, storage=module.storage)
         self.serve()
         self.cookies = self.session_cookie()
 

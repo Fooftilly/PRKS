@@ -88,9 +88,8 @@ class AdapterSurfaceTests(unittest.TestCase):
         self.assertEqual(missing, {})
 
     def test_the_adapter_reaches_every_public_facade_member(self):
-        # PG-C3 (#642): the handle holds only what a route still calls. A
-        # method only tests call belongs in tests/library_adapter.py; a route
-        # calls the domain commands directly.
+        # PG-C3 (#642): the handle holds only what a route still calls.
+        # Routes and tests call the domain commands directly.
         calls = adapter_library_calls()
         handle = {"database", "storage"}
         unreached = sorted(name for name in dir(PostgresLibrary)

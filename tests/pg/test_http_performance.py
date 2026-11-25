@@ -23,7 +23,7 @@ from unittest.mock import patch
 from psycopg_pool import PoolTimeout
 
 from backend.runtime import performance
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.pg.test_search_text import pdf_bytes
 
@@ -98,7 +98,7 @@ class PerformanceHttpTests(HttpAuthTestCase):
         self.storage = module.storage
         assert self.storage is not None
         os.makedirs(self.storage.thumbs_dir, exist_ok=True)
-        self.facade = TestLibrary(self.db, storage=self.storage)
+        self.facade = PostgresLibrary(self.db, storage=self.storage)
         module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()

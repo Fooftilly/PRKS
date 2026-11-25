@@ -171,7 +171,7 @@ def _library() -> tuple[Any, Callable[[LiteralString, dict[str, Any]], Any], Cal
     """A fresh harness database with one Library and a bound owner."""
     from backend.db.config import DatabaseConfig
     from backend.db.database import Database
-    from tests.library_adapter import TestLibrary
+    from backend.library import PostgresLibrary
     from tests import acting_context as facade_context
     from backend.storage.config import StorageConfig
     from tests.pg.facade_context import provision_actor
@@ -183,7 +183,7 @@ def _library() -> tuple[Any, Callable[[LiteralString, dict[str, Any]], Any], Cal
     tmp = tempfile.mkdtemp(prefix="prks-pg-ranking-")
     storage = StorageConfig.for_testing(tmp)
     os.makedirs(storage.pdfs_dir, exist_ok=True)
-    library = TestLibrary(db, storage=storage)
+    library = PostgresLibrary(db, storage=storage)
     token = facade_context.bind(provision_actor(db).context)
 
     def sql(query: LiteralString, params: dict[str, Any]) -> None:

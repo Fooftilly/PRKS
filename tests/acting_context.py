@@ -1,14 +1,13 @@
-"""Who a test's old-name Library call acts for (L-W-1 #628; PG-C3 #642).
+"""Who a test's Library call acts for (L-W-1 #628; PG-C3 #642).
 
 Served routes pass the admitted
 :class:`~backend.domain.identity.request_context.RequestContext` to the
 domain commands themselves, so nothing in ``backend/`` binds an actor any
-more. The test adapters keep the retired facade's names and signatures, which
-carry no actor (``tests/library_adapter.py`` ``TestLibrary``, the index
-adapters), so a test binds its context with :func:`acting_as` for the
-duration of the calls, and each adapter method takes it from
-:func:`current_context`. A call with no bound context is refused with
-:class:`NoRequestContext`, never run as an implicit owner.
+more. Code that is handed no context, such as the E2E seeds, the index
+adapters and :func:`tests.route_calls.call_route`, reads the one a test bound
+with :func:`acting_as` from :func:`current_context`. A call with no bound
+context is refused with :class:`NoRequestContext`, never run as an implicit
+owner.
 
 The binding is a :class:`contextvars.ContextVar`, so it is per thread (and per
 asyncio task). Work started on another thread does not inherit it and must
@@ -30,7 +29,7 @@ _CURRENT: ContextVar[Optional[RequestContext]] = ContextVar("prks_test_context",
 
 
 class NoRequestContext(RuntimeError):
-    """An adapter method that acts on a Library was called with no bound actor."""
+    """A call that acts on a Library ran with no bound actor."""
 
     def __init__(self) -> None:
         super().__init__("no request context is bound for this Library call")

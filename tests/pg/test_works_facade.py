@@ -23,7 +23,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.library_scope import library_query
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import queries, work_commands
-from tests.library_adapter import TestLibrary
+from backend.library import PostgresLibrary
 from tests import acting_context as facade_context
 from backend.storage.config import StorageConfig
 from tests.pg.facade_context import Actor, provision_actor
@@ -55,7 +55,7 @@ class WorksFacadeTestCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         self.storage = StorageConfig.for_testing(tmp)
         os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.library = TestLibrary(self.db, storage=self.storage)
+        self.library = PostgresLibrary(self.db, storage=self.storage)
         self.actor = provision_actor(self.db)
         self.bind(self.actor.context)
 
@@ -405,7 +405,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test", pool_min=0,
                                           pool_max=2))
         self.addCleanup(self.db.close)
-        self.library = TestLibrary(self.db, storage=self.storage)
+        self.library = PostgresLibrary(self.db, storage=self.storage)
         self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir)[0]["created_at"], "2026-06-01 10:00:00")
 
     def harness_db_name(self) -> str:

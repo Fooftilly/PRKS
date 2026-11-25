@@ -9,8 +9,8 @@ which authorizes inside each transaction (``library_command`` and
 ``library_query``); nothing binds an actor beside the call any more.
 
 PG-C3 retired the ``backend/pg_facade`` package that this replaces
-(``docs/postgresql-architecture.md`` §5.5). Tests keep the facade's old
-method names over the same commands in ``tests/library_adapter.py``.
+(``docs/postgresql-architecture.md`` §5.5). Tests call the same domain
+commands directly (#1426).
 
 A capability the Library documents as not available yet raises
 :class:`NotPortedError`, which the HTTP adapter answers with 501 and never

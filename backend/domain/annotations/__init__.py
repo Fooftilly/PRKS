@@ -10,17 +10,16 @@ replace and the byte-only markup adoption with SQLite's rules;
 :mod:`.annotation_commands` is what the HTTP routes call
 (``backend/api/annotations.py``, PG-C3 #642).
 
-SQLite's three materialization claim and mark methods survive only as the
-tests' names (``tests/library_adapter.py``), over :mod:`.materialize`. They
-keep SQLite's signatures, errors and returns, but acknowledge only committed
-bytes:
+SQLite's three materialization claim and mark methods survive only as
+test helpers (``tests/works_fixtures.py``), over :mod:`.materialize`. They
+keep SQLite's errors and returns, but acknowledge only committed bytes:
 
-- ``accept_work_pdf_materialization_claim`` validates as on SQLite (a Work
-  without a managed PDF is ``LookupError``: there are no bytes to replace).
-- ``mark_work_pdf_materialized_if_claim_current`` marks nothing: it returns
-  the claim only when the committed bytes embed it and it is still canonical
-  (the materialization committed them), else ``ValueError(STALE)``.
-- ``mark_work_pdf_materialized`` may only lower the materialized revision
+- ``accept_materialization_claim`` validates as on SQLite (a Work without a
+  managed PDF is ``LookupError``: there are no bytes to replace).
+- ``mark_materialized_if_claim_current`` marks nothing: it returns the claim
+  only when the committed bytes embed it and it is still canonical (the
+  materialization committed them), else ``ValueError(STALE)``.
+- ``mark_materialized`` may only lower the materialized revision
   (record lag) or, without ``at_revision``, report it; a revision above it
   is ``ValueError(STALE)``, since no committed bytes embed one.
 """

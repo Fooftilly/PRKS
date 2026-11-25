@@ -1,7 +1,7 @@
 """Independent unit tests for the Saved Views HTTP controller.
 
 These answer requests through the served route table
-(``tests.library_adapter.call_route``), with no threaded HTTP server; the
+(``tests.route_calls.call_route``), with no threaded HTTP server; the
 request's context is the actor the test is bound to.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import unittest
 
-from tests.library_adapter import call_route
+from tests.route_calls import call_route
 from tests.pg.test_saved_views import SavedViewTestCase
 
 _SEARCH = {"mode": "advanced", "q": "culture", "tag": "", "author": "Adorno", "publisher": ""}

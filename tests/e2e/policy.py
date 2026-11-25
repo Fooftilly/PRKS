@@ -412,7 +412,6 @@ AFFECTED_RULES = (
             "tests/narrowing.py",
             "tests/people_fixtures.py",
             "tests/works_fixtures.py",
-            "tests/library_adapter.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",

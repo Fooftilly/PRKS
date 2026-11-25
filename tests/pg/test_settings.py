@@ -20,7 +20,8 @@ from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.settings import app_settings
-from tests.library_adapter import TestLibrary, call_route
+from backend.library import PostgresLibrary
+from tests.route_calls import call_route
 from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_people_facade import PeopleFacadeTestCase
@@ -200,7 +201,7 @@ class IsolationAndAccessTests(SettingsTestCase):
         restarted = Database(DatabaseConfig(conninfo=self.db.config.conninfo, role="test",
                                             pool_min=0, pool_max=2))
         self.addCleanup(restarted.close)
-        self.assertEqual(settings_commands.response((TestLibrary(restarted, storage=self.storage)).database, current_context()), expected)
+        self.assertEqual(settings_commands.response((PostgresLibrary(restarted, storage=self.storage)).database, current_context()), expected)
 
 
 class RaceTests(SettingsTestCase):

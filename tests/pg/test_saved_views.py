@@ -24,7 +24,7 @@ from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
-from tests.library_adapter import call_route
+from tests.route_calls import call_route
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 from backend.domain.saved_views import commands as saved_view_commands
