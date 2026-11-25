@@ -279,7 +279,17 @@
             read: () => (reread ? root.prksOfflineReadEntity('work', ack.work_id,
                 '/api/works/' + encodeURIComponent(ack.work_id),
                 { validate: value => !!value && value.id === ack.work_id }) : Promise.resolve(null)),
+            merge: (held, fresh) => adoptSourceOf(held, fresh),
         });
+    }
+
+    /* The held Work with only the source columns taken from a server read.
+     * The rest of the held Work may be newer than that read: another family's
+     * ACK (a note, a Tag link) or a pending overlay (placement) applied while
+     * it was in flight, and a source re-read must not undo it. */
+    function adoptSourceOf(held, fresh) {
+        const next = Object.assign({}, held, root.prksAcknowledgedWorkSource(fresh));
+        return reconcileCore.carryObservation(fresh, next);
     }
 
     /** Entity-only source acknowledgement for a parked owner. No observed base, no paint. */
@@ -352,7 +362,10 @@
              * holds video C -- with the pending overlay gone, nothing else
              * would ever correct it. */
             if (adopt) {
-                ctx.setEntity('work', workResult.value);
+                const held = ctx.getEntity('work');
+                if (held && held.id === state.workId) {
+                    ctx.setEntity('work', adoptSourceOf(held, workResult.value));
+                }
                 writeInput(ctx, state, workResult.value.source_url || '');
             }
             return true;
