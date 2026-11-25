@@ -178,7 +178,11 @@ class OpenApiDocumentTests(unittest.TestCase):
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
                     # Only library_command takes the maintenance lock (#1431).
-                    self.assertNotIn("MAINTENANCE", json.dumps(op["responses"]["503"]))
+                    unavailable = op["responses"]["503"]
+                    if "$ref" in unavailable:
+                        name = unavailable["$ref"].rsplit("/", 1)[-1]
+                        unavailable = self.document["components"]["responses"][name]
+                    self.assertNotIn("MAINTENANCE", unavailable["description"])
 
     def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
         for (method, path), op in _operations(self.document).items():
