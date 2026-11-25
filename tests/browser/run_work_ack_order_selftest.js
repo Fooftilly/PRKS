@@ -39,13 +39,15 @@ async function sourceCache() {
         const op = createdNow();
         await later();
         await cache.putEntity('work', 'W', { id: 'W', title: 'Clip', ...video('BBB') });
-        await cache.putEntity('work-source-state', 'W', { work_id: 'W', revision: 2 });
+        await cache.putEntity('work-source-state', 'W', { work_id: 'W', revision: 2, ...video('BBB') });
         await cache.putList('works-browse:index', [browseRow('BBB')], '');
         await cache.putEntity('playlist', 'PL', { id: 'PL', items: [{ id: 'W', ...video('BBB') }] });
         assert.equal(await offline.reconcileWorkSource(sourceAck(1, 'AAA'), op), true, 'the operation retires');
         assert.equal((await cache.getEntity('work', 'W')).value.provider_id, 'BBB', 'Work keeps the newer video');
         assert.equal((await cache.getEntity('work', 'W')).value.thumb_url, 'https://img/BBB.jpg');
         assert.equal((await cache.getEntity('work-source-state', 'W')).value.revision, 2, 'revision stays 2');
+        assert.equal((await cache.getEntity('work-source-state', 'W')).value.provider_id, 'BBB',
+            'with the source it belongs to');
         assert.equal((await cache.getList('works-browse:index')).value[0].provider_id, 'BBB',
             'a browse row keeps the newer video');
         assert.equal((await cache.getEntity('playlist', 'PL')).value.items[0].provider_id, 'BBB',
@@ -69,14 +71,15 @@ async function sourceCache() {
     {
         const { cache, offline } = setup();
         await cache.putEntity('work', 'W', { id: 'W', title: 'Clip', ...video('AAA') });
-        await cache.putEntity('work-source-state', 'W', { work_id: 'W', revision: 1 });
+        await cache.putEntity('work-source-state', 'W', { work_id: 'W', revision: 1, ...video('AAA') });
         await cache.putList('works-browse:index', [browseRow('AAA')], '');
         await later();
         const op = createdNow();
         assert(await offline.reconcileWorkSource(sourceAck(2, 'BBB'), op));
         assert.equal((await cache.getEntity('work', 'W')).value.provider_id, 'BBB', 'a forward ACK applies');
         assert.equal((await cache.getList('works-browse:index')).value[0].provider_id, 'BBB');
-        assert.equal((await cache.getEntity('work-source-state', 'W')).value.revision, 2);
+        assert.deepEqual((await cache.getEntity('work-source-state', 'W')).value,
+            { work_id: 'W', revision: 2, ...video('BBB') }, 'the revision moves only with its source');
         assert(await offline.reconcileWorkSource(sourceAck(2, 'BBB'), op), 'a replayed equal ACK settles');
         assert.equal((await cache.getEntity('work', 'W')).value.provider_id, 'BBB');
         assert(await offline.reconcileWorkSource(sourceAck(1, 'AAA'), op), 'an older replay settles');
@@ -420,9 +423,9 @@ async function cacheEdges() {
     }
 }
 
-/* The mounted source editor's corrective read (#1450 review): the revision is
- * read before the Work, both fresh from the server, so a remote edit between
- * the two reads can only pair a newer identity with an older revision. */
+/* The mounted source editor's base (#1450 review): ONE source-state answer
+ * carries the revision with the source it belongs to, so no read order or
+ * read time has to prove that a separately read Work is not older. */
 async function mountedSourceCorrectiveRead() {
     globalThis.prksRightPanelOwnedBy = () => false;
     globalThis.prksOwnerTabIsFocused = () => false;
@@ -438,82 +441,69 @@ async function mountedSourceCorrectiveRead() {
         ctx.registerResource = (_ticket, entry) => { ctx.resources[entry.kind] = entry.value; return 'attached'; };
         return ctx;
     };
-    const serverState = revision => ({ value: { work_id: 'W', revision }, source: 'server' });
-    const serverWork = id => ({ value: core.observe({ id: 'W', title: 'Clip', text_content: 'note', ...video(id) },
-        Date.now()), source: 'server' });
-    /* Mounted on video ZZZ at revision 0. */
-    globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
-    {
-        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', text_content: 'note', ...video('ZZZ') },
+    const stateOf = (revision, id) => ({ work_id: 'W', revision, ...video(id) });
+    const serverState = (revision, id) => ({ value: stateOf(revision, id), source: 'server' });
+    const identity = id => globalThis.prksWorkSourceIdentity(globalThis.prksWorkSourceOf(video(id)));
+    const ackAAA = { work_id: 'W', server_revision: 1, ...video('AAA') };
+    const reads = [];
+    const answer = result => async (kind, _id, _path, options) => {
+        reads.push([kind, options && options.requestPolicy && options.requestPolicy.dedupe]);
+        return typeof result === 'function' ? result(kind, options) : result;
+    };
+    const mounted = async id => {
+        globalThis.prksOfflineReadEntity = answer(serverState(0, id));
+        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', text_content: 'note', ...video(id) },
             Date.now()));
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
         const state = ctx.resources.workSourceEditor;
         await state.preparing;
-        assert.equal(state.observed.revision, 0);
-        /* The ACK for video AAA (revision 1) arrives after this browser read
-         * the Work; the revision read answers 2 (video BBB), then another
-         * device saves CCC before the Work read. */
-        const requests = [];
-        let releaseState;
-        const stateGate = new Promise(resolve => { releaseState = resolve; });
-        globalThis.prksOfflineReadEntity = async (kind, _id, _path, options) => {
-            requests.push([kind, options && options.requestPolicy && options.requestPolicy.dedupe]);
-            if (kind === 'work-source-state') { await stateGate; return serverState(2); }
-            return serverWork('CCC');
-        };
-        const op = createdNow();
-        await later();
-        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
-        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
-            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
-        await flush();
-        assert.deepEqual(requests.map(r => r[0]), ['work-source-state'],
-            'the Work is not read before its revision answers');
-        releaseState();
-        await flush(); await flush(); await flush();
-        assert.deepEqual(requests.map(r => r[0]), ['work-source-state', 'work'], 'revision first, then the Work');
-        assert.deepEqual(requests.map(r => r[1]), [false, false], 'neither read joins an older GET');
-        assert.equal(state.observed.revision, 2, 'the base takes the revision read first');
-        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(globalThis.prksWorkSourceOf(
-            serverWork('CCC').value)), 'with the newer identity, so a save conflicts rather than cancels');
-        assert.equal(ctx.entity.provider_id, 'CCC', 'the mounted owner shows the server video');
-        assert.equal(ctx.entity.text_content, 'note');
-    }
-    /* Cold-parked between the two reads: the Work is never requested. */
+        reads.length = 0;
+        return { ctx, state };
+    };
+    /* An unproven ACK for video AAA (revision 1) is re-read: the server now
+     * holds CCC at revision 2. The base and the Work take that one answer. */
     {
-        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
-        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
-        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
-        await ctx.resources.workSourceEditor.preparing;
-        const kinds = [];
-        let releaseState;
-        const stateGate = new Promise(resolve => { releaseState = resolve; });
-        globalThis.prksOfflineReadEntity = async kind => {
-            kinds.push(kind);
-            if (kind === 'work-source-state') { await stateGate; return serverState(2); }
-            return serverWork('CCC');
-        };
+        const { ctx, state } = await mounted('ZZZ');
+        assert.equal(state.observed.revision, 0);
+        globalThis.prksOfflineReadEntity = answer(serverState(2, 'CCC'));
         const op = createdNow();
         await later();
         ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
-        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
-            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
+        await flush(); await flush(); await flush();
+        assert.deepEqual(reads, [['work-source-state', false]],
+            'one fresh source-state read, never a separately read Work');
+        assert.deepEqual(state.observed, { revision: 2, identity: identity('CCC') },
+            'the revision with the source it belongs to');
+        assert.equal(ctx.entity.provider_id, 'CCC', 'the mounted owner shows the server video');
+        assert.equal(ctx.entity.thumb_url, 'https://img/CCC.jpg');
+        assert.equal(ctx.entity.text_content, 'note', 'only the source columns move');
+        listeners.length = 0;
+    }
+    /* Cold-parked while the read is in flight: nothing is adopted. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        globalThis.prksOfflineReadEntity = answer(async () => { await gate; return serverState(2, 'CCC'); });
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
         await flush();
         delete ctx.resources.workSourceEditor;   // cold park disposes the editor
-        releaseState();
+        release();
         await flush(); await flush(); await flush();
-        assert.deepEqual(kinds, ['work-source-state'], 'a parked tab makes no second request');
+        assert.notEqual(ctx.entity.provider_id, 'CCC', 'a parked tab adopts nothing');
+        assert.equal(state.observed.revision, 1, 'the parked editor keeps the ACK base');
         listeners.length = 0;
     }
     /* The user is typing in the source field: the newer source is not shown,
-     * so the base stays the ACK's and a Save conflicts instead of overwriting. */
+     * so the base keeps the ACK revision and a Save conflicts instead of
+     * overwriting. */
     {
-        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
-        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
-        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
-        const state = ctx.resources.workSourceEditor;
-        await state.preparing;
-        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(2) : serverWork('CCC'));
+        const { ctx, state } = await mounted('ZZZ');
+        globalThis.prksOfflineReadEntity = answer(serverState(2, 'CCC'));
         globalThis.prksRightPanelOwnedBy = () => true;
         globalThis.prksOwnerTabIsFocused = () => true;
         globalThis.document = { activeElement: { matches: () => true, value: WATCH('typed') },
@@ -521,8 +511,7 @@ async function mountedSourceCorrectiveRead() {
         const op = createdNow();
         await later();
         ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
-        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
-            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
         await flush(); await flush(); await flush();
         delete globalThis.document;
         globalThis.prksRightPanelOwnedBy = () => false;
@@ -531,71 +520,51 @@ async function mountedSourceCorrectiveRead() {
         /* The store cancels a save whose identity matches the base. With the
          * newer identity, a draft naming the ACK's video AAA is queued against
          * revision 1 and conflicts; a draft naming CCC is the server's own. */
-        const ccc = globalThis.prksWorkSourceIdentity(globalThis.prksWorkSourceOf(serverWork('CCC').value));
-        assert.equal(state.observed.identity, ccc, 'paired with the server identity, not the ACK one');
-        assert.notEqual(state.observed.identity, globalThis.prksWorkSourceIdentity(
-            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })),
-            'a draft naming the ACK video is not cancelled as a no-op');
+        assert.equal(state.observed.identity, identity('CCC'), 'paired with the server identity, not the ACK one');
+        assert.notEqual(state.observed.identity, identity('AAA'), 'a draft naming the ACK video is not cancelled');
         assert.equal(ctx.entity.provider_id, 'CCC', 'the Work still takes the server source');
         listeners.length = 0;
     }
-    /* Preparing the editor: a server revision with a Work answered from the
-     * cache is not a base, and the Work read never joins an older GET. */
+    /* Reopened offline: the cached Work may be older or newer than the
+     * cached source state (a delayed Work answer, a Work-role ACK refreshing
+     * its read time). The base is the cached pair, and the tab shows the
+     * source that base belongs to, so a Save is never measured against a
+     * video the user did not see. */
     {
-        const policies = [];
-        globalThis.prksOfflineReadEntity = async (kind, _id, _path, options) => {
-            policies.push(options && options.requestPolicy && options.requestPolicy.dedupe);
-            return kind === 'work-source-state' ? serverState(2) : { ...serverWork('ZZZ'), source: 'cache' };
-        };
-        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
-        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
-        const state = ctx.resources.workSourceEditor;
-        await state.preparing;
-        assert.equal(state.observed, null, 'a server revision never pairs with a cached Work');
-        assert.equal(policies[1], false, 'the Work read after a server revision is fresh');
-        listeners.length = 0;
-    }
-    /* Reopened offline: two cached answers pair only when the Work was read
-     * no earlier than the revision. */
-    {
-        const t = Date.now();
-        const cached = (value, at) => ({ value: core.observe(value, at), source: 'cache', cachedAt: at });
-        for (const [stateAt, workAt, paired] of [[t, t - 1000, false], [t - 1000, t, true]]) {
-            globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state'
-                ? cached({ work_id: 'W', revision: 2 }, stateAt)
-                : cached({ id: 'W', title: 'Clip', ...video('ZZZ') }, workAt));
-            const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, t));
+        for (const [heldId, stateId] of [['AAA', 'BBB'], ['CCC', 'BBB'], ['BBB', 'BBB']]) {
+            globalThis.prksOfflineReadEntity = answer({ value: stateOf(2, stateId), source: 'cache' });
+            const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video(heldId) }, Date.now() + 1000));
             globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
             const state = ctx.resources.workSourceEditor;
             await state.preparing;
-            if (paired) assert.equal(state.observed && state.observed.revision, 2, 'a Work read after the revision pairs');
-            else assert.equal(state.observed, null, 'an older cached Work never pairs with a newer cached revision');
+            assert.deepEqual(state.observed, { revision: 2, identity: identity(stateId) },
+                'the base is the cached pair, whatever the Work read time says');
+            assert.equal(ctx.entity.provider_id, stateId, 'the tab shows the source its base belongs to');
         }
-        listeners.length = 0;
-    }
-    /* A revision answered from the cache adopts nothing and keeps the ACK's base. */
-    {
-        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
+        /* A cached revision with no source is no base. */
+        globalThis.prksOfflineReadEntity = async (_kind, _id, _path, options) => {
+            const value = { work_id: 'W', revision: 2 };
+            return options.validate(value) ? { value, source: 'cache' } : { value: null, source: 'unavailable' };
+        };
         const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
-        const state = ctx.resources.workSourceEditor;
-        await state.preparing;
-        let workReads = 0;
-        globalThis.prksOfflineReadEntity = async kind => {
-            if (kind === 'work-source-state') return { value: { work_id: 'W', revision: 2 }, source: 'cache' };
-            workReads += 1;
-            return serverWork('CCC');
-        };
+        await ctx.resources.workSourceEditor.preparing;
+        assert.equal(ctx.resources.workSourceEditor.observed, null, 'a bare revision never becomes a base');
+        listeners.length = 0;
+    }
+    /* A source state answered from the cache adopts nothing after an ACK and
+     * keeps the ACK's base. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        globalThis.prksOfflineReadEntity = answer({ value: stateOf(2, 'CCC'), source: 'cache' });
         const op = createdNow();
         await later();
         ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
-        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
-            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
         await flush(); await flush(); await flush();
-        assert.equal(workReads, 0, 'no Work is read without a server revision');
-        assert.equal(state.observed.revision, 1, 'the ACK base stays');
-        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(
-            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })));
+        assert.deepEqual(reads.map(r => r[0]), ['work-source-state'], 'no Work is read');
+        assert.deepEqual(state.observed, { revision: 1, identity: identity('AAA') }, 'the ACK base stays');
+        assert.notEqual(ctx.entity.provider_id, 'CCC');
     }
     listeners.length = 0;
 }
