@@ -130,7 +130,7 @@ class _WorkNotesPage(_PageBase):
             work_id)
 
     def wait_cached_field(self, page, work_id, field, expected):
-        """The cached Work once it holds `expected`. An ACK whose cached Work
+        """Until the cached Work holds `expected`. An ACK whose cached Work
         was read after the edit was made cannot prove that copy, so it drops
         it and the open editor's corrective read stores the server's Work."""
         wait_for_async(
@@ -139,7 +139,6 @@ class _WorkNotesPage(_PageBase):
                 .then(row => !!(row && row.value && row.value[field] === expected))""",
             arg=[work_id, field, expected], timeout=8000,
             message="the cached Work never held the acknowledged note")
-        return self.cached_work(page, work_id)
 
 
 class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
@@ -166,9 +165,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         names = {row['name'] for row in self.db_for(server).query(
             postgres='SELECT name FROM prks.concepts')}
         self.assertIn('Culture Industry', names)
-        cached = self.wait_cached_field(page, work, 'text_content', 'See [[concept:Culture Industry]].')
-        self.assertIsNotNone(cached)
-        self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
+        self.wait_cached_field(page, work, 'text_content', 'See [[concept:Culture Industry]].')
 
     def test_private_notes_are_independent_of_research_and_do_not_create_concepts(self):
         from backend.domain.works import work_commands
