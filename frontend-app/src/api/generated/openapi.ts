@@ -81,6 +81,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/bibtex/{work_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's BibTeX entry */
+        get: operations["getWorkBibtex"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/citation-styles": {
         parameters: {
             query?: never;
@@ -244,6 +263,26 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/pdfs/{filename}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                filename: string;
+            };
+            cookie?: never;
+        };
+        /** A managed PDF of this Library, with Range support */
+        get: operations["getManagedPdf"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** A managed PDF of this Library, with Range support (headers only) */
+        head: operations["getManagedPdfHead"];
         patch?: never;
         trace?: never;
     };
@@ -469,6 +508,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/recent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The most recently opened Works */
+        get: operations["listRecentWorks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/recently-added": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The most recently created Works */
+        get: operations["listRecentlyAddedWorks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/remote-images": {
         parameters: {
             query?: never;
@@ -531,6 +604,23 @@ export interface paths {
         patch: operations["updateSavedView"];
         trace?: never;
     };
+    "/api/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the Works by keywords, Tag, author or publisher */
+        get: operations["searchWorks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings": {
         parameters: {
             query?: never;
@@ -583,6 +673,191 @@ export interface paths {
          * @description The operation, its effects and its ledger row commit in one transaction.
          */
         post: operations["postSyncOperation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Work, as summaries or browse rows */
+        get: operations["listWorks"];
+        put?: never;
+        /** Create a Work from an upload, a managed PDF, a video URL or no file */
+        post: operations["createWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work with its notes, credits, Tags, annotations and Research refs */
+        get: operations["getWork"];
+        put?: never;
+        post?: never;
+        /** Delete a Work */
+        delete: operations["deleteWork"];
+        options?: never;
+        head?: never;
+        /** Change a Work's metadata, notes or Folder */
+        patch: operations["updateWork"];
+        trace?: never;
+    };
+    "/api/works/{work_id}/metadata-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's synchronized field revisions */
+        get: operations["getWorkMetadataState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/notes-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's note revisions */
+        get: operations["getWorkNotesState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/opened": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record an open of a Work now */
+        post: operations["markWorkOpened"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/source-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's source identity revision */
+        get: operations["getWorkSourceState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A card-sized render of a page of the Work's PDF */
+        get: operations["getWorkThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/bulk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** One action on many Works, all or nothing */
+        post: operations["bulkUpdateWorks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/linearize-existing-pdfs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Rewrite the managed PDFs for fast web view (not ported) */
+        post: operations["linearizeExistingPdfs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/reindex-pdf-text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Queue the rebuild of the PDF text index */
+        post: operations["queuePdfTextRebuild"];
         delete?: never;
         options?: never;
         head?: never;
@@ -689,6 +964,12 @@ export interface components {
              * @description A shipped style id or one this Library imported.
              */
             citation_style?: string;
+        };
+        ArgumentRef: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
         };
         /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
         BackupProgressLine: {
@@ -837,6 +1118,51 @@ export interface components {
             /** Year */
             year?: boolean;
         };
+        /** @description ``POST /api/works/bulk``: one action on up to 500 Works, all or nothing. */
+        BulkWorkRequest: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "set_status" | "move_folder" | "add_tags" | "remove_tags";
+            /**
+             * Folder Id
+             * @description move_folder: the Folder; null: Uncategorized.
+             * @default null
+             */
+            folder_id?: string | null;
+            /**
+             * Status
+             * @description set_status: the new status.
+             */
+            status?: string;
+            /**
+             * Tag Ids
+             * @description add_tags and remove_tags: the Tags.
+             */
+            tag_ids?: string[];
+            /** Work Ids */
+            work_ids: string[];
+        };
+        BulkWorkResult: {
+            /** Action */
+            action: string;
+            /**
+             * Requested
+             * @description The distinct Works named.
+             */
+            requested: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "updated";
+            /**
+             * Updated
+             * @description The Works whose state changed.
+             */
+            updated: number;
+        };
         /** @description ``format: bibtex``: each found Work's entry, separated by a blank line. */
         CitationsBibtex: {
             /**
@@ -970,6 +1296,14 @@ export interface components {
              */
             source?: unknown;
         };
+        ConceptRef: {
+            /** Aliases */
+            aliases: string[];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
         CslDate: {
             /** Date-Parts */
             "date-parts": number[][];
@@ -1090,6 +1424,15 @@ export interface components {
              */
             state: "starting" | "waiting" | "running" | "stopping" | "stopped" | "refused";
         };
+        /** @description A credit the new Work is born with; one without a known role type is skipped. */
+        InitialRole: {
+            /** Credit Name */
+            credit_name?: string | null;
+            /** Person Id */
+            person_id: string;
+            /** Role Type */
+            role_type?: string;
+        };
         /** @description GET /api/diagnostics/jobs body (owner only; ``PRKS_AUTH`` runtime only). */
         JobDiagnostics: {
             /** @description null when PRKS_EMBEDDED_WORKER=0 (a separate prks worker runs the jobs). */
@@ -1130,6 +1473,51 @@ export interface components {
             retried: number;
             /** Succeeded */
             succeeded: number;
+        };
+        /** @description One credit of the Work's primary Manifestation, in role order. */
+        LinkedPerson: {
+            /**
+             * Canonical Name
+             * @description The Person's first and last name.
+             */
+            canonical_name: string;
+            /**
+             * Credit Name
+             * @description The name as credited on this Work; empty when none.
+             */
+            credit_name: string;
+            /**
+             * Display Name
+             * @description The credit name, else the canonical name.
+             */
+            display_name: string;
+            /** Order Index */
+            order_index: number;
+            /** Person Id */
+            person_id: string;
+            /** Role Type */
+            role_type: string;
+        };
+        MetadataFieldState: {
+            /** Revision */
+            revision: number;
+            /**
+             * Value
+             * @description The current value; left out for the fields measured in bytes (title, abstract, ...).
+             */
+            value?: string | number | null;
+        };
+        /** @description ``501 not_ported`` (``backend.web.dispatch.not_ported``): a route PostgreSQL does not serve yet. */
+        NotPortedEnvelope: {
+            /**
+             * Code
+             * @constant
+             */
+            code: "not_ported";
+            /** Error */
+            error: string;
+            /** Request Id */
+            request_id: string;
         };
         /** @description Exact counter map the registry always emits (zeros included). */
         PerformanceCounters: {
@@ -1795,6 +2183,142 @@ export interface components {
             /** Work Count */
             work_count: number;
         };
+        /** @description ``GET /api/recently-added``: a card row with its creation, publisher and Folder. */
+        RecentlyAddedWork: {
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Created At */
+            created_at: string;
+            /** Doc Type */
+            doc_type: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /** Folder Id */
+            folder_id: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Publisher */
+            publisher: string | null;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Year */
+            year: string | null;
+        };
+        /** @description ``GET /api/recent``: a card row with its last open. */
+        RecentWork: {
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Doc Type */
+            doc_type: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /** Id */
+            id: string;
+            /** Last Opened At */
+            last_opened_at: string | null;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Year */
+            year: string | null;
+        };
+        /** @description The Concepts and Arguments the Research Note links to. */
+        ResearchRefs: {
+            /** Arguments */
+            arguments: components["schemas"]["ArgumentRef"][];
+            /** Concepts */
+            concepts: components["schemas"]["ConceptRef"][];
+            /**
+             * Pending
+             * @description True while the research index has not caught up with the note; left out when the index could not be read.
+             */
+            pending?: boolean;
+        };
         /** @description ``POST /api/backups/restore``: the new epoch fences the browser's earlier pending work. */
         Restored: {
             /** Epoch */
@@ -2124,6 +2648,582 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @description ``POST /api/works/reindex-pdf-text``: the rebuild is queued; the counters are zero. */
+        TextRebuildQueued: {
+            /** Empty */
+            empty: number;
+            /** Extractor Unavailable */
+            extractor_unavailable: boolean;
+            /** Failed */
+            failed: number;
+            /** Fts Rebuilt */
+            fts_rebuilt: boolean;
+            /** Indexed */
+            indexed: number;
+            /** Missing */
+            missing: number;
+            /** Processed */
+            processed: number;
+            /**
+             * Queued
+             * @description False when a rebuild was already queued.
+             */
+            queued: boolean;
+            /** Removed Orphans */
+            removed_orphans: number;
+            /** Skipped */
+            skipped: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "ok";
+            /** Truncated */
+            truncated: number;
+            /** Unchanged */
+            unchanged: number;
+            /** Updated */
+            updated: number;
+        };
+        TextRebuildRequest: {
+            /**
+             * Force
+             * @description Accepted; asks for nothing more (only what has no current row is re-extracted).
+             */
+            force?: boolean;
+        };
+        /** @description ``GET /api/works?projection=browse``: the compact card row. */
+        WorkBrowseRow: {
+            /**
+             * Abstract Excerpt
+             * @description The abstract's first 100 code points.
+             */
+            abstract_excerpt: string;
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Doc Type */
+            doc_type: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /** Id */
+            id: string;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Year */
+            year: string | null;
+        };
+        WorkCreated: {
+            /** Id */
+            id: string;
+        };
+        /**
+         * @description ``POST /api/works``: an upload, an existing managed PDF, a video URL or no file.
+         *
+         *     Every field may be left out; an empty title or author of a YouTube video is
+         *     filled from its oEmbed answer.
+         */
+        WorkCreateRequest: {
+            /** Abstract */
+            abstract?: string;
+            /** Author Text */
+            author_text?: string;
+            /** Doc Type */
+            doc_type?: string;
+            /** Doi */
+            doi?: string;
+            /** Edition */
+            edition?: string;
+            /**
+             * File B64
+             * @description The uploaded PDF, base64 encoded.
+             */
+            file_b64?: string;
+            /**
+             * File Name
+             * @description The uploaded file's name; sent with file_b64.
+             */
+            file_name?: string;
+            /**
+             * File Path
+             * @description A managed PDF (``/api/pdfs/<name>``) the new Work adopts.
+             */
+            file_path?: string;
+            /**
+             * Folder Id
+             * @description Left out or null: Uncategorized.
+             * @default null
+             */
+            folder_id?: string | null;
+            /** Isbn */
+            isbn?: string;
+            /** Issue */
+            issue?: string;
+            /** Journal */
+            journal?: string;
+            /** Location */
+            location?: string;
+            /** Pages */
+            pages?: string;
+            /**
+             * Playlist Id
+             * @description A Playlist to add the Work to (best effort).
+             */
+            playlist_id?: string;
+            /** Private Notes */
+            private_notes?: string | null;
+            /** Provider */
+            provider?: string;
+            /** Provider Id */
+            provider_id?: string;
+            /** Published Date */
+            published_date?: string;
+            /** Publisher */
+            publisher?: string;
+            /** Roles */
+            roles?: components["schemas"]["InitialRole"][];
+            /**
+             * Source Kind
+             * @description ``pdf`` or ``video``; inferred when left out.
+             */
+            source_kind?: string;
+            /** Source Mime */
+            source_mime?: string;
+            /**
+             * Source Url
+             * @description A YouTube URL for a video Work, else the citation URL.
+             */
+            source_url?: string;
+            /** Status */
+            status?: string;
+            /** Text Content */
+            text_content?: string;
+            /** Thumb Page */
+            thumb_page?: number | null;
+            /** Thumb Url */
+            thumb_url?: string;
+            /** Title */
+            title?: string;
+            /** Urldate */
+            urldate?: string;
+            /** Volume */
+            volume?: string;
+            /** Year */
+            year?: string;
+        };
+        /** @description ``GET /api/works/:id``: the Work with its notes, credits, Tags and annotations. */
+        WorkDetail: {
+            /** Abstract */
+            abstract: string | null;
+            /**
+             * Annotations
+             * @description The Work's annotations as a JSON array, in text.
+             */
+            annotations: string;
+            /**
+             * Arguments
+             * @description Always empty: the linked Arguments are in research_refs.
+             */
+            arguments: unknown[];
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /**
+             * Citation Style
+             * @description The Work's citation style id; empty for the Library's.
+             */
+            citation_style: string;
+            /** Created At */
+            created_at: string;
+            /** Doc Type */
+            doc_type: string | null;
+            /** Doi */
+            doi: string | null;
+            /** Edition */
+            edition: string | null;
+            /** File Path */
+            file_path: string;
+            /** File Size Bytes */
+            file_size_bytes: number | null;
+            /** Folder Id */
+            folder_id: string | null;
+            /** Folder Title */
+            folder_title: string | null;
+            /**
+             * Hide Pdf Link Annotations
+             * @enum {integer}
+             */
+            hide_pdf_link_annotations: 0 | 1;
+            /**
+             * Html Content
+             * @description The Research Note with its wiki links resolved; left out when empty.
+             */
+            html_content?: string;
+            /** Id */
+            id: string;
+            /** Isbn */
+            isbn: string | null;
+            /** Issue */
+            issue: string | null;
+            /** Journal */
+            journal: string | null;
+            /** Last Opened At */
+            last_opened_at: string | null;
+            /** Location */
+            location: string | null;
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Pages */
+            pages: string | null;
+            /** Playlist Id */
+            playlist_id: string | null;
+            /** Playlist Title */
+            playlist_title: string | null;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Private Notes */
+            private_notes: string | null;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Publisher */
+            publisher: string | null;
+            research_refs: components["schemas"]["ResearchRefs"];
+            /** Roles */
+            roles: components["schemas"]["WorkRole"][];
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Mime */
+            source_mime: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Tags */
+            tags: components["schemas"]["WorkTag"][];
+            /**
+             * Text Content
+             * @description The Research Note (Markdown); empty when none.
+             */
+            text_content: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Urldate */
+            urldate: string | null;
+            /** Volume */
+            volume: string | null;
+            /** Year */
+            year: string | null;
+        };
+        /** @description ``GET /api/works/:id/metadata-state``: each synchronized field's revision. */
+        WorkMetadataState: {
+            /** Fields */
+            fields: {
+                [key: string]: components["schemas"]["MetadataFieldState"];
+            };
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description ``GET /api/works/:id/notes-state``: the two notes' revisions (the bodies are on the Work). */
+        WorkNotesState: {
+            /** Private Note Revision */
+            private_note_revision: number;
+            /** Research Note Revision */
+            research_note_revision: number;
+            /** Work Id */
+            work_id: string;
+        };
+        /**
+         * @description ``PATCH /api/works/:id``: the fields sent change; the others are kept.
+         *
+         *     ``file_path`` may only echo the stored path (another one is ``501``); the
+         *     source identity fields are refused (``400``): they change through
+         *     ``SET_WORK_SOURCE``.
+         */
+        WorkPatch: {
+            /** Abstract */
+            abstract?: string | null;
+            /** Author Text */
+            author_text?: string | null;
+            /**
+             * Citation Style
+             * @description A style id, or empty for the Library's.
+             */
+            citation_style?: string;
+            /** Doc Type */
+            doc_type?: string | null;
+            /** Doi */
+            doi?: string | null;
+            /** Edition */
+            edition?: string | null;
+            /**
+             * File Path
+             * @description Only the stored path, echoed.
+             */
+            file_path?: string | null;
+            /**
+             * Folder Id
+             * @description Move to this Folder; null: Uncategorized.
+             * @default null
+             */
+            folder_id?: string | null;
+            /**
+             * Hide Pdf Link Annotations
+             * @description true, 1 or "1"/"true"/"yes" hide them.
+             */
+            hide_pdf_link_annotations?: boolean | number | string;
+            /** Isbn */
+            isbn?: string | null;
+            /** Issue */
+            issue?: string | null;
+            /** Journal */
+            journal?: string | null;
+            /** Location */
+            location?: string | null;
+            /** Pages */
+            pages?: string | null;
+            /** Private Notes */
+            private_notes?: string | null;
+            /** Published Date */
+            published_date?: string | null;
+            /** Publisher */
+            publisher?: string | null;
+            /** Source Mime */
+            source_mime?: string | null;
+            /** Status */
+            status?: string;
+            /**
+             * Text Content
+             * @description The Research Note (Markdown).
+             */
+            text_content?: string;
+            /** Thumb Page */
+            thumb_page?: string | number | null;
+            /** Title */
+            title?: string;
+            /** Urldate */
+            urldate?: string | null;
+            /** Volume */
+            volume?: string | null;
+            /** Year */
+            year?: string | null;
+        };
+        /** @description A credit on the Work's primary Manifestation: the Person's row and the role. */
+        WorkRole: {
+            /** About */
+            about: string | null;
+            /** Aliases */
+            aliases: string | null;
+            /** Birth Date */
+            birth_date: string | null;
+            /** Created At */
+            created_at: string;
+            /** Credit Name */
+            credit_name: string | null;
+            /** Death Date */
+            death_date: string | null;
+            /** First Name */
+            first_name: string | null;
+            /** Id */
+            id: string;
+            /** Image Url */
+            image_url: string | null;
+            /** Last Name */
+            last_name: string | null;
+            /** Link Iep */
+            link_iep: string | null;
+            /** Link Stanford Encyclopedia */
+            link_stanford_encyclopedia: string | null;
+            /** Link Wikipedia */
+            link_wikipedia: string | null;
+            /** Links Other */
+            links_other: string | null;
+            /** Manifestation Id */
+            manifestation_id: string | null;
+            /** Order Index */
+            order_index: number;
+            /** Role Type */
+            role_type: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** @description ``GET /api/works/:id/source-state``: the source identity's revision only. */
+        WorkSourceState: {
+            /** Revision */
+            revision: number;
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description ``{"status": ...}``: what the request did. */
+        WorkStatus: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "updated" | "deleted" | "opened";
+        };
+        /** @description ``GET /api/works`` and ``GET /api/search``: the whole summary row. */
+        WorkSummary: {
+            /** Abstract */
+            abstract: string | null;
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Created At */
+            created_at: string;
+            /** Doc Type */
+            doc_type: string | null;
+            /** Doi */
+            doi: string | null;
+            /** Edition */
+            edition: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /**
+             * Folder Id
+             * @description Left out of a Tag filter's rows (``GET /api/search?tag=``).
+             * @default null
+             */
+            folder_id?: string | null;
+            /** Id */
+            id: string;
+            /** Isbn */
+            isbn: string | null;
+            /** Issue */
+            issue: string | null;
+            /** Journal */
+            journal: string | null;
+            /** Last Opened At */
+            last_opened_at: string | null;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Location */
+            location: string | null;
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Pages */
+            pages: string | null;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Publisher */
+            publisher: string | null;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Mime */
+            source_mime: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Urldate */
+            urldate: string | null;
+            /** Volume */
+            volume: string | null;
+            /** Year */
+            year: string | null;
+        };
+        WorkTag: {
+            /** Color */
+            color: string | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
     };
     responses: {
         /** @description The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
@@ -2216,11 +3316,14 @@ export interface components {
 export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
 export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
+export type ArgumentRef = components['schemas']['ArgumentRef'];
 export type BackupProgressLine = components['schemas']['BackupProgressLine'];
 export type BackupRefusal = components['schemas']['BackupRefusal'];
 export type BackupStaged = components['schemas']['BackupStaged'];
 export type BibtexExportFields = components['schemas']['BibtexExportFields'];
 export type BibtexExportFieldsPatch = components['schemas']['BibtexExportFieldsPatch'];
+export type BulkWorkRequest = components['schemas']['BulkWorkRequest'];
+export type BulkWorkResult = components['schemas']['BulkWorkResult'];
 export type CitationsBibtex = components['schemas']['CitationsBibtex'];
 export type CitationsCslJson = components['schemas']['CitationsCslJson'];
 export type CitationsRequest = components['schemas']['CitationsRequest'];
@@ -2231,6 +3334,7 @@ export type CitationStyleList = components['schemas']['CitationStyleList'];
 export type CitationStyleSummary = components['schemas']['CitationStyleSummary'];
 export type ClientErrorLogged = components['schemas']['ClientErrorLogged'];
 export type ClientErrorReport = components['schemas']['ClientErrorReport'];
+export type ConceptRef = components['schemas']['ConceptRef'];
 export type CslDate = components['schemas']['CslDate'];
 export type CslItem = components['schemas']['CslItem'];
 export type CslName = components['schemas']['CslName'];
@@ -2239,9 +3343,13 @@ export type DeploymentSettings = components['schemas']['DeploymentSettings'];
 export type DuplicateItem = components['schemas']['DuplicateItem'];
 export type DuplicateWork = components['schemas']['DuplicateWork'];
 export type EmbeddedJobWorker = components['schemas']['EmbeddedJobWorker'];
+export type InitialRole = components['schemas']['InitialRole'];
 export type JobDiagnostics = components['schemas']['JobDiagnostics'];
 export type JobQueueDepth = components['schemas']['JobQueueDepth'];
 export type JobWorkerCounters = components['schemas']['JobWorkerCounters'];
+export type LinkedPerson = components['schemas']['LinkedPerson'];
+export type MetadataFieldState = components['schemas']['MetadataFieldState'];
+export type NotPortedEnvelope = components['schemas']['NotPortedEnvelope'];
 export type PerformanceCounters = components['schemas']['PerformanceCounters'];
 export type PerformanceDiagnosticsReset = components['schemas']['PerformanceDiagnosticsReset'];
 export type PerformanceDiagnosticsResetRequest = components['schemas']['PerformanceDiagnosticsResetRequest'];
@@ -2279,6 +3387,9 @@ export type PublisherCreated = components['schemas']['PublisherCreated'];
 export type PublisherCreateRequest = components['schemas']['PublisherCreateRequest'];
 export type PublisherDeleted = components['schemas']['PublisherDeleted'];
 export type PublisherInUse = components['schemas']['PublisherInUse'];
+export type RecentlyAddedWork = components['schemas']['RecentlyAddedWork'];
+export type RecentWork = components['schemas']['RecentWork'];
+export type ResearchRefs = components['schemas']['ResearchRefs'];
 export type Restored = components['schemas']['Restored'];
 export type RestoreRequest = components['schemas']['RestoreRequest'];
 export type SavedView = components['schemas']['SavedView'];
@@ -2296,6 +3407,20 @@ export type StorageRoot = components['schemas']['StorageRoot'];
 export type StorageStatus = components['schemas']['StorageStatus'];
 export type SyncOperation = components['schemas']['SyncOperation'];
 export type SyncResult = components['schemas']['SyncResult'];
+export type TextRebuildQueued = components['schemas']['TextRebuildQueued'];
+export type TextRebuildRequest = components['schemas']['TextRebuildRequest'];
+export type WorkBrowseRow = components['schemas']['WorkBrowseRow'];
+export type WorkCreated = components['schemas']['WorkCreated'];
+export type WorkCreateRequest = components['schemas']['WorkCreateRequest'];
+export type WorkDetail = components['schemas']['WorkDetail'];
+export type WorkMetadataState = components['schemas']['WorkMetadataState'];
+export type WorkNotesState = components['schemas']['WorkNotesState'];
+export type WorkPatch = components['schemas']['WorkPatch'];
+export type WorkRole = components['schemas']['WorkRole'];
+export type WorkSourceState = components['schemas']['WorkSourceState'];
+export type WorkStatus = components['schemas']['WorkStatus'];
+export type WorkSummary = components['schemas']['WorkSummary'];
+export type WorkTag = components['schemas']['WorkTag'];
 export type ResponseBadRequest = components['responses']['BadRequest'];
 export type ResponseEpochChanged = components['responses']['EpochChanged'];
 export type ResponseEpochRequired = components['responses']['EpochRequired'];
@@ -2507,6 +3632,31 @@ export interface operations {
                     "application/json": components["schemas"]["BackupRefusal"];
                 };
             };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkBibtex: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The entry; empty for a Work not in this Library. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["Unavailable"];
         };
     };
@@ -2863,6 +4013,124 @@ export interface operations {
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
             503: components["responses"]["Unavailable"];
+        };
+    };
+    getManagedPdf: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One byte range, e.g. ``bytes=0-65535``. */
+                Range?: string;
+            };
+            path: {
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No managed PDF of this Library by that name. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The range is outside the file. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getManagedPdfHead: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description One byte range, e.g. ``bytes=0-65535``. */
+                Range?: string;
+            };
+            path: {
+                filename: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No live session (not_authenticated). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session's role lacks the route's capability, or the Origin is not allowed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No managed PDF of this Library by that name. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The range is outside the file. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     listPositions: {
@@ -3804,6 +5072,80 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    listRecentWorks: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest open first. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentWork"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listRecentlyAddedWorks: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Newest first. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecentlyAddedWork"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     getRemoteImage: {
         parameters: {
             query: {
@@ -4063,6 +5405,40 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    searchWorks: {
+        parameters: {
+            query?: {
+                /** @description ``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q``. */
+                any?: string;
+                /** @description An author name. */
+                author?: string;
+                /** @description A publisher name. */
+                publisher?: string;
+                /** @description Keywords. */
+                q?: string;
+                /** @description A Tag name. */
+                tag?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching Work summaries (no ETag). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSummary"][];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     getSettings: {
         parameters: {
             query?: never;
@@ -4216,6 +5592,609 @@ export interface operations {
                     "application/json": components["schemas"]["SyncResult"];
                 };
             };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listWorks: {
+        parameters: {
+            query?: {
+                /** @description ``browse``: the compact card rows, by title. Left out: every summary, newest first. */
+                projection?: "browse";
+            };
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Summaries newest first, or with ``projection=browse`` browse rows by title. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSummary"][] | components["schemas"]["WorkBrowseRow"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Left out: an Untitled Work with no file. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created, filed and credited. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkCreated"];
+                };
+            };
+            /** @description An invalid YouTube URL, file_b64, upload or field value. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The named Folder does not exist (FOLDER_NOT_FOUND). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description A credited Person is missing or not saved yet (PERSON_NOT_FOUND), or the file cannot be filed. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWork: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Work. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkDetail"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id in this Library. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deleteWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted, or there was no such Work. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkStatus"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    updateWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: nothing changes. */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["WorkPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkStatus"];
+                };
+            };
+            /** @description A refused value, length, Folder or note. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id (not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The Research Note was refused. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            /** @description Not ported to PostgreSQL yet (not_ported). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotPortedEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkMetadataState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each synchronized field's revision, with the value of the small ones. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkMetadataState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id in this Library. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkNotesState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The two revisions. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkNotesState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id in this Library. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    markWorkOpened: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description A JSON object, ignored; may be left out. */
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Recorded. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkStatus"];
+                };
+            };
+            /** @description The id cannot name a Work. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id in this Library. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkSourceState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revision only. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkSourceState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id in this Library. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The video source cannot be read: its link is not a supported video URL (INVALID_SOURCE_STATE). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkThumbnail: {
+        parameters: {
+            query?: {
+                /** @description 1-based page; else the Work's thumbnail page, else 1. Not a number: the default. */
+                page?: string;
+            };
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The page as WebP (JPEG or PNG when WebP encoding is unavailable). */
+            200: {
+                headers: {
+                    /** @description public, max-age=86400 */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Work, no managed PDF, or the page cannot be rendered. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    bulkUpdateWorks: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BulkWorkRequest"];
+            };
+        };
+        responses: {
+            /** @description Applied. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkWorkResult"];
+                };
+            };
+            /** @description Unknown action, a bad status or Folder, or an empty, malformed or too large selection. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description A selected Work, the Folder or a Tag does not exist; nothing changed. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    linearizeExistingPdfs: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A JSON object, ignored; may be left out. */
+        requestBody?: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            /** @description Not ported to PostgreSQL yet (not_ported). */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotPortedEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    queuePdfTextRebuild: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TextRebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Queued, or one already was; the counters are zero. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TextRebuildQueued"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["Unavailable"];

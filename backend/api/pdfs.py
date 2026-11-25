@@ -18,6 +18,7 @@ import logging
 import os
 from typing import BinaryIO
 
+from backend.api_contract.operation import BINARY, PDF, Operation, Param, Reply, ok, plain
 from backend.web.byte_range import parse_byte_range
 from backend.pdf.managed_pdf_names import safe_pdf_path_under_dir
 from backend.web.http import Request, Response, Write, error_response
@@ -106,7 +107,15 @@ def managed_pdf(req: Request) -> Response:
     return pdf_response(req, file_size, stream)
 
 
+_PDF = Operation(
+    "getManagedPdf", "A managed PDF of this Library, with Range support", "works",
+    {200: ok(BINARY, "The whole file.", media_type=PDF),
+     206: ok(BINARY, "The requested range.", media_type=PDF),
+     404: plain("No managed PDF of this Library by that name."),
+     416: Reply("The range is outside the file.")},
+    params=(Param("Range", "header", description="One byte range, e.g. ``bytes=0-65535``."),))
+
 ROUTES = (
-    route("GET", "/api/pdfs/{filename:path}", managed_pdf),
-    route("HEAD", "/api/pdfs/{filename:path}", managed_pdf),
+    route("GET", "/api/pdfs/{filename:path}", managed_pdf, contract=_PDF),
+    route("HEAD", "/api/pdfs/{filename:path}", managed_pdf, contract=_PDF.head()),
 )

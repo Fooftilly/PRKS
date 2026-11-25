@@ -8,7 +8,7 @@ legacy 404 bodies that only carried ``error``. Admission and route refusals
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -31,6 +31,16 @@ class ApiErrorEnvelope(BaseModel):
     def as_dict(self) -> dict[str, Any]:
         data = self.model_dump(mode="json", exclude_none=True)
         return data
+
+
+class NotPortedEnvelope(BaseModel):
+    """``501 not_ported`` (``backend.web.dispatch.not_ported``): a route PostgreSQL does not serve yet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    error: str = Field(..., min_length=1)
+    code: Literal["not_ported"]
+    request_id: str
 
 
 def research_error_envelope(*, message: str, code: str | None = None) -> dict[str, Any]:
