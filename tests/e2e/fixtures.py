@@ -62,7 +62,7 @@ def _sync_research(cfg: StorageConfig, work_id: str, notes: str, db) -> None:
     from backend.domain.research import reindex
     from tests.acting_context import current_context
 
-    library_command(db._database, current_context(), Capability.EDIT_LIBRARY,
+    library_command(db.database, current_context(), Capability.EDIT_LIBRARY,
                     lambda scope: reindex.reindex_work(scope, work_id))
 
 
