@@ -39,6 +39,7 @@ from backend.api_contract.organization import (
     PlaylistState,
     WorkPlaylistState,
 )
+from backend.domain.organization.playlist_rules import PlaylistRuleError
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -89,10 +90,10 @@ def update(req: Request) -> Response:
 
     try:
         playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
-    except LookupError as e:
-        return json_response(req, 404, {"error": str(e)})
-    except ValueError as e:
+    except PlaylistRuleError as e:  # a refused value
         return json_response(req, 400, {"error": str(e)})
+    except ValueError as e:  # no such Playlist
+        return json_response(req, 404, {"error": str(e)})
     return json_response(req, 200, {"status": "updated"})
 
 

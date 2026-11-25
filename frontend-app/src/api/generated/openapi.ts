@@ -8997,7 +8997,7 @@ export interface operations {
     listTags: {
         parameters: {
             query?: {
-                /** @description Only the Tags linked to a Work or a Folder, with the counts (no ETag). */
+                /** @description Only the Tags linked to a Work or a Folder, with the counts. */
                 used?: "1" | "true" | "yes";
             };
             header?: {

@@ -6169,7 +6169,7 @@
                 "yes"
               ]
             },
-            "description": "Only the Tags linked to a Work or a Folder, with the counts (no ETag)."
+            "description": "Only the Tags linked to a Work or a Folder, with the counts."
           },
           {
             "name": "If-None-Match",

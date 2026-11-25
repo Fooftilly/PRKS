@@ -89,17 +89,14 @@ def create(db: Database, ctx: RequestContext, title: Any, description: Any = "",
 
 
 def update(db: Database, ctx: RequestContext, playlist_id: str, fields: dict[str, Any]) -> None:
-    """Edit a Playlist's fields through the revision-aware boundary; other keys are ignored.
-
-    A missing Playlist is ``LookupError``; a refused value ``PlaylistRuleError`` (a ``ValueError``).
-    """
+    """Edit a Playlist's fields through the revision-aware boundary; other keys are ignored."""
     updates = {k: v for k, v in fields.items() if k in playlist_rules.FIELD_SET}
     if not updates:
         return
 
     def run(scope: LibraryScope) -> None:
         if not playlists.lock(scope, playlist_id):
-            raise LookupError("Playlist not found.")
+            raise ValueError("Playlist not found.")
         for field in playlist_rules.FIELDS:
             if field in updates:
                 value = updates[field]
