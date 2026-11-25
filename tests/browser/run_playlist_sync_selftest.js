@@ -389,6 +389,23 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(await globalThis.prksAcknowledgedPlaylistBase("PL-UNKNOWN", ops), null,
         "guessing a revision would silently overwrite another device");
     assert.equal(await globalThis.prksAcknowledgedPlaylistOrder("PL-UNKNOWN", ops), null);
+
+    /* Revisions from the server with values from the cache are two snapshots:
+     * the newer revision would vouch for older text. */
+    const known = "PL-" + "K".repeat(32);
+    const sources = { state: "server", record: "cache" };
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "playlist-state") return { value: globalThis.prksNewPlaylistState(id), source: sources.state };
+        return { value: { id, title: "Old", description: "", original_url: "", items: [] }, source: sources.record };
+    };
+    assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
+        "server revisions never pair with cached values");
+    sources.record = "server";
+    assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
+        "values read from the server after the revisions are one base");
+    sources.state = "cache"; sources.record = "cache";
+    assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
+        "an offline cache still holds a base");
 }
 
 

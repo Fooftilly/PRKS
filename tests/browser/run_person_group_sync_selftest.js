@@ -815,6 +815,33 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 /* #783: two tabs open Edit at revision 0. Tab A saves; tab B's later Save is
  * still measured against revision 0, so the server sees a conflict instead of
  * B silently replacing A's description. */
+/* Revisions from the server with values from the cache are two snapshots:
+ * a newer revision would vouch for older text, so no base is formed. */
+async function serverRevisionsNeverPairWithCachedValues() {
+    const previous = globalThis.prksOfflineReadEntity;
+    const sources = { state: "server", record: "cache" };
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "person-group-state") {
+            const fields = {};
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+            return { value: { group_id: id, fields, members: [] }, source: sources.state };
+        }
+        return { value: { id, name: "Old", description: "", parent: null }, source: sources.record };
+    };
+    try {
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
+            "server revisions never pair with cached values");
+        sources.record = "server";
+        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
+            "values read from the server after the revisions are one base");
+        sources.state = "cache"; sources.record = "cache";
+        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
+            "an offline cache still holds a base");
+    } finally {
+        globalThis.prksOfflineReadEntity = previous;
+    }
+}
+
 /* A pin read that failed must not strand the edit session: the refused Save
  * pins again against the values the form showed, and the next Save uses it. */
 async function aFailedPinIsTakenAgainOnTheNextSave() {
@@ -1360,6 +1387,7 @@ async function main() {
     await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
     await aSaveUsesTheRevisionsPinnedWhenEditOpened();
     await aFailedPinIsTakenAgainOnTheNextSave();
+    await serverRevisionsNeverPairWithCachedValues();
     console.log("All " + checks + " person group checks passed");
 }
 

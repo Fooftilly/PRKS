@@ -408,9 +408,11 @@
             return observedGroupFields(catalogRowFromOp(creating), newGroupState(groupId));
         }
         let state = null;
+        let stateSource = null;
         try {
             const result = await readPersonGroupState(groupId);
             state = result && result.value;
+            stateSource = result && result.source;
         } catch (_e) { state = null; }
         if (!state) return null;
         let group = null;
@@ -420,7 +422,12 @@
              * likely to hold -- and it is one read rather than a whole list. */
             const cached = await root.prksOfflineReadEntity('person-group', groupId,
                 '/api/person-groups/' + encodeURIComponent(groupId), {});
-            group = cached && cached.value;
+            /* Revisions read from the server and values from an older cache
+             * are not one snapshot: a newer revision would vouch for older
+             * text, and a Save against it would replace the newer text
+             * unseen. Values read after the revisions are newer or equal,
+             * which at worst makes a Save a revision conflict. */
+            group = cached && (stateSource !== 'server' || cached.source === 'server') ? cached.value : null;
         } catch (_e) { group = null; }
         return group ? observedGroupFields(group, state) : null;
     }
