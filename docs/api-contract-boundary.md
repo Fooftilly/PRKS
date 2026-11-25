@@ -60,10 +60,11 @@ There is one document (#1431). A route's contract is declared once, on its
 route row, so a route and its description cannot drift apart. The builder
 adds the refusals every route of a kind shares (`components.responses`): the
 JSON body gate (400 `invalid_request`, 413, 415) for a JSON route, and
-admission (401, 403, 503; for a mutation also 400 `LIBRARY_EPOCH_REQUIRED`
+admission (401, 403, 503; for a mutation admission holds to the Library
+epoch, `backend.api.session.epoch_fenced`, also 400 `LIBRARY_EPOCH_REQUIRED`
 and 409 `LIBRARY_EPOCH_CHANGED`) for an `/api/` route. A route declares only
-its own answers; when it declares a status the builder would add, its own
-description is kept.
+its own answers; when it declares a status the builder would add, the shared
+refusal's description is appended to the route's own.
 
 Do **not** introduce a framework solely to obtain OpenAPI.
 
@@ -119,7 +120,9 @@ Do **not** introduce a framework solely to obtain OpenAPI.
    every answer of a typed route to its contract (`tests/contract_check.py`):
    an undocumented status, a JSON answer outside its schema, or a request
    body answered `2xx` that its request schema refuses fails the test that
-   sent it. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
+   sent it. It sees only what a route handler returns: a handler that raises,
+   and the dispatcher's own answers (admission refusals, the JSON body gate,
+   the exception mapper), go unchecked there and keep their own tests. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
    (b) assert live responses validate through openapi-core
    (`validate_request` / `validate_response`) and response DTOs
    (`PositionDetail.model_validate`, …), and (c) cover wrong-type

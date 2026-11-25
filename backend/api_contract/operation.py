@@ -34,6 +34,7 @@ BINARY: dict[str, Any] = {"type": "string", "format": "binary"}
 class Header:
     description: str
     schema: Mapping[str, Any] = field(default_factory=lambda: {"type": "string"})
+    required: bool = False
 
 
 @dataclass(frozen=True)

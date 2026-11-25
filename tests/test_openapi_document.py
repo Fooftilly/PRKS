@@ -154,7 +154,10 @@ class OpenApiDocumentTests(unittest.TestCase):
                 self.assertTrue({"401", "403", "503"} <= set(op["responses"]))
                 if epoch_fenced(method.upper(), path):
                     self.assertTrue({"400", "409"} <= set(op["responses"]))
-                else:  # a route's own 409 (a conflict) is fine; the epoch refusal is not
+                else:  # a route's own 400 or 409 is fine; the epoch refusals are not
+                    self.assertNotIn(op["responses"].get("400"), (
+                        {"$ref": "#/components/responses/EpochRequired"},
+                        {"$ref": "#/components/responses/BadRequest"}))
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
 
@@ -226,6 +229,42 @@ class OpenApiDocumentTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_document((route("GET", "/api/a", handler, contract=contract),
                             route("GET", "/api/b", handler, contract=contract)))
+
+    def test_equivalent_templates_and_duplicate_methods_are_refused(self) -> None:
+        def handler(req):  # pragma: no cover - never called
+            raise AssertionError
+
+        def op(name: str) -> Operation:
+            return Operation(name, name, "t", {200: ok({"type": "object"}, name)})
+
+        for second in (route("GET", "/api/a/{other}", handler, contract=op("b")),
+                       route("GET", "/api/a/{item}", handler, contract=op("b"))):
+            with self.subTest(pattern=second.pattern), self.assertRaises(ValueError):
+                build_document((route("GET", "/api/a/{item}", handler, contract=op("a")), second))
+
+    def test_a_declared_shared_status_keeps_the_shared_meaning(self) -> None:
+        def handler(req):  # pragma: no cover - never called
+            raise AssertionError
+
+        contract = Operation("w", "W", "t", {200: ok({"type": "object"}, "W"),
+                                             409: ok({"type": "object"}, "A conflict of its own.")})
+        doc = build_document((route("POST", "/api/w", handler, Body.JSON, contract=contract),))
+        description = doc["paths"]["/api/w"]["post"]["responses"]["409"]["description"]
+        self.assertTrue(description.startswith("A conflict of its own. Also: "), description)
+
+    def test_an_optional_json_body_still_names_its_content_type(self) -> None:
+        for path, op in _operations(self.document).items():
+            body = op.get("requestBody")
+            if body and not body["required"] and "application/json" in body["content"]:
+                with self.subTest(path=path, op=op["operationId"]):
+                    self.assertIn("Content-Type: application/json", body["description"])
+
+    def test_a_header_may_be_required(self) -> None:
+        op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["get"]
+        self.assertTrue(op["responses"]["206"]["headers"]["Content-Range"]["required"])
+        self.assertIn({"name": "Range", "in": "header", "required": False,
+                       "schema": {"type": "string"}, "description": "One byte range, `bytes=<first>-[<last>]`."},
+                      op["parameters"])
 
     def test_a_rest_parameter_is_one_openapi_parameter(self) -> None:
         self.assertEqual(openapi_path("/api/pdfs/{filename:path}"), "/api/pdfs/{filename}")

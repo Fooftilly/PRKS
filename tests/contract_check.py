@@ -80,7 +80,7 @@ class ContractCheck:
             self.violations.append(f"{where}: status not documented")
             return
         content = self._reply(reply).get("content") or {}
-        media = (response.header("Content-Type") or "").split(";", 1)[0].strip()
+        media = (response.header("Content-Type") or "").split(";", 1)[0].strip().lower()
         if response.stream is None and route.method != "HEAD":
             payload = _decoded(response)
             if payload:
