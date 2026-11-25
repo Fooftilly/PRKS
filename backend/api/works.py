@@ -36,6 +36,8 @@ from urllib.request import urlopen
 
 from backend.domain.works import source_rules
 from backend.api.common import objects, pdfs_dir, revalidated, text_field
+from backend.api_contract.citations import CitationsRequest, CitationsResult
+from backend.api_contract.operation import Operation, body, error, ok
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
 from backend.runtime.log_safety import safe_error_type, safe_log_id, safe_log_label
@@ -552,5 +554,12 @@ ROUTES = (
     route("GET", "/api/recent", recent),
     route("GET", "/api/recently-added", recently_added),
     route("GET", "/api/bibtex/{work_id}", bibtex),
-    route("POST", "/api/citations", citations),
+    route("POST", "/api/citations", citations, contract=Operation(
+        "exportCitations", "Read the selected Works' citations as CSL-JSON or BibTeX", "citations",
+        {200: ok(CitationsResult, "The found Works' citations, in request order."),
+         400: error("Domain refusal: not an object, unknown format, or an empty, malformed or too "
+                    "large selection.")},
+        request=body(CitationsRequest),
+        description="Changes nothing. Each Work is cited from its citation Manifestation. Ids this "
+                    "Library has no Work for are listed in `missing` and left out.")),
 )

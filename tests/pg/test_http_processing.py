@@ -406,7 +406,7 @@ class AccessTests(ProcessingHttpTestCase):
         self.assertEqual(self.ok(self.get(path))["status"], "ready")
 
     def test_the_openapi_document_is_served(self) -> None:
-        doc = self.ok(self.get("/api/openapi/processing-items.json"))
+        doc = self.ok(self.get("/api/openapi.json"))
         self.assertIn("/api/processing-items/{item_id}/import", doc["paths"])
 
 
@@ -414,7 +414,7 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
     """The served OpenAPI document and the live routes accept and refuse the same write bodies.
 
     Each payload is validated with openapi-core against
-    ``/api/openapi/processing-items.json`` as served, then sent to the live
+    ``/api/openapi.json`` as served, then sent to the live
     route. Where the domain refuses a value the schema leaves open
     (``status_draft``), the case says so.
     """
@@ -423,7 +423,7 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         super().setUp()
         from openapi_core import OpenAPI
 
-        self.api = OpenAPI.from_dict(self.ok(self.get("/api/openapi/processing-items.json")))
+        self.api = OpenAPI.from_dict(self.ok(self.get("/api/openapi.json")))
 
     def schema_accepts(self, method: str, path: str, body: Any, *, raw: Optional[bytes] = None) -> bool:
         from openapi_core.testing import MockRequest

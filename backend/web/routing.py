@@ -15,15 +15,22 @@ the handler runs: ``JSON`` parses one JSON object (``Request.json``) and
 refuses anything else with 400 (:mod:`backend.web.dispatch`), ``NONE``
 reads nothing, and ``STREAM`` leaves the body to the handler (uploads);
 an answer that leaves body unread closes the connection.
+
+A route's ``contract`` (:class:`backend.api_contract.operation.Operation`)
+is its wire contract; :mod:`backend.api_contract.openapi` builds the one
+OpenAPI document from the table (#1431).
 """
 
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Iterable, Optional, Union
 
 from backend.web.http import Request, Response
+
+if TYPE_CHECKING:
+    from backend.api_contract.operation import Operation
 
 Handler = Callable[[Request], Response]
 
@@ -75,6 +82,7 @@ class Route:
     pattern: str
     handler: Handler
     body: Optional[Body] = None
+    contract: Optional[Operation] = field(default=None, compare=False)
     segments: tuple[_Segment, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -125,8 +133,9 @@ class Route:
         return tuple(0 if s.literal is not None else (2 if s.rest else 1) for s in self.segments)
 
 
-def route(method: str, pattern: str, handler: Handler, body: Optional[Body] = None) -> Route:
-    return Route(method, pattern, handler, body)
+def route(method: str, pattern: str, handler: Handler, body: Optional[Body] = None, *,
+          contract: Optional[Operation] = None) -> Route:
+    return Route(method, pattern, handler, body, contract)
 
 
 @dataclass(frozen=True)

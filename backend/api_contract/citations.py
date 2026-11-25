@@ -16,7 +16,7 @@ so :class:`CslItem` is a ``TypedDict`` whose optional variables are
 """
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, with_config
 from typing_extensions import NotRequired, TypedDict
@@ -96,4 +96,5 @@ class CitationsBibtex(BaseModel):
     missing: list[str]
 
 
-CitationsResult = Union[CitationsCslJson, CitationsBibtex]
+CitationsResult = Annotated[Union[CitationsCslJson, CitationsBibtex], Field(discriminator="format")]
+

@@ -63,12 +63,12 @@ class PublisherTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest, MockResponse
 
-        from backend.api_contract.openapi import publishers_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         res = self.get(path) if method == "GET" else self.send(method, path, payload)
         data = json.dumps(payload).encode() if payload is not None else None
         parsed = urlsplit(path)
-        api = OpenAPI.from_dict(publishers_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=parsed.path,
                               args=dict(parse_qsl(parsed.query)), data=data)
         if schema_valid:

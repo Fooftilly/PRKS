@@ -4,11 +4,9 @@
  * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { SavedView, SavedViewSearch } from './generated/saved-views'
+import type { SavedView, SavedViewSearch } from './generated/openapi'
 
 export type { SavedView, SavedViewSearch }
-
-export const SAVED_VIEWS_CONTRACT_VERSION = '0.1.0'
 
 export const SAVED_VIEW_KEYS = ['id', 'name', 'search', 'created_at', 'updated_at'] as const
 export const SAVED_VIEW_SEARCH_KEYS = ['mode', 'q', 'tag', 'author', 'publisher'] as const

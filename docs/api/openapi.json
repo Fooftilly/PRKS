@@ -1,0 +1,5085 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "PRKS API",
+    "version": "0.2.0",
+    "description": "The PRKS HTTP API, generated from the route table (backend/api) and the Pydantic boundary models (backend/api_contract). Every /api/ request needs a live session; a mutation also sends the PRKS-Library-Epoch header."
+  },
+  "tags": [
+    {
+      "name": "citations"
+    },
+    {
+      "name": "diagnostics"
+    },
+    {
+      "name": "meta"
+    },
+    {
+      "name": "positions"
+    },
+    {
+      "name": "processing-items"
+    },
+    {
+      "name": "publishers"
+    },
+    {
+      "name": "saved-views"
+    },
+    {
+      "name": "settings"
+    }
+  ],
+  "paths": {
+    "/api/citations": {
+      "post": {
+        "operationId": "exportCitations",
+        "summary": "Read the selected Works' citations as CSL-JSON or BibTeX",
+        "tags": [
+          "citations"
+        ],
+        "description": "Changes nothing. Each Work is cited from its citation Manifestation. Ids this Library has no Work for are listed in `missing` and left out.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CitationsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The found Works' citations, in request order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "bibtex": "#/components/schemas/CitationsBibtex",
+                      "csl-json": "#/components/schemas/CitationsCslJson"
+                    },
+                    "propertyName": "format"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/CitationsCslJson"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CitationsBibtex"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Domain refusal: not an object, unknown format, or an empty, malformed or too large selection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/deployment-settings": {
+      "get": {
+        "operationId": "getDeploymentSettings",
+        "summary": "Deployment settings, read-only",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Every deployment setting with its effective value and source. Secrets and host paths show only that they are set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/diagnostics/jobs": {
+      "get": {
+        "operationId": "getJobDiagnostics",
+        "summary": "Job worker and queue diagnostics",
+        "tags": [
+          "diagnostics"
+        ],
+        "responses": {
+          "200": {
+            "description": "The embedded worker's state and process-local counters, and the queue's depth and oldest age by job kind and state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDiagnostics"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The server runs without a jobs runtime (test servers only).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The database cannot be read (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/diagnostics/performance": {
+      "get": {
+        "operationId": "getPerformanceDiagnostics",
+        "summary": "Runtime performance diagnostics snapshot",
+        "tags": [
+          "diagnostics"
+        ],
+        "responses": {
+          "200": {
+            "description": "Aggregate in-process measurements.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/diagnostics/performance/reset": {
+      "post": {
+        "operationId": "resetPerformanceDiagnostics",
+        "summary": "Clear the in-process performance window",
+        "tags": [
+          "diagnostics"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PerformanceDiagnosticsResetRequest"
+              }
+            }
+          },
+          "description": "Empty JSON object. Additional properties are rejected."
+        },
+        "responses": {
+          "200": {
+            "description": "Measurements were reset.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PerformanceDiagnosticsReset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No body, or a body that is not an empty object.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/openapi.json": {
+      "get": {
+        "operationId": "getOpenApiDocument",
+        "summary": "This OpenAPI document",
+        "tags": [
+          "meta"
+        ],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document of every typed route.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/positions": {
+      "get": {
+        "operationId": "listPositions",
+        "summary": "List Positions",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Position index (no embedded arguments).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PositionSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPosition",
+        "summary": "Create a Position",
+        "tags": [
+          "positions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created Position detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or domain refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/positions/{position_id}": {
+      "parameters": [
+        {
+          "name": "position_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deletePosition",
+        "summary": "Delete a Position",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Position is still targeted by an Argument or Stance (position_in_use).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getPosition",
+        "summary": "Get Position detail",
+        "tags": [
+          "positions"
+        ],
+        "responses": {
+          "200": {
+            "description": "Position detail with targeting Arguments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updatePosition",
+        "summary": "Update Position fields",
+        "tags": [
+          "positions"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PositionUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated Position detail.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation or domain refusal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/positions/{position_id}/sync-state": {
+      "parameters": [
+        {
+          "name": "position_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPositionSyncState",
+        "summary": "Position field revisions (sync-state)",
+        "tags": [
+          "positions"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revisions only.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque revision token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PositionSyncState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Current revision token (same as a matching 200).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/processing-items": {
+      "get": {
+        "operationId": "listProcessingItems",
+        "summary": "One page of the queue: ready items, oldest upload first",
+        "tags": [
+          "processing-items"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The previous page's `next_cursor`."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A limit out of range or a malformed cursor (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "uploadProcessingItem",
+        "summary": "Upload one PDF into the queue",
+        "tags": [
+          "processing-items"
+        ],
+        "description": "The body is the PDF. A used `Idempotency-Key` answers with its item without reading the body. Any answer sent before the whole body was read carries `Connection: close`. Duplicates by content are a warning only.",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{1,128}$"
+            },
+            "description": "Minted by the client per file: 1-128 of `A-Z a-z 0-9 . _ : -`."
+          },
+          {
+            "name": "PRKS-Filename",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The original filename, percent-encoded UTF-8; display only."
+          },
+          {
+            "name": "Content-Length",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 5
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/pdf": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The key was used: its item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemUploaded"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The item was created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemUploaded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "description": "The body stalled for 30 seconds, or did not arrive within 60 seconds plus its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "No Content-Length (PROCESSING_LENGTH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Not sent as application/pdf (unsupported_media_type), or the body does not start with %PDF- (PROCESSING_NOT_A_PDF).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/processing-items/import": {
+      "post": {
+        "operationId": "importProcessingItems",
+        "summary": "Import several items, each in its own transaction",
+        "tags": [
+          "processing-items"
+        ],
+        "description": "One item's failure never affects another's: each has its own result.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingImportRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "A result per item, in order.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingImportResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteProcessingItem",
+        "summary": "Remove a ready item; deleting it again changes nothing",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The deleted marker.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The item was imported (PROCESSING_ITEM_IMPORTED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getProcessingItem",
+        "summary": "An item, or the marker an import or delete left",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateProcessingItem",
+        "summary": "Edit a ready item's draft at its revision",
+        "tags": [
+          "processing-items"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingItemUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The item, one revision on.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No or a bad revision, or a refused draft value, folder, person, tag or role type (VALIDATION_ERROR).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, PROCESSING_ITEM_DELETED); `item` is the item as it now is.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}/import": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "importProcessingItem",
+        "summary": "Turn a ready item into a Work, in one transaction",
+        "tags": [
+          "processing-items"
+        ],
+        "description": "A retry of a finished import answers with the same Work and creates nothing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "A JSON object, ignored. Send `{}`."
+        },
+        "responses": {
+          "200": {
+            "description": "Imported before: its Work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemImported"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Imported.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemImported"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object (invalid_request).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such item in this Library (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/processing-items/{item_id}/pdf": {
+      "parameters": [
+        {
+          "name": "item_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getProcessingItemPdf",
+        "summary": "A ready item's PDF as uploaded, with Range support",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No ready item with that id (ENTITY_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingItemRefusal"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range is outside the file."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "getProcessingItemPdfHead",
+        "summary": "A ready item's PDF as uploaded, with Range support (headers only)",
+        "tags": [
+          "processing-items"
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file."
+          },
+          "206": {
+            "description": "The requested range."
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No ready item with that id (ENTITY_NOT_FOUND)."
+          },
+          "416": {
+            "description": "The range is outside the file."
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/publishers": {
+      "get": {
+        "operationId": "listPublishersInUse",
+        "summary": "List canonical Publishers with aliases and Work counts",
+        "tags": [
+          "publishers"
+        ],
+        "parameters": [
+          {
+            "name": "used",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "`1`, `true`, or `yes` returns the catalog. Any other value returns an empty list."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Publishers ordered by name, case-insensitively.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PublisherInUse"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createPublisher",
+        "summary": "Create a canonical Publisher, or return the existing one",
+        "tags": [
+          "publishers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublisherCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or existing Publisher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Schema or domain refusal (empty name).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/publishers/{publisher_id}": {
+      "parameters": [
+        {
+          "name": "publisher_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deletePublisher",
+        "summary": "Delete a Publisher group and its aliases",
+        "tags": [
+          "publishers"
+        ],
+        "description": "Works keep their publisher text. Deleting a missing id is not an error.",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/publishers/{publisher_id}/aliases": {
+      "parameters": [
+        {
+          "name": "publisher_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "removePublisherAlias",
+        "summary": "Remove an alternate spelling from a Publisher",
+        "tags": [
+          "publishers"
+        ],
+        "parameters": [
+          {
+            "name": "alias",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing alias.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "This Publisher has no such alias.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "addPublisherAlias",
+        "summary": "Add an alternate spelling to a Publisher",
+        "tags": [
+          "publishers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublisherAliasRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Added, or already an alias of this Publisher.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublisherAliasAdded"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Schema or domain refusal (empty, unknown Publisher, canonical name, or used elsewhere).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/saved-views": {
+      "get": {
+        "operationId": "listSavedViews",
+        "summary": "List Saved Views",
+        "tags": [
+          "saved-views"
+        ],
+        "responses": {
+          "200": {
+            "description": "Saved Views ordered by name, case-insensitively.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SavedView"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSavedView",
+        "summary": "Save a named search definition",
+        "tags": [
+          "saved-views"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Domain refusal: wrong type, empty or too long name, or an incomplete or invalid search definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "description": "Name already used, or the library has the maximum number of Saved Views.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/saved-views/{view_id}": {
+      "parameters": [
+        {
+          "name": "view_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteSavedView",
+        "summary": "Delete a Saved View",
+        "tags": [
+          "saved-views"
+        ],
+        "description": "Deleting a view never deletes Works or files.",
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewDeleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getSavedView",
+        "summary": "Read one Saved View",
+        "tags": [
+          "saved-views"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateSavedView",
+        "summary": "Rename a Saved View or change its search",
+        "tags": [
+          "saved-views"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to update, or a domain refusal of the name or search definition.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used by another Saved View.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/storage-status": {
+      "get": {
+        "operationId": "getStorageStatus",
+        "summary": "Storage status, read-only",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the Library's files are, the source that chose that place, the root marker's identity, filesystem facts, object counts and the paired database. Carries host paths, so it is sent Cache-Control: no-store.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "description": "Storage is not bound (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApiErrorEnvelope": {
+        "additionalProperties": false,
+        "description": "Standard JSON error body at the HTTP adapter boundary.",
+        "properties": {
+          "error": {
+            "description": "Human-readable error message.",
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable machine-readable code when the domain provides one.",
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Human-readable explanation sent with admission and route refusals.",
+            "title": "Message"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "CitationsBibtex": {
+        "additionalProperties": false,
+        "description": "``format: bibtex``: each found Work's entry, separated by a blank line.",
+        "properties": {
+          "format": {
+            "const": "bibtex",
+            "title": "Format",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "text",
+          "missing"
+        ],
+        "type": "object"
+      },
+      "CitationsCslJson": {
+        "additionalProperties": false,
+        "description": "``format: csl-json``: one item per found Work, in request order.",
+        "properties": {
+          "format": {
+            "const": "csl-json",
+            "title": "Format",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CslItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format",
+          "items",
+          "missing"
+        ],
+        "type": "object"
+      },
+      "CitationsRequest": {
+        "description": "POST /api/citations. At most ``PRKS_BULK_WORK_MAX`` ids, deduplicated in order by the domain.",
+        "properties": {
+          "work_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "format": {
+            "enum": [
+              "csl-json",
+              "bibtex"
+            ],
+            "title": "Format",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_ids",
+          "format"
+        ],
+        "type": "object"
+      },
+      "CslDate": {
+        "additionalProperties": false,
+        "properties": {
+          "date-parts": {
+            "items": {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "title": "Date-Parts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "date-parts"
+        ],
+        "type": "object"
+      },
+      "CslItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "author": {
+            "items": {
+              "$ref": "#/components/schemas/CslName"
+            },
+            "title": "Author",
+            "type": "array"
+          },
+          "editor": {
+            "items": {
+              "$ref": "#/components/schemas/CslName"
+            },
+            "title": "Editor",
+            "type": "array"
+          },
+          "translator": {
+            "items": {
+              "$ref": "#/components/schemas/CslName"
+            },
+            "title": "Translator",
+            "type": "array"
+          },
+          "issued": {
+            "$ref": "#/components/schemas/CslDate"
+          },
+          "accessed": {
+            "$ref": "#/components/schemas/CslDate"
+          },
+          "genre": {
+            "title": "Genre",
+            "type": "string"
+          },
+          "container-title": {
+            "title": "Container-Title",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          },
+          "publisher-place": {
+            "title": "Publisher-Place",
+            "type": "string"
+          },
+          "edition": {
+            "title": "Edition",
+            "type": "string"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          },
+          "issue": {
+            "title": "Issue",
+            "type": "string"
+          },
+          "page": {
+            "title": "Page",
+            "type": "string"
+          },
+          "ISBN": {
+            "title": "Isbn",
+            "type": "string"
+          },
+          "DOI": {
+            "title": "Doi",
+            "type": "string"
+          },
+          "URL": {
+            "title": "Url",
+            "type": "string"
+          },
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "type": "object"
+      },
+      "CslName": {
+        "additionalProperties": false,
+        "description": "A CSL name: ``family`` with an optional ``given``, or one ``literal`` (a channel).",
+        "properties": {
+          "family": {
+            "title": "Family",
+            "type": "string"
+          },
+          "given": {
+            "title": "Given",
+            "type": "string"
+          },
+          "literal": {
+            "title": "Literal",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "DeploymentSetting": {
+        "additionalProperties": false,
+        "description": "One deployment setting as this web process read it at start.",
+        "properties": {
+          "key": {
+            "description": "The environment variable, such as PRKS_HTTP_THREADS.",
+            "title": "Key",
+            "type": "string"
+          },
+          "summary": {
+            "description": "What it controls.",
+            "title": "Summary",
+            "type": "string"
+          },
+          "value": {
+            "description": "The effective value. For a default, the documented default; for a secret, '(set, hidden)'; for a path on the host, 'set on the host'.",
+            "title": "Value",
+            "type": "string"
+          },
+          "source": {
+            "description": "Where the value came from; the storage root may also come from the command line or the bootstrap file.",
+            "enum": [
+              "environment",
+              "default",
+              "command line",
+              "bootstrap file"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "default": {
+            "type": "string",
+            "description": "The documented default.",
+            "title": "Default"
+          }
+        },
+        "required": [
+          "key",
+          "summary",
+          "value",
+          "source",
+          "default"
+        ],
+        "type": "object"
+      },
+      "DeploymentSettings": {
+        "additionalProperties": false,
+        "description": "GET /api/deployment-settings body (Library owner only).",
+        "properties": {
+          "settings": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentSetting"
+            },
+            "title": "Settings",
+            "type": "array"
+          },
+          "editable_in_browser": {
+            "const": false,
+            "description": "Always false: these values are changed on the host and need a restart.",
+            "title": "Editable In Browser",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settings",
+          "editable_in_browser"
+        ],
+        "type": "object"
+      },
+      "DuplicateItem": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "original_filename"
+        ],
+        "type": "object"
+      },
+      "DuplicateWork": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "type": "object"
+      },
+      "EmbeddedJobWorker": {
+        "additionalProperties": false,
+        "description": "The worker thread this web process runs (``PRKS_EMBEDDED_WORKER``).",
+        "properties": {
+          "state": {
+            "enum": [
+              "starting",
+              "waiting",
+              "running",
+              "stopping",
+              "stopped",
+              "refused"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable reason code while waiting or refused.",
+            "title": "Reason"
+          },
+          "counters": {
+            "$ref": "#/components/schemas/JobWorkerCounters"
+          }
+        },
+        "required": [
+          "state",
+          "counters"
+        ],
+        "type": "object"
+      },
+      "JobDiagnostics": {
+        "additionalProperties": false,
+        "description": "GET /api/diagnostics/jobs body (owner only; ``PRKS_AUTH`` runtime only).",
+        "properties": {
+          "embedded_worker": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EmbeddedJobWorker"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null when PRKS_EMBEDDED_WORKER=0 (a separate prks worker runs the jobs)."
+          },
+          "queue": {
+            "items": {
+              "$ref": "#/components/schemas/JobQueueDepth"
+            },
+            "title": "Queue",
+            "type": "array"
+          }
+        },
+        "required": [
+          "embedded_worker",
+          "queue"
+        ],
+        "type": "object"
+      },
+      "JobQueueDepth": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "queued",
+              "running",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "oldest_age_seconds": {
+            "minimum": 0,
+            "title": "Oldest Age Seconds",
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "state",
+          "count",
+          "oldest_age_seconds"
+        ],
+        "type": "object"
+      },
+      "JobWorkerCounters": {
+        "additionalProperties": false,
+        "description": "The counters ``backend.jobs.diagnostics.WorkerStats`` always emits (zeros included).",
+        "properties": {
+          "claimed": {
+            "minimum": 0,
+            "title": "Claimed",
+            "type": "integer"
+          },
+          "succeeded": {
+            "minimum": 0,
+            "title": "Succeeded",
+            "type": "integer"
+          },
+          "retried": {
+            "minimum": 0,
+            "title": "Retried",
+            "type": "integer"
+          },
+          "cancelled": {
+            "minimum": 0,
+            "title": "Cancelled",
+            "type": "integer"
+          },
+          "failed": {
+            "minimum": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
+          "lost": {
+            "minimum": 0,
+            "title": "Lost",
+            "type": "integer"
+          },
+          "released": {
+            "minimum": 0,
+            "title": "Released",
+            "type": "integer"
+          },
+          "reaped": {
+            "minimum": 0,
+            "title": "Reaped",
+            "type": "integer"
+          },
+          "errors": {
+            "minimum": 0,
+            "title": "Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "claimed",
+          "succeeded",
+          "retried",
+          "cancelled",
+          "failed",
+          "lost",
+          "released",
+          "reaped",
+          "errors"
+        ],
+        "type": "object"
+      },
+      "PerformanceCounters": {
+        "additionalProperties": false,
+        "description": "Exact counter map the registry always emits (zeros included).",
+        "properties": {
+          "thumbnail_cache_hits": {
+            "minimum": 0,
+            "title": "Thumbnail Cache Hits",
+            "type": "integer"
+          },
+          "thumbnail_cache_misses": {
+            "minimum": 0,
+            "title": "Thumbnail Cache Misses",
+            "type": "integer"
+          },
+          "pdf_file_stat_rows": {
+            "minimum": 0,
+            "title": "Pdf File Stat Rows",
+            "type": "integer"
+          },
+          "pdf_file_stat_files": {
+            "minimum": 0,
+            "title": "Pdf File Stat Files",
+            "type": "integer"
+          },
+          "db_read": {
+            "minimum": 0,
+            "title": "Db Read",
+            "type": "integer"
+          },
+          "db_write": {
+            "minimum": 0,
+            "title": "Db Write",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "thumbnail_cache_hits",
+          "thumbnail_cache_misses",
+          "pdf_file_stat_rows",
+          "pdf_file_stat_files",
+          "db_read",
+          "db_write"
+        ],
+        "type": "object"
+      },
+      "PerformanceDiagnosticsReset": {
+        "additionalProperties": false,
+        "description": "POST /api/diagnostics/performance/reset body.",
+        "properties": {
+          "status": {
+            "const": "reset",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PerformanceDiagnosticsResetRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/diagnostics/performance/reset request.\n\nEmpty object only. The JSON body exists so the request passes the body\ngate; additional fields are not part of the contract.",
+        "properties": {},
+        "type": "object"
+      },
+      "PerformanceRequestTotals": {
+        "additionalProperties": false,
+        "properties": {
+          "total": {
+            "minimum": 0,
+            "title": "Total",
+            "type": "integer"
+          },
+          "slow": {
+            "minimum": 0,
+            "title": "Slow",
+            "type": "integer"
+          },
+          "response_bytes": {
+            "minimum": 0,
+            "title": "Response Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "slow",
+          "response_bytes"
+        ],
+        "type": "object"
+      },
+      "PerformanceRouteStat": {
+        "additionalProperties": false,
+        "properties": {
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          },
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "status_4xx": {
+            "minimum": 0,
+            "title": "Status 4Xx",
+            "type": "integer"
+          },
+          "status_5xx": {
+            "minimum": 0,
+            "title": "Status 5Xx",
+            "type": "integer"
+          },
+          "slow_count": {
+            "minimum": 0,
+            "title": "Slow Count",
+            "type": "integer"
+          },
+          "avg_ms": {
+            "title": "Avg Ms",
+            "type": "number"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "max_ms": {
+            "title": "Max Ms",
+            "type": "number"
+          },
+          "avg_db_ms": {
+            "title": "Avg Db Ms",
+            "type": "number"
+          },
+          "db_calls": {
+            "minimum": 0,
+            "title": "Db Calls",
+            "type": "integer"
+          },
+          "db_calls_avg": {
+            "title": "Db Calls Avg",
+            "type": "number"
+          },
+          "measured_db_share_percent": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Db Share Percent"
+          },
+          "avg_response_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Response Bytes"
+          }
+        },
+        "required": [
+          "method",
+          "route",
+          "count",
+          "status_4xx",
+          "status_5xx",
+          "slow_count",
+          "avg_ms",
+          "p50_ms",
+          "p95_ms",
+          "max_ms",
+          "avg_db_ms",
+          "db_calls",
+          "db_calls_avg",
+          "measured_db_share_percent",
+          "avg_response_bytes"
+        ],
+        "type": "object"
+      },
+      "PerformanceSnapshot": {
+        "additionalProperties": false,
+        "description": "GET /api/diagnostics/performance body.\n\nRuntime aggregate metadata. No research content, query strings, or names.",
+        "properties": {
+          "process_started_at": {
+            "title": "Process Started At",
+            "type": "number"
+          },
+          "uptime_seconds": {
+            "minimum": 0,
+            "title": "Uptime Seconds",
+            "type": "integer"
+          },
+          "measured_for_seconds": {
+            "minimum": 0,
+            "title": "Measured For Seconds",
+            "type": "integer"
+          },
+          "slow_threshold_ms": {
+            "title": "Slow Threshold Ms",
+            "type": "number"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/PerformanceRequestTotals"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/PerformanceRouteStat"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "spans": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PerformanceSpanStat"
+            },
+            "title": "Spans",
+            "type": "object"
+          },
+          "counters": {
+            "$ref": "#/components/schemas/PerformanceCounters"
+          }
+        },
+        "required": [
+          "process_started_at",
+          "uptime_seconds",
+          "measured_for_seconds",
+          "slow_threshold_ms",
+          "requests",
+          "routes",
+          "spans",
+          "counters"
+        ],
+        "type": "object"
+      },
+      "PerformanceSpanStat": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "minimum": 0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "avg_ms": {
+            "title": "Avg Ms",
+            "type": "number"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "max_ms": {
+            "title": "Max Ms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "count",
+          "avg_ms",
+          "p50_ms",
+          "p95_ms",
+          "max_ms"
+        ],
+        "type": "object"
+      },
+      "PositionArgumentSummary": {
+        "additionalProperties": false,
+        "description": "Argument/Stance row embedded on Position detail.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "verdict_id": {
+            "title": "Verdict Id",
+            "type": "string"
+          },
+          "verdict_label": {
+            "title": "Verdict Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "verdict_id",
+          "verdict_label"
+        ],
+        "type": "object"
+      },
+      "PositionCreateRequest": {
+        "description": "POST /api/positions body.\n\nOmitted ``description`` defaults to empty string. Supplied values must be\nstrings \u2014 JSON null and other non-strings are ``invalid_text``.",
+        "properties": {
+          "name": {
+            "description": "Position claim name (domain-normalized).",
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "description": "Optional markdown description. Omitted \u2192 empty string. When supplied must be a string (not null). Domain enforces length/control rules.",
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PositionDeleted": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PositionDetail": {
+        "additionalProperties": false,
+        "description": "Detail / create / update response including Arguments targeting this Position.\n\nExact wire contract: ``arguments`` is always present (may be empty).",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/PositionArgumentSummary"
+            },
+            "title": "Arguments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "created_at",
+          "updated_at",
+          "arguments"
+        ],
+        "type": "object"
+      },
+      "PositionSummary": {
+        "additionalProperties": false,
+        "description": "Index row from GET /api/positions (no embedded arguments).\n\nExact wire contract: established keys are required (nullable where the\nDB allows null). Unknown keys are forbidden so GET dump_response cannot\nsilently drop or invent fields.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "PositionSyncFieldState": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PositionSyncFields": {
+        "additionalProperties": false,
+        "description": "Exact Position revision map \u2014 always ``name`` and ``description``.",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/PositionSyncFieldState"
+          },
+          "description": {
+            "$ref": "#/components/schemas/PositionSyncFieldState"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object"
+      },
+      "PositionSyncState": {
+        "additionalProperties": false,
+        "description": "GET /api/positions/{id}/sync-state \u2014 revisions only.",
+        "properties": {
+          "position_id": {
+            "title": "Position Id",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/PositionSyncFields"
+          }
+        },
+        "required": [
+          "position_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "PositionUpdateRequest": {
+        "description": "PATCH /api/positions/{id} body.\n\nIntentional contract (#180):\n\n- omitted field \u2192 do not modify;\n- ``name`` when present must be a string; explicit null is invalid;\n- ``description`` when present must be a string (empty string clears);\n  explicit null is invalid.\n\nWhether at least one field is supplied is a domain rule\n(``nothing_to_update``), not enforced here.",
+        "properties": {
+          "name": {
+            "description": "When present, must be a string. Omit to leave unchanged. Explicit JSON null is invalid.",
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "description": "When present, must be a string (empty string clears). Omit to leave unchanged. Explicit JSON null is invalid.",
+            "title": "Description",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ProcessingDuplicates": {
+        "additionalProperties": false,
+        "description": "Other ``ready`` items and Works of this Library with the same bytes: a warning only.\n\nEach list names at most ten (items oldest first, Works by id); ``more_*``\nsays whether there are more.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateItem"
+            },
+            "maxItems": 10,
+            "title": "Items",
+            "type": "array"
+          },
+          "works": {
+            "items": {
+              "$ref": "#/components/schemas/DuplicateWork"
+            },
+            "maxItems": 10,
+            "title": "Works",
+            "type": "array"
+          },
+          "more_items": {
+            "title": "More Items",
+            "type": "boolean"
+          },
+          "more_works": {
+            "title": "More Works",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "items",
+          "works",
+          "more_items",
+          "more_works"
+        ],
+        "type": "object"
+      },
+      "ProcessingFileRole": {
+        "additionalProperties": false,
+        "description": "A staged person role, in inbox order.",
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "string"
+          },
+          "person_name": {
+            "title": "Person Name",
+            "type": "string"
+          },
+          "role_type": {
+            "title": "Role Type",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "person_id",
+          "person_name",
+          "role_type",
+          "order_index"
+        ],
+        "type": "object"
+      },
+      "ProcessingFileRoleInput": {
+        "description": "A staged role as the endpoint accepts it.\n\nAn item without a person or role type is skipped. A duplicate\nperson/role pair keeps its first position.",
+        "properties": {
+          "person_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Person Id"
+          },
+          "role_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "A People role type (domain-checked).",
+            "title": "Role Type"
+          }
+        },
+        "type": "object"
+      },
+      "ProcessingFileTag": {
+        "additionalProperties": false,
+        "description": "A staged tag.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "ProcessingFileTagInput": {
+        "description": "A staged tag as the endpoint accepts it. ``tag_id`` is read when ``id`` is empty.",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Id"
+          },
+          "tag_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tag Id"
+          }
+        },
+        "type": "object"
+      },
+      "ProcessingImportRequest": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items/import: the items to import, each in its own transaction, in order.",
+        "properties": {
+          "item_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Item Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "item_ids"
+        ],
+        "type": "object"
+      },
+      "ProcessingImportResult": {
+        "additionalProperties": false,
+        "description": "One item's outcome: ``work_id`` when it imported, else ``code`` (and ``item`` when there is one).",
+        "properties": {
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "work_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Id"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "item_id",
+          "ok",
+          "work_id",
+          "created",
+          "code",
+          "message",
+          "item"
+        ],
+        "type": "object"
+      },
+      "ProcessingImportResults": {
+        "additionalProperties": false,
+        "properties": {
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingImportResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "results"
+        ],
+        "type": "object"
+      },
+      "ProcessingItem": {
+        "additionalProperties": false,
+        "description": "One queue item: a ``ready`` item with its draft, or an ``imported`` or ``deleted`` marker.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "original_filename": {
+            "title": "Original Filename",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "byte_size": {
+            "title": "Byte Size",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ready",
+              "imported",
+              "deleted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "imported_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported At"
+          },
+          "imported_work_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Imported Work Id"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItemDraft"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "original_filename",
+          "sha256",
+          "byte_size",
+          "status",
+          "revision",
+          "created_at",
+          "updated_at",
+          "imported_at",
+          "imported_work_id",
+          "deleted_at",
+          "draft"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemDraft": {
+        "additionalProperties": false,
+        "description": "The Work a ``ready`` item will become, as the user drafts it.",
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status_draft": {
+            "enum": [
+              "Planned",
+              "In Progress",
+              "Completed",
+              "Paused",
+              "Not Started"
+            ],
+            "title": "Status Draft",
+            "type": "string"
+          },
+          "published_date": {
+            "title": "Published Date",
+            "type": "string"
+          },
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "author_text": {
+            "title": "Author Text",
+            "type": "string"
+          },
+          "year": {
+            "title": "Year",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "edition": {
+            "title": "Edition",
+            "type": "string"
+          },
+          "journal": {
+            "title": "Journal",
+            "type": "string"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          },
+          "issue": {
+            "title": "Issue",
+            "type": "string"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "string"
+          },
+          "isbn": {
+            "title": "Isbn",
+            "type": "string"
+          },
+          "doi": {
+            "title": "Doi",
+            "type": "string"
+          },
+          "doc_type": {
+            "title": "Doc Type",
+            "type": "string"
+          },
+          "private_notes": {
+            "title": "Private Notes",
+            "type": "string"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "target_folder_id": {
+            "title": "Target Folder Id",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingFileRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingFileTag"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "status_draft",
+          "published_date",
+          "abstract",
+          "source_url",
+          "author_text",
+          "year",
+          "publisher",
+          "location",
+          "edition",
+          "journal",
+          "volume",
+          "issue",
+          "pages",
+          "isbn",
+          "doi",
+          "doc_type",
+          "private_notes",
+          "thumb_page",
+          "target_folder_id",
+          "roles",
+          "tags"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemImported": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items/{id}/import: the Work (201 created, 200 for an import already done).",
+        "properties": {
+          "item_id": {
+            "title": "Item Id",
+            "type": "string"
+          },
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item_id",
+          "work_id",
+          "created"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemPage": {
+        "additionalProperties": false,
+        "description": "GET /api/processing-items: one page of ``ready`` items, oldest upload first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProcessingItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Pass as `cursor` for the next page; null on the last.",
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemRefusal": {
+        "additionalProperties": false,
+        "description": "Every refusal on these routes.\n\nThe queue's own refusals and admission's authorization refusals carry\n``code`` and ``message`` (and ``item``, as it now is, when there is\none). Refusals decided before admission or the route (Host, Origin, the\nJSON body reader, an unavailable database) carry ``error`` alone.",
+        "properties": {
+          "error": {
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Code"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Message"
+          },
+          "item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProcessingItem"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemUpdateRequest": {
+        "description": "PATCH /api/processing-items/{id}. ``revision`` is required; omit a field to leave it unchanged.\n\nDraft values are stringified and trimmed. ``thumb_page`` keeps a whole\npage number of at least 1 and clears anything else. An empty\n``target_folder_id`` clears it. ``roles`` and ``tags`` replace the\ndrafted list; ``null`` leaves it unchanged.",
+        "properties": {
+          "revision": {
+            "description": "The item's revision the edit was made against.",
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Title"
+          },
+          "status_draft": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "One of the draft statuses (domain-checked).",
+            "title": "Status Draft"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Legacy alias of status_draft.",
+            "title": "Status"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Published Date"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Abstract"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Url"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Year"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Publisher"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Location"
+          },
+          "edition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Edition"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Journal"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Volume"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Issue"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Pages"
+          },
+          "isbn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Isbn"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Doi"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Doc Type"
+          },
+          "private_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Private Notes"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Thumb Page"
+          },
+          "target_folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Target Folder Id"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileRoleInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Roles"
+          },
+          "tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ProcessingFileTagInput"
+                    },
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "items": {},
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Tags"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "ProcessingItemUploaded": {
+        "additionalProperties": false,
+        "description": "POST /api/processing-items: the item (201 created, 200 for a used Idempotency-Key).",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ProcessingItem"
+          },
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "duplicates": {
+            "$ref": "#/components/schemas/ProcessingDuplicates"
+          }
+        },
+        "required": [
+          "item",
+          "created",
+          "duplicates"
+        ],
+        "type": "object"
+      },
+      "PublisherAliasAdded": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "pattern": "^added$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PublisherAliasRequest": {
+        "description": "POST /api/publishers/{id}/aliases.",
+        "properties": {
+          "alias": {
+            "title": "Alias",
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias"
+        ],
+        "type": "object"
+      },
+      "PublisherCreateRequest": {
+        "description": "POST /api/publishers. Emptiness is a domain refusal, not a schema one.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PublisherCreated": {
+        "additionalProperties": false,
+        "description": "POST /api/publishers body. ``existed`` is true when the name was already canonical.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "existed": {
+            "title": "Existed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "existed"
+        ],
+        "type": "object"
+      },
+      "PublisherDeleted": {
+        "additionalProperties": false,
+        "description": "DELETE /api/publishers/{id} and DELETE /api/publishers/{id}/aliases body.",
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "PublisherInUse": {
+        "additionalProperties": false,
+        "description": "One row of GET /api/publishers?used=1.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          },
+          "work_count": {
+            "minimum": 0,
+            "title": "Work Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases",
+          "work_count"
+        ],
+        "type": "object"
+      },
+      "SavedView": {
+        "additionalProperties": false,
+        "description": "One Saved View: GET list rows, GET by id, POST and PATCH bodies.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SavedViewSearch"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "search",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "SavedViewCreateRequest": {
+        "description": "POST /api/saved-views.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "search": {
+            "$ref": "#/components/schemas/SavedViewSearchInput"
+          }
+        },
+        "required": [
+          "name",
+          "search"
+        ],
+        "type": "object"
+      },
+      "SavedViewDeleted": {
+        "additionalProperties": false,
+        "description": "DELETE /api/saved-views/{id} body.",
+        "properties": {
+          "status": {
+            "pattern": "^deleted$",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "SavedViewSearch": {
+        "additionalProperties": false,
+        "description": "A saved search definition. All five keys are always present.",
+        "properties": {
+          "mode": {
+            "enum": [
+              "all",
+              "advanced",
+              "tag"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "q": {
+            "title": "Q",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "q",
+          "tag",
+          "author",
+          "publisher"
+        ],
+        "type": "object"
+      },
+      "SavedViewSearchInput": {
+        "description": "A search definition as the endpoint accepts it.\n\nAll five keys are required strings. Extra keys are ignored. ``mode`` is\ntrimmed by the domain before it must be ``all``, ``advanced``, or ``tag``,\nso the schema types it as a string; the allowed values, field lengths,\nand mode/field combinations are domain refusals (400).",
+        "properties": {
+          "mode": {
+            "description": "`all`, `advanced`, or `tag` after trimming (domain-checked).",
+            "title": "Mode",
+            "type": "string"
+          },
+          "q": {
+            "title": "Q",
+            "type": "string"
+          },
+          "tag": {
+            "title": "Tag",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "q",
+          "tag",
+          "author",
+          "publisher"
+        ],
+        "type": "object"
+      },
+      "SavedViewUpdateRequest": {
+        "description": "PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.\n\nSending neither field (or only nulls) is a domain refusal\n(``Nothing to update.``).",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Name"
+          },
+          "search": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedViewSearchInput"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "type": "object"
+      },
+      "StorageDatabase": {
+        "additionalProperties": false,
+        "description": "The database half of the Library (storage-architecture \u00a79.2), read-only.",
+        "properties": {
+          "engine": {
+            "const": "PostgreSQL",
+            "title": "Engine",
+            "type": "string"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Host name or address; 'local socket' for a Unix socket.",
+            "title": "Host"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Port"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The database name.",
+            "title": "Name"
+          }
+        },
+        "required": [
+          "engine",
+          "host",
+          "port",
+          "name"
+        ],
+        "type": "object"
+      },
+      "StorageFilesystem": {
+        "additionalProperties": false,
+        "description": "Facts about the filesystem that holds the root, measured, not assumed.",
+        "properties": {
+          "free_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "total_bytes": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Bytes"
+          },
+          "filesystem_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The type the platform reports, such as ext4 or apfs.",
+            "title": "Filesystem Type"
+          },
+          "network": {
+            "description": "Whether the type is known to be a network mount (\u00a77.4); FUSE types are uncertain.",
+            "enum": [
+              "local",
+              "network",
+              "uncertain",
+              "unknown"
+            ],
+            "title": "Network",
+            "type": "string"
+          },
+          "case_sensitive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Measured with probe files; null when not measured.",
+            "title": "Case Sensitive"
+          },
+          "normalization": {
+            "anyOf": [
+              {
+                "enum": [
+                  "preserved",
+                  "insensitive",
+                  "normalized"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unicode names: preserved (NFC and NFD are two names), insensitive (either finds the other), normalized (the filesystem rewrites names). Null when not measured.",
+            "title": "Normalization"
+          },
+          "directory_fsync": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whether directory fsync works here, as the root's first probe recorded it.",
+            "title": "Directory Fsync"
+          }
+        },
+        "required": [
+          "free_bytes",
+          "total_bytes",
+          "filesystem_type",
+          "network",
+          "case_sensitive",
+          "normalization",
+          "directory_fsync"
+        ],
+        "type": "object"
+      },
+      "StorageIdentity": {
+        "additionalProperties": false,
+        "description": "The root marker (prks-root.json) as it is now.",
+        "properties": {
+          "storage_root_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "SR- plus 32 hex; null when the marker cannot be read.",
+            "title": "Storage Root Id"
+          },
+          "layout_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Layout Version"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The marker state; active for a served root.",
+            "title": "State"
+          },
+          "relocation_state": {
+            "description": "none, or the phase of a storage move the marker records (unknown when it names none).",
+            "title": "Relocation State",
+            "type": "string"
+          },
+          "backend_type": {
+            "const": "local",
+            "title": "Backend Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "storage_root_id",
+          "layout_version",
+          "state",
+          "relocation_state",
+          "backend_type"
+        ],
+        "type": "object"
+      },
+      "StorageObjects": {
+        "additionalProperties": false,
+        "description": "Counts across the instance; never key names.",
+        "properties": {
+          "referenced": {
+            "description": "Objects the catalogue names.",
+            "minimum": 0,
+            "title": "Referenced",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Named objects the data root does not have.",
+            "minimum": 0,
+            "title": "Missing",
+            "type": "integer"
+          },
+          "pending_cleanup": {
+            "description": "Released objects waiting for cleanup.",
+            "minimum": 0,
+            "title": "Pending Cleanup",
+            "type": "integer"
+          },
+          "orphans": {
+            "description": "Objects nothing ever named, found by the orphan sweep, waiting for cleanup.",
+            "minimum": 0,
+            "title": "Orphans",
+            "type": "integer"
+          },
+          "held": {
+            "description": "Objects a restore keeps; never removed automatically.",
+            "minimum": 0,
+            "title": "Held",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "referenced",
+          "missing",
+          "pending_cleanup",
+          "orphans",
+          "held"
+        ],
+        "type": "object"
+      },
+      "StorageRoot": {
+        "additionalProperties": false,
+        "description": "Where the Library's files are, and what chose that place.",
+        "properties": {
+          "configured": {
+            "description": "The root as it was configured, before links were resolved.",
+            "title": "Configured",
+            "type": "string"
+          },
+          "resolved": {
+            "description": "The directory PRKS uses: the configured root with links resolved.",
+            "title": "Resolved",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "cli",
+                  "env",
+                  "config_file",
+                  "platform_default",
+                  "development_default"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which setting selected the root (storage-architecture \u00a75.2); null for a test binding.",
+            "title": "Source"
+          },
+          "editable_in_app": {
+            "const": false,
+            "description": "Always false: the root is paired with the database, so it changes only on the host, with a storage move or a new installation and a Library restore.",
+            "title": "Editable In App",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured",
+          "resolved",
+          "source",
+          "editable_in_app"
+        ],
+        "type": "object"
+      },
+      "StorageStatus": {
+        "additionalProperties": false,
+        "description": "GET /api/storage-status body (Library owner only, never cached).",
+        "properties": {
+          "root": {
+            "$ref": "#/components/schemas/StorageRoot"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/StorageIdentity"
+          },
+          "filesystem": {
+            "$ref": "#/components/schemas/StorageFilesystem"
+          },
+          "objects": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StorageObjects"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the counts could not be read (the database or the store was unavailable)."
+          },
+          "database": {
+            "$ref": "#/components/schemas/StorageDatabase"
+          }
+        },
+        "required": [
+          "root",
+          "identity",
+          "filesystem",
+          "objects",
+          "database"
+        ],
+        "type": "object"
+      }
+    },
+    "responses": {
+      "RequestTooLarge": {
+        "description": "The body is larger than the JSON body limit (request_too_large).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "UnsupportedMediaType": {
+        "description": "No or another Content-Type than application/json (unsupported_media_type).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "NotAuthenticated": {
+        "description": "No live session (not_authenticated).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The session's role lacks the route's capability, or the Origin is not allowed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "EpochRequired": {
+        "description": "No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "EpochChanged": {
+        "description": "PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      }
+    }
+  }
+}

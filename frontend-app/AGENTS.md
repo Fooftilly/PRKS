@@ -36,7 +36,7 @@ For changes to the classic coordinator, offline runtime, service worker, durable
 ## API and state boundaries
 
 - Components call `src/api/` and the typed service layer, never raw transport. Keep transport DTOs separate from PRKS domain types.
-- OpenAPI owns wire schema. `src/api/generated/` has one module per `docs/api/openapi-*.json` (`npm run openapi:types`, checked by `npm run openapi:check`). Never generate clients, hooks, cache logic or domain services from OpenAPI, and generated types never replace runtime response parsers. Feature view models (for example `src/features/positions/types.ts`) are not aliases of generated types.
+- OpenAPI owns wire schema. `src/api/generated/openapi.ts` is generated from `docs/api/openapi.json`, the one document built from the route table (`npm run openapi:types`, checked by `npm run openapi:check`). Never generate clients, hooks, cache logic or domain services from OpenAPI, and generated types never replace runtime response parsers. Feature view models (for example `src/features/positions/types.ts`) are not aliases of generated types.
 - #310/#311: do not assume PRKS stays single-owner, tied to one host path, or one process, but do not build future account or storage behavior in an unrelated slice; consume API contracts as they land.
 
 ## Toolchain and validation

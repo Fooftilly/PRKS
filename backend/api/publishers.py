@@ -21,11 +21,14 @@ from __future__ import annotations
 
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.publishers import (
+    PublisherAliasAdded,
     PublisherAliasRequest,
+    PublisherCreated,
     PublisherCreateRequest,
     PublisherDeleted,
     PublisherInUse,
 )
+from backend.api_contract.operation import Operation, Param, body, error, ok
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -86,10 +89,32 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, dump_response(PublisherDeleted, {"status": "deleted"}))
 
 
+_TAG = "publishers"
+_ALIASES = "/api/publishers/{publisher_id}/aliases"
+
 ROUTES = (
-    route("GET", "/api/publishers", in_use),
-    route("POST", "/api/publishers", create),
-    route("DELETE", "/api/publishers/{publisher_id}", delete),
-    route("POST", "/api/publishers/{publisher_id}/aliases", add_alias),
-    route("DELETE", "/api/publishers/{publisher_id}/aliases", delete_alias),
+    route("GET", "/api/publishers", in_use, contract=Operation(
+        "listPublishersInUse", "List canonical Publishers with aliases and Work counts", _TAG,
+        {200: ok(list[PublisherInUse], "Publishers ordered by name, case-insensitively.")},
+        params=(Param("used", description="`1`, `true`, or `yes` returns the catalog. Any other value "
+                                          "returns an empty list."),))),
+    route("POST", "/api/publishers", create, contract=Operation(
+        "createPublisher", "Create a canonical Publisher, or return the existing one", _TAG,
+        {200: ok(PublisherCreated, "Created or existing Publisher."),
+         400: error("Schema or domain refusal (empty name).")},
+        request=body(PublisherCreateRequest))),
+    route("DELETE", "/api/publishers/{publisher_id}", delete, contract=Operation(
+        "deletePublisher", "Delete a Publisher group and its aliases", _TAG,
+        {200: ok(PublisherDeleted, "Deleted.")},
+        description="Works keep their publisher text. Deleting a missing id is not an error.")),
+    route("POST", _ALIASES, add_alias, contract=Operation(
+        "addPublisherAlias", "Add an alternate spelling to a Publisher", _TAG,
+        {200: ok(PublisherAliasAdded, "Added, or already an alias of this Publisher."),
+         400: error("Schema or domain refusal (empty, unknown Publisher, canonical name, or used elsewhere).")},
+        request=body(PublisherAliasRequest))),
+    route("DELETE", _ALIASES, delete_alias, contract=Operation(
+        "removePublisherAlias", "Remove an alternate spelling from a Publisher", _TAG,
+        {200: ok(PublisherDeleted, "Removed."), 400: error("Missing alias."),
+         404: error("This Publisher has no such alias.")},
+        params=(Param("alias", required=True),))),
 )

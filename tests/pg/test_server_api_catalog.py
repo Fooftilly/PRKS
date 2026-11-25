@@ -174,11 +174,11 @@ class CitationExportTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest, MockResponse
 
-        from backend.api_contract.openapi import citations_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         payload = {"work_ids": work_ids, "format": fmt}
         res = self.send("POST", "/api/citations", payload)
-        api = OpenAPI.from_dict(citations_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method="post", path="/api/citations",
                               data=json.dumps(payload).encode())
         if schema_valid:

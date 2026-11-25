@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from './http'
-import type { PublisherAliasAdded, PublisherCreated, PublisherDeleted, PublisherInUse } from './generated/publishers'
+import type { PublisherAliasAdded, PublisherCreated, PublisherDeleted, PublisherInUse } from './generated/openapi'
 import {
   PUBLISHER_ALIAS_ADDED_KEYS,
   PUBLISHER_CREATED_KEYS,

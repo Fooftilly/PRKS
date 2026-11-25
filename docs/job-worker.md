@@ -60,7 +60,7 @@ configuration error. Output is fixed text, never a connection string.
 
 The Library owner can read `GET /api/diagnostics/jobs` (other roles get
 403). Contract:
-`docs/api/openapi-job-diagnostics.json`.
+`docs/api/openapi.json` (`getJobDiagnostics`).
 
 - `embedded_worker`: `null` with `PRKS_EMBEDDED_WORKER=0`; otherwise its
   `state` (`starting`, `waiting`, `running`, `stopping`, `stopped` or

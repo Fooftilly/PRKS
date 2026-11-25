@@ -12,7 +12,7 @@ import type {
   PerformanceRouteStat,
   PerformanceSnapshot,
   PerformanceSpanStat,
-} from './generated/performance-diagnostics'
+} from './generated/openapi'
 
 export type {
   PerformanceCounters,
@@ -22,8 +22,6 @@ export type {
   PerformanceSnapshot,
   PerformanceSpanStat,
 }
-
-export const PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION = '0.1.0'
 
 export const PERFORMANCE_SNAPSHOT_KEYS = [
   'process_started_at',

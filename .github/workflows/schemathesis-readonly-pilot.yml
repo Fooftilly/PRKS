@@ -10,13 +10,15 @@ on:
       - "scripts/ci/schemathesis_pilot.py"
       - "tests/test_schemathesis_pilot.py"
       - "backend/api_contract/openapi.py"
+      - "backend/api_contract/operation.py"
       - "backend/api_contract/publishers.py"
+      - "backend/api/publishers.py"
       - "backend/server.py"
       - "backend/api/works.py"
       - "backend/domain/works/work_commands.py"
       - "tests/e2e/fixtures.py"
       - "tests/ux_tour/fixtures.py"
-      - "docs/api/openapi-publishers.json"
+      - "docs/api/openapi.json"
       - "requirements-dev.txt"
       - "scripts/ci/install_pinned_python.py"
 
@@ -75,7 +77,7 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ## Schemathesis (advisory, isolated)
           - One allowlisted operation: GET /api/publishers
-          - Schema: docs/api/openapi-publishers.json, checked against the live fragment and Pydantic builder
+          - Schema: GET /api/publishers from docs/api/openapi.json, checked against the live document and the route table
           - Synthetic disposable --testing instance, Host admission guard, seeded Publishers
           - Fixed seed 855; max 25 fuzz examples (plus fixed examples phase), 75s CLI timeout, single worker
           - No POST, PATCH, DELETE, stateful sequences, production PostgreSQL sessions or user libraries

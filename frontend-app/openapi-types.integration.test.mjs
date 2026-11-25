@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { generateOpenApiTypes } from './scripts/generate-openapi-types.mjs'
 
 describe('OpenAPI transport types', () => {
-  it('matches the checked-in family artifacts on two generations', () => {
+  it('matches the checked-in document on two generations', () => {
     execFileSync(process.execPath, ['scripts/generate-openapi-types.mjs', '--check'], {
       stdio: 'pipe',
     })
@@ -21,7 +21,7 @@ describe('OpenAPI transport types', () => {
         families: [
           {
             name: 'saved-views',
-            artifact: 'docs/api/openapi-saved-views.json',
+            artifact: 'docs/api/openapi.json',
             output: 'frontend-app/src/api/generated/../saved-views.ts',
           },
         ],

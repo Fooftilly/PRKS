@@ -22,101 +22,55 @@ _BANNED = (
 
 
 class OpenApiTypescriptTypesTests(unittest.TestCase):
-    def test_family_manifest_covers_checked_in_typed_families(self):
+    def test_manifest_names_the_one_document_and_module(self):
         manifest = json.loads(_MANIFEST.read_text(encoding="utf-8"))
         families = manifest["families"]
         self.assertEqual(
             [(item["name"], item["artifact"], item["output"]) for item in families],
-            [
-                (
-                    "publishers",
-                    "docs/api/openapi-publishers.json",
-                    "frontend-app/src/api/generated/publishers.ts",
-                ),
-                (
-                    "saved-views",
-                    "docs/api/openapi-saved-views.json",
-                    "frontend-app/src/api/generated/saved-views.ts",
-                ),
-                (
-                    "processing-items",
-                    "docs/api/openapi-processing-items.json",
-                    "frontend-app/src/api/generated/processing-items.ts",
-                ),
-                (
-                    "performance-diagnostics",
-                    "docs/api/openapi-performance-diagnostics.json",
-                    "frontend-app/src/api/generated/performance-diagnostics.ts",
-                ),
-                (
-                    "positions",
-                    "docs/api/openapi-positions.json",
-                    "frontend-app/src/api/generated/positions.ts",
-                ),
-                (
-                    "citations",
-                    "docs/api/openapi-citations.json",
-                    "frontend-app/src/api/generated/citations.ts",
-                ),
-                (
-                    "deployment-settings",
-                    "docs/api/openapi-deployment-settings.json",
-                    "frontend-app/src/api/generated/deployment-settings.ts",
-                ),
-                (
-                    "storage-status",
-                    "docs/api/openapi-storage-status.json",
-                    "frontend-app/src/api/generated/storage-status.ts",
-                ),
-            ],
+            [("prks-api", "docs/api/openapi.json", "frontend-app/src/api/generated/openapi.ts")],
         )
-        for item in families:
-            self.assertTrue((_ROOT / item["artifact"]).is_file(), item["artifact"])
-            output = _ROOT / item["output"]
-            self.assertTrue(output.is_file(), item["output"])
-            self.assertEqual(output.parent, _GENERATED)
+        self.assertTrue((_ROOT / "docs" / "api" / "openapi.json").is_file())
+        self.assertEqual(sorted(p.name for p in _GENERATED.iterdir()), ["openapi.ts"])
+        self.assertEqual(sorted(p.name for p in (_ROOT / "docs" / "api").iterdir()), ["openapi.json"])
 
-    def test_generated_modules_are_schema_aliases_without_clients(self):
-        markers = {
-            "publishers": "export type PublisherInUse =",
-            "saved-views": "export type SavedView =",
-            "processing-items": "export type ProcessingItem =",
-            "performance-diagnostics": "export type PerformanceSnapshot =",
-            "positions": "export type PositionSummary =",
-            "citations": "export type CslItem =",
-        }
-        for name, marker in markers.items():
-            text = (_GENERATED / f"{name}.ts").read_text(encoding="utf-8")
+    def test_the_generated_module_is_schema_aliases_without_clients(self):
+        text = (_GENERATED / "openapi.ts").read_text(encoding="utf-8")
+        for marker in (
+            "export type PublisherInUse =",
+            "export type SavedView =",
+            "export type ProcessingItem =",
+            "export type PerformanceSnapshot =",
+            "export type PositionSummary =",
+            "export type CslItem =",
+        ):
             self.assertIn(marker, text)
-            self.assertIn("components['schemas']", text)
-            for token in _BANNED:
-                self.assertNotIn(token, text, token)
-        saved = (_GENERATED / "saved-views.ts").read_text(encoding="utf-8")
-        update = saved.split("SavedViewUpdateRequest: {", 1)[1].split("};", 1)[0]
+        self.assertIn("components['schemas']", text)
+        for token in _BANNED:
+            self.assertNotIn(token, text, token)
+        update = text.split("SavedViewUpdateRequest: {", 1)[1].split("};", 1)[0]
         self.assertIn("name?:", update)
         self.assertIn("search?:", update)
-        view = saved.split("SavedView: {", 1)[1].split("};", 1)[0]
+        view = text.split("SavedView: {", 1)[1].split("};", 1)[0]
         self.assertIn("\n            name: string;", view)
         self.assertNotIn("name?:", view)
-        envelope = saved.split("ApiErrorEnvelope: {", 1)[1].split("};", 1)[0]
+        envelope = text.split("ApiErrorEnvelope: {", 1)[1].split("};", 1)[0]
         self.assertIn("code?:", envelope)
         self.assertIn("\n            error: string;", envelope)
         self.assertNotIn("error?:", envelope)
-        performance = (_GENERATED / "performance-diagnostics.ts").read_text(encoding="utf-8")
-        reset = performance.split("PerformanceDiagnosticsReset: {", 1)[1].split("};", 1)[0]
+        reset = text.split("PerformanceDiagnosticsReset: {", 1)[1].split("};", 1)[0]
         self.assertIn('status: "reset";', reset)
         self.assertNotIn("status: string", reset)
 
     def test_hand_written_clients_reexport_generated_transport_types(self):
         publishers = (_ROOT / "frontend-app" / "src" / "api" / "publishers.ts").read_text(encoding="utf-8")
         saved = (_ROOT / "frontend-app" / "src" / "api" / "saved-views.ts").read_text(encoding="utf-8")
-        self.assertIn("from './generated/publishers'", publishers)
+        self.assertIn("from './generated/openapi'", publishers)
         self.assertIn("export type { PublisherCreated, PublisherInUse }", publishers)
         self.assertNotIn("export interface PublisherInUse", publishers)
         self.assertNotIn("export interface PublisherCreated", publishers)
         self.assertIn("parsePublishersInUse", publishers)
         self.assertIn("prksApiRequest", publishers)
-        self.assertIn("from './generated/saved-views'", saved)
+        self.assertIn("from './generated/openapi'", saved)
         self.assertIn("export type { SavedView, SavedViewSearch }", saved)
         self.assertNotIn("export interface SavedView ", saved)
         self.assertNotIn("export interface SavedViewSearch", saved)
@@ -129,7 +83,7 @@ class OpenApiTypescriptTypesTests(unittest.TestCase):
         performance = (
             _ROOT / "frontend-app" / "src" / "api" / "performance-diagnostics.ts"
         ).read_text(encoding="utf-8")
-        self.assertIn("from './generated/performance-diagnostics'", performance)
+        self.assertIn("from './generated/openapi'", performance)
         self.assertIn("export type {\n  PerformanceCounters,\n  PerformanceDiagnosticsReset,", performance)
         self.assertNotIn("export interface PerformanceSnapshot", performance)
         self.assertNotIn("export interface PerformanceDiagnosticsReset", performance)

@@ -13,7 +13,7 @@ import type {
   StorageObjects,
   StorageRoot,
   StorageStatus,
-} from './generated/storage-status'
+} from './generated/openapi'
 
 export type { StorageDatabase, StorageFilesystem, StorageIdentity, StorageObjects, StorageRoot, StorageStatus }
 

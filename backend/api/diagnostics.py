@@ -7,16 +7,17 @@
   server started without jobs answers it like any unknown route.
 - ``POST /api/client-errors``: a browser error report, logged as metadata
   only (``backend.runtime.log_safety.client_error_log_fields``).
-- ``GET /api/openapi.json`` and ``/api/openapi/<slice>.json``: the OpenAPI
-  vertical slices (#180), not yet the full PRKS surface.
+- ``GET /api/openapi.json``: the OpenAPI document of the route table
+  (``backend.api_contract.openapi``, #1431).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any
 
-from backend.api_contract import openapi
+from backend.api_contract.openapi import openapi_document
+from backend.api_contract.operation import Operation, Reply, body, error, ok
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.performance import (
@@ -67,30 +68,30 @@ def client_error(req: Request) -> Response:
     return json_response(req, 200, {"status": "logged", "request_id": req.request_id})
 
 
-def _document(build: Callable[[], dict[str, Any]]) -> Callable[[Request], Response]:
-    def serve(req: Request) -> Response:
-        return json_response(req, 200, build())
-
-    return serve
+def document(req: Request) -> Response:
+    return json_response(req, 200, openapi_document())
 
 
-_DOCUMENTS: dict[str, Callable[[], dict[str, Any]]] = {
-    "/api/openapi.json": openapi.positions_openapi_document,
-    "/api/openapi/positions.json": openapi.positions_openapi_document,
-    "/api/openapi/performance-diagnostics.json": openapi.performance_diagnostics_openapi_document,
-    "/api/openapi/deployment-settings.json": openapi.deployment_settings_openapi_document,
-    "/api/openapi/storage-status.json": openapi.storage_status_openapi_document,
-    "/api/openapi/job-diagnostics.json": openapi.job_diagnostics_openapi_document,
-    "/api/openapi/publishers.json": openapi.publishers_openapi_document,
-    "/api/openapi/citations.json": openapi.citations_openapi_document,
-    "/api/openapi/saved-views.json": openapi.saved_views_openapi_document,
-    "/api/openapi/processing-items.json": openapi.processing_items_openapi_document,
-}
+_TAG = "diagnostics"
 
 ROUTES: tuple[Route, ...] = (
-    route("GET", "/api/diagnostics/performance", performance),
-    route("POST", "/api/diagnostics/performance/reset", performance_reset),
-    route("GET", "/api/diagnostics/jobs", jobs),
+    route("GET", "/api/diagnostics/performance", performance, contract=Operation(
+        "getPerformanceDiagnostics", "Runtime performance diagnostics snapshot", _TAG,
+        {200: ok(PerformanceSnapshot, "Aggregate in-process measurements.")})),
+    route("POST", "/api/diagnostics/performance/reset", performance_reset, contract=Operation(
+        "resetPerformanceDiagnostics", "Clear the in-process performance window", _TAG,
+        {200: ok(PerformanceDiagnosticsReset, "Measurements were reset."),
+         400: error("No body, or a body that is not an empty object.")},
+        request=body(PerformanceDiagnosticsResetRequest,
+                     "Empty JSON object. Additional properties are rejected."))),
+    route("GET", "/api/diagnostics/jobs", jobs, contract=Operation(
+        "getJobDiagnostics", "Job worker and queue diagnostics", _TAG,
+        {200: ok(JobDiagnostics, "The embedded worker's state and process-local counters, and the "
+                                 "queue's depth and oldest age by job kind and state."),
+         404: error("The server runs without a jobs runtime (test servers only)."),
+         503: error("The database cannot be read (unavailable).")})),
     route("POST", "/api/client-errors", client_error),
-    *(route("GET", path, _document(build)) for path, build in _DOCUMENTS.items()),
+    route("GET", "/api/openapi.json", document, contract=Operation(
+        "getOpenApiDocument", "This OpenAPI document", "meta",
+        {200: ok({"type": "object"}, "The OpenAPI 3.1 document of every typed route.")})),
 )

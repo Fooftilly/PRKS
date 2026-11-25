@@ -11,11 +11,10 @@ from pydantic import ValidationError
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.jobs import JobDiagnostics
-from backend.api_contract.openapi import job_diagnostics_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ARTIFACT = _ROOT / "docs" / "api" / "openapi-job-diagnostics.json"
 
 _COUNTERS = dict.fromkeys(
     ("claimed", "succeeded", "retried", "cancelled", "failed", "lost", "released", "reaped", "errors"), 0
@@ -30,12 +29,8 @@ def _body(**worker):
 
 
 class JobDiagnosticsContractTests(unittest.TestCase):
-    def test_checked_in_openapi_artifact_matches_generator(self):
-        self.assertTrue(_ARTIFACT.is_file(), "commit docs/api/openapi-job-diagnostics.json")
-        self.assertEqual(json.loads(_ARTIFACT.read_text(encoding="utf-8")), job_diagnostics_openapi_document())
-
     def test_a_body_validates_against_the_document(self):
-        api = OpenAPI.from_dict(job_diagnostics_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/diagnostics/jobs")
         api.validate_request(request)
         for body in (_body(), {"embedded_worker": None, "queue": []}, _body(state="waiting", reason="pending")):

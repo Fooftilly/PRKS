@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ApiErrorEnvelope, SavedView, SavedViewDeleted, SavedViewSearch, SavedViewUpdateRequest } from './generated/saved-views'
+import type { ApiErrorEnvelope, SavedView, SavedViewDeleted, SavedViewSearch, SavedViewUpdateRequest } from './generated/openapi'
 import {
   SAVED_VIEW_DELETED_KEYS,
   SAVED_VIEW_KEYS,

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from backend.api_contract.errors import validation_error_envelope
 
@@ -44,3 +44,17 @@ def domain_kwargs_from(model: BaseModel, *, fields: tuple[str, ...]) -> dict[str
     """Extract plain field values for domain calls (only fields present / set)."""
     data = model.model_dump(mode="python")
     return {name: data[name] for name in fields if name in data}
+
+
+def _drop_default(schema: dict[str, Any]) -> None:
+    schema.pop("default", None)
+
+
+def omittable(description: str = "") -> Any:
+    """A request field that may be left out but, when sent, is never ``null``.
+
+    Declare it with the sent type (``name: str = omittable()``): Pydantic
+    refuses an explicit ``null`` and the published schema has no default, so
+    the field is optional without being nullable.
+    """
+    return Field(default=None, json_schema_extra=_drop_default, description=description or None)
