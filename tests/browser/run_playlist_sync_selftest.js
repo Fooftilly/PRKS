@@ -184,6 +184,53 @@ async function oneSyncingFieldDoesNotBlockAnother() {
         "but editing the field that is in flight is refused");
 }
 
+/* Edit opened on this device's own unsent A -> B edit pins A with B pending.
+ * Going back to A cancels B while it is unsent; once B has left the queue the
+ * server holds it, so going back to A is a change and is recorded. */
+async function aRevertAfterTheShownEditSyncedIsSaved() {
+    const core = require("../../frontend/js/sync-reconcile.js");
+    const id = "PL-" + "R".repeat(32);
+    const shown = { title: "Seminars", description: "", original_url: "" };
+    const read = baseAt({ title: 3 }, { title: "Lectures" });
+    const pinFor = async store => core.pinEditBase(shown, read, Object.fromEntries((await rowsFor(store,
+        "SET_PLAYLIST_FIELD")).map(r => [r.payload.field, { value: r.payload.value, revision: r.base_revision }])));
+
+    {
+        const store = newStore();
+        await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        assert.equal(pinned.title.pending, "Seminars", "the pin knows the form showed an unsent edit");
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        assert.equal((await rowsFor(store, "SET_PLAYLIST_FIELD")).length, 0, "unsent: the revert cancels it");
+    }
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.status !== "acknowledged");
+        assert.equal(rows.length, 1, "acknowledged: the revert is recorded, not dropped");
+        assert.equal(rows[0].payload.value, "Lectures");
+        assert.equal(rows[0].base_revision, 4, "measured against the shown edit's ACK");
+    }
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        await store.deleteAcknowledgedOperation(sent.op_id);
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        assert.equal(rows.length, 1, "retired: the revert is still recorded");
+        assert.equal(rows[0].base_revision, 3,
+            "against the pinned revision: a server that moved on refuses it as a conflict");
+    }
+}
+
 /* ---- membership ---- */
 
 async function aVideosPlaylistIsAScalarThatCancels() {
@@ -525,6 +572,7 @@ async function main() {
     await aPlaylistIsAValidDestinationImmediately();
     await anEmptyTitleBecomesThePlaceholder();
     await fieldEditsCoalesceAndCancel();
+    await aRevertAfterTheShownEditSyncedIsSaved();
     await oneSyncingFieldDoesNotBlockAnother();
     await aVideosPlaylistIsAScalarThatCancels();
     await aPendingMembershipShowsOnBothEnds();

@@ -1358,10 +1358,49 @@ async function deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts() {
     }
 }
 
+/* Edit opened on this device's own unsent rename: once it has been
+ * acknowledged, renaming back is recorded against its ACK, not dropped. */
+async function aRevertAfterTheShownRenameSyncedIsSaved() {
+    const core = globalThis.prksSyncReconcile;
+    const store = newStore();
+    const read = baseAt({ name: 4 }, { name: "Analysts" });
+    const [sent] = await store.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const shown = { name: "Engineers", description: "", parent_id: "" };
+    const pinned = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4 } });
+    await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 5 });
+    const edits = core.pinnedEdits(shown, Object.assign({}, shown, { name: "Analysts" }), pinned);
+    await store.savePersonGroupFields("PG-R", edits.changes, edits.base);
+    const rows = (await rowsFor(store, "SET_PERSON_GROUP_FIELD")).filter(r => r.status !== "acknowledged");
+    assert.equal(rows.length, 1, "the revert is recorded");
+    assert.equal(rows[0].payload.value, "Analysts");
+    assert.equal(rows[0].base_revision, 5, "against the shown rename's ACK");
+}
+
+/* A pending move shows the new parent on the nested `parent` too, so Edit
+ * opens on it and does not refuse its own move as changed elsewhere. */
+async function aPendingMoveShowsTheNewParent() {
+    const group = { id: "PG-C", name: "Child", parent_id: "PG-OLD", parent: { id: "PG-OLD", name: "Old" },
+        members: [] };
+    const ops = [{ operation: "SET_PERSON_GROUP_FIELD", entity_type: "person-group", entity_id: "PG-C",
+        status: "pending", sequence: 1, base_revision: 2, payload: { field: "parent_id", value: "PG-NEW" } }];
+    const catalogue = [{ id: "PG-NEW", name: "New" }];
+    const moved = globalThis.prksEffectivePersonGroupDetail(group, ops, [], catalogue);
+    assert.equal(moved.parent_id, "PG-NEW");
+    assert.deepEqual(moved.parent, { id: "PG-NEW", name: "New" }, "the shown parent follows the move");
+    assert.equal(globalThis.prksPersonGroupHasPendingMove(ops, "PG-C"), true);
+    const toTop = globalThis.prksEffectivePersonGroupDetail(group, [Object.assign({}, ops[0],
+        { payload: { field: "parent_id", value: "" } })], [], catalogue);
+    assert.equal(toTop.parent, null, "a move to the top level shows no parent");
+    assert.deepEqual(globalThis.prksEffectivePersonGroupDetail(group, [], [], catalogue).parent,
+        { id: "PG-OLD", name: "Old" }, "no pending move leaves the parent alone");
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
     await fieldEditsCoalesceAndCancel();
+    await aRevertAfterTheShownRenameSyncedIsSaved();
+    await aPendingMoveShowsTheNewParent();
     await movingIntoALocalGroupWaitsForIt();
     await editsFollowTheGroupsOwnCreation();
     await aRefusedCreationTakesItsEditsDownVisibly();

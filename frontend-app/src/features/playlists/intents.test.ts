@@ -121,6 +121,30 @@ describe('Playlist intents', () => {
     })
   })
 
+  it('reloads the Playlist when Cancel follows a changed-elsewhere refusal', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).not.toHaveBeenCalled()
+
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve({ ...pinAll(shown), description: null }),
+    }
+    const refused = await intents.saveFields('PL-1', { ...shown, description: 'Mine' }, shown)
+    expect(refused.ok).toBe(false)
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledOnce()
+  })
+
   it('refuses a changed field whose pinned base is unknown and keeps the draft', async () => {
     window.prksTabContextOwnsEntityRoute = () => true
     window.updatePlaylist = vi.fn(async () => ({}))

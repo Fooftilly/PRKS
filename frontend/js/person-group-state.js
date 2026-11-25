@@ -77,6 +77,11 @@
 
     /* ---- fields ---- */
 
+    /** Whether this device has an unsent move of `groupId`. */
+    function hasPendingMove(operations, groupId) {
+        return pendingFieldValues(operations, groupId).has('parent_id');
+    }
+
     function pendingFieldValues(operations, groupId) {
         const values = new Map();
         unsettled(operations, 'SET_PERSON_GROUP_FIELD', groupId)
@@ -221,10 +226,26 @@
      * membership operation names an id, and a member chip renders a profile
      * name, so the row comes from the People projection rather than being
      * invented here.
+     *
+     * A pending move changes `parent_id`; the nested `parent` the page and
+     * editor show follows it, named from `catalogue` (the effective Group
+     * rows) where it holds the new parent. Otherwise the editor would open on
+     * the old parent and refuse its own pending move as changed elsewhere.
      */
-    function effectivePersonGroupDetail(group, operations, people) {
+    function effectivePersonGroupDetail(group, operations, people, catalogue) {
         if (!group || typeof group !== 'object') return group;
-        const out = applyFields(group, pendingFieldValues(operations, group.id));
+        const fields = pendingFieldValues(operations, group.id);
+        const out = applyFields(group, fields);
+        if (fields.has('parent_id')) {
+            const parentId = out.parent_id || null;
+            const held = group.parent && group.parent.id ? group.parent : null;
+            if (!parentId) Object.assign(out, { parent: null });
+            else if (!held || String(held.id) !== String(parentId)) {
+                const row = (Array.isArray(catalogue) ? catalogue : [])
+                    .find(g => g && String(g.id) === String(parentId));
+                Object.assign(out, { parent: { id: parentId, name: row ? String(row.name || '') : '' } });
+            }
+        }
         const memberships = pendingMemberships(operations);
         /* Somebody this device has asked to delete is gone from the member list
          * too: the Group page is one of the places a Person is read, and a
@@ -717,6 +738,7 @@
         prksPersonGroupMembershipKey: membershipKey,
         prksEffectivePersonGroups: effectivePersonGroups,
         prksEffectivePersonGroupDetail: effectivePersonGroupDetail,
+        prksPersonGroupHasPendingMove: hasPendingMove,
         prksEffectivePersonGroupChips: effectivePersonGroupChips,
         prksEffectivePersonGroupChipRows: effectivePersonGroupChipRows,
         prksIsPersonGroupStateShape: isGroupStateShape,

@@ -285,6 +285,12 @@ export function applyOwnerAck<T extends object>(
 export interface FieldBase {
   value: string
   revision: number
+  /**
+   * This device's own unsent edit the form showed when the base was pinned.
+   * Returning to `value` cancels it only while it is still unsent; once it has
+   * left the queue the server holds it, and returning is a real change.
+   */
+  pending?: string
 }
 
 /** Field -> pinned base, or null where the base is not known. */
@@ -322,7 +328,9 @@ export function pinEditBase(
       pinned[field] = null
     } else if (own !== undefined) {
       pinned[field] = isFieldBase(own) && own.value === value
-        ? { value: entry.value, revision: own.revision }
+        ? (own.value === entry.value
+            ? { value: entry.value, revision: own.revision }
+            : { value: entry.value, revision: own.revision, pending: own.value })
         : null
     } else {
       pinned[field] = entry.value === value ? { value: entry.value, revision: entry.revision } : null

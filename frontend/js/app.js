@@ -1374,11 +1374,15 @@ async function prksEffectivePersonGroupRecord(group) {
     /* The People index is only needed to NAME someone added while
      * unsynchronized, so a device with nothing pending never reads it. */
     const memberships = prksPendingPersonGroupMemberships(ops);
-    if (!memberships.size) return prksEffectivePersonGroupDetail(group, ops, []);
+    /* Likewise the catalogue only names the parent of a pending move. */
+    const catalogue = typeof prksPersonGroupHasPendingMove === 'function' &&
+        prksPersonGroupHasPendingMove(ops, group.id)
+        ? await prksEffectivePersonGroupCatalogue(ops) : [];
+    if (!memberships.size) return prksEffectivePersonGroupDetail(group, ops, [], catalogue);
     const people = await prksCachedPeopleRows();
     return prksEffectivePersonGroupDetail(group, ops,
         typeof prksEffectivePeople === 'function'
-            ? prksEffectivePeople(people, ops) || people : people);
+            ? prksEffectivePeople(people, ops) || people : people, catalogue);
 }
 
 /** A Group that exists only because of an unsynchronized creation. */
