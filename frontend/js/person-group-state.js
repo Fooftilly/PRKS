@@ -237,12 +237,17 @@
         const fields = pendingFieldValues(operations, group.id);
         const out = applyFields(group, fields);
         if (fields.has('parent_id')) {
-            const parentId = out.parent_id || null;
+            /* The parent shown is where the effective catalogue places this
+             * group: a pending deletion of the move's destination moves it up
+             * to the surviving ancestor there. `parent_id` keeps the queued
+             * value, which is what the edit pin compares. */
+            const rows = Array.isArray(catalogue) ? catalogue : [];
+            const own = rows.find(g => g && String(g.id) === String(group.id));
+            const parentId = (own ? own.parent_id : out.parent_id) || null;
             const held = group.parent && group.parent.id ? group.parent : null;
             if (!parentId) Object.assign(out, { parent: null });
             else if (!held || String(held.id) !== String(parentId)) {
-                const row = (Array.isArray(catalogue) ? catalogue : [])
-                    .find(g => g && String(g.id) === String(parentId));
+                const row = rows.find(g => g && String(g.id) === String(parentId));
                 Object.assign(out, { parent: { id: parentId, name: row ? String(row.name || '') : '' } });
             }
         }
