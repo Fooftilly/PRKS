@@ -3004,9 +3004,13 @@
                 }
             }
             if (present && groupName === null) {
+                /* Both fences move even with nothing cached: a People or
+                 * Person read started before this ACK must not publish a
+                 * snapshot without the membership after it retires. */
+                advanceDomainGeneration(DOMAIN_PEOPLE);
                 if (person && !hasChip(person) && !await dropUnprovenList(PEOPLE_LIST_KEY)) return false;
                 const detail = await store.getEntity('person', personId).catch(function () { return null; });
-                if (detail && !(detail.value && hasChip(detail.value)) &&
+                if (!(detail && detail.value && hasChip(detail.value)) &&
                     !await dropUnprovenEntity('person', personId)) return false;
             } else if (person && !await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
                 peopleList => peopleList.every(row => !row || row.id !== personId || hasChip(row) === present),
