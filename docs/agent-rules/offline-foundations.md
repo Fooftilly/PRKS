@@ -108,7 +108,12 @@ background. During that window no cached value in the domain may be served. The
 domain unblocks only when the sweep **for that same generation** completed
 successfully: a superseded generation's completion may never unblock, reset, or
 publish eligibility for a newer one, and a failed sweep leaves the domain
-conservatively blocked for the life of the runtime. Safe degradation is
+conservatively blocked for the life of the runtime. The one exception is a
+generation an ACK reconcile starts (`advanceDomainGeneration`): it only fences
+reads in flight, and the reconcile patches or drops each row it touches
+itself, so it adds nothing for a sweep to delete. A sweep still pending when it
+starts carries its result to that generation; otherwise the domain would stay
+blocked although every stale row is gone. Safe degradation is
 "unavailable offline," never "known-stale shown offline"; online PRKS keeps
 working normally either way. A read associated with a domain captures its
 generation when the authoritative request begins and may publish a cache write
