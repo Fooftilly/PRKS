@@ -367,7 +367,9 @@
              * nothing. */
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            const usable = !!(stateResult && stateResult.value && (adopt
+            /* A cached answer comes back unvalidated, so the shape is checked
+             * here too: a revision cached without its source is no base. */
+            const usable = !!(stateResult && sourceStateShape(state.workId)(stateResult.value) && (adopt
                 ? stateResult.source === 'server' : stateResult.source !== 'unavailable'));
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
