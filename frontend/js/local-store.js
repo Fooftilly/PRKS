@@ -3664,7 +3664,12 @@
          */
         function fieldWriteRevision(rows, existing, isFieldRow, desired, observed) {
             if (desired !== observed.value) return observed.revision;
-            if (existing || typeof observed.pending !== 'string' || observed.pending === observed.value) {
+            /* Only the edit the form was opened on is cancelled by returning
+             * to the pinned value. A replacement another pane queued after
+             * that edit synced is measured from its ACK and is not ours. */
+            const original = existing && existing.base_revision === observed.revision &&
+                (typeof observed.pending !== 'string' || existing.payload.value === observed.pending);
+            if (original || typeof observed.pending !== 'string' || observed.pending === observed.value) {
                 return null;
             }
             const acknowledged = rows.find(r => isFieldRow(r) && r.status === STATUS_ACKNOWLEDGED &&
