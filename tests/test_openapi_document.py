@@ -188,8 +188,9 @@ class OpenApiDocumentTests(unittest.TestCase):
                 self.assertTrue({"401", "403", "503"} <= set(op["responses"]))
                 if epoch_fenced(method.upper(), path):
                     self.assertTrue({"400", "409"} <= set(op["responses"]))
-                else:
-                    self.assertNotIn("409", op["responses"])
+                else:  # a route's own 409 (a conflict) is fine; the epoch refusal is not
+                    self.assertNotEqual(op["responses"].get("409"),
+                                        {"$ref": "#/components/responses/EpochChanged"})
 
     def test_a_read_sent_as_post_documents_no_epoch_refusal(self) -> None:
         for path in ("/api/citations", "/api/diagnostics/performance/reset"):
