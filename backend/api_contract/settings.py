@@ -48,7 +48,8 @@ class AppSettingsPatch(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    annotation_author: Optional[str] = Field(
-        default=None, description="At most 500 characters, no NUL; null or empty clears it.")
+    annotation_author: Any = Field(
+        default=None, description="Null or empty clears it; another JSON value is converted to text and "
+                                  "trimmed (at most 500 characters, no NUL).")
     bibtex_export_fields: BibtexExportFieldsPatch = omittable()  # type: ignore[valid-type]
     citation_style: str = omittable("A shipped style id or one this Library imported.")

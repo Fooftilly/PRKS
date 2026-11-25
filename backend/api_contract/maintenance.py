@@ -60,8 +60,8 @@ class BackupStaged(BaseModel):
 class RestoreRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    token: Optional[str] = Field(default=None, description="The staged archive's token.")
-    confirm: Optional[str] = Field(default=None, description="Must be `RESTORE`.")
+    token: str = Field(description="The staged archive's token.")
+    confirm: Literal["RESTORE"] = Field(description="Confirms the restore over the Library.")
 
 
 class Restored(BaseModel):

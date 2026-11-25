@@ -198,7 +198,8 @@ def progress(req: Request) -> Response:
 
     def stream(write: Write) -> None:
         def write_line(payload: dict[str, Any]) -> None:
-            write(ndjson(payload))
+            # Each line is held to the published per-line shape.
+            write(ndjson(BackupProgressLine.model_validate(payload).model_dump(exclude_none=True)))
 
         try:
             stream_backup(library, ctx, write_line)
@@ -312,8 +313,10 @@ _NO_STORE = {"Cache-Control": Header("Always no-store.")}
 ROUTES = (
     route("POST", "/api/backups/progress", progress, contract=Operation(
         "backupProgress", "Make a backup and stream its progress", _TAG,
-        {200: ok(BackupProgressLine, "One JSON object per line until `ready` (with the download token) or "
-                                     "`failed`.", media_type="application/x-ndjson", headers=_NO_STORE)},
+        {200: ok({"type": "string", "description": "Newline-delimited JSON: each line is one "
+                                                   "BackupProgressLine object."},
+                 "One JSON object per line until `ready` (with the download token) or `failed`.",
+                 media_type="application/x-ndjson", headers=_NO_STORE)},
         request=body({"type": "object"}, "A JSON object, ignored. Send `{}`."),
         description="Queues the Library's backup job, or follows the one already queued or running.")),
     route("POST", "/api/backups/stage", stage, Body.STREAM, contract=Operation(

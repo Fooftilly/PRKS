@@ -174,6 +174,18 @@ class OpenApiDocumentTests(unittest.TestCase):
                 else:
                     self.assertNotIn("409", op["responses"])
 
+    def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
+        for (method, path), op in _operations(self.document).items():
+            if not path.startswith("/api/"):
+                continue
+            headers = {p["name"]: p for p in op.get("parameters", []) if p["in"] == "header"}
+            with self.subTest(method=method, path=path):
+                if epoch_fenced(method.upper(), path):
+                    self.assertIn("PRKS-Library-Epoch", headers)
+                    self.assertEqual(headers["PRKS-Library-Epoch"]["required"], path != "/api/sync/operations")
+                else:
+                    self.assertNotIn("PRKS-Library-Epoch", headers)
+
     def test_a_read_sent_as_post_documents_no_epoch_refusal(self) -> None:
         for path in ("/api/citations", "/api/diagnostics/performance/reset"):
             responses = self.document["paths"][path]["post"]["responses"]

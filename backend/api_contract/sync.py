@@ -33,7 +33,9 @@ class SyncOperation(BaseModel):
 class SyncResult(BaseModel):
     """The ledgered result: ``ACKNOWLEDGED`` with the family's fields, or a refusal code.
 
-    A retry with the same ``op_id`` and body answers the same status and result.
+    Once an operation is ledgered, a retry with the same ``op_id`` and body answers
+    the ledgered status and result. A refusal that is not ledgered (an unmet
+    ``depends_on``, for one) may answer differently on a later retry.
     """
 
     model_config = ConfigDict(extra="allow")

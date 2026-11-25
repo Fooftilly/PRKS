@@ -679,50 +679,16 @@ export interface components {
         AppSettingsPatch: {
             /**
              * Annotation Author
-             * @description At most 500 characters, no NUL; null or empty clears it.
+             * @description Null or empty clears it; another JSON value is converted to text and trimmed (at most 500 characters, no NUL).
              * @default null
              */
-            annotation_author?: string | null;
+            annotation_author?: unknown;
             bibtex_export_fields?: components["schemas"]["BibtexExportFieldsPatch"];
             /**
              * Citation Style
              * @description A shipped style id or one this Library imported.
              */
             citation_style?: string;
-        };
-        /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
-        BackupProgressLine: {
-            /**
-             * Error
-             * @description `failed` only: what to tell the user.
-             * @default null
-             */
-            error?: string | null;
-            /**
-             * Filename
-             * @description `ready` only: the archive's file name.
-             * @default null
-             */
-            filename?: string | null;
-            /** Percent */
-            percent: number;
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "snapshot" | "objects" | "ready" | "failed";
-            /**
-             * Token
-             * @description `ready` only: the download token.
-             * @default null
-             */
-            token?: string | null;
-            /**
-             * Warnings
-             * @description `ready` only.
-             * @default null
-             */
-            warnings?: string[] | null;
         };
         /** @description A backup or restore refusal: ``reason`` is the stable code. */
         BackupRefusal: {
@@ -1812,16 +1778,15 @@ export interface components {
         RestoreRequest: {
             /**
              * Confirm
-             * @description Must be `RESTORE`.
-             * @default null
+             * @description Confirms the restore over the Library.
+             * @constant
              */
-            confirm?: string | null;
+            confirm: "RESTORE";
             /**
              * Token
              * @description The staged archive's token.
-             * @default null
              */
-            token?: string | null;
+            token: string;
         };
         /** @description One Saved View: GET list rows, GET by id, POST and PATCH bodies. */
         SavedView: {
@@ -2112,7 +2077,9 @@ export interface components {
         /**
          * @description The ledgered result: ``ACKNOWLEDGED`` with the family's fields, or a refusal code.
          *
-         *     A retry with the same ``op_id`` and body answers the same status and result.
+         *     Once an operation is ledgered, a retry with the same ``op_id`` and body answers
+         *     the ledgered status and result. A refusal that is not ledgered (an unmet
+         *     ``depends_on``, for one) may answer differently on a later retry.
          */
         SyncResult: {
             /**
@@ -2215,7 +2182,6 @@ export interface components {
 export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
 export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
-export type BackupProgressLine = components['schemas']['BackupProgressLine'];
 export type BackupRefusal = components['schemas']['BackupRefusal'];
 export type BackupStaged = components['schemas']['BackupStaged'];
 export type BibtexExportFields = components['schemas']['BibtexExportFields'];
@@ -2348,7 +2314,10 @@ export interface operations {
     backupProgress: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2367,7 +2336,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/x-ndjson": components["schemas"]["BackupProgressLine"];
+                    "application/x-ndjson": string;
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -2382,7 +2351,10 @@ export interface operations {
     restoreBackup: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2440,6 +2412,8 @@ export interface operations {
             query?: never;
             header: {
                 "Content-Length": number;
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
             };
             path?: never;
             cookie?: never;
@@ -2527,7 +2501,10 @@ export interface operations {
     importCitationStyle: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2600,7 +2577,10 @@ export interface operations {
     deleteCitationStyle: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 style_id: string;
             };
@@ -2876,7 +2856,10 @@ export interface operations {
     createPosition: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2949,7 +2932,10 @@ export interface operations {
     deletePosition: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 position_id: string;
             };
@@ -2993,7 +2979,10 @@ export interface operations {
     updatePosition: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 position_id: string;
             };
@@ -3133,6 +3122,8 @@ export interface operations {
                 "Idempotency-Key": string;
                 /** @description The original filename, percent-encoded UTF-8; display only. */
                 "PRKS-Filename"?: string;
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
             };
             path?: never;
             cookie?: never;
@@ -3257,7 +3248,10 @@ export interface operations {
     deleteProcessingItem: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 item_id: string;
             };
@@ -3301,7 +3295,10 @@ export interface operations {
     updateProcessingItem: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 item_id: string;
             };
@@ -3359,7 +3356,10 @@ export interface operations {
     importProcessingItem: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 item_id: string;
             };
@@ -3539,7 +3539,10 @@ export interface operations {
     importProcessingItems: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3604,7 +3607,10 @@ export interface operations {
     createPublisher: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3643,7 +3649,10 @@ export interface operations {
     deletePublisher: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 publisher_id: string;
             };
@@ -3670,7 +3679,10 @@ export interface operations {
     addPublisherAlias: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 publisher_id: string;
             };
@@ -3713,7 +3725,10 @@ export interface operations {
             query: {
                 alias: string;
             };
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 publisher_id: string;
             };
@@ -3832,7 +3847,10 @@ export interface operations {
     createSavedView: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -3913,7 +3931,10 @@ export interface operations {
     deleteSavedView: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 view_id: string;
             };
@@ -3949,7 +3970,10 @@ export interface operations {
     updateSavedView: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path: {
                 view_id: string;
             };
@@ -4030,7 +4054,10 @@ export interface operations {
     updateSettings: {
         parameters: {
             query?: never;
-            header?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -4102,7 +4129,10 @@ export interface operations {
     postSyncOperation: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The Library epoch the client acted on. A new operation without it, or with another epoch, is refused; a replay of a ledgered op_id answers its ledgered result. */
+                "PRKS-Library-Epoch"?: string;
+            };
             path?: never;
             cookie?: never;
         };

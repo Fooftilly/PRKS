@@ -30,11 +30,14 @@ from typing import Any, Iterable, Optional
 from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
-from backend.api_contract.operation import Operation, Reply, RequestBody, Schema
+from backend.api_contract.operation import Operation, Param, Reply, RequestBody, Schema
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
 _PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
+
+EPOCH_HEADER = "PRKS-Library-Epoch"
+_EPOCH_SCHEMA = {"type": "string", "pattern": "^[0-9]+$"}
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
@@ -128,15 +131,31 @@ def _shared_for(route: Any) -> dict[str, str]:
     return shared
 
 
+def _epoch_param(route: Any) -> tuple[Param, ...]:
+    """``PRKS-Library-Epoch`` on each mutation admission holds to the Library epoch."""
+    from backend.api.session import epoch_fenced, ledgered
+
+    if not (route.pattern.startswith("/api/") and epoch_fenced(route.method, route.pattern)):
+        return ()
+    if ledgered(route.pattern):
+        return (Param(EPOCH_HEADER, "header", _EPOCH_SCHEMA, required=False, description=(
+            "The Library epoch the client acted on. A new operation without it, or with another "
+            "epoch, is refused; a replay of a ledgered op_id answers its ledgered result.")),)
+    return (Param(EPOCH_HEADER, "header", _EPOCH_SCHEMA, required=True,
+                  description="The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, "
+                              "LIBRARY_EPOCH_CHANGED)."),)
+
+
 def _operation(components: _Components, route: Any, contract: Operation, shared: set[str]) -> dict[str, Any]:
     out: dict[str, Any] = {"operationId": contract.id, "summary": contract.summary, "tags": [contract.tag]}
     if contract.description:
         out["description"] = contract.description
-    if contract.params:
+    params = [*contract.params, *_epoch_param(route)]
+    if params:
         out["parameters"] = [
             {"name": p.name, "in": p.where, "required": p.required, "schema": dict(p.schema),
              **({"description": p.description} if p.description else {})}
-            for p in contract.params
+            for p in params
         ]
     if contract.request is not None:
         out["requestBody"] = _request(components, contract.request)
