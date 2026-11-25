@@ -476,7 +476,8 @@
              * to the newer source while keeping that draft; taking the newer
              * revision here would let its Save replace a source the user
              * never saw instead of conflicting with it. */
-            if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '')) {
+            if (!adopt && !(options && options.reopened) && state.observed &&
+                unsavedSource(ctx, state, effective.source_url || '')) {
                 return true;
             }
             state.observed = baseOf(stateResult.value.revision, identity);
@@ -490,7 +491,13 @@
     }
 
     async function prepare(ctx, state) {
-        if (!(await readBase(ctx, state))) return;
+        /* A base kept for a draft belongs to the metadata session it was
+         * typed in. The first prepare of a new session (the editor reopened)
+         * starts from what it reads, whatever is typed meanwhile. */
+        const session = ctx.ui ? ctx.ui.workMetaEditSession : undefined;
+        const reopened = 'preparedSession' in state && state.preparedSession !== session;
+        state.preparedSession = session;
+        if (!(await readBase(ctx, state, { reopened }))) return;
         await safePaint(ctx, state);
     }
 

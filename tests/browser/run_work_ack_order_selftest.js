@@ -590,6 +590,13 @@ async function mountedSourceCorrectiveRead() {
         await state.preparing;
         assert.equal(ctx.entity.provider_id, 'CCC');
         assert.equal(state.observed.revision, 1, 'a second prepare keeps the draft on its revision');
+        /* A reopened editor (a new metadata session) starts from what it
+         * reads, even with text typed while it prepares. */
+        ctx.ui.workMetaEditSession = 7;
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        assert.equal(state.observed.revision, 2, 'a new session does not keep the closed one\'s base');
+        state.observed = { revision: 1, identity: identity('CCC') };
         /* Without the draft the same prepare takes the server's revision. */
         ctx.ui.workMetaDraft.source_url = WATCH('ZZZ');
         globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
