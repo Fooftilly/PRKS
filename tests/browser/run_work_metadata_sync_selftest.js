@@ -464,6 +464,8 @@ async function acknowledgement() {
     const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-M', { id: 'W-M', title: 'Paper', doi: 'old', isbn: 'keep' });
     await cache.putEntity('work-metadata-state', 'W-M', { work_id: 'W-M', fields: base({ doi: { value: 'old', revision: 3 } }) });
+    const readAt = (await cache.getEntity('work', 'W-M')).observedAt;
+    await new Promise(resolve => setTimeout(resolve, 3));
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
@@ -491,6 +493,11 @@ async function acknowledgement() {
     assert.equal(await store.getOperation(op[0].op_id), null, 'a reconciled edit retires locally');
     assert.equal((await cache.getEntity('work', 'W-M')).value.doi, 'new');
     assert.equal((await cache.getEntity('work', 'W-M')).value.isbn, 'keep');
+    /* #1425: one patched field does not make the rest of the Work fresh. A
+     * later ACK of another family (a Tag link) proves itself from this time,
+     * and a reset one would make it drop the warmed detail. */
+    assert.equal((await cache.getEntity('work', 'W-M')).observedAt, readAt,
+        'a field ACK keeps the read time of the Work it patched');
     const state = (await cache.getEntity('work-metadata-state', 'W-M')).value.fields;
     assert.deepEqual(state.doi, { value: 'new', revision: 4 });
     assert.deepEqual(state.isbn, { value: '', revision: 0 }, 'other fields are untouched');
