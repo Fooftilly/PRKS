@@ -144,7 +144,11 @@
             // Only the links come from the re-read: the held Folder also
             // carries pending edits and ACKs of other families.
             merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
-            adopted: () => refreshOptions(ctx, state),
+            // The editor mounted when the re-read lands, not the one that started it.
+            adopted: () => {
+                const current = ctx.getResource('folderTagEditor');
+                if (current && current.folderId === ack.folder_id) refreshOptions(ctx, current);
+            },
         });
         if (plan === 'superseded') return;
         if (state.options) {

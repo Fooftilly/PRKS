@@ -144,7 +144,7 @@
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         state.readVersion = (state.readVersion || 0) + 1;
         const held = state.options ? root.prksWorkTagBase(state.options, ack.tag_id).revision : null;
-        const plan = applyWorkTagAck(ctx, ack, op, held, () => refreshOptions(ctx, state));
+        const plan = applyWorkTagAck(ctx, ack, op, held);
         if (plan === 'superseded') return;
         if (state.options) setOptionsBase(state.options, ack.tag_id, ack.present, ack.server_revision);
         // An ACK during a refresh cancelled its read (readVersion): read again.
@@ -173,6 +173,10 @@
             fresh => ctx.setEntity('work', reconcileCore.carryObservation(fresh,
                 { ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags })));
     }
+    function refreshMountedOptions(ctx, workId) {
+        const current = ctx.getResource('workTagEditor');
+        if (current && current.workId === workId) refreshOptions(ctx, current);
+    }
     /* A corrective refresh takes only a server answer that agrees with the
      * adopted links. A cached fallback still holds the delayed ACK's base, and
      * two server reads can straddle another device's change: either would let
@@ -191,7 +195,7 @@
      * link, and a Work this tab cannot prove older than the ACK is patched and
      * then re-read from the server, whose answer wins.
      */
-    function applyWorkTagAck(ctx, ack, op, heldRevision, adopted) {
+    function applyWorkTagAck(ctx, ack, op, heldRevision) {
         return reconcileCore.applyOwnerAck({
             ackRevision: ack.server_revision,
             heldRevision,
@@ -215,7 +219,11 @@
             // Only the links come from the re-read: the held Work also carries
             // pending Folder, Playlist and source values and other ACKs.
             merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
-            adopted,
+            /* The editor mounted when the re-read lands, not the one that
+             * started it: a warm park and resume replaces the editor while
+             * keeping this Work, and the new one measures edits against
+             * options read before the links moved. */
+            adopted: () => refreshMountedOptions(ctx, ack.work_id),
         });
     }
     function setOptionsBase(options, tagId, present, revision) {
@@ -227,7 +235,7 @@
     /** Entity-only tag acknowledgement for a parked owner. No options, no paint. */
     function applyWorkTagEntityAck(ctx, ack, op) {
         if (!ctx || !ack || !Number.isSafeInteger(ack.server_revision)) return;
-        applyWorkTagAck(ctx, ack, op, null, null);
+        applyWorkTagAck(ctx, ack, op, null);
     }
     async function prepare(ctx, state, requestPolicy) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
@@ -499,8 +507,7 @@
              * against, under the same consistency checks as acceptAck. */
             const ack = { work_id: state.workId, tag_id: tagId, present: base.present,
                 server_revision: base.revision, tag };
-            applyWorkTagAck(ctx, ack, op, state.options ? base.revision : null,
-                () => refreshOptions(ctx, state));
+            applyWorkTagAck(ctx, ack, op, state.options ? base.revision : null);
         }
         return base;
     }

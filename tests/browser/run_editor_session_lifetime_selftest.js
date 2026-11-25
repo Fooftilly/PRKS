@@ -933,6 +933,75 @@ async function twoCrossTabSettlementsKeepTheRefresh() {
     }
 }
 
+/* #1088 review: a parked owner's corrective read can land after the tab
+ * resumes with a NEW editor. The adoption refreshes the editor mounted then,
+ * so its options follow the adopted links and the next inverse edit is
+ * measured against the newer base. */
+async function parkedCorrectiveReadRefreshesTheResumedEditor() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-parked-read';
+    const ctx = mountTab('tag-parked-read');
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previous = {
+        options: global.prksReadWorkTagOptions, read: global.prksOfflineReadEntity,
+        base: global.prksWorkTagBase, css: global.prksCssVarClass,
+    };
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    if (typeof global.prksCssVarClass !== 'function') global.prksCssVarClass = function () { return ''; };
+    let removed = false;
+    let releaseRead; const readGate = new Promise(r => { releaseRead = r; });
+    global.prksReadWorkTagOptions = async function () {
+        return removed
+            ? { value: { assigned: [], known_absent: { 'tag-1': 2 } }, source: 'server' }
+            : { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 1 }], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previous.read(kind, id);
+        await readGate;
+        return { source: 'server', value: core.observe({ id: id, tags: [] }, Date.now()) };
+    };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        // Parked: no editor. The unproven ACK patches the Work and re-reads it.
+        prksApplyWorkTagEntityAck(ctx, { work_id: workId, tag_id: 'tag-1', present: true,
+            server_revision: 1, tag: tag }, op);
+        assertEq('the parked ACK patches the Work', ctx.getEntity('work').tags.length, 1);
+        // Resume: a new editor reads options while the re-read is out.
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the resumed editor starts from present/1',
+            global.prksWorkTagBase(state.options, 'tag-1').revision, 1);
+        // Another device removes the Tag; the re-read lands after resume.
+        removed = true;
+        releaseRead();
+        await flush(); await flush();
+        assertEq('the re-read removes the Tag', ctx.getEntity('work').tags.length, 0);
+        const base = global.prksWorkTagBase(state.options, 'tag-1');
+        assert('the resumed editor follows the adopted links',
+            base.present === false && base.revision === 2);
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-1', true, tag);
+        const write = tagWrites[writes];
+        assertEq('the inverse edit is measured against the newer base',
+            write && write.slice(2, 5).join(','), 'true,false,2');
+    } finally {
+        global.prksReadWorkTagOptions = previous.options;
+        global.prksOfflineReadEntity = previous.read;
+        global.prksWorkTagBase = previous.base;
+        global.prksCssVarClass = previous.css;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1361,6 +1430,7 @@ async function main() {
     await tagAckRefreshRejectsInconsistentOptions();
     await crossTabSettlementRefreshesOptions();
     await twoCrossTabSettlementsKeepTheRefresh();
+    await parkedCorrectiveReadRefreshesTheResumedEditor();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
