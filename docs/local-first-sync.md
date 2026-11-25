@@ -1222,6 +1222,35 @@ on the server is the durable idempotency history, so the browser keeps no
 growing record of completed work. Retirement is strictly last, so a crash
 anywhere earlier leaves a replayable row rather than a lost edit.
 
+### ACK ordering: one shared core
+
+An ACK can arrive late (a slow response, a retry the ledger replays) after
+this page already holds something newer: another device changed the same
+target and this page read the result. The rule that keeps an older ACK from
+overwriting it lives in one typed module, `frontend-app/src/sync/reconcile.ts`,
+which classic code reaches as `prksSyncReconcile` (#1425):
+
+- A held value that carries the target's own revision (a revision projection
+  such as `work-tag-options`) is compared by revision. An older ACK is
+  superseded and nothing is written; an equal or newer one applies.
+- A held value without that revision (a Work or Folder detail, a browse row)
+  is proven by **when it was read**. A read that finished before the operation
+  was created cannot contain any later commit, and every revision that could
+  supersede the ACK was committed after it. Cache envelopes record the read as
+  `observedAt` (kept when an ACK patches the value); live owners' values are
+  stamped by the offline read path and carry the stamp through patches.
+- A value that already shows the ACK needs no proof.
+- Anything else is **unproven**: the disposable cache drops the value so the
+  next read refetches it, and a live owner applies the ACK (the user's own
+  change must not vanish) and re-reads, adopting the server's answer only if
+  nothing else replaced the value meanwhile.
+
+A sibling projection's revision can prove an ACK superseded for a detail, but
+never proves the detail current: the detail may have been read later. The
+pending overlay stays separate: caches hold acknowledged state only, and
+`overlay` folds the durable queue over it at read time. No protocol or ledger
+change is involved.
+
 ### An acknowledgement states the stored row; the client never rebuilds it
 
 A field acknowledgement can omit a byte-limited value because the client

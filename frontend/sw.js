@@ -24,10 +24,11 @@
     // frontend/js/search-query-codec.js,
     // frontend/js/tab-leave.js,
     // frontend/js/owner-resource.js,
-    // frontend/js/editor-recovery.js, or
-    // frontend/js/route-model.js) retires old
+    // frontend/js/editor-recovery.js,
+    // frontend/js/route-model.js, or
+    // frontend/js/sync-reconcile.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '043ce5753704';
+    const DEPENDENCY_REVISION = '00960c6b26ff';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,
@@ -149,6 +150,7 @@
         '/js/browser-scope.js',
         '/js/sign-in.js',
         '/vendor/idb/idb.min.js',
+        '/js/sync-reconcile.js',
         '/js/offline-store.js',
         '/js/offline-runtime.js',
         '/js/local-store.js',

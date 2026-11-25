@@ -14,7 +14,7 @@
  * (browser-scope.js). Without a scope the cache is unavailable.
  *
  * Schema (version 1):
- *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision, libraryEpoch }
+ *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, observedAt, sourceRevision, libraryEpoch }
  *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision, libraryEpoch }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
  *
@@ -663,12 +663,18 @@
             }, true);
         }
 
-        function putEntity(kind, id, value, sourceRevision) {
+        /* `observedAt` is when the server read behind `value` finished. It
+         * defaults to now; a value rewritten from an older read (an ACK
+         * patched into a cached detail) passes that read's time, so the sync
+         * reconcile core can still prove what the rest of the value predates. */
+        function putEntity(kind, id, value, sourceRevision, observedAt) {
+            const cachedAt = now();
             const envelope = {
                 kind: String(kind),
                 id: String(id),
                 value: value,
-                cachedAt: now(),
+                cachedAt: cachedAt,
+                observedAt: Number.isFinite(observedAt) && observedAt <= cachedAt ? observedAt : cachedAt,
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
                 libraryEpoch: null,
             };

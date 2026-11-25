@@ -632,6 +632,376 @@ async function warmAcknowledgementSurvivesActivation() {
     }
 }
 
+/* #1425 / #1088: an unproven Tag ACK re-reads the Work. The re-read takes only
+ * the links (pending values of other families stay), and the editor's
+ * revisioned options are read again, past any in-flight request, before an
+ * edit can be made against them. */
+async function tagAckReReadRefreshesOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-reread';
+    const ctx = mountTab('tag-reread');
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, folder_id: 'pending-folder' }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    const optionReads = [];
+    const freshOptions = { assigned: [], known_absent: { 'tag-1': 5 } };
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        optionReads.push(options || null);
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        return { value: refreshed ? freshOptions : { assigned: [], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id, _path, options) {
+        if (kind !== 'work') return previousRead(kind, id);
+        assert('the corrective Work read never joins an older flight',
+            !!(options && options.requestPolicy && options.requestPolicy.dedupe === false));
+        return { source: 'server', value: core.observe({ id: id, tags: [], folder_id: 'server-folder' }, Date.now()) };
+    };
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        emitLive({
+            acknowledged: { work_id: workId, tag_id: 'tag-1', present: true, server_revision: 3,
+                tag: { id: 'tag-1', name: 'Alpha' } },
+            operation: 'ADD_WORK_TAG',
+            op: op,
+        });
+        await flush();
+        const held = ctx.getEntity('work');
+        assertEq('the re-read links win over the unproven ACK', held.tags.length, 0);
+        assertEq('the re-read keeps the pending Folder value on the held Work', held.folder_id, 'pending-folder');
+        const last = optionReads[optionReads.length - 1];
+        assert('the options are read again, past any older flight, after the adopted Work',
+            !!last && !!last.requestPolicy && last.requestPolicy.dedupe === false);
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the editor edits against the refreshed options', state && state.options, freshOptions);
+        assertEq('the refresh settles', state && state.refreshing, false);
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+    }
+}
+
+/* #1088 review: the corrective options read must not re-enable editing on a
+ * base that disagrees with the adopted links. A REMOVE ACK at revision 1, a
+ * Work re-read showing the Tag back at revision 2, then an options read that
+ * falls back to the cache the ACK just wrote (Tag absent at 1): editing stays
+ * off. A server answer that disagrees reads the detail and the options
+ * again, a bounded number of times: editing stays off while they disagree,
+ * and comes back once a newer detail agrees with the options. */
+async function tagAckRefreshRejectsInconsistentOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-stale-options';
+    const ctx = mountTab('tag-stale-options');
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [tag] }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    let mode = 'cache';
+    // 'cache': the options read falls back to the cache; 'disagree': the server answers the older base.
+    let refreshReads = 0;
+    const stale = { assigned: [], known_absent: { 'tag-1': 1 } };
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (!refreshed) return { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 0 }], known_absent: {} }, source: 'server' };
+        refreshReads += 1;
+        if (mode === 'cache') return { value: stale, source: 'cache' };
+        return { value: stale, source: 'server' };
+    };
+    let workReads = 0;
+    let supersedeOnRead = false;
+    let workTags = function () { return [tag]; };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previousRead(kind, id);
+        workReads += 1;
+        if (supersedeOnRead && workReads > 1) {
+            const live = ctx.getResource('workTagEditor');
+            if (live) live.readVersion += 1;
+        }
+        return { source: 'server', value: core.observe({ id: id, tags: workTags() }, Date.now()) };
+    };
+    function ack(revision) {
+        emitLive({
+            acknowledged: { work_id: workId, tag_id: 'tag-1', present: false, server_revision: revision, tag: tag },
+            operation: 'REMOVE_WORK_TAG',
+            op: op,
+        });
+    }
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        ack(1);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the adopted Work shows the re-added Tag', ctx.getEntity('work').tags.length, 1);
+        assertEq('a cached options fallback is not taken as the corrective base', state.options, null);
+        assertEq('the refresh stays open after the cached fallback', state.refreshing, true);
+
+        mode = 'disagree';
+        refreshReads = 0;
+        ack(1);
+        await flush();
+        // One read the ACK itself restarts, then at most three for the adopted Work.
+        assert('a disagreeing server answer is read again, a bounded number of times',
+            refreshReads >= 3 && refreshReads <= 4);
+        assertEq('a disagreeing server answer is not taken as the base', state.options, null);
+
+        // A retry superseded while its detail read is out never writes it.
+        workReads = 0;
+        supersedeOnRead = true;
+        workTags = function () { return workReads > 1 ? [] : [tag]; };
+        ctx.setEntity('work', core.observe({ ...work, tags: [tag] }, Date.now()));
+        ack(1);
+        await flush();
+        assertEq('a superseded link re-read leaves the held links', ctx.getEntity('work').tags.length, 1);
+        supersedeOnRead = false;
+
+        // The detail was the older read: another device removed the Tag
+        // after it. Reading both again makes them agree on the removal.
+        workReads = 0;
+        workTags = function () { return workReads > 1 ? [] : [tag]; };
+        ack(1);
+        await flush();
+        assert('a disagreement reads the detail again too', workReads >= 2);
+        assertEq('the re-read detail takes the newer links', ctx.getEntity('work').tags.length, 0);
+        assertEq('the options that agree with the re-read detail are taken', state.options, stale);
+        assertEq('the refresh settles once both reads agree', state.refreshing, false);
+
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+    }
+}
+
+/* #1088 review: a change settled in ANOTHER tab reaches this editor through
+ * paint, not an ACK. When its corrective Work re-read contradicts the settled
+ * base (another device removed the Tag after the ADD landed), the options are
+ * refreshed too, so the next inverse edit is measured against the newer base
+ * instead of coalescing away against the stale one. */
+async function crossTabSettlementRefreshesOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-cross-tab';
+    const ctx = mountTab('tag-cross-tab');
+    const created = Date.now() - 1000;
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const op = {
+        op_id: 'op-cross-tab', entity_type: 'work', entity_id: workId, operation: 'ADD_WORK_TAG',
+        payload: { tag_id: 'tag-1' }, status: 'syncing', attempt_count: 1, base_revision: 0,
+        created_at: new Date(created).toISOString(), local_context: { tag: tag },
+    };
+    const work = showWork(ctx, workId);
+    // Read after the ADD was created: nothing proves it older than the ACK.
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    const previousList = prksSync.store.listOperations;
+    const previousBase = global.prksWorkTagBase;
+    // The real base read (work-tag-state.js): this path measures revisions.
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    let phase = 'before';
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (refreshed) return { value: { assigned: [], known_absent: { 'tag-1': 2 } }, source: 'server' };
+        if (phase === 'before') return { value: { assigned: [], known_absent: {} }, source: 'server' };
+        return { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 1 }], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previousRead(kind, id);
+        return { source: 'server', value: core.observe({ id: id, tags: [] }, Date.now()) };
+    };
+    prksSync.store.listOperations = async function () { return phase === 'before' ? [op] : []; };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the in-flight ADD is held', state.operations.length, 1);
+        phase = 'settled';
+        emitLive({});
+        await flush();
+        assertEq('the corrective re-read keeps the Tag removed', ctx.getEntity('work').tags.length, 0);
+        const base = state.options && global.prksWorkTagBase(state.options, 'tag-1');
+        assert('the options are refreshed past the settled base',
+            !!base && base.present === false && base.revision === 2);
+        assertEq('the refresh settles', state.refreshing, false);
+        // The inverse edit (Add again) is measured against the removal at 2.
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-1', true, tag);
+        const write = tagWrites[writes];
+        assert('the inverse edit is recorded, not coalesced away', !!write);
+        assertEq('the inverse edit is measured against the newer base',
+            write && write.slice(2, 5).join(','), 'true,false,2');
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+        prksSync.store.listOperations = previousList;
+        global.prksWorkTagBase = previousBase;
+    }
+}
+
+/* #1088 review: two changes settled in other tabs before one paint. The first
+ * one's corrective read starts an options refresh; the second one's settled
+ * read supersedes it (readVersion) while already agreeing with the Work, so it
+ * starts no refresh of its own. The superseded refresh must be started again,
+ * or Tag editing stays off for the session. */
+async function twoCrossTabSettlementsKeepTheRefresh() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-two-settled';
+    const ctx = mountTab('tag-two-settled');
+    const created = new Date(Date.now() - 1000).toISOString();
+    const alpha = { id: 'tag-a', name: 'Alpha' };
+    const beta = { id: 'tag-b', name: 'Beta' };
+    function addOp(id, tag) {
+        return { op_id: id, entity_type: 'work', entity_id: workId, operation: 'ADD_WORK_TAG',
+            payload: { tag_id: tag.id }, status: 'syncing', attempt_count: 1, base_revision: 0,
+            created_at: created, local_context: { tag: tag } };
+    }
+    const ops = [addOp('op-a', alpha), addOp('op-b', beta)];
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previous = {
+        options: global.prksReadWorkTagOptions, read: global.prksOfflineReadEntity,
+        list: prksSync.store.listOperations, base: global.prksWorkTagBase, css: global.prksCssVarClass,
+    };
+    // The chips render once the Work holds Tags; the harness has no CSS helper.
+    if (typeof global.prksCssVarClass !== 'function') global.prksCssVarClass = function () { return ''; };
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    const both = { assigned: [{ tag_id: 'tag-a', relation_revision: 1 }, { tag_id: 'tag-b', relation_revision: 1 }], known_absent: {} };
+    let phase = 'before';
+    let settledReads = 0;
+    let refreshStarted; const refreshStart = new Promise(r => { refreshStarted = r; });
+    let releaseRefresh; const refreshGate = new Promise(r => { releaseRefresh = r; });
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (phase === 'before') return { value: { assigned: [], known_absent: {} }, source: 'server' };
+        if (refreshed) {
+            refreshStarted();
+            await refreshGate;
+            return { value: both, source: 'server' };
+        }
+        settledReads += 1;
+        // The second settlement's read lands after the first one's refresh began.
+        if (settledReads === 2) { await refreshStart; setTimeout(releaseRefresh, 0); }
+        return { value: JSON.parse(JSON.stringify(both)), source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previous.read(kind, id);
+        return { source: 'server', value: core.observe({ id: id, tags: [alpha, beta] }, Date.now()) };
+    };
+    prksSync.store.listOperations = async function () { return phase === 'before' ? ops : []; };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('both in-flight ADDs are held', state.operations.length, 2);
+        phase = 'settled';
+        emitLive({});
+        await flush(); await flush();
+        assertEq('the refresh survives the second settlement', state.refreshing, false);
+        assert('the editor holds options again', !!state.options);
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-a', false);
+        assert('a later edit reaches the durable store', tagWrites.length === writes + 1);
+    } finally {
+        global.prksReadWorkTagOptions = previous.options;
+        global.prksOfflineReadEntity = previous.read;
+        prksSync.store.listOperations = previous.list;
+        global.prksWorkTagBase = previous.base;
+        global.prksCssVarClass = previous.css;
+    }
+}
+
+/* #1088 review: a parked owner's corrective read can land after the tab
+ * resumes with a NEW editor. The adoption refreshes the editor mounted then,
+ * so its options follow the adopted links and the next inverse edit is
+ * measured against the newer base. */
+async function parkedCorrectiveReadRefreshesTheResumedEditor() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-parked-read';
+    const ctx = mountTab('tag-parked-read');
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const op = { created_at: new Date(Date.now() - 1000).toISOString() };
+    const work = showWork(ctx, workId);
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previous = {
+        options: global.prksReadWorkTagOptions, read: global.prksOfflineReadEntity,
+        base: global.prksWorkTagBase, css: global.prksCssVarClass,
+    };
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    if (typeof global.prksCssVarClass !== 'function') global.prksCssVarClass = function () { return ''; };
+    let removed = false;
+    let releaseRead; const readGate = new Promise(r => { releaseRead = r; });
+    global.prksReadWorkTagOptions = async function () {
+        return removed
+            ? { value: { assigned: [], known_absent: { 'tag-1': 2 } }, source: 'server' }
+            : { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 1 }], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previous.read(kind, id);
+        await readGate;
+        return { source: 'server', value: core.observe({ id: id, tags: [] }, Date.now()) };
+    };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        // Parked: no editor. The unproven ACK patches the Work and re-reads it.
+        prksApplyWorkTagEntityAck(ctx, { work_id: workId, tag_id: 'tag-1', present: true,
+            server_revision: 1, tag: tag }, op);
+        assertEq('the parked ACK patches the Work', ctx.getEntity('work').tags.length, 1);
+        // Resume: a new editor reads options while the re-read is out.
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the resumed editor starts from present/1',
+            global.prksWorkTagBase(state.options, 'tag-1').revision, 1);
+        // Another device removes the Tag; the re-read lands after resume.
+        removed = true;
+        releaseRead();
+        await flush(); await flush();
+        assertEq('the re-read removes the Tag', ctx.getEntity('work').tags.length, 0);
+        const base = global.prksWorkTagBase(state.options, 'tag-1');
+        assert('the resumed editor follows the adopted links',
+            base.present === false && base.revision === 2);
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-1', true, tag);
+        const write = tagWrites[writes];
+        assertEq('the inverse edit is measured against the newer base',
+            write && write.slice(2, 5).join(','), 'true,false,2');
+    } finally {
+        global.prksReadWorkTagOptions = previous.options;
+        global.prksOfflineReadEntity = previous.read;
+        global.prksWorkTagBase = previous.base;
+        global.prksCssVarClass = previous.css;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1056,6 +1426,11 @@ async function main() {
     assertEq('repeated cycles leave no contexts', snap.contexts.length, 0);
     assertEq('no unhandled rejection', unhandled.length, 0);
 
+    await tagAckReReadRefreshesOptions();
+    await tagAckRefreshRejectsInconsistentOptions();
+    await crossTabSettlementRefreshesOptions();
+    await twoCrossTabSettlementsKeepTheRefresh();
+    await parkedCorrectiveReadRefreshesTheResumedEditor();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }

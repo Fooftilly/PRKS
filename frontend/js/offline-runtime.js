@@ -21,6 +21,15 @@
 (function (root) {
     'use strict';
 
+    /* The shared ACK ordering rule (frontend-app/src/sync/reconcile.ts), built
+     * as frontend/js/sync-reconcile.js and loaded before this file. */
+    const reconcileCore =
+        root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js')
+            : null);
+    if (!reconcileCore) throw new Error('offline-runtime.js requires sync-reconcile.js');
+
     const STATE_ONLINE = 'online';
     const STATE_OFFLINE = 'offline';
     const STATE_RECONNECTING = 'reconnecting';
@@ -421,6 +430,7 @@
                     !ineligibleEntities.has(entityKey(kind, id)) &&
                     !isDomainBlocked(domain) &&
                     !(options2.signal && options2.signal.aborted)) {
+                    reconcileCore.observe(cached.value, observedAtOf(cached));
                     return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                 }
             }
@@ -464,6 +474,7 @@
                         currentDomainGeneration(domain) === domainToken &&
                         !ineligibleEntities.has(entityKey(kind, id)) &&
                         !isDomainBlocked(domain)) {
+                        reconcileCore.observe(cached.value, observedAtOf(cached));
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
@@ -474,7 +485,9 @@
             // good cached entity.
             assertAcceptableShape(options2.validate, raw);
             void cacheEntityForDomain(kind, id, raw, coherenceToken, domain, domainToken);
-            return { value: raw, source: 'server', cachedAt: now() };
+            const readAt = now();
+            reconcileCore.observe(raw, readAt);
+            return { value: raw, source: 'server', cachedAt: readAt };
         }
 
         /** Best-effort persistence for a complete authoritative entity value. */
@@ -494,13 +507,20 @@
             }
         }
 
-        /** Cache only if no later canonical change has superseded this value. */
-        function cacheEntityIfCurrent(kind, id, value, coherenceToken) {
+        /** When the server read behind a cached envelope finished. */
+        function observedAtOf(envelope) {
+            if (!envelope) return null;
+            return Number.isFinite(envelope.observedAt) ? envelope.observedAt : envelope.cachedAt;
+        }
+
+        /** Cache only if no later canonical change has superseded this value.
+         * `observedAt` keeps an older read's time on a value rewritten from it. */
+        function cacheEntityIfCurrent(kind, id, value, coherenceToken, observedAt) {
             if (value == null || !store || typeof store.putEntity !== 'function') return Promise.resolve(false);
             const key = entityKey(kind, id);
             if (coherenceToken !== currentEntityGeneration(kind, id)) return Promise.resolve(false);
             try {
-                return Promise.resolve(store.putEntity(kind, id, value, coherenceToken)).then(function (ok) {
+                return Promise.resolve(store.putEntity(kind, id, value, coherenceToken, observedAt)).then(function (ok) {
                     if (ok && coherenceToken === currentEntityGeneration(kind, id)) {
                         ineligibleEntities.delete(key);
                         return true;
@@ -514,79 +534,44 @@
             }
         }
 
-        /* Reconcile an authoritative relationship response without inventing a
-         * complete Work/options snapshot when the disposable base is missing.
-         * Publication generations fence pre-ACK GETs. The caller retains its
-         * durable operation unless every required cache write commits. */
-        async function reconcileWorkTag(result) {
+        /* One acknowledged Tag link (Work or Folder), merged into the two
+         * cached records that carry it: the owner's detail (its `tags` rows)
+         * and its revisioned tag-options projection.
+         *
+         * Every write goes through the shared ordering rule
+         * (`prksSyncReconcile.decideAck`, #1425, #1088):
+         *  - the options projection carries the link's revision, so an older
+         *    ACK is superseded there and nothing is written anywhere;
+         *  - the detail carries no link revision. It takes the ACK only when
+         *    it already agrees or its server read finished before the
+         *    operation was created. Otherwise it may hold a newer link state
+         *    (read after another device's change), so it is DROPPED for the
+         *    next read to refetch, never overwritten.
+         *
+         * Publication generations fence pre-ACK GETs. A missing base stays
+         * missing. The caller retains its durable operation unless every
+         * required cache write commits. `op` is the acknowledged operation;
+         * without it the detail cannot be proven and is dropped on any
+         * disagreement. */
+        async function reconcileTagLink(result, op, ownerKind, optionsKind, id, optionsShape) {
             if (!store || !await store.isAvailable()) return false;
-            const id = result.work_id;
-            const kinds = ['work', 'work-tag-options'];
+            if (!reconcileCore.isRevision(result.server_revision)) return false;
+            const kinds = [ownerKind, optionsKind];
             const tokens = kinds.map(kind => {
-                const key = entityKey(kind, id);
                 const token = currentEntityGeneration(kind, id) + 1;
-                entityCoherence.set(key, token);
+                entityCoherence.set(entityKey(kind, id), token);
                 return token;
             });
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
-            const work = snapshots[0] && snapshots[0].value;
+            const detail = snapshots[0] && snapshots[0].value;
             const options = snapshots[1] && snapshots[1].value;
-            if (options && typeof root.prksIsWorkTagOptionsShape === 'function' && !root.prksIsWorkTagOptionsShape(options, id)) {
-                return false;
-            }
-            let revision = 0;
+            if (options && typeof optionsShape === 'function' && !optionsShape(options, id)) return false;
             if (options) {
                 const assigned = options.assigned.find(r => r.tag_id === result.tag_id);
-                revision = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
-            }
-            if (revision > result.server_revision) return true;
-            if (work) {
-                if (!Array.isArray(work.tags)) return false;
-                work.tags = work.tags.filter(t => t.id !== result.tag_id);
-                if (result.present) work.tags.push(result.tag);
-            }
-            if (options) {
-                options.assigned = options.assigned.filter(t => t.tag_id !== result.tag_id);
-                delete options.known_absent[result.tag_id];
-                if (result.present) options.assigned.push({ tag_id: result.tag_id, relation_revision: result.server_revision });
-                else if (result.server_revision) options.known_absent[result.tag_id] = result.server_revision;
-            }
-            const values = [work, options];
-            for (let i = 0; i < kinds.length; i++) {
-                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
-            }
-            return true;
-        }
-
-        async function reconcileFolderTag(result) {
-            if (!store || !await store.isAvailable()) return false;
-            const id = result.folder_id;
-            const kinds = ['folder', 'folder-tag-options'];
-            const tokens = kinds.map(kind => {
-                const key = entityKey(kind, id);
-                const token = currentEntityGeneration(kind, id) + 1;
-                entityCoherence.set(key, token);
-                return token;
-            });
-            const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
-            const folder = snapshots[0] && snapshots[0].value;
-            const options = snapshots[1] && snapshots[1].value;
-            if (options && typeof root.prksIsFolderTagOptionsShape === 'function' &&
-                !root.prksIsFolderTagOptionsShape(options, id)) {
-                return false;
-            }
-            let revision = 0;
-            if (options) {
-                const assigned = options.assigned.find(r => r.tag_id === result.tag_id);
-                revision = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
-            }
-            if (revision > result.server_revision) return true;
-            if (folder) {
-                if (!Array.isArray(folder.tags)) return false;
-                folder.tags = folder.tags.filter(t => t.id !== result.tag_id);
-                if (result.present) folder.tags.push(result.tag);
-            }
-            if (options) {
+                const held = assigned ? assigned.relation_revision : (options.known_absent[result.tag_id] || 0);
+                if (reconcileCore.decideAck({ ackRevision: result.server_revision, heldRevision: held }) === 'superseded') {
+                    return true;
+                }
                 options.assigned = options.assigned.filter(t => t.tag_id !== result.tag_id);
                 delete options.known_absent[result.tag_id];
                 if (result.present) {
@@ -594,12 +579,31 @@
                 } else if (result.server_revision) {
                     options.known_absent[result.tag_id] = result.server_revision;
                 }
+                if (!await cacheEntityIfCurrent(optionsKind, id, options, tokens[1])) return false;
             }
-            const values = [folder, options];
-            for (let i = 0; i < kinds.length; i++) {
-                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
-            }
-            return true;
+            if (!detail) return true;
+            if (!Array.isArray(detail.tags)) return false;
+            const plan = reconcileCore.planAck({
+                ackRevision: result.server_revision,
+                agrees: detail.tags.some(t => t && t.id === result.tag_id) === !!result.present,
+                observedAt: observedAtOf(snapshots[0]),
+                operationCreatedAt: op && op.created_at,
+            });
+            if (plan === 'unproven') return dropUnprovenEntity(ownerKind, id);
+            if (plan !== 'apply') return true;
+            detail.tags = detail.tags.filter(t => t.id !== result.tag_id);
+            if (result.present) detail.tags.push(result.tag);
+            return cacheEntityIfCurrent(ownerKind, id, detail, tokens[0], observedAtOf(snapshots[0]));
+        }
+
+        async function reconcileWorkTag(result, op) {
+            return reconcileTagLink(result, op, 'work', 'work-tag-options', result.work_id,
+                root.prksIsWorkTagOptionsShape);
+        }
+
+        async function reconcileFolderTag(result, op) {
+            return reconcileTagLink(result, op, 'folder', 'folder-tag-options', result.folder_id,
+                root.prksIsFolderTagOptionsShape);
         }
 
         /* Reconcile one acknowledged field edit into both cached records that
@@ -647,8 +651,12 @@
              * this is it for the record itself. */
             if (work) work[result.field] = root.prksWorkFieldToEntity(result.field, result.value);
             const values = [work, state];
+            /* Each record keeps the time of the read behind it: one patched
+             * field does not make the rest of the record fresh, and a later
+             * ACK (a Tag link, a note) proves its order from that time. */
             for (let i = 0; i < kinds.length; i++) {
-                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i],
+                    observedAtOf(snapshots[i]))) return false;
             }
             if (!await reconcileFieldProjections(result)) return false;
             if (!await reconcileEmbeddedSummaries(result)) return false;
@@ -2642,7 +2650,7 @@
             if (!value) return true;
             const next = mutate(value);
             if (next === null) return true;
-            return cacheEntityIfCurrent(kind, id, next, token);
+            return cacheEntityIfCurrent(kind, id, next, token, observedAtOf(snapshot));
         }
 
         /**
@@ -2896,6 +2904,18 @@
             return true;
         }
 
+        /* An unproven cached value must go before its operation retires: it
+         * is fenced from publication and reads at once, and the result is
+         * whether the deletion COMMITTED. False keeps the operation, so a
+         * replay deletes it again; retiring it instead would let a reload
+         * serve the stale value with nothing left to overlay or retry. */
+        function dropUnprovenEntity(kind, id) {
+            const key = entityKey(kind, id);
+            entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
+            ineligibleEntities.add(key);
+            return invalidateEntity(kind, id).then(ok => ok === true);
+        }
+
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
         function invalidateEntity(kind, id) {
             if (!store || typeof store.deleteEntity !== 'function') return Promise.resolve(false);
@@ -3081,6 +3101,7 @@
                     connectivityGeneration === connectionToken &&
                     currentDomainGeneration(domain) === domainToken &&
                     !isDomainBlocked(domain)) {
+                    reconcileCore.observe(cached.value, observedAtOf(cached));
                     return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                 }
             }
@@ -3119,6 +3140,7 @@
                         onlineGeneration === fallbackOnlineToken &&
                         currentDomainGeneration(domain) === domainToken &&
                         !isDomainBlocked(domain)) {
+                        reconcileCore.observe(cached.value, observedAtOf(cached));
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
                     }
                 }
@@ -3131,7 +3153,9 @@
             // Return before the sweep. The publish waits for a same-generation
             // delete, then stores the list. A skipped write stays skipped.
             void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken);
-            return { value: raw, source: 'server', cachedAt: now() };
+            const readAt = now();
+            reconcileCore.observe(raw, readAt);
+            return { value: raw, source: 'server', cachedAt: readAt };
         }
 
         function isMutationBlocked() {
@@ -3487,8 +3511,8 @@
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
         prksOfflinePeekEntity: prksOfflinePeekEntity,
-        prksOfflineReconcileWorkTag: result => production.reconcileWorkTag(result),
-        prksOfflineReconcileFolderTag: result => production.reconcileFolderTag(result),
+        prksOfflineReconcileWorkTag: (result, op) => production.reconcileWorkTag(result, op),
+        prksOfflineReconcileFolderTag: (result, op) => production.reconcileFolderTag(result, op),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
         prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
         prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),
