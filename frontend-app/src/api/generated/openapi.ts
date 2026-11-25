@@ -9189,7 +9189,7 @@ export interface operations {
                     "application/json": components["schemas"]["Done"];
                 };
             };
-            /** @description A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            /** @description A value past its limit (title 300 bytes, the others 4000); other values are sent as their text. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
