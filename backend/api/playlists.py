@@ -15,11 +15,8 @@ admitted request's context on the served Library's database. The commands
 open the transactions, so authorization stays in ``library_query`` and
 ``library_command``, and a write's maintenance and epoch fence in
 ``library_command``.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+The commands are imported when a route runs: the served app loads no
+PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 """
 
 from __future__ import annotations
@@ -27,112 +24,60 @@ from __future__ import annotations
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from backend.web.etags import etag_for_representation
-
-COLLECTION = "/api/playlists"
-_PREFIX = COLLECTION + "/"
-
-
-def _commands() -> Any:
-    """``backend.domain.organization.playlist_commands``, imported when a route runs.
-
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
-    from backend.domain.organization import playlist_commands
-
-    return playlist_commands
+from backend.api.common import optional_pdfs_dir, revalidated
+from backend.web.http import Request, Response, error_response, json_response
+from backend.web.routing import route
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a Playlist route ran without an admitted request context")
-    return db.database, ctx
-
-
-def _pdfs_dir(db: Any) -> Optional[str]:
-    """The data root's PDF directory; ``None`` when the Library has none (the command decides)."""
-    return None if db.storage is None else db.storage.pdfs_dir
-
-
-def _item_id(path: str) -> Optional[str]:
-    """The Playlist id of ``/api/playlists/:id``, else ``None``."""
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        return path.split("/")[-1]
-    return None
-
-
-def _sub(path: str, leaf: str) -> Optional[str]:
-    """The Playlist id of ``/api/playlists/:id/<leaf>``, else ``None``."""
-    parts = path.split("/")
-    if len(parts) == 5 and parts[4] == leaf:
-        return parts[3]
-    return None
-
-
-def _send_revalidated(handler: Any, label: str, data: Any) -> None:
-    etag = etag_for_representation(label, data)
-    if handler._prks_if_none_match(etag):
-        handler._send_json_not_modified(etag)
-        return
-    handler.send_json(200, data, etag=etag, precondition_checked=True)
-
-
-def add_item(handler: Any, db: Any, playlist_id: Optional[str], work_id: Optional[str],
+def add_item(req: Request, playlist_id: Optional[str], work_id: Optional[str],
              position: Optional[int] = None) -> None:
     """Put a Work in a Playlist for this request; refusals raise ``ValueError``."""
-    _commands().add_item(*_actor(handler, db), playlist_id, work_id, position)
+    from backend.domain.organization import playlist_commands
+
+    playlist_commands.add_item(*req.actor, playlist_id, work_id, position)
 
 
-def handle_get(handler: Any, db: Any, path: str) -> bool:
-    if path == COLLECTION:
-        _send_revalidated(handler, "playlists", _commands().catalog(*_actor(handler, db)))
-        return True
-    pl_id = _item_id(path)
-    if pl_id is not None:
-        data = _commands().detail(*_actor(handler, db), pl_id, _pdfs_dir(db))
-        if data:
-            handler.send_json(200, data)
-        else:
-            handler.send_error(404, "Playlist not found")
-        return True
-    if path.startswith(_PREFIX) and path.endswith("/sync-state") and len(path.split("/")) == 5:
-        # REVISIONS ONLY: the three field revisions and the ORDER revision.
-        # The playlist detail already carries its items in order, so echoing
-        # them here would make a second cached copy.
-        data = _commands().sync_state(*_actor(handler, db), unquote(path.split("/")[3]))
-        if data is None:
-            handler.send_json(404, {"error": "Playlist not found"})
-        else:
-            _send_revalidated(handler, "playlist-state", data)
-        return True
-    return False
+def catalog(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    return revalidated(req, "playlists", playlist_commands.catalog(*req.actor))
 
 
-def handle_work_state(handler: Any, db: Any, path: str) -> bool:
+def detail(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    data = playlist_commands.detail(*req.actor, req.params["playlist_id"], optional_pdfs_dir(req))
+    if data:
+        return json_response(req, 200, data)
+    return error_response(404, "Playlist not found")
+
+
+def sync_state(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    # REVISIONS ONLY: the three field revisions and the ORDER revision. The
+    # playlist detail already carries its items in order, so echoing them
+    # here would make a second cached copy.
+    data = playlist_commands.sync_state(*req.actor, unquote(req.params["playlist_id"]))
+    return revalidated(req, "playlist-state", data, missing="Playlist not found")
+
+
+def work_state(req: Request) -> Response:
     """``GET /api/works/:id/playlist-state``."""
-    if not (path.startswith("/api/works/") and path.endswith("/playlist-state") and len(path.split("/")) == 5):
-        return False
-    data = _commands().work_state(*_actor(handler, db), unquote(path.split("/")[3]))
-    if data is None:
-        handler.send_json(404, {"error": "Work not found"})
-    else:
-        _send_revalidated(handler, "work-playlist-state", data)
-    return True
+    from backend.domain.organization import playlist_commands
+
+    data = playlist_commands.work_state(*req.actor, unquote(req.params["work_id"]))
+    return revalidated(req, "work-playlist-state", data)
 
 
-def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    pl_id = _item_id(path)
-    if pl_id is None:
-        return False
-    _commands().update(*_actor(handler, db), pl_id, data)
-    handler.send_json(200, {"status": "updated"})
-    return True
+def update(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
+    return json_response(req, 200, {"status": "updated"})
 
 
-def _position(data: Any) -> Optional[int]:
+def _position(data: dict[str, Any]) -> Optional[int]:
     try:
         raw = data.get("position", None)
         return int(raw) if raw is not None and str(raw).strip() != "" else None
@@ -140,64 +85,68 @@ def _position(data: Any) -> Optional[int]:
         return None
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path == COLLECTION:
-        pl_id = _commands().create(
-            *_actor(handler, db),
-            title=data.get("title", "") or "",
-            description=data.get("description", "") or "",
-            original_url=data.get("original_url", "") or "",
-        )
-        handler.send_json(200, {"id": pl_id})
-        return True
-    if path.startswith(_PREFIX) and path.endswith("/items"):
-        pl_id = _sub(path, "items")
-        if pl_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        w_id = (data.get("work_id") or "").strip()
-        if not w_id:
-            handler.send_json(400, {"error": "work_id is required"})
-            return True
-        try:
-            add_item(handler, db, pl_id, w_id, _position(data))
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, {"status": "added"})
-        return True
-    if path.startswith(_PREFIX) and path.endswith("/reorder"):
-        pl_id = _sub(path, "reorder")
-        if pl_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        work_ids = data.get("work_ids", [])
-        if not isinstance(work_ids, list):
-            handler.send_json(400, {"error": "work_ids must be a JSON array"})
-            return True
-        try:
-            _commands().reorder(*_actor(handler, db), pl_id, [str(x) for x in work_ids])
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, {"status": "reordered"})
-        return True
-    return False
+def create(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    data = req.data
+    pl_id = playlist_commands.create(
+        *req.actor,
+        title=data.get("title", "") or "",
+        description=data.get("description", "") or "",
+        original_url=data.get("original_url", "") or "",
+    )
+    return json_response(req, 200, {"id": pl_id})
 
 
-def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    pl_id = _item_id(path)
-    if pl_id is not None:
-        _commands().delete(*_actor(handler, db), pl_id)
-        handler.send_json(200, {"status": "deleted"})
-        return True
-    if path.startswith(_PREFIX) and "/items/" in path:
-        # /api/playlists/{id}/items/{work_id}
-        parts = path.split("/")
-        if len(parts) == 6 and parts[4] == "items":
-            _commands().remove_item(*_actor(handler, db), parts[3], parts[5])
-            handler.send_json(200, {"status": "removed"})
-        else:
-            handler.send_error(404, "API endpoint not found")
-        return True
-    return False
+def post_item(req: Request) -> Response:
+    data = req.data
+    raw = data.get("work_id")
+    w_id = raw.strip() if isinstance(raw, str) else ""
+    if not w_id:
+        return json_response(req, 400, {"error": "work_id is required"})
+    try:
+        add_item(req, req.params["playlist_id"], w_id, _position(data))
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, {"status": "added"})
+
+
+def reorder(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    work_ids = req.data.get("work_ids", [])
+    if not isinstance(work_ids, list):
+        return json_response(req, 400, {"error": "work_ids must be a JSON array"})
+    try:
+        playlist_commands.reorder(*req.actor, req.params["playlist_id"], [str(x) for x in work_ids])
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, {"status": "reordered"})
+
+
+def delete(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    playlist_commands.delete(*req.actor, req.params["playlist_id"])
+    return json_response(req, 200, {"status": "deleted"})
+
+
+def remove_item(req: Request) -> Response:
+    from backend.domain.organization import playlist_commands
+
+    playlist_commands.remove_item(*req.actor, req.params["playlist_id"], req.params["work_id"])
+    return json_response(req, 200, {"status": "removed"})
+
+
+ROUTES = (
+    route("GET", "/api/playlists", catalog),
+    route("POST", "/api/playlists", create),
+    route("GET", "/api/playlists/{playlist_id}", detail),
+    route("PATCH", "/api/playlists/{playlist_id}", update),
+    route("DELETE", "/api/playlists/{playlist_id}", delete),
+    route("GET", "/api/playlists/{playlist_id}/sync-state", sync_state),
+    route("POST", "/api/playlists/{playlist_id}/items", post_item),
+    route("DELETE", "/api/playlists/{playlist_id}/items/{work_id}", remove_item),
+    route("POST", "/api/playlists/{playlist_id}/reorder", reorder),
+    route("GET", "/api/works/{work_id}/playlist-state", work_state),
+)

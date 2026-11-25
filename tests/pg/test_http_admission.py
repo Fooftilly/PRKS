@@ -7,7 +7,6 @@ routes; admission decides with the PR 4/5 helpers before any of them runs.
 
 from __future__ import annotations
 
-from email.message import Message
 from typing import Any, Optional
 
 import psycopg
@@ -19,7 +18,8 @@ from backend.domain.identity.library_scope import LIBRARY_LOCK_KEY_SQL
 from backend.domain.identity.login_limiter import TrustedProxies
 from backend.domain.identity.request_context import EPOCH_MAX
 from backend.domain.identity.web_start import AuthMode
-from backend.server import parse_request_origin
+from backend.web.hosts import parse_request_origin
+from backend.web.http import Headers
 from tests.pg.http_fixtures import HttpAuthTestCase, Response
 from tests.narrowing import require
 
@@ -461,7 +461,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
         self.assert_refused(self.call("GET", "/api/tags"), 401, "not_authenticated")
 
     def test_a_non_loopback_peer_is_nobody(self) -> None:
-        headers = Message()
+        headers = Headers()
         request = session_api.HttpRequest(
             method="GET", path="/api/tags", headers=headers, peer="192.0.2.7",
             request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
@@ -484,7 +484,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
 
         def admitted(path: str, method: str = "GET"):
             outcome = session_api.handle(self.auth, session_api.HttpRequest(
-                method=method, path=path, headers=Message(), peer="127.0.0.1",
+                method=method, path=path, headers=Headers(), peer="127.0.0.1",
                 request_host=("127.0.0.1", self.port), scheme="http", parse_origin=parse_request_origin,
                 read_json=lambda: {},
             ))
@@ -501,9 +501,7 @@ class LoopbackOwnerTests(AdmissionTestCase):
 
     def test_only_a_ledgered_route_leaves_the_epoch_fence_to_itself(self) -> None:
         self.run_sql("UPDATE prks.libraries SET epoch = 2")
-        headers = Message()
-        headers["Origin"] = f"http://127.0.0.1:{self.port}"
-        headers["PRKS-Library-Epoch"] = "1"
+        headers = Headers([("Origin", f"http://127.0.0.1:{self.port}"), ("PRKS-Library-Epoch", "1")])
 
         def admit(path: str, route_fences_epoch: bool):
             return session_api.handle(self.auth, session_api.HttpRequest(

@@ -16,15 +16,8 @@ apply_isolated_test_env(_PROJECT_DIR)
 import backend.server as server_module
 from backend.server import PORT, run_server
 from backend.storage.config import StorageConfig
+from backend.web.app import App
 from prks_app import build_parser
-
-
-def _capture_bind():
-    return server_module._bound_storage
-
-
-def _restore_bind(snapshot):
-    server_module._bound_storage = snapshot
 
 
 def _parse_host_argv(*argv):
@@ -73,13 +66,11 @@ class TestListenCli(unittest.TestCase):
 
 class TestListenServerBind(unittest.TestCase):
     def setUp(self):
-        self._prev = _capture_bind()
         self._tmpdir = tempfile.mkdtemp(prefix="prks-listen-bind-")
         # ``run_server`` only needs a bound root; the Library is not opened here.
-        server_module._bound_storage = StorageConfig.for_testing(self._tmpdir)
+        self.app = App(storage=StorageConfig.for_testing(self._tmpdir))
 
     def tearDown(self):
-        _restore_bind(self._prev)
         try:
             import shutil
 
@@ -92,7 +83,7 @@ class TestListenServerBind(unittest.TestCase):
         httpd.serve_forever.side_effect = KeyboardInterrupt
         with patch.object(server_module, "make_server") as ctor:
             ctor.return_value.__enter__.return_value = httpd
-            run_server(**kwargs)
+            run_server(self.app, **kwargs)
         return ctor
 
     def test_default_bind_is_loopback_and_default_port(self):
@@ -113,14 +104,14 @@ class TestListenServerBind(unittest.TestCase):
     def test_empty_host_rejected_before_server_construction(self):
         with patch.object(server_module, "make_server") as ctor:
             with self.assertRaises(ValueError) as ctx:
-                run_server(host="")
+                run_server(self.app, host="")
             self.assertEqual(str(ctx.exception), "host must not be empty")
             ctor.assert_not_called()
 
     def test_whitespace_host_rejected_before_server_construction(self):
         with patch.object(server_module, "make_server") as ctor:
             with self.assertRaises(ValueError) as ctx:
-                run_server(host="   ")
+                run_server(self.app, host="   ")
             self.assertEqual(str(ctx.exception), "host must not be empty")
             ctor.assert_not_called()
 

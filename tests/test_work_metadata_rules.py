@@ -511,16 +511,18 @@ class WriterAuditTests(unittest.TestCase):
                 self.assertIn(column, owned)
 
     def test_the_oembed_author_fill_only_reaches_a_create(self) -> None:
-        server = (_ROOT / "backend" / "server.py").read_text(encoding="utf-8")
-        at = server.index("If author_text not provided, fill from oEmbed author_name.")
-        window = server[at: at + 4000]
-        self.assertIn("works_api.create(", window)
-        self.assertNotIn("update_metadata", window)
+        # The oEmbed lookup runs inside the create route (#1424), which writes
+        # the Work through the create command and never a metadata update.
         works = (_ROOT / "backend" / "api" / "works.py").read_text(encoding="utf-8")
         create = works[works.index("def create("):]
         create = create[: create.index("\ndef ", 1)]
-        self.assertIn("commands.create(", create)
+        self.assertIn("fetch_youtube_oembed(", create)
+        self.assertIn("_new_work(", create)
         self.assertNotIn("update_metadata", create)
+        new_work = works[works.index("def _new_work("):]
+        new_work = new_work[: new_work.index("\ndef ", 1)]
+        self.assertIn("work_commands.create(", new_work)
+        self.assertEqual(works.count("fetch_youtube_oembed("), 2)  # its definition and the create
 
 
 if __name__ == "__main__":

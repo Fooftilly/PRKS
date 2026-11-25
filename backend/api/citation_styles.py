@@ -10,77 +10,57 @@
 - ``DELETE /api/citation-styles/:id``: ``{"deleted": id}``, or ``404``.
 
 An import or a delete is Library administration (``backend/api/session.py``
-admits only ``ADMIN_LIBRARY``); the commands open the transactions.
-``server.py`` calls these handlers after host/origin, JSON body size and
-library-access checks; each returns ``False`` for another path.
+admits only ``ADMIN_LIBRARY``); the commands open the transactions. They
+are imported when a route runs (no PostgreSQL module at import time).
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
-PATH = "/api/citation-styles"
-_PREFIX = PATH + "/"
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
 
 
-def _commands() -> Any:
-    """``custom_citation_styles``, imported when a route runs (no PostgreSQL module at import time)."""
+def _not_found(req: Request) -> Response:
+    return json_response(req, 404, {"error": "Citation style not found."})
+
+
+def list_styles(req: Request) -> Response:
     from backend.domain.works import custom_citation_styles
 
-    return custom_citation_styles
+    return json_response(req, 200, {"styles": custom_citation_styles.listed(*req.actor)})
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a citation style route ran without an admitted request context")
-    return db.database, ctx
+def read(req: Request) -> Response:
+    from backend.domain.works import custom_citation_styles
 
-
-def _style_id(path: str) -> Optional[str]:
-    if not path.startswith(_PREFIX):
-        return None
-    rest = path[len(_PREFIX):]
-    return rest if rest and "/" not in rest else None
-
-
-def _not_found(handler: Any) -> bool:
-    handler.send_json(404, {"error": "Citation style not found."})
-    return True
-
-
-def handle_get(handler: Any, db: Any, path: str) -> bool:
-    if path == PATH:
-        handler.send_json(200, {"styles": _commands().listed(*_actor(handler, db))})
-        return True
-    style_id = _style_id(path)
-    if style_id is None:
-        return False
-    style = _commands().read(*_actor(handler, db), style_id)
+    style = custom_citation_styles.read(*req.actor, req.params["style_id"])
     if style is None:
-        return _not_found(handler)
-    handler.send_json(200, style)
-    return True
+        return _not_found(req)
+    return json_response(req, 200, style)
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path != PATH:
-        return False
-    commands = _commands()
+def create(req: Request) -> Response:
+    from backend.domain.works import custom_citation_styles
+
     try:
-        summary = commands.imported(*_actor(handler, db), data)
-    except commands.StyleRefused as e:
-        handler.send_json(400, {"error": str(e)})
-        return True
-    handler.send_json(201, summary)
-    return True
+        summary = custom_citation_styles.imported(*req.actor, req.data)
+    except custom_citation_styles.StyleRefused as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 201, summary)
 
 
-def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    style_id = _style_id(path)
-    if style_id is None:
-        return False
-    if not _commands().deleted(*_actor(handler, db), style_id):
-        return _not_found(handler)
-    handler.send_json(200, {"deleted": style_id})
-    return True
+def delete(req: Request) -> Response:
+    from backend.domain.works import custom_citation_styles
+
+    style_id = req.params["style_id"]
+    if not custom_citation_styles.deleted(*req.actor, style_id):
+        return _not_found(req)
+    return json_response(req, 200, {"deleted": style_id})
+
+
+ROUTES = (
+    route("GET", "/api/citation-styles", list_styles),
+    route("POST", "/api/citation-styles", create),
+    route("GET", "/api/citation-styles/{style_id}", read),
+    route("DELETE", "/api/citation-styles/{style_id}", delete),
+)

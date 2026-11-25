@@ -144,7 +144,7 @@ class PositionHttpContractTests(ServerApiTestCase):
         validate(method="PATCH", path=path, path_pattern=DETAIL, view_args=args, status=415, response_body=res.raw,
                  request_body=b'{"description": "x"}', check_request=False)
         oversized = {"name": "overflow-body-name"}
-        with mock.patch.object(self.server_module, "_PRKS_MAX_JSON_BODY_BYTES", 8):
+        with mock.patch("backend.web.dispatch.MAX_JSON_BODY_BYTES", 8):
             post = self.send("POST", "/api/positions", oversized)
             patch = self.send("PATCH", path, oversized)
         self.assertEqual((post.status, post.body["error"]), (413, "request_too_large"))

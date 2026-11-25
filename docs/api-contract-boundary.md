@@ -38,8 +38,8 @@ Pydantic **must not** own:
 - research-domain normalization beyond JSON type checks.
 
 Those stay in `backend/domain/`, including the family rule modules `*_rules.py` (the route modules in
-`backend/api/` call its commands with the `backend/library.py` handle's database), and related domain modules. The HTTP adapter (`backend/server.py` or a future
-extracted controller) only parses, dispatches, maps status codes, and
+`backend/api/` call its commands with the `backend/library.py` handle's database), and related domain modules. The HTTP adapter (`backend/web/` and the route
+families in `backend/api/`) only parses, dispatches, maps status codes, and
 serializes.
 
 ## Layout
@@ -53,7 +53,7 @@ serializes.
 | Checked-in OpenAPI artifact | `docs/api/openapi-positions.json` (and later siblings) |
 | Live document | `GET /api/openapi.json` (Positions slice today; grows with families) |
 
-Do **not** introduce a framework or split `server.py` solely to obtain OpenAPI.
+Do **not** introduce a framework solely to obtain OpenAPI.
 Route extraction (#67) is a separate track; typed models do not require it.
 
 ## Steps for the next family

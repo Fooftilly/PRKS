@@ -33,7 +33,7 @@ from backend.domain.identity.web_start import (
     settings_from_env,
     start_web_identity,
 )
-from backend.server import parse_request_origin
+from backend.web.hosts import parse_request_origin
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
 from tests.pg.test_root_pairing import Crash, RootPairingTestCase, crash_at

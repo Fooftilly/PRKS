@@ -17,6 +17,9 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
+
 PATH = "/api/storage-status"
 
 LOGGER = logging.getLogger("prks.storage")
@@ -136,13 +139,11 @@ def body(
     return result
 
 
-def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
-    """Answer ``GET /api/storage-status``; ``config`` is the bound ``StorageConfig``."""
-    if path != PATH:
-        return False
+def storage_status(req: Request) -> Response:
+    """``GET /api/storage-status``."""
+    config = req.app.storage
     if config is None:
-        handler.send_json(503, {"error": "Storage is not bound.", "code": "unavailable"})
-        return True
+        return json_response(req, 503, {"error": "Storage is not bound.", "code": "unavailable"})
     from backend.domain.objects.jobs import root_storage
     from backend.storage.root_binding import active_bound_root
 
@@ -152,12 +153,14 @@ def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
     else:
         configured = config.configured_root or config.root
         resolved, source, leased = config.root, config.root_source, False
-    database = getattr(library, "database", None) if library is not None else None
+    library = req.app.library
+    database = library.database if library is not None else None
     conninfo = None
     if database is not None:
         conninfo = getattr(getattr(database, "config", None), "conninfo", None)
     # The body names host paths: no browser, proxy or service worker keeps it.
-    handler.send_json(
+    return json_response(
+        req,
         200,
         body(
             configured_root=configured,
@@ -170,4 +173,8 @@ def handle_get(handler: Any, path: str, *, config: Any, library: Any) -> bool:
         ),
         cache_control="no-store",
     )
-    return True
+
+
+ROUTES = (
+    route("GET", PATH, storage_status),
+)

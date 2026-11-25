@@ -10,198 +10,152 @@ Folder: ``POST /api/{works,folders}/:id/tags``, ``DELETE
 is ``400`` with its message; a delete of a missing Tag is ``404``.
 
 The calls go to ``backend/domain/organization/tag_commands`` for the
-admitted request's context on the served Library's database. The commands
-open the transactions, so authorization stays in ``library_query`` and
-``library_command``, and a write's maintenance and epoch fence in
-``library_command``.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+admitted request's context on the served Library's database, imported when
+a route runs (the served app loads no PostgreSQL module at import time,
+``tests/test_e2e_policy.py``). The commands open the transactions, so
+authorization stays in ``library_query`` and ``library_command``, and a
+write's maintenance and epoch fence in ``library_command``.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 from backend.web.etags import etag_for_representation
-
-COLLECTION = "/api/tags"
-_PREFIX = COLLECTION + "/"
-MERGE = "/api/tags/merge"
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
 
 
-def _commands() -> Any:
-    """``backend.domain.organization.tag_commands``, imported when a route runs.
-
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
+def list_tags(req: Request) -> Response:
     from backend.domain.organization import tag_commands
 
-    return tag_commands
+    if req.query_value("used") in ("1", "true", "yes"):
+        return json_response(req, 200, tag_commands.in_use(*req.actor))
+    data = tag_commands.all_tags(*req.actor)
+    return json_response(req, 200, data, etag=etag_for_representation("tags", data))
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a Tag route ran without an admitted request context")
-    return db.database, ctx
+def work_tag_options(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
 
-
-def _owner(path: str) -> Optional[str]:
-    """``"work"`` or ``"folder"`` for a path under ``/api/works/`` or ``/api/folders/``."""
-    if path.startswith("/api/works/"):
-        return "work"
-    if path.startswith("/api/folders/"):
-        return "folder"
-    return None
-
-
-def _is_aliases(path: str) -> bool:
-    return path.startswith(_PREFIX) and path.endswith("/aliases")
-
-
-def _aliases_owner(path: str) -> Optional[str]:
-    """The Tag id of ``/api/tags/:id/aliases``, else ``None``."""
-    parts = path.split("/")
-    if len(parts) == 5 and parts[4] == "aliases":
-        return parts[3]
-    return None
-
-
-def _send_catalog(handler: Any, data: Any) -> None:
-    etag = etag_for_representation("tags", data)
-    if handler._prks_if_none_match(etag):
-        handler._send_json_not_modified(etag)
-        return
-    handler.send_json(200, data, etag=etag, precondition_checked=True)
-
-
-def handle_get(handler: Any, db: Any, path: str, query: dict[str, list[str]]) -> bool:
-    if path == COLLECTION:
-        if query.get("used", [""])[0] in ("1", "true", "yes"):
-            handler.send_json(200, _commands().in_use(*_actor(handler, db)))
-        else:
-            _send_catalog(handler, _commands().all_tags(*_actor(handler, db)))
-        return True
-    owner = _owner(path)
-    if owner is None or not path.endswith("/tag-options") or len(path.split("/")) != 5:
-        return False
-    owner_id = path.split("/")[3]
-    if owner == "work":
-        data = _commands().work_options(*_actor(handler, db), owner_id)
-        missing, label = "Work not found", "work-tag-options"
-    else:
-        data = _commands().folder_options(*_actor(handler, db), owner_id)
-        missing, label = "Folder not found", "folder-tag-options"
+    data = tag_commands.work_options(*req.actor, req.params["owner_id"])
     if data is None:
-        handler.send_json(404, {"error": missing})
-    else:
-        handler.send_json(200, data, etag=etag_for_representation(label, data))
-    return True
+        return json_response(req, 404, {"error": "Work not found"})
+    return json_response(req, 200, data, etag=etag_for_representation("work-tag-options", data))
 
 
-def _post_tags_route(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path == MERGE:
-        sid = (data.get("source_tag_id") or "").strip()
-        tid = (data.get("target_tag_id") or "").strip()
-        try:
-            out = _commands().merge(*_actor(handler, db), sid, tid)
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, {"status": "merged", **out})
-        return True
-    if _is_aliases(path):
-        tag_id = _aliases_owner(path)
-        if tag_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        try:
-            _commands().add_alias(*_actor(handler, db), tag_id, (data.get("alias") or "").strip())
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, {"status": "added"})
-        return True
-    if path == COLLECTION:
-        try:
-            out = _commands().create(*_actor(handler, db), data.get("name"), data.get("color", "#6d6cf7"))
-        except ValueError as e:
-            handler.send_json(400, {"error": str(e)})
-            return True
-        handler.send_json(200, out)
-        return True
-    return False
+def folder_tag_options(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    data = tag_commands.folder_options(*req.actor, req.params["owner_id"])
+    if data is None:
+        return json_response(req, 404, {"error": "Folder not found"})
+    return json_response(req, 200, data, etag=etag_for_representation("folder-tag-options", data))
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if _post_tags_route(handler, db, path, data):
-        return True
-    owner = _owner(path)
-    if owner is None or not path.endswith("/tags"):
-        return False
-    owner_id = path.split("/")[3]
+def merge(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    data = req.data
+    sid = (data.get("source_tag_id") or "").strip()
+    tid = (data.get("target_tag_id") or "").strip()
     try:
-        if owner == "work":
-            _commands().tag_work(*_actor(handler, db), owner_id, data.get("tag_id"))
-        else:
-            _commands().tag_folder(*_actor(handler, db), owner_id, data.get("tag_id"))
+        out = tag_commands.merge(*req.actor, sid, tid)
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, {"status": "merged", **out})
+
+
+def add_alias(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    try:
+        tag_commands.add_alias(*req.actor, req.params["tag_id"], (req.data.get("alias") or "").strip())
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, {"status": "added"})
+
+
+def create(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    data = req.data
+    try:
+        out = tag_commands.create(*req.actor, data.get("name"), data.get("color", "#6d6cf7"))
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
+    return json_response(req, 200, out)
+
+
+def tag_work(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    try:
+        tag_commands.tag_work(*req.actor, req.params["owner_id"], req.data.get("tag_id"))
     except ValueError as e:
         # A missing Work, Folder or Tag (e.g. a Tag whose creation is still
         # queued on the client) is a refusal, not a server error.
-        handler.send_json(404, {"error": str(e)})
-        return True
-    handler.send_json(200, {"status": "added"})
-    return True
+        return json_response(req, 404, {"error": str(e)})
+    return json_response(req, 200, {"status": "added"})
 
 
-def _delete_link(handler: Any, db: Any, path: str) -> bool:
-    owner = _owner(path)
-    if owner is None or "/tags/" not in path:
-        return False
-    # /api/{works,folders}/{id}/tags/{tag_id}
-    parts = path.split("/")
-    if len(parts) < 6:
-        handler.send_error(404, "API endpoint not found")
-        return True
-    if owner == "work":
-        _commands().untag_work(*_actor(handler, db), parts[3], parts[5])
-    else:
-        _commands().untag_folder(*_actor(handler, db), parts[3], parts[5])
-    handler.send_json(200, {"status": "removed"})
-    return True
+def tag_folder(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    try:
+        tag_commands.tag_folder(*req.actor, req.params["owner_id"], req.data.get("tag_id"))
+    except ValueError as e:
+        return json_response(req, 404, {"error": str(e)})
+    return json_response(req, 200, {"status": "added"})
 
 
-def handle_delete(handler: Any, db: Any, path: str, query: dict[str, list[str]]) -> bool:
-    if _delete_link(handler, db, path):
-        return True
-    if _is_aliases(path):
-        tag_id = _aliases_owner(path)
-        if tag_id is None:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        # parse_qs already decoded the value once; a second unquote mangled
-        # aliases that contain "%" (and turned "%2500" into NUL).
-        alias = (query.get("alias") or [""])[0]
-        if not alias.strip():
-            handler.send_json(400, {"error": "missing alias"})
-            return True
-        if _commands().delete_alias(*_actor(handler, db), tag_id, alias):
-            handler.send_json(200, {"status": "deleted"})
-        else:
-            handler.send_json(404, {"error": "alias not found"})
-        return True
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        try:
-            result = _commands().delete(*_actor(handler, db), path.split("/")[-1])
-        except ValueError as e:
-            msg = str(e)
-            handler.send_json(404 if "not found" in msg.lower() else 400, {"error": msg})
-            return True
-        handler.send_json(200, result)
-        return True
-    return False
+def untag_work(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    tag_commands.untag_work(*req.actor, req.params["owner_id"], req.params["tag_id"])
+    return json_response(req, 200, {"status": "removed"})
+
+
+def untag_folder(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    tag_commands.untag_folder(*req.actor, req.params["owner_id"], req.params["tag_id"])
+    return json_response(req, 200, {"status": "removed"})
+
+
+def delete_alias(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    # parse_qs already decoded the value once; a second unquote mangled
+    # aliases that contain "%" (and turned "%2500" into NUL).
+    alias = req.query_value("alias")
+    if not alias.strip():
+        return json_response(req, 400, {"error": "missing alias"})
+    if tag_commands.delete_alias(*req.actor, req.params["tag_id"], alias):
+        return json_response(req, 200, {"status": "deleted"})
+    return json_response(req, 404, {"error": "alias not found"})
+
+
+def delete(req: Request) -> Response:
+    from backend.domain.organization import tag_commands
+
+    try:
+        result = tag_commands.delete(*req.actor, req.params["tag_id"])
+    except ValueError as e:
+        msg = str(e)
+        return json_response(req, 404 if "not found" in msg.lower() else 400, {"error": msg})
+    return json_response(req, 200, result)
+
+
+ROUTES = (
+    route("GET", "/api/tags", list_tags),
+    route("POST", "/api/tags", create),
+    route("POST", "/api/tags/merge", merge),
+    route("DELETE", "/api/tags/{tag_id}", delete),
+    route("POST", "/api/tags/{tag_id}/aliases", add_alias),
+    route("DELETE", "/api/tags/{tag_id}/aliases", delete_alias),
+    route("GET", "/api/works/{owner_id}/tag-options", work_tag_options),
+    route("GET", "/api/folders/{owner_id}/tag-options", folder_tag_options),
+    route("POST", "/api/works/{owner_id}/tags", tag_work),
+    route("POST", "/api/folders/{owner_id}/tags", tag_folder),
+    route("DELETE", "/api/works/{owner_id}/tags/{tag_id}", untag_work),
+    route("DELETE", "/api/folders/{owner_id}/tags/{tag_id}", untag_folder),
+)

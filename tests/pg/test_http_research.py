@@ -35,16 +35,16 @@ class ResearchHttpTestCase(HttpAuthTestCase):
         super().setUp()
         from backend.domain.research import reindex  # noqa: F401  registers research.reindex_work
 
-        module = self.server_module
-        previous = module.db
+        module = self.app
+        previous = module.library
         self.addCleanup(self._restore, previous)
-        self.facade = TestLibrary(self.db, storage=module._bound_storage)
-        module.db = self.facade
+        self.facade = TestLibrary(self.db, storage=module.storage)
+        module.library = self.facade
         self.serve()
         self.cookies = self.session_cookie()
 
     def _restore(self, previous: Any) -> None:
-        self.server_module.db = previous
+        self.app.library = previous
 
     # -- requests ----------------------------------------------------------------------
 

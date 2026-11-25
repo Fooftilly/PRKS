@@ -5,8 +5,7 @@ with its ``mention_count``; POST create, ``201``), ``/api/arguments/:id``
 (GET with its targets, citations, ``mention_count``, ``mentions`` and the
 ``verdicts``; PATCH name, kind and main text; DELETE), PUT
 ``/api/arguments/:id/sources`` and ``/api/arguments/:id/targets`` (the
-whole list, as ``{"sources": [...]}``/``{"targets": [...]}`` or a bare
-array), ``GET /api/argument-verdicts`` and the revision state
+whole list, as ``{"sources": [...]}``/``{"targets": [...]}``), ``GET /api/argument-verdicts`` and the revision state
 ``GET /api/arguments/:id/sync-state``. A ``ResearchError`` is its own
 status with ``{error, code}``.
 
@@ -16,118 +15,74 @@ open the transactions, so authorization stays in ``library_query`` and
 ``library_command``, and a write's maintenance and epoch fence in
 ``library_command``. The Research index is the database's, so a delete has
 no mentions to remove.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+The commands are imported when a route runs: the served app loads no
+PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.domain.research.rules import ResearchError
 from backend.web.etags import etag_for_representation
-
-COLLECTION = "/api/arguments"
-VERDICTS = "/api/argument-verdicts"
-_PREFIX = COLLECTION + "/"
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
 
 
-def _commands() -> Any:
-    """``backend.domain.research.argument_commands``, imported when a route runs.
+def _id(req: Request) -> str:
+    return unquote(req.params["argument_id"])
 
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
+
+def _refused(req: Request, error: ResearchError) -> Response:
+    return json_response(req, error.http_status, {"error": str(error), "code": error.code})
+
+
+def verdicts(req: Request) -> Response:
     from backend.domain.research import argument_commands
 
-    return argument_commands
+    return json_response(req, 200, argument_commands.verdicts(*req.actor))
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("an Argument route ran without an admitted request context")
-    return db.database, ctx
+def catalog(req: Request) -> Response:
+    from backend.domain.research import argument_commands
+
+    kind = req.query_value("kind").strip() or None
+    try:
+        items = argument_commands.catalog_with_mentions(*req.actor, kind)
+    except ResearchError as e:
+        return _refused(req, e)
+    return json_response(req, 200, items)
 
 
-def _item_id(path: str) -> Optional[str]:
-    """The Argument id of ``/api/arguments/:id`` (unquoted), else ``None``."""
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        return unquote(path.split("/")[-1])
-    return None
+def detail(req: Request) -> Response:
+    from backend.domain.research import argument_commands
 
-
-def _sub(path: str, leaf: str) -> Optional[str]:
-    """The Argument id of ``/api/arguments/:id/<leaf>`` (unquoted), else ``None``."""
-    parts = path.split("/")
-    if path.startswith(_PREFIX) and len(parts) == 5 and parts[4] == leaf:
-        return unquote(parts[3])
-    return None
-
-
-def _refused(handler: Any, error: ResearchError) -> None:
-    handler.send_json(error.http_status, {"error": str(error), "code": error.code})
-
-
-def handle_get(handler: Any, db: Any, path: str, query: dict) -> bool:
-    """The verdicts, the catalog and one Argument (the sync state is :func:`handle_sync_state`)."""
-    if path == VERDICTS:
-        handler.send_json(200, _commands().verdicts(*_actor(handler, db)))
-        return True
-    if path == COLLECTION:
-        kind = (query.get("kind") or [""])[0].strip() or None
-        try:
-            items = _commands().catalog_with_mentions(*_actor(handler, db), kind)
-        except ResearchError as e:
-            _refused(handler, e)
-            return True
-        handler.send_json(200, items)
-        return True
-    aid = _item_id(path)
-    if aid is None:
-        return False
-    item = _commands().detail_with_mentions(*_actor(handler, db), aid)
+    item = argument_commands.detail_with_mentions(*req.actor, _id(req))
     if not item:
-        handler.send_json(404, {"error": "Argument not found."})
-    else:
-        handler.send_json(200, item)
-    return True
+        return json_response(req, 404, {"error": "Argument not found."})
+    return json_response(req, 200, item)
 
 
-def handle_sync_state(handler: Any, db: Any, path: str) -> bool:
+def sync_state(req: Request) -> Response:
     """``GET /api/arguments/:id/sync-state``."""
-    aid = _sub(path, "sync-state")
-    if aid is None:
-        return False
+    from backend.domain.research import argument_commands
+
     # REVISIONS ONLY, aggregates included: the Argument detail already
     # carries its sources and its targets, and a second copy would be a
     # second thing to keep true.
-    data = _commands().sync_state(*_actor(handler, db), aid)
+    data = argument_commands.sync_state(*req.actor, _id(req))
     if data is None:
-        handler.send_json(404, {"error": "Argument not found"})
-        return True
-    etag = etag_for_representation("argument-state", data)
-    if handler._prks_if_none_match(etag):
-        handler._send_json_not_modified(etag)
-        return True
-    handler.send_json(200, data, etag=etag, precondition_checked=True)
-    return True
+        return json_response(req, 404, {"error": "Argument not found"})
+    return json_response(req, 200, data, etag=etag_for_representation("argument-state", data))
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path != COLLECTION:
-        return False
-    if not isinstance(data, dict):
-        handler.send_json(400, {"error": "JSON object body required"})
-        return True
+def create(req: Request) -> Response:
+    from backend.domain.research import argument_commands
+
+    data = req.data
     try:
-        item = _commands().create(
-            *_actor(handler, db),
+        item = argument_commands.create(
+            *req.actor,
             name=data.get("name"),
             kind=data.get("kind"),
             main_text=data.get("main_text", "") or "",
@@ -135,66 +90,65 @@ def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
             targets=data.get("targets"),
         )
     except ResearchError as e:
-        _refused(handler, e)
-        return True
-    handler.send_json(201, item)
-    return True
+        return _refused(req, e)
+    return json_response(req, 201, item)
 
 
-def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    aid = _item_id(path)
-    if aid is None:
-        return False
-    if not isinstance(data, dict):
-        handler.send_json(400, {"error": "JSON object body required"})
-        return True
+def update(req: Request) -> Response:
+    from backend.domain.research import argument_commands
+
+    data = req.data
     try:
-        item = _commands().update(
-            *_actor(handler, db),
-            aid,
+        item = argument_commands.update(
+            *req.actor,
+            _id(req),
             name=data.get("name") if "name" in data else None,
             kind=data.get("kind") if "kind" in data else None,
             main_text=data.get("main_text") if "main_text" in data else None,
         )
     except ResearchError as e:
-        _refused(handler, e)
-        return True
-    handler.send_json(200, item)
-    return True
+        return _refused(req, e)
+    return json_response(req, 200, item)
 
 
-def _list_body(data: Any, key: str) -> Any:
-    """``data[key]`` of an object body, else the bare array, else ``None`` (the domain refuses)."""
-    value = data.get(key) if isinstance(data, dict) else None
-    if value is None and isinstance(data, list):
-        value = data
-    return value
+def replace_sources(req: Request) -> Response:
+    from backend.domain.research import argument_commands
 
-
-def handle_put(handler: Any, db: Any, path: str, data: Any) -> bool:
-    for leaf in ("sources", "targets"):
-        aid = _sub(path, leaf)
-        if aid is None:
-            continue
-        replace = _commands().replace_sources if leaf == "sources" else _commands().replace_targets
-        try:
-            item = replace(*_actor(handler, db), aid, _list_body(data, leaf))
-        except ResearchError as e:
-            _refused(handler, e)
-            return True
-        handler.send_json(200, item)
-        return True
-    return False
-
-
-def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    aid = _item_id(path)
-    if aid is None:
-        return False
     try:
-        _commands().delete(*_actor(handler, db), aid)
+        item = argument_commands.replace_sources(*req.actor, _id(req), req.data.get("sources"))
     except ResearchError as e:
-        _refused(handler, e)
-        return True
-    handler.send_json(200, {"status": "deleted"})
-    return True
+        return _refused(req, e)
+    return json_response(req, 200, item)
+
+
+def replace_targets(req: Request) -> Response:
+    from backend.domain.research import argument_commands
+
+    try:
+        item = argument_commands.replace_targets(*req.actor, _id(req), req.data.get("targets"))
+    except ResearchError as e:
+        return _refused(req, e)
+    return json_response(req, 200, item)
+
+
+def delete(req: Request) -> Response:
+    from backend.domain.research import argument_commands
+
+    try:
+        argument_commands.delete(*req.actor, _id(req))
+    except ResearchError as e:
+        return _refused(req, e)
+    return json_response(req, 200, {"status": "deleted"})
+
+
+ROUTES = (
+    route("GET", "/api/argument-verdicts", verdicts),
+    route("GET", "/api/arguments", catalog),
+    route("POST", "/api/arguments", create),
+    route("GET", "/api/arguments/{argument_id}", detail),
+    route("PATCH", "/api/arguments/{argument_id}", update),
+    route("DELETE", "/api/arguments/{argument_id}", delete),
+    route("GET", "/api/arguments/{argument_id}/sync-state", sync_state),
+    route("PUT", "/api/arguments/{argument_id}/sources", replace_sources),
+    route("PUT", "/api/arguments/{argument_id}/targets", replace_targets),
+)

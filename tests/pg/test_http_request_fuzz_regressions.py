@@ -1,10 +1,10 @@
 """Requests the Schemathesis mutation scan found answered with a 500 or no answer.
 
 ``scripts/ci/schemathesis_mutations.py`` fuzzes the positions, saved views and
-publishers families. Before the fixes in ``backend/server.py`` it found:
+publishers families. Before the fixes in the HTTP adapter it found:
 
 * a body that is not UTF-8, or JSON nested past the decoder's recursion
-  limit, escaped ``_read_json_body`` and the connection closed with no answer;
+  limit, escaped the body reader and the connection closed with no answer;
 * a ``"\\ud800"`` escape decoded to a lone surrogate, and psycopg failed to
   encode it when the route stored the name (a 500);
 * ``%00`` in a query reached a PostgreSQL bind, which refuses NUL (a 500).
@@ -48,19 +48,19 @@ class RequestFuzzRegressionTests(ServerApiTestCase):
 
     def test_a_body_that_is_not_utf8_is_invalid_json(self) -> None:
         res = self.raw_post("/api/positions", b'{"name": "\xff\xfe"}')
-        self.assertEqual(self.refused(res, 400), {"error": "invalid_json"})
+        self.assertEqual(self.refused(res, 400), {"error": "invalid_json", "code": "invalid_request"})
         self.assertEqual(self.position_names(), [])
 
     def test_json_nested_past_the_recursion_limit_is_invalid_json(self) -> None:
         res = self.raw_post("/api/positions", b"[" * 200_000)
-        self.assertEqual(self.refused(res, 400), {"error": "invalid_json"})
+        self.assertEqual(self.refused(res, 400), {"error": "invalid_json", "code": "invalid_request"})
 
     def test_a_lone_surrogate_escape_is_invalid_json_and_nothing_is_stored(self) -> None:
         for payload in (b'{"name": "a\\ud800"}', b'{"name": "a", "\\udfff": 1}',
                         b'{"name": "a", "tags": [["\\udc00"]]}'):
             with self.subTest(payload=payload):
                 res = self.raw_post("/api/positions", payload)
-                self.assertEqual(self.refused(res, 400), {"error": "invalid_json"})
+                self.assertEqual(self.refused(res, 400), {"error": "invalid_json", "code": "invalid_request"})
         self.assertEqual(self.position_names(), [])
 
     def test_a_surrogate_pair_is_still_text(self) -> None:

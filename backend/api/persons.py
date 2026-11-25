@@ -15,131 +15,70 @@ request's context on the served Library's database. The commands open the
 transactions, so authorization stays in ``library_query`` and
 ``library_command``, and a write's maintenance and epoch fence in
 ``library_command``.
-
-``server.py`` calls these handlers after host/origin, JSON body size, and
-library-access checks. Each ``handle_*`` returns ``True`` when the path
-belongs to this family (including refusals already sent), else ``False`` so
-dispatch continues.
+The commands are imported when a route runs: the served app loads no
+PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import unquote
 
+from backend.api.common import objects, optional_pdfs_dir, revalidated
 from backend.media.derived_caches import prks_delete_person_image_cache
-from backend.web.etags import etag_for_representation
 from backend.runtime.log_safety import safe_error_type, safe_log_id
-from backend.media.person_image import PersonImageUrlError, fetch_and_prepare, normalize_person_image_url
+from backend.media.person_image import (
+    PersonImageUrlError,
+    fetch_and_prepare,
+    identify_cached_portrait_subtype,
+    normalize_person_image_url,
+)
+from backend.web.http import Request, Response, bytes_response, error_response, json_response
+from backend.web.routing import route
 
 LOGGER = logging.getLogger("prks.server")
 
-COLLECTION = "/api/persons"
-_PREFIX = COLLECTION + "/"
+
+def image_response(body: bytes, subtype: str, *, max_age: int = 86400,
+                   cache_control: Optional[str] = None, etag: Optional[str] = None) -> Response:
+    """A cached image (a portrait or a saved remote image), typed by its bytes."""
+    actual = identify_cached_portrait_subtype(body) or subtype
+    mime = "image/webp" if actual == "webp" else "image/jpeg"
+    headers = [("Cache-Control", cache_control or f"private, max-age={max_age}")]
+    if etag:
+        headers.append(("ETag", etag))
+    return bytes_response(200, body, mime, headers)
 
 
-def _commands() -> Any:
-    """``backend.domain.people.person_commands``, imported when a route runs.
-
-    The served app loads no PostgreSQL module at import time
-    (``tests/test_e2e_policy.py``).
-    """
+def catalog(req: Request) -> Response:
     from backend.domain.people import person_commands
 
-    return person_commands
+    return revalidated(req, "persons", person_commands.catalog(*req.actor))
 
 
-def _actor(handler: Any, db: Any) -> tuple[Any, Any]:
-    """The served Library's database and the admitted request's context."""
-    ctx = getattr(handler, "_prks_request_context", None)
-    if ctx is None:
-        raise RuntimeError("a Person route ran without an admitted request context")
-    return db.database, ctx
-
-
-def _pdfs_dir(db: Any) -> Optional[str]:
-    """The data root's PDF directory; ``None`` when the Library has none (the command decides)."""
-    return None if db.storage is None else db.storage.pdfs_dir
-
-
-def _objects(db: Any) -> Any:
-    """The served Library's managed objects (portraits live there)."""
-    from backend.storage.objects import LocalFilesystemStorage
-
-    if db.storage is None:
-        raise RuntimeError("this PostgreSQL library has no data root")
-    return LocalFilesystemStorage.for_config(db.storage)
-
-
-def _item_id(path: str) -> Optional[str]:
-    """The Person id of ``/api/persons/:id`` (still quoted), else ``None``."""
-    if path.startswith(_PREFIX) and len(path.split("/")) == 4:
-        return path.split("/")[-1]
-    return None
-
-
-def _sub(path: str, leaf: str) -> Optional[str]:
-    """The Person id of ``/api/persons/:id/<leaf>`` (unquoted), else ``None``."""
-    parts = path.split("/")
-    if path.startswith(_PREFIX) and len(parts) == 5 and parts[4] == leaf:
-        return unquote(parts[3])
-    return None
-
-
-def _send_revalidated(handler: Any, label: str, data: Any) -> None:
-    etag = etag_for_representation(label, data)
-    if handler._prks_if_none_match(etag):
-        handler._send_json_not_modified(etag)
-        return
-    handler.send_json(200, data, etag=etag, precondition_checked=True)
-
-
-def handle_get(handler: Any, db: Any, path: str) -> bool:
-    if path == COLLECTION:
-        _send_revalidated(handler, "persons", _commands().catalog(*_actor(handler, db)))
-        return True
-    return False
-
-
-def handle_metadata_state(handler: Any, db: Any, path: str) -> bool:
+def metadata_state(req: Request) -> Response:
     """``GET /api/persons/:id/metadata-state``."""
-    p_id = _sub(path, "metadata-state")
-    if p_id is None:
-        return False
+    from backend.domain.people import person_commands
+
     # REVISIONS ONLY. The Person detail already carries every profile value
     # and none of them has a length bound, so echoing them here would make a
     # second copy of the whole biography in what this sends and what
     # IndexedDB stores.
-    data = _commands().metadata_state(*_actor(handler, db), p_id)
-    if data is None:
-        handler.send_json(404, {"error": "Person not found"})
-    else:
-        _send_revalidated(handler, "person-metadata-state", data)
-    return True
+    data = person_commands.metadata_state(*req.actor, unquote(req.params["person_id"]))
+    return revalidated(req, "person-metadata-state", data, missing="Person not found")
 
 
-def handle_detail(handler: Any, db: Any, path: str) -> bool:
-    """``GET /api/persons/:id/profile-image`` and ``GET /api/persons/:id``."""
-    if path.startswith(_PREFIX) and path.endswith("/profile-image"):
-        parts = path.split("/")
-        if len(parts) != 5:
-            handler.send_error(404, "API endpoint not found")
-            return True
-        _send_portrait(handler, db, unquote(parts[3]))
-        return True
-    p_id = _item_id(path)
-    if p_id is None:
-        return False
-    data = _commands().detail(*_actor(handler, db), unquote(p_id), _pdfs_dir(db))
+def detail(req: Request) -> Response:
+    from backend.domain.people import person_commands
+
+    data = person_commands.detail(*req.actor, unquote(req.params["person_id"]), optional_pdfs_dir(req))
     if data:
-        handler.send_json(200, data)
-    else:
-        handler.send_error(404, "Person not found")
-    return True
+        return json_response(req, 200, data)
+    return error_response(404, "Person not found")
 
 
-def _send_portrait(handler: Any, db: Any, person_id: str) -> None:
+def profile_image(req: Request) -> Response:
     """Serve the Person's portrait from the Library's ``portraits`` objects.
 
     A cached portrait is the immutable object the Person row names
@@ -151,30 +90,27 @@ def _send_portrait(handler: Any, db: Any, person_id: str) -> None:
     a restore fenced. Nothing is read from or written to ``people_dir``.
     """
     from backend.domain.identity.authorization import AccessRefused, Refusal
+    from backend.domain.people import person_commands
 
-    commands = _commands()
-    database, ctx = _actor(handler, db)
-    row = commands.detail(database, ctx, person_id, _pdfs_dir(db))
+    person_id = unquote(req.params["person_id"])
+    database, ctx = req.actor
+    row = person_commands.detail(database, ctx, person_id, optional_pdfs_dir(req))
     if not row:
-        handler.send_error(404, "Person not found")
-        return
+        return error_response(404, "Person not found")
     url = (row.get("image_url") or "").strip()
     if not url:
-        handler.send_error(404, "Profile image not available")
-        return
-    objects = _objects(db)
+        return error_response(404, "Profile image not available")
+    store = objects(req)
     try:
-        cached = commands.portrait(database, ctx, objects, person_id)
+        cached = person_commands.portrait(database, ctx, store, person_id)
         if cached is not None:
-            handler._send_person_profile_image_bytes(cached["body"], cached["subtype"])
-            return
+            return image_response(cached["body"], cached["subtype"])
         # ``fetch_and_prepare`` is looked up when called, so the module's
         # binding is the one used.
-        fresh = commands.cache_portrait(database, ctx, objects, person_id,
-                                        lambda source: fetch_and_prepare(source))
+        fresh = person_commands.cache_portrait(database, ctx, store, person_id,
+                                               lambda source: fetch_and_prepare(source))
     except LookupError:
-        handler.send_error(404, "Person not found")
-        return
+        return error_response(404, "Person not found")
     except AccessRefused as exc:
         # A reader may not fill the cache, and a restore since admission
         # fences the fill: either way the image is served uncached.
@@ -183,60 +119,57 @@ def _send_portrait(handler: Any, db: Any, person_id: str) -> None:
         prepared = fetch_and_prepare(url)
         fresh = None if prepared is None else {"body": prepared.body, "subtype": prepared.subtype}
     if fresh is None:
-        LOGGER.info("portrait_fetch_failed request_id=%s", safe_log_id(handler._prks_request_id))
-        handler.send_error(404, "Profile image not available")
-        return
-    handler._send_person_profile_image_bytes(fresh["body"], fresh["subtype"], max_age=3600)
+        LOGGER.info("portrait_fetch_failed request_id=%s", safe_log_id(req.request_id))
+        return error_response(404, "Profile image not available")
+    return image_response(fresh["body"], fresh["subtype"], max_age=3600)
 
 
-def handle_patch(handler: Any, db: Any, path: str, data: Any) -> bool:
-    p_id = _item_id(path)
-    if p_id is None:
-        return False
+def update(req: Request) -> Response:
+    from backend.domain.people import person_commands
+
+    p_id = unquote(req.params["person_id"])
+    data = dict(req.data)
     group_ids = data.pop("group_ids", None)
     image_url_changed = "image_url" in data
     if image_url_changed:
         try:
             data["image_url"] = normalize_person_image_url(data.get("image_url"))
         except PersonImageUrlError:
-            handler.send_json(400, {"error": "Invalid image_url"})
-            return True
+            return json_response(req, 400, {"error": "Invalid image_url"})
     if group_ids is not None and not isinstance(group_ids, list):
-        handler.send_json(400, {"error": "group_ids must be a JSON array"})
-        return True
+        return json_response(req, 400, {"error": "group_ids must be a JSON array"})
     # Metadata and memberships commit or roll back together, so an unknown
     # group id cannot leave the profile half-updated. A failed request must
     # not have changed canonical state -- that is what makes "failed
     # mutation keeps its cache" sound.
     try:
-        _commands().update_profile(*_actor(handler, db), p_id, data, group_ids)
+        person_commands.update_profile(*req.actor, p_id, data, group_ids)
     except ValueError as e:
-        handler.send_json(400, {"error": str(e)})
-        return True
-    if image_url_changed and db.storage is not None:
+        return json_response(req, 400, {"error": str(e)})
+    storage = req.library.storage
+    if image_url_changed and storage is not None:
         # Disposable per-Person cache of the retired layout, cleared only after
         # the canonical profile change committed; a failure here never fails
         # the PATCH.
         try:
-            prks_delete_person_image_cache(p_id, db.storage.people_dir)
+            prks_delete_person_image_cache(p_id, storage.people_dir)
         except Exception as e:
             LOGGER.warning(
                 "person_image_cache_cleanup_failed person_id=%s error_type=%s",
                 safe_log_id(p_id),
                 safe_error_type(e),
             )
-    handler.send_json(200, {"status": "updated"})
-    return True
+    return json_response(req, 200, {"status": "updated"})
 
 
-def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
-    if path != COLLECTION:
-        return False
+def create(req: Request) -> Response:
+    from backend.domain.people import person_commands
+
+    data = req.data
     try:
         image_url = normalize_person_image_url(data.get("image_url", "") or "")
     except PersonImageUrlError:
-        handler.send_json(400, {"error": "Invalid image_url"})
-        return True
+        return json_response(req, 400, {"error": "Invalid image_url"})
     fields = {
         "first_name": data.get("first_name", ""),
         "last_name": data.get("last_name", ""),
@@ -247,25 +180,31 @@ def handle_post(handler: Any, db: Any, path: str, data: Any) -> bool:
     for name in ("link_wikipedia", "link_stanford_encyclopedia", "link_iep", "links_other",
                  "birth_date", "death_date"):
         fields[name] = data.get(name, "") or ""
-    p_id = _commands().create(*_actor(handler, db), fields)
-    handler.send_json(200, {"id": p_id})
-    return True
+    p_id = person_commands.create(*req.actor, fields)
+    return json_response(req, 200, {"id": p_id})
 
 
-def handle_delete(handler: Any, db: Any, path: str) -> bool:
-    p_id = _item_id(path)
-    if p_id is None:
-        return False
+def delete(req: Request) -> Response:
+    from backend.domain.people import person_commands
+
     try:
-        _commands().delete_if_unlinked(*_actor(handler, db), p_id)
+        person_commands.delete_if_unlinked(*req.actor, unquote(req.params["person_id"]))
     except ValueError as e:
         msg = str(e)
         if "not found" in msg.lower():
-            handler.send_json(404, {"error": msg})
-        elif "linked works" in msg.lower():
-            handler.send_json(409, {"error": msg})
-        else:
-            handler.send_json(400, {"error": msg})
-        return True
-    handler.send_json(200, {"status": "deleted"})
-    return True
+            return json_response(req, 404, {"error": msg})
+        if "linked works" in msg.lower():
+            return json_response(req, 409, {"error": msg})
+        return json_response(req, 400, {"error": msg})
+    return json_response(req, 200, {"status": "deleted"})
+
+
+ROUTES = (
+    route("GET", "/api/persons", catalog),
+    route("POST", "/api/persons", create),
+    route("GET", "/api/persons/{person_id}", detail),
+    route("PATCH", "/api/persons/{person_id}", update),
+    route("DELETE", "/api/persons/{person_id}", delete),
+    route("GET", "/api/persons/{person_id}/metadata-state", metadata_state),
+    route("GET", "/api/persons/{person_id}/profile-image", profile_image),
+)

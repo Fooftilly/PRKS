@@ -17,7 +17,7 @@ import base64
 from collections.abc import Callable
 from typing import Any, Optional
 
-from backend import server as server_module
+from backend.web import dispatch
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -347,9 +347,9 @@ class ShellTests(FreshnessTestCase):
             with self.subTest(label):
                 res = self.get(path, headers)
                 self.assertEqual(res.status, status, label)
-                for name, value in server_module.SECURITY_HEADERS:
+                for name, value in dispatch.SECURITY_HEADERS:
                     self.assertEqual(res.header(name), [value], f"{label}: {name}")
-        policy = server_module.CONTENT_SECURITY_POLICY
+        policy = dispatch.CONTENT_SECURITY_POLICY
         script_src = next(part for part in policy.split("; ") if part.startswith("script-src "))
         self.assertNotIn("'unsafe-inline'", script_src)
         self.assertNotIn("'unsafe-eval'", script_src)

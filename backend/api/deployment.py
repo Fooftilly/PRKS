@@ -14,6 +14,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from backend.web.http import Request, Response, json_response
+from backend.web.routing import route
+
 PATH = "/api/deployment-settings"
 
 
@@ -63,8 +66,11 @@ def body(environ: Any = None, root_source: Any = None) -> dict[str, Any]:
     return result
 
 
-def handle_get(handler: Any, path: str, root_source: Any = None) -> bool:
-    if path != PATH:
-        return False
-    handler.send_json(200, body(root_source=root_source))
-    return True
+def deployment_settings(req: Request) -> Response:
+    storage = req.app.storage
+    return json_response(req, 200, body(root_source=storage.root_source if storage is not None else None))
+
+
+ROUTES = (
+    route("GET", PATH, deployment_settings),
+)

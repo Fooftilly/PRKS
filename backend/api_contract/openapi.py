@@ -126,7 +126,7 @@ def positions_openapi_document() -> dict[str, Any]:
             "content": _json_content(error_ref),
         }
 
-    # Shared body-read refusals from PRKSHandler._read_json_body (POST/PATCH).
+    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST/PATCH).
     mutation_body_read_errors = {
         "413": _json_error(
             "Request body larger than the JSON body limit (request_too_large)."
@@ -345,7 +345,7 @@ def performance_diagnostics_openapi_document() -> dict[str, Any]:
             "content": _json_content(error_ref),
         }
 
-    # Same body-read refusals as Positions POST/PATCH: PRKSHandler._read_json_body.
+    # Same body-read refusals as Positions POST/PATCH: backend.web.dispatch.read_json_body.
     mutation_body_read_errors = {
         "400": _json_error(
             "JSON body gate refusal, or a body that is not an empty object."
@@ -628,7 +628,7 @@ def publishers_openapi_document() -> dict[str, Any]:
             "content": _json_content(error_ref),
         }
 
-    # Shared body-read refusals from PRKSHandler._read_json_body (POST).
+    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST).
     mutation_body_read_errors = {
         "413": _json_error(
             "Request body larger than the JSON body limit (request_too_large)."
@@ -903,7 +903,7 @@ def saved_views_openapi_document() -> dict[str, Any]:
             "content": _json_content(error_ref),
         }
 
-    # Shared body-read refusals from PRKSHandler._read_json_body (POST/PATCH).
+    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST/PATCH).
     mutation_body_read_errors = {
         "413": _json_error(
             "Request body larger than the JSON body limit (request_too_large)."
@@ -1193,13 +1193,16 @@ def processing_items_openapi_document() -> dict[str, Any]:
                 "tags": ["processing-items"],
                 "requestBody": {
                     "required": True,
-                    "description": "Any JSON value, ignored. Send `{}`.",
-                    "content": {"application/json": {"schema": {}}},
+                    "description": "A JSON object, ignored. Send `{}`.",
+                    "content": {"application/json": {"schema": {"type": "object"}}},
                 },
                 "responses": {
                     "200": {"description": "Imported before: its Work.", "content": _json("ProcessingItemImported")},
                     "201": {"description": "Imported.", "content": _json("ProcessingItemImported")},
-                    "400": _error("A refused draft value (VALIDATION_ERROR)."),
+                    "400": _error(
+                        "A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object "
+                        "(invalid_request)."
+                    ),
                     "404": not_found,
                     "409": _refusal(
                         "A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was "

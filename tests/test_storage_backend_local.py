@@ -415,9 +415,9 @@ class TestLocalSpecifics(LocalStorageTestCase):
         # it. Phase B starts on PostgreSQL (L-A-1 #635): the PostgreSQL
         # workers' object maintenance, which a SQLite root never gets, the
         # Processing queue's routes, which answer only with a PostgreSQL
-        # library bound (L-PR-1 #636), the Person, annotation and Work
-        # routes' objects (PG-C3 #642) and saved remote images (#1351) are
-        # the only other users.
+        # library bound (L-PR-1 #636), and the routes' shared objects helper
+        # (backend/api/common.py: Person, annotation and Work routes, PG-C3
+        # #642, and saved remote images, #1351) are the only other users.
         import subprocess
 
         out = subprocess.run(
@@ -426,9 +426,7 @@ class TestLocalSpecifics(LocalStorageTestCase):
         )
         if out.returncode not in (0, 1):  # pragma: no cover - no git
             self.skipTest("git unavailable")
-        self.assertEqual(out.stdout.split(), ["backend/api/annotations.py", "backend/api/persons.py",
-                                              "backend/api/processing.py", "backend/api/remote_images.py",
-                                              "backend/api/works.py",
+        self.assertEqual(out.stdout.split(), ["backend/api/common.py", "backend/api/processing.py",
                                               "backend/domain/objects/jobs.py", "backend/storage/objects.py"])
 
 

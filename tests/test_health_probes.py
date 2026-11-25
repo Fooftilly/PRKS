@@ -15,17 +15,15 @@ from run_tests import apply_isolated_test_env  # noqa: E402
 apply_isolated_test_env(_PROJECT)
 
 from backend import server as server_module  # noqa: E402
-from backend.server import PRKSHandler  # noqa: E402
+from backend.web import dispatch  # noqa: E402
+from backend.web.app import App  # noqa: E402
 
 
 class HealthProbeTests(unittest.TestCase):
     def setUp(self):
-        self.httpd = server_module.make_server(("127.0.0.1", 0))  # the default transport
-        self.httpd.prks_bind_host = "127.0.0.1"
-        self.httpd.prks_trusted_hosts = frozenset()
-        self.httpd.prks_auth = object()  # no session; probe cannot depend on it
-        self.httpd.prks_jobs = None
-        self.httpd.prks_readiness = None
+        # No session: a probe cannot depend on it.
+        self.app = App(bind_host="127.0.0.1", trusted_hosts=frozenset(), auth=object())  # type: ignore[arg-type]
+        self.httpd = server_module.make_server(("127.0.0.1", 0), self.app)  # the default transport
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.thread.join, 5)
@@ -47,7 +45,7 @@ class HealthProbeTests(unittest.TestCase):
     def test_liveness_is_unauthenticated_constant_time_no_io(self):
         # No database or storage is configured on this temporary HTTP server.
         # If either probe enters the API authentication gate the test fails.
-        with patch.object(PRKSHandler, "_prks_admit", side_effect=AssertionError("API auth invoked")):
+        with patch.object(dispatch, "_admit", side_effect=AssertionError("API auth invoked")):
             for method, expected_body in (("GET", b"ok"), ("HEAD", b"")):
                 with self.subTest(method=method):
                     status, body, headers = self.request(method, "/healthz?probe=1")
@@ -81,11 +79,11 @@ class HealthProbeTests(unittest.TestCase):
                 return self.answer
 
         cases = ((True, 200, b"ok"), (False, 503, b"not ready"), (RuntimeError("db at 10.0.0.5"), 503, b"not ready"))
-        with patch.object(PRKSHandler, "_prks_admit", side_effect=AssertionError("API auth invoked")):
+        with patch.object(dispatch, "_admit", side_effect=AssertionError("API auth invoked")):
             for answer, expected_status, expected_body in cases:
                 with self.subTest(answer=repr(answer)):
                     readiness = Readiness(answer)
-                    self.httpd.prks_readiness = readiness
+                    self.app.readiness = readiness  # type: ignore[assignment]
                     status, body, headers = self.request("GET", "/readyz")
                     self.assertEqual((status, body), (expected_status, expected_body))
                     self.assertEqual(headers.get("Cache-Control"), "no-store")
@@ -108,7 +106,7 @@ class HealthProbeTests(unittest.TestCase):
             ("/%68ealthz?check=1", 200, b"ok"),
             ("/healthz///", 200, b"ok"),
         )
-        with patch.object(PRKSHandler, "_prks_admit", side_effect=AssertionError("API auth invoked")):
+        with patch.object(dispatch, "_admit", side_effect=AssertionError("API auth invoked")):
             for method in ("GET", "HEAD"):
                 for path, expected_status, expected_body in cases:
                     with self.subTest(method=method, path=path):
