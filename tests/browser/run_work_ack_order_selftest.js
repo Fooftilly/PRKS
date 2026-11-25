@@ -376,7 +376,14 @@ async function cacheEdges() {
         assert(await offline.reconcileRecentOpen({ work_id: 'W' }));
         const after = await cache.getList('recent:index');
         assert.deepEqual(after.value.map(row => row.id), ['W', 'OLD'], 'Recent is patched');
-        assert.equal(after.observedAt, readAt, 'Recent keeps the time of its read');
+        assert(after.observedAt > readAt, 'Recent takes the time of the row the open upserted');
+        /* A delayed source ACK for that fresh row cannot prove itself. */
+        globalThis.prksMergeRecentOpen = (rows, result) => [{ id: result.work_id, ...video('BBB') }, ...rows];
+        const op = createdNow();
+        await later();
+        assert(await offline.reconcileRecentOpen({ work_id: 'W' }));
+        assert(await offline.reconcileWorkSource(sourceAck(1, 'AAA'), op));
+        assert.equal(await cache.getList('recent:index'), null, 'the fresh row is dropped, not rewritten');
     }
     {
         const { cache, offline } = setup();
@@ -401,6 +408,247 @@ async function cacheEdges() {
     }
 }
 
+/* The mounted source editor's corrective read (#1450 review): the revision is
+ * read before the Work, both fresh from the server, so a remote edit between
+ * the two reads can only pair a newer identity with an older revision. */
+async function mountedSourceCorrectiveRead() {
+    globalThis.prksRightPanelOwnedBy = () => false;
+    globalThis.prksOwnerTabIsFocused = () => false;
+    globalThis.prksRefreshPendingWorkSources = async () => [];
+    globalThis.prksOfflineRuntimeState = () => 'online';
+    globalThis.prksOfflineRuntimeSubscribe = () => () => {};
+    const listeners = [];
+    globalThis.prksSync = { subscribe: fn => { listeners.push(fn); return () => {}; } };
+    const mountedOwner = work => {
+        const ctx = ownerCtx(work);
+        ctx.generation = 1;
+        ctx.resourceTicket = () => ({});
+        ctx.registerResource = (_ticket, entry) => { ctx.resources[entry.kind] = entry.value; return 'attached'; };
+        return ctx;
+    };
+    const serverState = revision => ({ value: { work_id: 'W', revision }, source: 'server' });
+    const serverWork = id => ({ value: core.observe({ id: 'W', title: 'Clip', text_content: 'note', ...video(id) },
+        Date.now()), source: 'server' });
+    /* Mounted on video ZZZ at revision 0. */
+    globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
+    {
+        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', text_content: 'note', ...video('ZZZ') },
+            Date.now()));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        const state = ctx.resources.workSourceEditor;
+        await state.preparing;
+        assert.equal(state.observed.revision, 0);
+        /* The ACK for video AAA (revision 1) arrives after this browser read
+         * the Work; the revision read answers 2 (video BBB), then another
+         * device saves CCC before the Work read. */
+        const requests = [];
+        let releaseState;
+        const stateGate = new Promise(resolve => { releaseState = resolve; });
+        globalThis.prksOfflineReadEntity = async (kind, _id, _path, options) => {
+            requests.push([kind, options && options.requestPolicy && options.requestPolicy.dedupe]);
+            if (kind === 'work-source-state') { await stateGate; return serverState(2); }
+            return serverWork('CCC');
+        };
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
+            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        await flush();
+        assert.deepEqual(requests.map(r => r[0]), ['work-source-state'],
+            'the Work is not read before its revision answers');
+        releaseState();
+        await flush(); await flush(); await flush();
+        assert.deepEqual(requests.map(r => r[0]), ['work-source-state', 'work'], 'revision first, then the Work');
+        assert.deepEqual(requests.map(r => r[1]), [false, false], 'neither read joins an older GET');
+        assert.equal(state.observed.revision, 2, 'the base takes the revision read first');
+        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(globalThis.prksWorkSourceOf(
+            serverWork('CCC').value)), 'with the newer identity, so a save conflicts rather than cancels');
+        assert.equal(ctx.entity.provider_id, 'CCC', 'the mounted owner shows the server video');
+        assert.equal(ctx.entity.text_content, 'note');
+    }
+    /* A revision answered from the cache adopts nothing and keeps the ACK's base. */
+    {
+        globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
+        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        const state = ctx.resources.workSourceEditor;
+        await state.preparing;
+        let workReads = 0;
+        globalThis.prksOfflineReadEntity = async kind => {
+            if (kind === 'work-source-state') return { value: { work_id: 'W', revision: 2 }, source: 'cache' };
+            workReads += 1;
+            return serverWork('CCC');
+        };
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE',
+            acknowledged: { work_id: 'W', server_revision: 1, ...video('AAA') }, op }));
+        await flush(); await flush(); await flush();
+        assert.equal(workReads, 0, 'no Work is read without a server revision');
+        assert.equal(state.observed.revision, 1, 'the ACK base stays');
+        assert.equal(state.observed.identity, globalThis.prksWorkSourceIdentity(
+            globalThis.prksAcknowledgedWorkSource({ work_id: 'W', server_revision: 1, ...video('AAA') })));
+    }
+    listeners.length = 0;
+}
+
+/* A note re-read survives a source re-read replacing the Work object, and an
+ * open Research Notes editor decides whether the body may become its base. */
+async function notesEditorAndSourceReplacement() {
+    const listeners = [];
+    globalThis.prksSync = { subscribe: fn => { listeners.push(fn); return () => {}; } };
+    const emit = event => listeners.forEach(fn => fn(event));
+    const opFor = text => ({ op_id: 'n-' + text, operation: 'SET_WORK_RESEARCH_NOTE', entity_id: 'W',
+        payload: { text }, ...createdNow() });
+    const ackOf = revision => ({ code: 'ACKNOWLEDGED', work_id: 'W', server_revision: revision });
+    const ownerWith = (body, extra) => {
+        const observed = { research: { value: body, revision: 0, source: 'server' },
+            private: { value: '', revision: 0, source: 'server' } };
+        const canonical = { id: 'W', text_content: body, private_notes: '', sources: { research: 'server' } };
+        return ownerCtx(core.observe({ id: 'W', text_content: body, private_notes: null }, Date.now()),
+            Object.assign({ workNotesObserved: observed, workNotesCanonical: canonical }, extra || {}));
+    };
+    const gated = () => {
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        globalThis.prksOfflineReadEntity = async kind => {
+            await gate;
+            return kind === 'work-notes-state'
+                ? { value: { work_id: 'W', research_note_revision: 2, private_note_revision: 0 }, source: 'server' }
+                : { value: { id: 'W', text_content: 'B', private_notes: null }, source: 'server' };
+        };
+        return release;
+    };
+    {
+        listeners.length = 0;
+        const release = gated();
+        const op = opFor('A');
+        await later();
+        const ctx = ownerWith('older');
+        globalThis.prksBindWorkNotesSync(ctx);
+        emit({ acknowledged: ackOf(1), op });
+        await flush();
+        /* A source re-read replaces the Work object, notes untouched. */
+        ctx.entity = Object.assign({}, ctx.entity, video('CCC'));
+        release();
+        await flush(); await flush(); await flush();
+        assert.equal(ctx.entity.text_content, 'B', 'the note re-read still lands on the replacement Work');
+        assert.equal(ctx.entity.provider_id, 'CCC', 'which keeps its source');
+        assert.equal(ctx.resources.workNotesObserved.research.revision, 2);
+    }
+    const appliedTexts = [];
+    globalThis.prksResearchNotesApplyText = (notes, text) => { appliedTexts.push(text); notes.text = text; };
+    const editorWith = text => ({ workId: 'W', drafting: false, pendingSave: false, text,
+        editor: null });
+    const withEditor = notes => { notes.editor = { value: () => notes.text }; return notes; };
+    /* A clean editor showing the ACK's text takes the server body and its revision. */
+    {
+        listeners.length = 0;
+        const release = gated();
+        const op = opFor('A');
+        await later();
+        const notes = withEditor(editorWith('A'));
+        const ctx = ownerWith('older', { workNotes: notes });
+        globalThis.prksBindWorkNotesSync(ctx);
+        emit({ acknowledged: ackOf(1), op });
+        release();
+        await flush(); await flush(); await flush();
+        assert.deepEqual(appliedTexts, ['B'], 'the clean editor shows the server body');
+        assert.equal(ctx.resources.workNotesObserved.research.value, 'B');
+        assert.equal(ctx.resources.workNotesObserved.research.revision, 2, 'at the revision read with it');
+    }
+    /* An editor with typing keeps its base, so its next save conflicts. */
+    {
+        listeners.length = 0;
+        appliedTexts.length = 0;
+        const release = gated();
+        const op = opFor('A');
+        await later();
+        const notes = withEditor(editorWith('A'));
+        const ctx = ownerWith('older', { workNotes: notes });
+        globalThis.prksBindWorkNotesSync(ctx);
+        emit({ acknowledged: ackOf(1), op });
+        notes.text = 'A plus a sentence';
+        notes.drafting = true;
+        release();
+        await flush(); await flush(); await flush();
+        assert.deepEqual(appliedTexts, [], 'typing is never replaced');
+        assert.equal(ctx.resources.workNotesObserved.research.value, 'A');
+        assert.equal(ctx.resources.workNotesObserved.research.revision, 1,
+            'the base stays on the ACK, so a save cannot overwrite revision 2 unseen');
+        assert.equal(ctx.entity.text_content, 'A');
+    }
+    /* An open Reminders session keeps the private note base the same way. */
+    {
+        listeners.length = 0;
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        globalThis.prksOfflineReadEntity = async kind => {
+            await gate;
+            return kind === 'work-notes-state'
+                ? { value: { work_id: 'W', research_note_revision: 0, private_note_revision: 2 }, source: 'server' }
+                : { value: { id: 'W', text_content: '', private_notes: 'B' }, source: 'server' };
+        };
+        const op = { op_id: 'p1', operation: 'SET_WORK_PRIVATE_NOTE', entity_id: 'W', payload: { text: 'A' },
+            ...createdNow() };
+        await later();
+        const ctx = ownerWith('');
+        ctx.ui = { workPrivateNoteSession: { entityId: 'W', retired: false, draftText: 'A' } };
+        globalThis.prksBindWorkNotesSync(ctx);
+        emit({ acknowledged: ackOf(1), op });
+        release();
+        await flush(); await flush(); await flush();
+        assert.equal(ctx.resources.workNotesObserved.private.revision, 1, 'the open session keeps the ACK base');
+        assert.equal(ctx.entity.private_notes, 'A');
+    }
+    delete globalThis.prksResearchNotesApplyText;
+    listeners.length = 0;
+}
+
+/* An unproven entity that could not be dropped keeps the operation queued,
+ * and its replay drops it; a list being dropped is never served offline. */
+async function failedDeletions() {
+    const noteAck = revision => ({ code: 'ACKNOWLEDGED', work_id: 'W', note_kind: 'work-research-note',
+        changed: true, server_revision: revision, value_omitted: true });
+    for (const [label, seed, run] of [
+        ['source Work', async cache => cache.putEntity('work', 'W', { id: 'W', title: 'Clip', ...video('BBB') }),
+            (offline, op) => offline.reconcileWorkSource(sourceAck(1, 'AAA'), op)],
+        ['source summary', async cache => cache.putEntity('folder', 'F', { id: 'F', works: [{ id: 'W', ...video('BBB') }] }),
+            (offline, op) => offline.reconcileWorkSource(sourceAck(1, 'AAA'), op)],
+        ['note Work', async cache => cache.putEntity('work', 'W', { id: 'W', text_content: 'B', private_notes: 'P' }),
+            (offline, op) => offline.reconcileWorkNote(noteAck(1),
+                { operation: 'SET_WORK_RESEARCH_NOTE', entity_id: 'W', payload: { text: 'A' }, ...op })],
+    ]) {
+        const { cache, offline } = setup();
+        const op = createdNow();
+        await later();
+        await seed(cache);
+        const deleteEntity = cache.deleteEntity;
+        cache.deleteEntity = async () => { throw new Error('quota'); };
+        assert.equal(await run(offline, op), false, label + ': a failed deletion keeps the operation queued');
+        cache.deleteEntity = deleteEntity;
+        assert.equal(await run(offline, op), true, label + ': the replay drops it and retires');
+        const kind = label === 'source summary' ? 'folder' : 'work';
+        assert.equal(await cache.getEntity(kind, kind === 'folder' ? 'F' : 'W'), null, label + ': gone');
+    }
+    {
+        const { cache, offline } = setup();
+        const op = createdNow();
+        await later();
+        await cache.putList('works-browse:index', [browseRow('BBB')], '');
+        const deleteList = cache.deleteList;
+        cache.deleteList = async () => false;
+        assert.equal(await offline.reconcileWorkSource(sourceAck(1, 'AAA'), op), false);
+        const read = await offline.readThroughList('works-browse:index', '/api/works?projection=browse',
+            { domain: 'works-browse', validate: Array.isArray });
+        assert.equal(read.source, 'unavailable', 'a list whose deletion failed is not served as a fallback');
+        cache.deleteList = deleteList;
+        assert.equal(await offline.reconcileWorkSource(sourceAck(1, 'AAA'), op), true, 'the replay drops it');
+    }
+}
+
 async function main() {
     await sourceCache();
     await notesCache();
@@ -409,6 +657,9 @@ async function main() {
     await notesOwnerCorrectiveRead();
     await sourceRereadKeepsOtherFamilies();
     await cacheEdges();
+    await mountedSourceCorrectiveRead();
+    await notesEditorAndSourceReplacement();
+    await failedDeletions();
     console.log('All ' + checks + ' Work source and note ACK ordering checks passed');
 }
 

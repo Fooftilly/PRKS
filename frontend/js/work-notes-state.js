@@ -258,8 +258,8 @@
             operationCreatedAt: op.created_at,
         });
         if (plan === 'superseded') return;
-        const fence = advanceNoteFence(work, field);
-        if (plan === 'unproven') rereadNoteBody(ctx, work, field, fence);
+        const fence = advanceNoteFence(ctx, work.id, field);
+        if (plan === 'unproven') rereadNoteBody(ctx, work.id, field, fence);
         if (op.operation === RESEARCH_OP) {
             work.text_content = text;
             const refs = event.acknowledged.research_refs;
@@ -288,53 +288,81 @@
         }
     }
 
-    /* Each accepted note ACK advances its field's fence on the Work it was
-     * written into. ACKs patch that Work in place, so the object alone cannot
-     * tell a re-read started before a later ACK from one started after it. */
+    /* Each accepted note ACK advances its field's fence for this owner and
+     * Work. The fence is keyed by the owner, not by the Work object: a source
+     * re-read replaces the Work object without touching its notes, and must
+     * not cancel a note re-read, while a later note ACK must. */
     const noteFences = new WeakMap();
 
-    function noteFence(work, field) {
-        const fences = noteFences.get(work);
-        return fences ? fences[field] || 0 : 0;
+    function noteFence(ctx, workId, field) {
+        const fences = noteFences.get(ctx);
+        return fences ? fences.get(String(workId) + '\u0000' + field) || null : null;
     }
 
-    function advanceNoteFence(work, field) {
-        const fences = noteFences.get(work) || {};
-        fences[field] = (fences[field] || 0) + 1;
-        noteFences.set(work, fences);
-        return fences[field];
+    function advanceNoteFence(ctx, workId, field) {
+        let fences = noteFences.get(ctx);
+        if (!fences) {
+            fences = new Map();
+            noteFences.set(ctx, fences);
+        }
+        const fence = {};
+        fences.set(String(workId) + '\u0000' + field, fence);
+        return fence;
+    }
+
+    /* The open editor for this note decides whether a corrective body may
+     * become its save base. A clean editor takes the body and its revision
+     * together; an editor with typing, a save in flight, or text other than
+     * what the ACK left keeps its old base, so its next save conflicts with
+     * the newer note instead of overwriting it unseen. */
+    function editorTakes(ctx, workId, field, shown, body) {
+        if (field === 'text_content') {
+            const notes = ctx.getResource && ctx.getResource('workNotes');
+            if (!notes || !notes.editor || String(notes.workId) !== String(workId)) return true;
+            if (notes.drafting || notes.pendingSave ||
+                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown) return false;
+            if (typeof root.prksResearchNotesApplyText !== 'function') return false;
+            root.prksResearchNotesApplyText(notes, body);
+            return true;
+        }
+        /* Reminders keep a live session while their editor is open. */
+        const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+        return !(session && String(session.entityId) === String(workId) && !session.retired);
     }
 
     /* An unproven ACK was written into this owner's Work: take the body the
-     * server holds now, with the revision it belongs to, unless the Work was
-     * replaced or a later ACK for this note landed meanwhile.
+     * server holds now, with the revision it belongs to, unless the owner
+     * moved to another Work or a later ACK for this note landed meanwhile.
      *
      * notes-state is read before the Work, so the body is never older than the
      * revision paired with it. A save in between can only pair a newer body
      * with an older revision, which conflicts; the reverse order could pair an
      * older body with a newer revision and overwrite a save never shown. */
-    function rereadNoteBody(ctx, work, field, fence) {
+    function rereadNoteBody(ctx, workId, field, fence) {
         if (typeof root.prksOfflineReadEntity !== 'function') return;
         const revisionKey = field === 'private_notes' ? 'private_note_revision' : 'research_note_revision';
         const fresh = { dedupe: false };
         void reconcileCore.adoptFresh(
             async () => {
-                const state = await readState(work.id, { requestPolicy: fresh });
+                const state = await readState(workId, { requestPolicy: fresh });
                 if (!state || state.source !== 'server' || !state.value) return null;
-                const read = await root.prksOfflineReadEntity('work', work.id,
-                    '/api/works/' + encodeURIComponent(work.id),
-                    { validate: value => !!value && value.id === work.id, requestPolicy: fresh });
+                const read = await root.prksOfflineReadEntity('work', workId,
+                    '/api/works/' + encodeURIComponent(workId),
+                    { validate: value => !!value && value.id === workId, requestPolicy: fresh });
                 if (!read || read.source !== 'server' || !read.value) return null;
                 return { source: 'server', value: { work: read.value, revision: state.value[revisionKey] } };
             },
             () => {
                 if (ctx.destroyed) return null;
                 const current = ctx.getEntity && ctx.getEntity('work');
-                return current === work && noteFence(work, field) === fence ? current : null;
+                return current && current.id === workId ? noteFence(ctx, workId, field) : null;
             },
-            work,
+            fence,
             ({ work: read, revision }) => {
+                const work = ctx.getEntity('work');
                 const body = read[field] == null ? '' : String(read[field]);
+                const shown = work[field] == null ? '' : String(work[field]);
+                if (!editorTakes(ctx, workId, field, shown, body)) return;
                 work[field] = field === 'private_notes' ? (read[field] == null ? null : body) : body;
                 /* The references are resolved against the body: B's text
                  * never renders with the links resolved for A. */
@@ -344,7 +372,7 @@
                     else delete work.research_refs;
                 }
                 const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
-                if (canonical && canonical.id === work.id) canonical[field] = body;
+                if (canonical && canonical.id === workId) canonical[field] = body;
                 /* The next save is measured against the body now shown. */
                 const base = ctx.getResource && ctx.getResource('workNotesObserved');
                 const slot = base ? (field === 'private_notes' ? base.private : base.research) : null;
