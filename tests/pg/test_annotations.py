@@ -1,8 +1,7 @@
-"""PDF annotations on PostgreSQL: what parity cannot show (L-A-1 #635).
+"""PDF annotations on PostgreSQL (L-A-1 #635).
 
-``tests/test_annotations_parity.py`` proves the families, the replace, the
-adoption and the reads answer as on SQLite. These tests cover what only
-PostgreSQL has: annotation identity per Asset, the schema's keys, the Asset
+:class:`AnswerTests` spells out what the families, the replace, the adoption
+and the reads answer. The other tests cover annotation identity per Asset, the schema's keys, the Asset
 row lock under concurrent and interleaved writers, replayed operations,
 Library isolation, reader and writer permissions, a Work delete with
 annotations present, rollback, and what PostgreSQL cannot store.
@@ -22,6 +21,7 @@ from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.works import commands
 from backend.pdf.pdf_annotations import WorkAnnotationError
 from tests import acting_context as facade_context
+from tests.pg.test_works_facade import WorksAnswerTestCase
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
 
@@ -597,3 +597,265 @@ class ReplaceTests(AnnotationTestCase):
                          ("old-1", "highlight", "note", 0, "#fff"))
         self.assertEqual((got["rect"], got["rects"], got["quadPoints"], got["position"]),
                          (legacy["rect"], [{"x": 1}], None, None))
+
+
+_HI: dict[str, Any] = {
+    "id": "ann-hi-1", "type": 9, "pageIndex": 0, "contents": "Highlight comment", "color": "#FFCD45",
+    "strokeColor": "#FFCD45", "opacity": 0.5, "blendMode": "Multiply",
+    "segmentRects": [{"origin": {"x": 72, "y": 700.25}, "size": {"width": 160, "height": 14}}],
+    "rect": {"origin": {"x": 72, "y": 700.25}, "size": {"width": 160, "height": 14}},
+    "custom": {"prksComment": "Highlight comment", "tags": ["a", "b"]}, "author": "Reader",
+}
+_INK: dict[str, Any] = {
+    "id": "ann-ink-1", "type": 15, "pageIndex": 2, "contents": "", "color": "#0000FF",
+    "inkList": [{"points": [{"x": 1, "y": 2}, {"x": 3.5, "y": 4}]}],
+    "rect": {"origin": {"x": 1, "y": 2}, "size": {"width": 2.5, "height": 2}},
+}
+_NOTE: dict[str, Any] = {"id": "ann-note-1", "type": "note", "page": "1", "comment": "A margin note"}
+_NOTE_STORED = {"color": "", "contents": "A margin note", "id": "ann-note-1", "pageIndex": 1, "type": "note",
+                "updated_at": "<s>"}
+_MISSING_WORK = "W-" + "E" * 32
+
+
+def _with(base: dict[str, Any], **changes: Any) -> dict[str, Any]:
+    item = copy.deepcopy(base)
+    item.update(changes)
+    return item
+
+
+class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
+    """What the annotation families, the replace, the adoption and the reads answer, spelled out."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.work = self.add_pdf("pdf", "a.pdf", title="Annotated")
+
+    def put(self, operation: str, item: dict[str, Any], base: Optional[int] = None,
+            work_id: Optional[str] = None) -> Any:
+        status, result = self.send(self.op(operation, work_id or self.work, item, base))
+        result = dict(result)
+        for key in ("current_value", "requested_value"):
+            if key in result:
+                result[key] = json.loads(result[key])
+        return self.labels.show((status, result))
+
+    def reads(self) -> Any:
+        return self.labels.show((self.library.get_work_annotations_state(self.work),
+                                 self.library.get_work_annotations_snapshot(self.work),
+                                 self.library.get_work_pdf_materialization(self.work)))
+
+    def outcome(self, call: Any) -> Any:
+        try:
+            return self.labels.show(call())
+        except WorkAnnotationError as exc:
+            return exc.code, exc.http_status, str(exc)
+
+    def save(self, items: Any, base: Any) -> Any:
+        return self.outcome(lambda: self.library.save_work_annotations(self.work, json.dumps(items),
+                                                                       base_set_revision=base))
+
+    def test_create_set_delete_decision_tables(self) -> None:
+        ack = {"code": "ACKNOWLEDGED", "work_id": "<W pdf>"}
+        self.answer(self.put("CREATE_PDF_ANNOTATION", _HI), (200, {
+            **ack, "annotation_id": "ann-hi-1", "annotation": {**_HI}, "canonical_annotation_set_revision": 1,
+            "changed": True, "server_revision": 0}))
+        self.answer(self.put("CREATE_PDF_ANNOTATION", _HI), (200, {  # a replayed meaning
+            **ack, "annotation": {"id": "ann-hi-1", "updated_at": "<s>"}, "canonical_annotation_set_revision": 1,
+            "changed": False, "server_revision": 0}))
+        current = {"blendMode": "Multiply", "color": "#FFCD45", "content": "Highlight comment",
+                   "custom": {"prksComment": "Highlight comment", "tags": ["a", "b"]}, "id": "ann-hi-1",
+                   "opacity": 0.5, "page_index": 0, "strokeColor": "#FFCD45", "type": "9"}
+        self.answer(self.put("CREATE_PDF_ANNOTATION", _with(_HI, contents="x" * 900)), (409, {
+            "annotation_id": "ann-hi-1", "code": "ANNOTATION_EXISTS", "current_revision": 0, "current_state": True,
+            "current_value": current, "requested_state": True, "requested_value": {"content": "x" * 900}}))
+        self.answer(self.put("CREATE_PDF_ANNOTATION", _INK), (200, {
+            "annotation_id": "ann-ink-1", "canonical_annotation_set_revision": 2, "changed": True}))
+        self.answer(self.put("CREATE_PDF_ANNOTATION", _NOTE), (200, {
+            "annotation": {k: v for k, v in _NOTE_STORED.items() if k != "updated_at"},
+            "canonical_annotation_set_revision": 3, "changed": True}))
+        changed = _with(_HI, color="#00FF00", contents="Recoloured")
+        recoloured = {**current, "color": "#00FF00", "content": "Recoloured"}
+        set_answer = {**ack, "annotation_id": "ann-hi-1", "canonical_annotation_set_revision": 4,
+                      "server_revision": 1, "annotation": {"color": "#00FF00", "contents": "Recoloured",
+                                                           "updated_at": "<s>"}}
+        self.answer(self.put("SET_PDF_ANNOTATION", changed, 0), (200, {**set_answer, "changed": True}))
+        self.answer(self.put("SET_PDF_ANNOTATION", changed, 1), (200, {**set_answer, "changed": False}))
+        self.answer(self.put("SET_PDF_ANNOTATION", changed, 0), (200, {**set_answer, "changed": False}))
+        clash = {"annotation_id": "ann-hi-1", "current_revision": 1, "current_state": True,
+                 "current_value": recoloured}
+        self.answer(self.put("SET_PDF_ANNOTATION", _with(_HI, color="#123456"), 0), (409, {
+            **clash, "code": "REVISION_CONFLICT", "requested_state": True,
+            "requested_value": {"color": "#123456", "content": "Highlight comment"}}))
+        self.answer(self.put("SET_PDF_ANNOTATION", changed, 7), (400, {**clash, "code": "FUTURE_REVISION"}))
+        self.answer(self.put("SET_PDF_ANNOTATION", _with(_HI, id="ann-absent"), 0), (404, {
+            "annotation_id": "ann-absent", "code": "ENTITY_NOT_FOUND", "work_id": "<W pdf>"}))
+        self.answer(self.put("SET_PDF_ANNOTATION", _with(_INK, rect={"origin": {"x": 9, "y": 9}}), 0), (200, {
+            "annotation": {"rect": {"origin": {"x": 9, "y": 9}}}, "canonical_annotation_set_revision": 5,
+            "changed": True, "server_revision": 1}))
+        deleted = {"annotation_id": "ann-hi-1", "requested_state": False, "work_id": "<W pdf>"}
+        self.answer(self.put("DELETE_PDF_ANNOTATION", _HI, 0), (409, {**clash, **deleted, "code": "REVISION_CONFLICT"}))
+        self.answer(self.put("DELETE_PDF_ANNOTATION", _HI, 5), (400, {**clash, **deleted, "code": "FUTURE_REVISION"}))
+        gone = {**ack, "canonical_annotation_set_revision": 6, "present": False}
+        self.assertEqual(self.put("DELETE_PDF_ANNOTATION", _HI, 1),
+                         (200, {**gone, "annotation_id": "ann-hi-1", "changed": True, "server_revision": 2}))
+        self.assertEqual(self.put("DELETE_PDF_ANNOTATION", _HI, 1),  # already absent
+                         (200, {**gone, "annotation_id": "ann-hi-1", "changed": False, "server_revision": 2}))
+        self.assertEqual(self.put("DELETE_PDF_ANNOTATION", {"id": "ann-never"}, 0),
+                         (200, {**gone, "annotation_id": "ann-never", "changed": False, "server_revision": 0}))
+        self.assertEqual(self.put("CREATE_PDF_ANNOTATION", _HI), (409, {
+            "annotation_id": "ann-hi-1", "code": "ANNOTATION_ID_REUSED", "current_revision": 2, "work_id": "<W pdf>"}))
+        ink = {"color": "#0000FF", "contents": "", "id": "ann-ink-1", "pageIndex": 2, "type": 15,
+               "inkList": [{"points": [{"x": 1, "y": 2}, {"x": 3.5, "y": 4}]}], "rect": {"origin": {"x": 9, "y": 9}},
+               "updated_at": "<s>"}
+        listing = [{"annotation_id": "ann-note-1", "revision": 0}, {"annotation_id": "ann-ink-1", "revision": 1}]
+        self.answer(self.reads(), (
+            {"annotations": listing, "known_absent": {"ann-hi-1": 2}, "work_id": "<W pdf>"},
+            {"annotations": listing, "canonical_annotation_set_revision": 6, "items": [_NOTE_STORED, ink],
+             "known_absent": {"ann-hi-1": 2}, "materialized_pdf_annotation_revision": 0, "work_id": "<W pdf>"},
+            {"canonical_annotation_set_revision": 6, "code": "ANNOTATION_MATERIALIZATION_STALE",
+             "materialized_pdf_annotation_revision": 0, "stale": True, "work_id": "<W pdf>"}))
+        self.answer(self.labels.show(self.listed(self.work)), [_NOTE_STORED, ink])
+        work = require(self.library.get_work(self.work))
+        self.answer(self.labels.show(json.loads(work["annotations"])), [_NOTE_STORED, ink])
+        self.assertEqual(work["canonical_annotation_set_revision"], 6)
+
+    def test_invalid_envelopes_and_missing_works(self) -> None:
+        def sent(operation: str, payload: dict[str, Any], base: Optional[int] = None,
+                 work_id: Optional[str] = None) -> Any:
+            return self.labels.show(self.send(self.envelope(operation, work_id or self.work, payload, base)))
+
+        invalid, no_base = (400, {"code": "INVALID_ENVELOPE"}), (400, {"code": "INVALID_BASE_REVISION"})
+        for operation, payload, base, expected in (
+            ("CREATE_PDF_ANNOTATION", {"annotation_id": "a", "annotation": _HI}, None, invalid),
+            ("CREATE_PDF_ANNOTATION", {"annotation_id": "ann-hi-1", "annotation": _HI}, 0, no_base),
+            ("CREATE_PDF_ANNOTATION", {"annotation_id": "x" * 201, "annotation": _with(_HI, id="x" * 201)},
+             None, invalid),
+            ("CREATE_PDF_ANNOTATION", {"annotation_id": " a", "annotation": _with(_HI, id=" a")}, None, invalid),
+            ("SET_PDF_ANNOTATION", {"annotation_id": "a", "annotation": _HI}, None, no_base),
+            ("DELETE_PDF_ANNOTATION", {"annotation_id": "a", "extra": 1}, 0, invalid),
+            ("DELETE_PDF_ANNOTATION", {"annotation_id": "a"}, None, no_base),
+        ):
+            with self.subTest(operation=operation, payload=str(payload)[:40]):
+                self.assertEqual(sent(operation, payload, base), expected)
+        self.assertEqual(sent("CREATE_PDF_ANNOTATION", {"annotation_id": "ann-hi-1", "annotation": _HI},
+                              work_id=_MISSING_WORK),
+                         (404, {"annotation_id": "ann-hi-1", "code": "ENTITY_NOT_FOUND", "work_id": "<unknown id>"}))
+        self.assertEqual(sent("DELETE_PDF_ANNOTATION", {"annotation_id": "a"}, 0, work_id=_MISSING_WORK),
+                         (404, {"annotation_id": "a", "code": "ENTITY_NOT_FOUND", "work_id": "<unknown id>"}))
+        self.assertEqual(self.reads(), (
+            {"annotations": [], "known_absent": {}, "work_id": "<W pdf>"},
+            {"annotations": [], "canonical_annotation_set_revision": 0, "items": [], "known_absent": {},
+             "materialized_pdf_annotation_revision": 0, "work_id": "<W pdf>"},
+            {"canonical_annotation_set_revision": 0, "code": None, "materialized_pdf_annotation_revision": 0,
+             "stale": False, "work_id": "<W pdf>"}))
+        self.assertIsNone(self.library.get_work_annotations_snapshot(_MISSING_WORK))
+        self.assertIsNone(self.library.get_work_pdf_materialization(_MISSING_WORK))
+        self.assertEqual(self.library.get_work_annotations(_MISSING_WORK), "[]")
+
+    def test_replayed_operation_answers_from_the_ledger(self) -> None:
+        first_op = self.op("CREATE_PDF_ANNOTATION", self.work, _INK)
+        first = self.send(first_op)
+        self.assertEqual(self.put("SET_PDF_ANNOTATION", _with(_INK, color="#FF0000"), 0)[1]["server_revision"], 1)
+        # The replay answers what the first delivery answered, whatever happened since.
+        self.assertEqual(self.send(first_op), first)
+        self.answer(self.labels.show(first), (200, {"annotation": {"color": "#0000FF"},
+                                                    "canonical_annotation_set_revision": 1, "changed": True}))
+
+    def test_full_list_replace(self) -> None:
+        self.assertEqual(self.save([_HI, _INK], 0), 1)
+        self.assertEqual(self.save([_HI, _INK], 1), 1)  # identical: no change
+        self.assertEqual(self.save([_HI], 0), ("ANNOTATION_SET_STALE", 409, "Annotation set revision is stale."))
+        self.assertEqual(self.save([_HI], "one"), (
+            "malformed_annotation_payload", 400, "canonical_annotation_set_revision must be an integer."))
+        self.assertEqual(self.save([_HI, _HI], 1), ("malformed_annotation_payload", 400, "Duplicate annotation ID."))
+        self.assertEqual(self.save([_with(_HI, color="#111111"), _NOTE], 1), 2)
+        self.answer(self.reads()[0], {"annotations": [{"annotation_id": "ann-hi-1", "revision": 1},
+                                                      {"annotation_id": "ann-note-1", "revision": 0}],
+                                      "known_absent": {"ann-ink-1": 1}})
+        self.assertEqual(self.save([_NOTE, _INK], 2), (
+            "ANNOTATION_ID_REUSED", 409, "Annotation ID was previously used and cannot be reinserted."))
+        self.assertEqual(self.save([], None), 3)
+        self.assertEqual(self.outcome(lambda: self.library.save_work_annotations(self.work, "{}")),
+                         ("malformed_annotation_payload", 400, "annotations_json must be a JSON list."))
+        self.answer(self.reads(), (
+            {"annotations": [], "known_absent": {"ann-hi-1": 2, "ann-ink-1": 1, "ann-note-1": 1}},
+            {"canonical_annotation_set_revision": 3, "items": []},
+            {"canonical_annotation_set_revision": 3, "stale": True, "code": "ANNOTATION_MATERIALIZATION_STALE"}))
+        self.assertEqual(self.outcome(lambda: self.library.sync_work_annotations(_MISSING_WORK, [_HI])),
+                         ("work_not_found", 404, "Work not found."))
+
+    def test_byte_only_markup_adoption(self) -> None:
+        link = {"id": "link-1", "type": 2, "pageIndex": 0, "uri": "https://example.org",
+                "rect": {"origin": {"x": 0, "y": 0}}}
+        widget = {"id": "w-1", "type": "widget", "pageIndex": 0, "rect": {"origin": {"x": 0, "y": 0}}}
+        viewer = [_HI, link, widget, "junk", _INK, _HI]
+        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, viewer)), {
+            "adopted": ["ann-hi-1", "ann-ink-1"], "adopted_count": 2, "skipped_existing": 0,
+            "skipped_known_absent": 0, "skipped_non_user": 3, "work_id": "<W pdf>"})
+        self.answer(self.reads(), (
+            {"annotations": [{"annotation_id": "ann-hi-1", "revision": 0},
+                             {"annotation_id": "ann-ink-1", "revision": 0}], "known_absent": {}},
+            {"canonical_annotation_set_revision": 1},
+            {"canonical_annotation_set_revision": 1, "materialized_pdf_annotation_revision": 0, "stale": True}))
+        # The bytes now lag the metadata: adopting from them again is refused.
+        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, viewer)), (
+            "ANNOTATION_MATERIALIZATION_STALE", 409, "Cannot adopt annotations from known-stale PDF bytes."))
+        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(_MISSING_WORK, viewer)),
+                         ("work_not_found", 404, "Work not found."))
+
+    def test_adoption_skips_present_and_known_absent_ids(self) -> None:
+        self.library.save_work_annotations(self.work, json.dumps([_HI, _INK]), base_set_revision=0)
+        self.library.save_work_annotations(self.work, json.dumps([_HI]), base_set_revision=1)
+        # PostgreSQL acknowledges only bytes it committed: mark the column directly.
+        self.sql("UPDATE prks.assets SET materialized_pdf_annotation_revision = canonical_annotation_set_revision"
+                 " WHERE work_id = %s", (self.work,))
+        self.assertEqual(self.outcome(lambda: self.library.adopt_byte_only_user_markup(self.work, [_HI, _INK, _NOTE])), {
+            "adopted": ["ann-note-1"], "adopted_count": 1, "skipped_existing": 1, "skipped_known_absent": 1,
+            "skipped_non_user": 0, "work_id": "<W pdf>"})
+        self.answer(self.reads(), (
+            {"annotations": [{"annotation_id": "ann-hi-1", "revision": 0},
+                             {"annotation_id": "ann-note-1", "revision": 0}], "known_absent": {"ann-ink-1": 1}},
+            {"canonical_annotation_set_revision": 3},
+            {"canonical_annotation_set_revision": 3, "materialized_pdf_annotation_revision": 2, "stale": True}))
+
+    def test_marks_that_need_no_new_bytes(self) -> None:
+        def outcome(call: Any) -> Any:
+            try:
+                return call()
+            except (LookupError, ValueError) as exc:
+                return type(exc).__name__, str(exc)
+
+        stale = ("ValueError", "ANNOTATION_MATERIALIZATION_STALE")
+        library, work = self.library, self.work
+        # The uploaded bytes embed the empty set (revision 0).
+        for call, expected in (
+                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, 0), 0),
+                (lambda: library.mark_work_pdf_materialized(work), 0),
+                (lambda: library.mark_work_pdf_materialized(work, at_revision=0), 0),
+                (lambda: library.mark_work_pdf_materialized(work, at_revision=1), stale),
+                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, 1), stale),
+                (lambda: library.mark_work_pdf_materialized_if_claim_current(work, False), stale),
+                (lambda: library.mark_work_pdf_materialized(_MISSING_WORK), 0),
+                (lambda: library.mark_work_pdf_materialized_if_claim_current(_MISSING_WORK, 0),
+                 ("LookupError", "ENTITY_NOT_FOUND"))):
+            self.assertEqual(outcome(call), expected)
+        self.answer(self.reads()[2], {"canonical_annotation_set_revision": 0, "stale": False})
+
+    def test_materialization_claims(self) -> None:
+        self.library.save_work_annotations(self.work, json.dumps([_HI]), base_set_revision=0)
+
+        def accept(work_id: str, claim: Any) -> Any:
+            try:
+                return self.library.accept_work_pdf_materialization_claim(work_id, claim)
+            except (LookupError, ValueError) as exc:
+                return type(exc).__name__, str(exc)
+
+        for claim in (1, 0, 2, True, 1.0, "1", None):
+            with self.subTest(claim=claim):
+                self.assertEqual(accept(self.work, claim), 1 if claim == 1 and type(claim) is int
+                                 else ("ValueError", "ANNOTATION_MATERIALIZATION_STALE"))
+        self.assertEqual(accept(_MISSING_WORK, 0)[0], "LookupError")
+        # Accepting a claim marks nothing: only committed bytes do.
+        self.answer(self.reads()[2], {"canonical_annotation_set_revision": 1, "materialized_pdf_annotation_revision": 0,
+                                      "stale": True})
+

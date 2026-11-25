@@ -54,8 +54,7 @@ KEY SHARE``, then its note ``FOR SHARE``, and writes only ``derived`` rows,
 which no command locks: a note write or a Work delete waits for it at most
 once and never holds anything it waits on.
 
-**Differences from SQLite**, each deliberate (the recorded parity tests
-avoid them). The commands that routes call are ``concept_commands``,
+**Differences from SQLite**, each deliberate. The commands that routes call are ``concept_commands``,
 ``position_commands``, ``argument_commands`` and ``note_commands`` (PG-C3
 #642; the facade's ``ResearchMixin`` is gone); a SQLite method name below
 is the one ``tests/library_adapter.py`` keeps. Refusals are SQLite's

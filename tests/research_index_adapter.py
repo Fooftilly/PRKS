@@ -3,7 +3,7 @@
 The served routes read a Work's Research refs and the Research Graph through
 :mod:`backend.domain.research.index_commands` with the admitted context.
 :class:`PostgresResearchIndex` keeps the SQLite ``PRKSResearchIndex`` names,
-signatures and return shapes the recorded parity tests replay (the ``db``
+signatures and return shapes tests call (the ``db``
 argument is accepted and unused), each read in one ``library_query``
 snapshot for the context bound with :mod:`tests.acting_context`. Until PG-C3
 retired the facade package it was ``backend/pg_facade/research_index.py``,
@@ -23,11 +23,8 @@ Differences from SQLite, each deliberate:
   missing or corrupt apart from the canonical tables.
 
 The index is kept by the database, never by its reader: a note save
-enqueues ``research.reindex_work`` in its own transaction. So the
-maintenance calls ``PRKSResearchIndex`` took after a change (``sync_work``,
-``remove_concept_mentions``, ``remove_argument_mentions``) are accepted with
-its signatures and do nothing, for the recorded parity tests that replay
-them.
+enqueues ``research.reindex_work`` in its own transaction, so this adapter
+has no maintenance calls.
 """
 
 from __future__ import annotations
@@ -93,15 +90,6 @@ class PostgresResearchIndex:
 
         aid = (argument_id or "").strip()
         return self._read(lambda scope: reindex.backlinks(scope, "argument", aid))
-
-    def sync_work(self, work_id: str, text_content: str, db: Any) -> None:
-        """Nothing to do: the note save enqueued ``research.reindex_work`` in its transaction."""
-
-    def remove_concept_mentions(self, concept_id: str) -> None:
-        """Nothing to do: the reads join the live Concepts, so a deleted one has no mentions."""
-
-    def remove_argument_mentions(self, argument_id: str) -> None:
-        """Nothing to do: the reads join the live Arguments, so a deleted one has no mentions."""
 
     def build_graph(self, db: Any = None, *, include_people: bool = False) -> GraphSnapshot:
         """``PRKSResearchIndex.build_graph``; raises ``GraphTooLargeError`` past the bounds.

@@ -676,7 +676,6 @@ class DocsOnlyWorkflowTests(unittest.TestCase):
 
         for job_id, required_name in (
             ("postgres-helpers-shards", "PostgreSQL helpers ("),
-            ("backend-parity", "Backend parity (SQLite + PostgreSQL)"),
         ):
             with self.subTest(job_id=job_id):
                 block = job(job_id)

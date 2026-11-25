@@ -104,7 +104,7 @@ Rules for all issues:
 - Processing is a managed upload queue (`backend/domain/processing/`); do not bring back a scanned inbox directory.
 - `frontend/`: legacy UI shell and runtime (`js/tab-context.js`, `js/workspace-tabs.js`, `js/offline-store.js`, `js/offline-runtime.js`, `sw.js`); see `frontend/AGENTS.md` "Offline / PWA".
 - `frontend-app/`: Vue 3 + TypeScript source and Vite build (`src/app-shell/` holds the New File split button); `frontend/vue/` is the committed bundle.
-- `tests/`: unittest. Tests build their Library with `tests/library_adapter.py` `TestLibrary`; parity tests replay recorded SQLite answers (`tests/parity_reference/`), so a changed call needs a PostgreSQL-only assertion.
+- `tests/`: unittest. Tests build their Library with `tests/library_adapter.py` `TestLibrary`. PostgreSQL tests spell out answers with `tests/pg/answers.py` and check only the keys they name, so add a field without touching unrelated tests.
 
 New File UI uses the canonical Work creation path (`#work-modal` / `POST /api/works`), never a second creation API.
 

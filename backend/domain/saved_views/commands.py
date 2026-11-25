@@ -9,8 +9,8 @@ Refusals are
 status) and ``AccessRefused``.
 
 An id is matched after trimming its surrounding whitespace, and a blank one
-names no Saved View (SQLite's ``get_saved_view``/``update_saved_view``/
-``delete_saved_view``, which the recorded parity answers hold).
+names no Saved View, as SQLite's ``get_saved_view``/``update_saved_view``/
+``delete_saved_view`` did.
 """
 
 from __future__ import annotations

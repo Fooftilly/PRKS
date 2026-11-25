@@ -2,8 +2,7 @@
 
 The path-based inbox page (``frontend/js/components/processing-files.js`` and
 ``frontend-app/src/features/processing/``) is gone with the SQLite runtime
-(PG-C2 #641); ``tests/sqlite_retirement/test_frontend_processing_page.partial.json``
-records its tests. The queue page's own tests live beside it in
+(PG-C2 #641). The queue page's own tests live beside it in
 ``frontend-app/src/features/processing-queue/``.
 """
 import json

@@ -2,14 +2,11 @@
 
 PG-C3 moved every route family off the ``PostgresLibrary`` facade to direct
 domain calls and retired the facade package: :class:`backend.library.PostgresLibrary`
-is now only the database-plus-storage handle the routes hold. The tests still
-need the old names: the parity tests replay SQLite's recorded answers by
-method name and arguments (``tests/parity_reference.py``), and nothing can
-record them again, so a parity test keeps its calls and this class keeps
-answering them. Each method runs the domain query or command the route runs,
-for the actor bound with :mod:`tests.acting_context`, and shapes the answer
-as the facade did, so the recorded SQLite answers still hold for the domain
-code.
+is now only the database-plus-storage handle the routes hold. Many tests
+still call the old names (#1426 replaces them with direct domain calls).
+Each method runs the domain query or command the route runs, for the actor
+bound with :mod:`tests.acting_context`, and shapes the answer as the facade
+did.
 
 Every test builds its Library with :class:`TestLibrary`, which extends the
 handle, so a test can bind it as the served ``db``.
@@ -17,10 +14,8 @@ handle, so a test can bind it as the served ``db``.
 
 from __future__ import annotations
 
-import contextlib
 import json
-from typing import Any, Callable, Dict, Iterator, List, Optional, TypeVar
-from unittest import mock
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from backend.library import PostgresLibrary
 from tests.acting_context import current_context
@@ -949,62 +944,6 @@ class TestLibrary(PostgresLibrary):
         from backend.domain.people import group_commands
 
         return group_commands.person_state(self.database, current_context(), person_id)
-
-
-class SavedViewCommandsOver:
-    """``backend.domain.saved_views.commands`` answered by a Library's old method names.
-
-    A parity test drives ``backend/api/saved_views.py`` on both sides. The
-    reference side replays SQLite's recorded calls by method name, so there
-    the route's commands are patched to this (:func:`route_commands_over`):
-    each command becomes the ``PRKSDatabase`` call it replaced, and the
-    database and context the route passes are not used.
-    """
-
-    def __init__(self, library: Any) -> None:
-        self._library = library
-
-    def all_views(self, _db: Any, _ctx: Any) -> Any:
-        return self._library.get_saved_views()
-
-    def view(self, _db: Any, _ctx: Any, view_id: Any) -> Any:
-        return self._library.get_saved_view(view_id)
-
-    def create(self, _db: Any, _ctx: Any, name: Any, search: Any) -> Any:
-        return self._library.create_saved_view(name, search)
-
-    def update(self, _db: Any, _ctx: Any, view_id: Any, *, name: Any = None, search: Any = None) -> Any:
-        return self._library.update_saved_view(view_id, name=name, search=search)
-
-    def delete(self, _db: Any, _ctx: Any, view_id: Any) -> None:
-        self._library.delete_saved_view(view_id)
-
-
-class SettingsCommandsOver:
-    """``backend.domain.settings.commands`` answered by a Library's old method names (see :class:`SavedViewCommandsOver`)."""
-
-    def __init__(self, library: Any) -> None:
-        self._library = library
-
-    def response(self, _db: Any, _ctx: Any) -> Any:
-        return self._library.get_app_settings_response()
-
-    def patch(self, _db: Any, _ctx: Any, data: Any) -> None:
-        self._library.patch_app_settings(data)
-
-
-@contextlib.contextmanager
-def route_commands_over(commands_module: Any, commands: Any) -> Iterator[None]:
-    """Run the routes with ``commands_module``'s commands replaced by ``commands`` (a ``*CommandsOver``).
-
-    A route imports its domain commands module when it runs, so each public
-    method of ``commands`` stands in for the module function of that name.
-    """
-    names = [name for name in dir(commands) if not name.startswith("_")]
-    with contextlib.ExitStack() as stack:
-        for name in names:
-            stack.enter_context(mock.patch.object(commands_module, name, getattr(commands, name)))
-        yield
 
 
 class _Bytes:

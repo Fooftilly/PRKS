@@ -1,7 +1,6 @@
 """The Folder sync handlers and ``CREATE_WORK``'s Folder filing on PostgreSQL (L-O-1 #633).
 
-``tests/test_folders_parity.py`` proves each Folder operation answers as on
-SQLite. These tests cover what only PostgreSQL has: races decided by row
+These tests cover races decided by row
 locks, the hierarchy lock, SERIALIZABLE retries and the title index, each
 held open until the other side waits (§7.1); one ``op_id`` replayed, reused
 or sent concurrently; a stale operation after a Folder or a Work was deleted

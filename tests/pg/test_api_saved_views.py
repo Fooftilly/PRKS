@@ -1,47 +1,23 @@
 """Independent unit tests for the Saved Views HTTP controller.
 
 These answer requests through the served route table
-(``tests.library_adapter.call_route``), with no threaded HTTP server. They
-run on PostgreSQL (``tests/backend_parity.py``), the request's context being
-the actor the test is bound to.
+(``tests.library_adapter.call_route``), with no threaded HTTP server; the
+request's context is the actor the test is bound to.
 """
 
 from __future__ import annotations
 
-import os
-import shutil
-import sys
-import tempfile
 import unittest
 
-_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _PROJECT_DIR)
-
-from run_tests import apply_isolated_test_env
-
-apply_isolated_test_env(_PROJECT_DIR)
-
-from backend.storage.config import StorageConfig
-from tests.backend_parity import BackendParityTestCase, parametrize_backends
 from tests.library_adapter import call_route
+from tests.pg.test_saved_views import SavedViewTestCase
 
 _SEARCH = {"mode": "advanced", "q": "culture", "tag": "", "author": "Adorno", "publisher": ""}
 
 
-@parametrize_backends
-class TestSavedViewsApiController(BackendParityTestCase):
-    def setUp(self):
-        self._tmpdir = tempfile.mkdtemp(prefix="prks-api-saved-views-")
-        self.storage = StorageConfig.for_testing(self._tmpdir)
-        os.makedirs(self.storage.pdfs_dir, exist_ok=True)
-        self.db = self.open_library(self.storage)
-
-    def tearDown(self):
-        if getattr(self, "_tmpdir", None):
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
-
+class TestSavedViewsApiController(SavedViewTestCase):
     def call(self, method, target, body=None):
-        return call_route(self.db, method, target, body)
+        return call_route(self.library, method, target, body)
 
     def test_crud_via_controller(self):
         status, body = self.call("POST", "/api/saved-views", {"name": "Industry", "search": _SEARCH})

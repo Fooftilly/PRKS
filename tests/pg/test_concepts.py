@@ -1,7 +1,7 @@
-"""Concepts, their aliases and hierarchy on PostgreSQL: what parity cannot show (L-R-1 #634).
+"""Concepts, their aliases and hierarchy on PostgreSQL (L-R-1 #634).
 
-``tests/test_concepts_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: identity keys (Unicode names
+:class:`AnswerTests` spells out what the facade answers. The other tests
+cover identity keys (Unicode names
 that are one name, or two) in the shared ``concept_keys`` namespace,
 resolution through that index, refusals of what PostgreSQL text cannot
 hold, the scopes a delete tombstones, the Research Note check, Library
@@ -12,7 +12,7 @@ until the other is waiting on it).
 from __future__ import annotations
 
 import unicodedata
-from typing import Any
+from typing import Any, Optional
 from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
@@ -22,6 +22,7 @@ from backend.domain.works import notes
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.research.rules import ResearchError
+from tests.pg.answers import AnswerAssertions
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 
@@ -434,3 +435,154 @@ class CatalogTests(ConceptTestCase):
         self.assertEqual(len(large), 3)
         for query in large:
             self.assertNotIn("(SELECT", query.upper())
+
+
+_MISSING_CONCEPT = "C-" + "0" * 32
+_EXISTS = ("concept_exists", "A Concept with that name or alias already exists.", 409)
+_NOT_FOUND = ("not_found", "Concept not found.", 404)
+
+
+def concept_state(label: str, name: str, *, description: str = "", description_revision: int = 0,
+           aliases: Optional[list[str]] = None, identity_revision: int = 0, parent_ids: Optional[list[str]] = None,
+           parents_revision: int = 0) -> dict[str, Any]:
+    return {"concept_id": label, "fields": {"description": {"revision": description_revision, "value": description}},
+            "identity": {"aliases": aliases or [], "name": name}, "identity_revision": identity_revision,
+            "parent_ids": parent_ids or [], "parents_revision": parents_revision}
+
+
+class AnswerTests(AnswerAssertions, ConceptTestCase):
+    """What the Concept calls answer and refuse, spelled out."""
+
+    def refusal(self, call: Any, *args: Any, **kwargs: Any) -> tuple[str, str, int]:
+        with self.assertRaises(ResearchError) as caught:
+            call(*args, **kwargs)
+        return caught.exception.code, str(caught.exception), caught.exception.http_status
+
+    def named(self, name: str, description: str = "") -> str:
+        return self.labels.name(self.concept(name, description), f"<C {name}>")
+
+    def test_create_read_and_list(self) -> None:
+        ethics = self.named("Ethics", "The study of *conduct*.")
+        self.named("logic")
+        for args, expected in ((("ETHICS",), _EXISTS), (("  ",), ("invalid_name", "Name is required.", 400)),
+                               (("a\tb\x01",), ("invalid_name", "Name contains invalid characters.", 400)),
+                               (("x" * 161,), ("invalid_name", "Name is too long.", 400)),
+                               (("Ok", "bad\x00"), ("invalid_text", "Text contains invalid characters.", 400))):
+            with self.subTest(args=[arg[:8] for arg in args]):
+                self.assertEqual(self.refusal(self.library.create_concept, *args), expected)
+        self.answer(self.library.get_concept(ethics), {
+            "aliases": [], "children": [], "created_at": "<s>", "description": "The study of *conduct*.",
+            "id": "<C Ethics>", "name": "Ethics", "parents": [], "updated_at": "<s>"})
+        self.assertIsNone(self.library.get_concept(_MISSING_CONCEPT))
+        self.assertIsNone(self.library.get_concept("  "))
+        self.answer(self.library.get_concept_sync_state(ethics),
+                    concept_state("<C Ethics>", "Ethics", description="The study of *conduct*."))
+        self.assertIsNone(self.library.get_concept_sync_state(_MISSING_CONCEPT))
+        self.answer(self.library.list_concepts(), [
+            {"aliases": [], "created_at": "<s>", "description": "The study of *conduct*.", "id": "<C Ethics>",
+             "name": "Ethics", "parents": [], "subconcept_count": 0, "updated_at": "<s>"},
+            {"description": "", "id": "<C logic>", "name": "logic"}])
+
+    def test_research_note_save(self) -> None:
+        """``save_work_notes`` (the Work PATCH's note): the Concepts it names, revisions, refusals."""
+        self.named("Ethics")
+        work = self.labels.name(self.library.add_work("W"), "<W W>")
+        note = "On [[concept:ethics]] and [[concept:Logic]]."
+        notes_state = {"private_note_revision": 0, "research_note_revision": 1, "work_id": "<W W>"}
+        for _ in range(2):  # the same text again advances nothing
+            self.assertIsNone(self.library.save_work_notes(work, note))
+            self.answer(self.library.get_work_notes_state(work), notes_state)
+        # A Concept the note names that does not exist yet is created.
+        self.answer(self.library.list_concepts(), [{"id": "<C Ethics>", "name": "Ethics"},
+                                                   {"id": "<unknown id>", "name": "Logic", "description": ""}])
+        for text, expected in ((None, ("invalid_text", "Research notes must be a string.", 400)),
+                               (7, ("invalid_text", "Research notes must be a string.", 400)),
+                               ("a\x01b", ("invalid_text", "Research notes contain invalid characters.", 400))):
+            with self.subTest(text=text):
+                self.assertEqual(self.refusal(self.library.save_work_notes, work, text), expected)
+        work_missing = ("not_found", "Work not found.", 404)
+        self.assertEqual(self.refusal(self.library.save_work_notes, "W-" + "0" * 32, "[[concept:Gone]]"), work_missing)
+        self.assertEqual(self.refusal(self.library.save_work_notes, "  ", "text"), work_missing)
+        self.assertEqual([row["name"] for row in self.library.list_concepts()], ["Ethics", "Logic"])
+        self.answer(self.library.get_work_notes_state(work), notes_state)
+
+    def test_identity_and_definition(self) -> None:
+        ethics, logic = self.named("Ethics"), self.named("Logic")
+        self.answer(self.library.replace_concept_aliases(ethics, ["Morals", "morals", "ethics", "Moral  code"]), {
+            "aliases": ["Moral code", "Morals"], "children": [], "created_at": "<s>", "description": "",
+            "id": "<C Ethics>", "name": "Ethics", "parents": [], "updated_at": "<s>"})
+        # A renamed Concept keeps its old name as an alias.
+        self.answer(self.library.update_concept(ethics, name="Moral philosophy", description="About"), {
+            "aliases": ["Ethics", "Moral code", "Morals"], "description": "About", "name": "Moral philosophy"})
+        self.answer(self.library.update_concept(ethics, name="MORALS"), {
+            "aliases": ["Ethics", "Moral code", "Moral philosophy"], "name": "MORALS"})
+        self.answer(self.library.update_concept(ethics, name="Morals"), {
+            "aliases": ["Ethics", "Moral code", "Moral philosophy"], "name": "Morals"})
+        for concept_id, kwargs, expected in (
+                (logic, {"name": "ethics"}, _EXISTS), (logic, {"name": "moral philosophy"}, _EXISTS),
+                (ethics, {}, ("nothing_to_update", "Nothing to update.", 400)),
+                (_MISSING_CONCEPT, {"name": "X"}, _NOT_FOUND), (" ", {"name": "X"}, _NOT_FOUND),
+                (ethics, {"description": "\x00"}, ("invalid_text", "Text contains invalid characters.", 400)),
+                (ethics, {"name": ""}, ("invalid_name", "Name is required.", 400))):
+            with self.subTest(kwargs=kwargs):
+                self.assertEqual(self.refusal(self.library.update_concept, concept_id, **kwargs), expected)
+        conflict = ("alias_conflict", "That search key already belongs to another Concept.", 409)
+        for concept_id, aliases, expected in (
+                (ethics, ["LOGIC"], conflict), (ethics, "Logic", ("invalid_aliases", "Aliases must be a JSON array.", 400)),
+                (ethics, [1], ("invalid_aliases", "Each alias must be a string.", 400)),
+                (ethics, ["\x07"], ("invalid_name", "Name contains invalid characters.", 400)),
+                (logic, ["moral code"], conflict), (_MISSING_CONCEPT, [], _NOT_FOUND)):
+            with self.subTest(aliases=aliases):
+                self.assertEqual(self.refusal(self.library.replace_concept_aliases, concept_id, aliases), expected)
+        self.answer(self.library.get_concept_sync_state(ethics), concept_state(
+            "<C Ethics>", "Morals", description="About", description_revision=1,
+            aliases=["Ethics", "Moral code", "Moral philosophy"], identity_revision=4))
+        self.answer(self.library.get_concept_sync_state(logic), concept_state("<C Logic>", "Logic"))
+        self.assertEqual([row["name"] for row in self.library.list_concepts()], ["Logic", "Morals"])
+
+    def test_hierarchy(self) -> None:
+        a, b, c = self.named("A"), self.named("B"), self.named("C")
+        self.answer(self.library.replace_concept_parents(b, [a]), {"id": "<C B>", "parents": [{"id": "<C A>", "name": "A"}]})
+        # Parents are kept in name order, each once.
+        self.answer(self.library.replace_concept_parents(c, [b, a, " " + a]), {
+            "id": "<C C>", "parents": [{"id": "<C A>", "name": "A"}, {"id": "<C B>", "name": "B"}]})
+        cycle = ("concept_cycle", "That parent would create a Concept hierarchy cycle.", 409)
+        for parents, expected in (([c], cycle), ([a], cycle),
+                                  ([_MISSING_CONCEPT], ("parent_not_found", "Parent Concept not found.", 404)),
+                                  ("A", ("invalid_parents", "Parents must be a JSON array.", 400)),
+                                  ([""], ("invalid_parents", "Each parent id must be a string.", 400)),
+                                  ([3], ("invalid_parents", "Each parent id must be a string.", 400))):
+            with self.subTest(parents=parents):
+                self.assertEqual(self.refusal(self.library.replace_concept_parents, a, parents), expected)
+        self.assertEqual(self.refusal(self.library.replace_concept_parents, _MISSING_CONCEPT, []), _NOT_FOUND)
+        self.answer(self.library.get_concept(a), {"children": [{"id": "<C B>", "name": "B"}, {"id": "<C C>", "name": "C"}],
+                                                  "parents": []})
+        self.answer(self.library.get_concept(b), {"children": [{"id": "<C C>", "name": "C"}],
+                                                  "parents": [{"id": "<C A>", "name": "A"}]})
+        # The edges of a Concept's children are its scope too: A moved on with B's and C's changes.
+        self.answer([self.library.get_concept_sync_state(concept) for concept in (a, b, c)], [
+            concept_state("<C A>", "A", parents_revision=2), concept_state("<C B>", "B", parent_ids=["<C A>"], parents_revision=2),
+            concept_state("<C C>", "C", parent_ids=["<C A>", "<C B>"], parents_revision=1)])
+        self.answer(self.library.list_concepts(), [{"id": "<C A>", "subconcept_count": 2}, {"id": "<C B>"},
+                                                   {"id": "<C C>"}])
+
+    def test_delete(self) -> None:
+        a, b, c = self.named("A"), self.named("B"), self.named("C")
+        self.library.replace_concept_parents(b, [a])
+        self.library.replace_concept_parents(c, [b])
+        work = self.library.add_work("W")
+        self.research_note(work, "On [[concept:b]].")
+        self.assertEqual(self.refusal(self.library.delete_concept, b), (
+            "concept_in_use", "This Concept is still referenced in research notes. Remove or replace those"
+            " references before deleting it.", 409))
+        self.research_note(work, "On `[[concept:b]]`.")  # code, not a reference
+        self.assertIsNone(self.library.delete_concept(b))
+        for concept_id in (b, " "):
+            self.assertEqual(self.refusal(self.library.delete_concept, concept_id), _NOT_FOUND)
+        self.answer([self.library.get_concept(a), self.library.get_concept(c)], [
+            {"id": "<C A>", "children": [], "parents": []}, {"id": "<C C>", "children": [], "parents": []}])
+        self.answer([self.library.get_concept_sync_state(a), self.library.get_concept_sync_state(c)], [
+            concept_state("<C A>", "A", parents_revision=2), concept_state("<C C>", "C", parents_revision=2)])
+        self.answer(self.library.list_concepts(), [{"id": "<C A>", "subconcept_count": 0},
+                                                   {"id": "<C C>", "subconcept_count": 0}])
+

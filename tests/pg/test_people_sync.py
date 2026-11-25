@@ -1,7 +1,7 @@
 """The People sync handlers on PostgreSQL (L-P-1 #632, PR 4).
 
-``tests/test_people_sync_parity.py`` proves each People operation answers
-as on SQLite. These tests cover what only PostgreSQL has: races decided by
+:class:`AnswerTests` spells out what each People operation answers. The
+rest cover races decided by
 row locks, SERIALIZABLE and the unique index, each held open until the
 other side waits (§7.1); one ``op_id`` replayed, reused or sent
 concurrently; a recreated id refusing bases from before its delete; Library
@@ -43,6 +43,9 @@ _ENTITY_TYPES = {"CREATE_PERSON": "person", "DELETE_PERSON": "person",
 _GROUP_OPERATIONS = ("CREATE_PERSON_GROUP", "SET_PERSON_GROUP_FIELD", "ADD_PERSON_GROUP_MEMBER",
                      "REMOVE_PERSON_GROUP_MEMBER", "DELETE_PERSON_GROUP")
 _NAME_KEY = "person_groups_library_id_name_key_key"
+
+
+_MISSING_GROUP = "PG-" + "0" * 32
 
 
 def person_payload(**changes: Any) -> dict[str, Any]:
@@ -779,3 +782,226 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
                          {(self.jane, "Author"): 0, (self.ed, "Author"): 0})
         self.link(False, 0)
         self.assertEqual((self.revision(), self.revision(self.ed)), (1, 0))
+
+
+class AnswerTests(PeopleSyncTestCase):
+    """What each People operation answers, spelled out as decision tables."""
+
+    def test_create_person(self) -> None:
+        person_id = generate("P")
+        payload = person_payload(first_name="Ann", last_name="Lee", aliases="A. Lee, Annie",
+                                 image_url="  https://example.org/ann.jpg  ", about="Bio")
+        status, first = self.send(self.envelope("CREATE_PERSON", person_id, payload))
+        self.assertEqual((status, first["code"], first["changed"], first["person_id"]),
+                         (200, "ACKNOWLEDGED", True, person_id))
+        person = first["person"]
+        self.assertEqual({key: person[key] for key in ("first_name", "last_name", "aliases", "about", "image_url",
+                                                        "assigned_roles", "groups", "works")},
+                         {"first_name": "Ann", "last_name": "Lee", "aliases": "A. Lee, Annie", "about": "Bio",
+                          "image_url": "https://example.org/ann.jpg", "assigned_roles": [], "groups": [],
+                          "works": []})
+        status, again = self.send(self.envelope("CREATE_PERSON", person_id, person_payload(last_name="Other")))
+        self.assertEqual((status, again["changed"], again["person"]["last_name"]), (200, False, "Lee"))
+        for entity_id, bad, base, code in (("P-not-distributed", payload, None, "INVALID_ENVELOPE"),
+                                           (person_id, payload, 0, "INVALID_BASE_REVISION"),
+                                           (person_id, {"first_name": "Ann"}, None, "INVALID_ENVELOPE"),
+                                           (person_id, person_payload(about=7), None, "INVALID_ENVELOPE"),
+                                           (person_id, person_payload(image_url="javascript:x"), None,
+                                            "INVALID_ENVELOPE")):
+            with self.subTest(payload=str(bad)[:40], base=base):
+                self.assertEqual(self.send(self.envelope("CREATE_PERSON", entity_id, bad, base)), (400, {"code": code}))
+
+    def test_person_metadata_decision_table(self) -> None:
+        person_id = self.create_person(first_name="Ann", last_name="Lee")
+        ack = {"code": "ACKNOWLEDGED", "person_id": person_id, "value_omitted": True, "server_revision": 1}
+        conflict = {"person_id": person_id, "field": "about", "current_revision": 1, "current_value": "Bio",
+                    "requested_value": "Other"}
+        for field, value, base, answer in (
+                ("about", "Bio", 0, (200, {**ack, "field": "about", "changed": True})),
+                ("about", "Bio", 1, (200, {**ack, "field": "about", "changed": False})),
+                ("about", "Bio", 0, (200, {**ack, "field": "about", "changed": False})),  # a stale base that agrees
+                ("about", "Other", 0, (409, {**conflict, "code": "REVISION_CONFLICT"})),
+                ("about", "Other", 9, (400, {**conflict, "code": "FUTURE_REVISION"})),
+                ("image_url", " https://example.org/a.png ", 0, (200, {**ack, "field": "image_url", "changed": True})),
+                ("aliases", "A. Lee, Annie", 0, (200, {**ack, "field": "aliases", "changed": True})),
+                ("last_name", "", 0, (200, {**ack, "field": "last_name", "changed": True}))):
+            with self.subTest(field=field, value=value, base=base):
+                self.assertEqual(self.send(self.person_field(person_id, field, value, base)), answer)
+        for payload, base, code in (({"field": "id", "value": "x"}, 0, "INVALID_ENVELOPE"),
+                                    ({"field": "about", "value": 1}, 0, "INVALID_ENVELOPE"),
+                                    ({"field": "image_url", "value": "javascript:x"}, 0, "INVALID_ENVELOPE"),
+                                    ({"field": "about", "value": "x"}, None, "INVALID_BASE_REVISION")):
+            with self.subTest(payload=payload, base=base):
+                self.assertEqual(self.send(self.envelope("SET_PERSON_METADATA_FIELD", person_id, payload, base)),
+                                 (400, {"code": code}))
+        missing = generate("P")
+        self.assertEqual(self.send(self.person_field(missing, "about", "x", 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "person_id": missing, "field": "about"}))
+        self.assertEqual(require(self.library.get_person(person_id))["image_url"], "https://example.org/a.png")
+
+    def test_delete_person(self) -> None:
+        person_id, group_id = self.create_person(last_name="Lee"), self.create_group("Readers")
+        work_id = self.library.add_work("Essay")
+        self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, person_id, 0))
+        self.send(self.role("ADD_WORK_PERSON_ROLE", work_id, person_id, 0, credit=""))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {})),
+                         (409, {"code": "PERSON_HAS_LINKS", "person_id": person_id, "current_revision": 1}))
+        self.send(self.role("REMOVE_WORK_PERSON_ROLE", work_id, person_id, 1))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {})),
+                         (200, {"code": "ACKNOWLEDGED", "person_id": person_id, "changed": True}))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {}))[1]["changed"], False)
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {"x": 1})), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON", person_id, {}, 0)), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(require(self.library.get_person_group(group_id))["members"], [])
+
+    def test_create_person_group(self) -> None:
+        parent = self.create_group("Parent")
+        child = generate("PG")
+        status, created = self.send(self.envelope("CREATE_PERSON_GROUP", child,
+                                                  group_payload("  Child  ", parent_id=parent, description=" About ")))
+        self.assertEqual((status, created["code"], created["changed"], created["group_id"]),
+                         (200, "ACKNOWLEDGED", True, child))
+        self.assertEqual({key: created["group"][key] for key in ("child_count", "description", "id", "member_count",
+                                                                 "name", "parent_id")},
+                         {"child_count": 0, "description": "About", "id": child, "member_count": 0, "name": "Child",
+                          "parent_id": parent})
+        self.assertEqual(self.send(self.envelope("CREATE_PERSON_GROUP", child, group_payload("Else")))[1]["changed"], False)
+        taken, orphan = generate("PG"), generate("PG")
+        self.assertEqual(self.send(self.envelope("CREATE_PERSON_GROUP", taken, group_payload("PARENT"))), (409, {
+            "code": "NAME_TAKEN", "group_id": taken, "message": "A group with this name already exists."}))
+        self.assertEqual(self.send(self.envelope("CREATE_PERSON_GROUP", orphan,
+                                                 group_payload("Orphan", parent_id=generate("PG")))),
+                         (404, {"code": "PARENT_NOT_FOUND", "group_id": orphan, "message": "Parent group not found."}))
+        for group_id, payload, base, code in (("PG-not-distributed", group_payload("X"), None, "INVALID_ENVELOPE"),
+                                              (generate("PG"), group_payload(""), None, "INVALID_ENVELOPE"),
+                                              (generate("PG"), group_payload("Y"), 0, "INVALID_BASE_REVISION"),
+                                              (generate("PG"), {"name": "Z"}, None, "INVALID_ENVELOPE")):
+            with self.subTest(payload=payload, base=base):
+                self.assertEqual(self.send(self.envelope("CREATE_PERSON_GROUP", group_id, payload, base)),
+                                 (400, {"code": code}))
+
+    def test_person_group_field_decision_table(self) -> None:
+        group_id, other = self.create_group("Readers"), self.create_group("Writers")
+        child = self.create_group("Child", parent_id=group_id)
+        ack = {"code": "ACKNOWLEDGED", "group_id": group_id, "value_omitted": True}
+        name = {"group_id": group_id, "field": "name", "current_revision": 1, "current_value": "Circle",
+                "requested_value": "Ring"}
+        parent = {"group_id": group_id, "field": "parent_id", "current_revision": 0}
+        for field, value, base, answer in (
+                ("name", "Circle", 0, (200, {**ack, "field": "name", "changed": True, "server_revision": 1})),
+                ("name", " Circle ", 1, (200, {**ack, "field": "name", "changed": False, "server_revision": 1})),
+                ("name", "Circle", 0, (200, {**ack, "field": "name", "changed": False, "server_revision": 1})),
+                ("name", "Ring", 0, (409, {**name, "code": "REVISION_CONFLICT"})),
+                ("name", "Ring", 5, (400, {**name, "code": "FUTURE_REVISION"})),
+                ("name", "writers", 1, (409, {"code": "NAME_TAKEN", "group_id": group_id, "field": "name",
+                                              "current_revision": 1,
+                                              "message": "A group with this name already exists."})),
+                ("description", "About", 0, (200, {**ack, "field": "description", "changed": True,
+                                                   "server_revision": 1})),
+                ("parent_id", child, 0, (409, {**parent, "code": "PARENT_CYCLE",
+                                               "message": "Cannot set parent to a subgroup (cycle)."})),
+                ("parent_id", group_id, 0, (409, {**parent, "code": "PARENT_CYCLE",
+                                                  "message": "A group cannot be its own parent."})),
+                ("parent_id", _MISSING_GROUP, 0, (404, {**parent, "code": "PARENT_NOT_FOUND",
+                                                        "message": "Parent group not found."})),
+                ("parent_id", other, 0, (200, {**ack, "field": "parent_id", "changed": True, "server_revision": 1})),
+                ("parent_id", "", 1, (200, {**ack, "field": "parent_id", "changed": True, "server_revision": 2}))):
+            with self.subTest(field=field, value=value, base=base):
+                self.assertEqual(self.send(self.group_field(group_id, field, value, base)), answer)
+        missing = generate("PG")
+        self.assertEqual(self.send(self.group_field(missing, "name", "x", 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "group_id": missing, "field": "name"}))
+        for payload, base, code in (({"field": "name", "value": ""}, 0, "INVALID_ENVELOPE"),
+                                    ({"field": "x", "value": "y"}, 0, "INVALID_ENVELOPE"),
+                                    ({"field": "name", "value": "x"}, None, "INVALID_BASE_REVISION")):
+            with self.subTest(payload=payload, base=base):
+                self.assertEqual(self.send(self.envelope("SET_PERSON_GROUP_FIELD", group_id, payload, base)),
+                                 (400, {"code": code}))
+
+    def test_person_group_members(self) -> None:
+        group_id, ann = self.create_group("Readers"), self.create_person(last_name="Lee")
+        ack = {"code": "ACKNOWLEDGED", "group_id": group_id, "person_id": ann}
+        stale = {"group_id": group_id, "person_id": ann, "current_revision": 1, "current_present": True,
+                 "requested_present": False}
+        for operation, base, answer in (
+                ("ADD_PERSON_GROUP_MEMBER", 0, (200, {**ack, "changed": True, "present": True, "server_revision": 1})),
+                ("ADD_PERSON_GROUP_MEMBER", 1, (200, {**ack, "changed": False, "present": True, "server_revision": 1})),
+                ("ADD_PERSON_GROUP_MEMBER", 0, (200, {**ack, "changed": False, "present": True, "server_revision": 1})),
+                ("REMOVE_PERSON_GROUP_MEMBER", 0, (409, {**stale, "code": "REVISION_CONFLICT"})),
+                ("REMOVE_PERSON_GROUP_MEMBER", 4, (400, {**stale, "code": "FUTURE_REVISION"})),
+                ("REMOVE_PERSON_GROUP_MEMBER", 1, (200, {**ack, "changed": True, "present": False,
+                                                         "server_revision": 2})),
+                ("REMOVE_PERSON_GROUP_MEMBER", 2, (200, {**ack, "changed": False, "present": False,
+                                                         "server_revision": 2}))):
+            with self.subTest(operation=operation, base=base):
+                self.assertEqual(self.send(self.member(operation, group_id, ann, base)), answer)
+        missing_person, missing_group = generate("P"), generate("PG")
+        self.assertEqual(self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, missing_person, 0)),
+                         (404, {"code": "PERSON_NOT_FOUND", "group_id": group_id, "person_id": missing_person}))
+        self.assertEqual(self.send(self.member("ADD_PERSON_GROUP_MEMBER", missing_group, ann, 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "group_id": missing_group, "person_id": ann}))
+        for payload, base, code in (({"person_id": " "}, 0, "INVALID_ENVELOPE"), ({}, 0, "INVALID_ENVELOPE"),
+                                    ({"person_id": ann}, None, "INVALID_BASE_REVISION")):
+            with self.subTest(payload=payload, base=base):
+                self.assertEqual(self.send(self.envelope("ADD_PERSON_GROUP_MEMBER", group_id, payload, base)),
+                                 (400, {"code": code}))
+        self.assertEqual(self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, ann, 2))[1]["server_revision"], 3)
+
+    def test_delete_person_group(self) -> None:
+        parent = self.create_group("Parent")
+        group_id = self.create_group("Middle", parent_id=parent)
+        child = self.create_group("Child", parent_id=group_id)
+        ann = self.create_person(last_name="Lee")
+        self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, ann, 0))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {})),
+                         (200, {"code": "ACKNOWLEDGED", "group_id": group_id, "changed": True}))
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {}))[1]["changed"], False)
+        self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {}, 0)),
+                         (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(require(self.library.get_person_group(child))["parent_id"], parent)
+        self.assertEqual(require(self.library.get_person(ann))["groups"], [])
+
+    def test_role_decision_table(self) -> None:
+        ann = self.create_person(first_name="Ann", last_name="Lee")
+        work_id = self.library.add_work("Essay")
+        role = {"person_id": ann, "role_type": "Author", "work_id": work_id}
+        ack = {**role, "code": "ACKNOWLEDGED", "first_name": "Ann", "last_name": "Lee"}
+        stale = {**role, "current": {"credit_name": "A. Lee", "present": True}, "current_revision": 1,
+                 "requested": {"credit_name": "Ann L.", "present": True}}
+        for operation, base, credit, answer in (
+                ("SET_WORK_PERSON_ROLE_CREDIT", 0, "x", (409, {**role, "code": "ROLE_NOT_PRESENT",
+                                                               "current_revision": 0})),
+                ("ADD_WORK_PERSON_ROLE", 0, "A. Lee", (200, {**ack, "aliases_revision": 1, "changed": True,
+                                                             "credit_name": "A. Lee", "present": True,
+                                                             "server_revision": 1})),
+                ("ADD_WORK_PERSON_ROLE", 1, "A. Lee", (200, {**ack, "changed": False, "credit_name": "A. Lee",
+                                                             "present": True, "server_revision": 1})),
+                ("ADD_WORK_PERSON_ROLE", 0, "A. Lee", (200, {**ack, "changed": False, "credit_name": "A. Lee",
+                                                             "present": True, "server_revision": 1})),
+                ("SET_WORK_PERSON_ROLE_CREDIT", 0, "Ann L.", (409, {**stale, "code": "REVISION_CONFLICT"})),
+                ("SET_WORK_PERSON_ROLE_CREDIT", 7, "Ann L.", (400, {**stale, "code": "FUTURE_REVISION"})),
+                ("SET_WORK_PERSON_ROLE_CREDIT", 1, "", (200, {**ack, "changed": True, "credit_name": "",
+                                                              "present": True, "server_revision": 2})),
+                ("REMOVE_WORK_PERSON_ROLE", 2, None, (200, {**ack, "changed": True, "credit_name": "",
+                                                            "present": False, "server_revision": 3})),
+                ("REMOVE_WORK_PERSON_ROLE", 3, None, (200, {**ack, "changed": False, "credit_name": "",
+                                                            "present": False, "server_revision": 3}))):
+            with self.subTest(operation=operation, base=base):
+                self.assertEqual(self.send(self.role(operation, work_id, ann, base, credit=credit)), answer)
+        self.assertEqual(self.send(self.role("ADD_WORK_PERSON_ROLE", work_id, ann, 0, "Editor", ""))[1]["server_revision"], 1)
+        missing_person, missing_work = generate("P"), generate("W")
+        self.assertEqual(self.send(self.role("ADD_WORK_PERSON_ROLE", work_id, missing_person, 0, credit="")),
+                         (404, {"code": "PERSON_NOT_FOUND", "person_id": missing_person, "role_type": "Author",
+                                "work_id": work_id}))
+        self.assertEqual(self.send(self.role("ADD_WORK_PERSON_ROLE", missing_work, ann, 0, credit="")),
+                         (404, {"code": "ENTITY_NOT_FOUND", "person_id": ann, "role_type": "Author",
+                                "work_id": missing_work}))
+        for payload, base, code in (({"person_id": ann, "role_type": "Boss", "credit_name": ""}, 0, "INVALID_ENVELOPE"),
+                                    ({"person_id": ann, "role_type": "Author"}, 0, "INVALID_ENVELOPE"),
+                                    ({"person_id": ann, "role_type": "Author", "credit_name": "x" * 501}, 0,
+                                     "INVALID_ENVELOPE"),
+                                    ({"person_id": ann, "role_type": "Author", "credit_name": ""}, None,
+                                     "INVALID_BASE_REVISION")):
+            with self.subTest(payload=str(payload)[:50], base=base):
+                self.assertEqual(self.send(self.envelope("ADD_WORK_PERSON_ROLE", work_id, payload, base)),
+                                 (400, {"code": code}))

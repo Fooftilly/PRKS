@@ -23,8 +23,7 @@ A row is locked in its own statement before it is read for a decision,
 because under READ COMMITTED a statement that waited for a row returns that
 row's newest version only.
 
-**Differences from SQLite**, each deliberate (the recorded parity tests
-avoid them). The commands that routes call are ``person_commands``,
+**Differences from SQLite**, each deliberate. The commands that routes call are ``person_commands``,
 ``group_commands``, ``role_commands`` and ``publisher_commands`` (PG-C3
 #642; the facade's ``PeopleMixin`` is gone); a SQLite method name below is
 the one ``tests/library_adapter.py`` keeps:

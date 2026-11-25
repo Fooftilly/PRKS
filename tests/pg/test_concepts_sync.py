@@ -1,7 +1,7 @@
 """The Concept sync handlers on PostgreSQL (L-R-1 #634).
 
-``tests/test_concepts_parity.py`` proves each Concept operation answers as on
-SQLite. These tests cover what only PostgreSQL has: races decided by the
+:class:`AnswerTests` spells out what each Concept operation answers. The
+other tests cover races decided by the
 key index (and the rerun that ledgers the refusal), the hierarchy lock and
 row locks, each held open until the other side waits (§7.1); one ``op_id``
 replayed or sent concurrently; a stale operation after a Concept was
@@ -11,6 +11,7 @@ and NUL, which PostgreSQL cannot store.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -23,7 +24,8 @@ from backend.domain.entity_ids import generate, is_distributed, is_generated
 from backend.domain.research.research_markup import CONCEPT_REF_MAX
 from backend.sync.families import FamilyHandler
 from backend.sync.handlers import concept as concept_handlers
-from tests.pg.test_concepts import ConceptTestCase
+from tests.pg.answers import AnswerAssertions
+from tests.pg.test_concepts import ConceptTestCase, concept_state
 from tests.pg.test_works_sync import SyncTestCase
 from tests.narrowing import require
 
@@ -357,3 +359,135 @@ class AccessTests(ConceptSyncTestCase):
         self.assertEqual(self.send(self.envelope("DELETE_CONCEPT", ethics, {}) | {"device_id": device},
                                    other.context)[1]["changed"], False)
         self.assertEqual(require(self.library.get_concept(ethics))["name"], "Ethics")
+
+
+_MISSING_CONCEPT = "C-" + "0" * 32
+_INVALID = (400, {"code": "INVALID_ENVELOPE"})
+_NO_BASE = (400, {"code": "INVALID_BASE_REVISION"})
+
+
+class AnswerTests(AnswerAssertions, ConceptSyncTestCase):
+    """What each Concept operation answers, spelled out as decision tables."""
+
+    def op(self, operation: str, concept_id: str, payload: dict[str, Any], base: Optional[int] = None,
+           **changes: Any) -> Any:
+        return self.labels.show(self.send(self.envelope(operation, concept_id, payload, base, **changes)))
+
+    def made(self, name: str) -> str:
+        return self.labels.name(self.create_concept(name), f"<C {name}>")
+
+    def sync_state(self, concept_id: str) -> Any:
+        return self.labels.show(self.library.get_concept_sync_state(concept_id))
+
+    def test_create(self) -> None:
+        concept_id = self.labels.name(generate("C"), "<C Ethics>")
+        payload = {"name": "  Ethics ", "description": "About"}
+        created = {"code": "ACKNOWLEDGED", "concept_id": "<C Ethics>",
+                   "concept": {"description": "About", "id": "<C Ethics>", "name": "Ethics"}}
+        op_id = str(uuid.uuid4())
+        self.assertEqual(self.op("CREATE_CONCEPT", concept_id, payload, op_id=op_id), (200, {**created, "changed": True}))
+        self.assertEqual(self.op("CREATE_CONCEPT", concept_id, payload, op_id=op_id),  # a replay
+                         (200, {**created, "changed": True}))
+        self.assertEqual(self.op("CREATE_CONCEPT", concept_id, {"name": "Other", "description": ""}),
+                         (200, {**created, "changed": False}))
+        clash = self.labels.name(generate("C"), "<C Clash>")
+        self.assertEqual(self.op("CREATE_CONCEPT", clash, {"name": "ETHICS", "description": ""}),
+                         (409, {"code": "CONCEPT_EXISTS", "concept_id": "<C Clash>"}))
+        self.assertEqual(self.op("CREATE_CONCEPT", "C-1", payload), _INVALID)
+        self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), {"name": "  ", "description": ""}), _INVALID)
+        self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), {**payload, "x": 1}), _INVALID)
+        self.assertEqual(self.op("CREATE_CONCEPT", generate("C"), payload, 0), _NO_BASE)
+        self.answer(self.library.list_concepts(), [{"description": "About", "id": "<C Ethics>", "name": "Ethics"}])
+
+    def test_field(self) -> None:
+        concept_id = self.made("Ethics")
+        field = {"field": "description", "value": "First"}
+        ack = {"code": "ACKNOWLEDGED", "concept_id": "<C Ethics>", "field": "description", "server_revision": 1,
+               "value_omitted": True}
+        clash = {"concept_id": "<C Ethics>", "current_revision": 1, "current_value": "First", "field": "description",
+                 "requested_value": "Other"}
+        other = {"field": "description", "value": "Other"}
+        for payload, base, expected in (
+                (field, 0, (200, {**ack, "changed": True})),
+                (field, 0, (200, {**ack, "changed": False})),  # a stale base, the same value
+                (other, 0, (409, {**clash, "code": "REVISION_CONFLICT"})),
+                (other, 5, (400, {**clash, "code": "FUTURE_REVISION"})),
+                ({"field": "name", "value": "X"}, 1, _INVALID),
+                ({"field": "description", "value": "\x07"}, 1,
+                 (409, {"code": "ENTITY_NOT_FOUND", "concept_id": "<C Ethics>", "field": "description"})),
+                (field, None, _NO_BASE)):
+            with self.subTest(payload=payload, base=base):
+                self.assertEqual(self.op("SET_CONCEPT_FIELD", concept_id, payload, base), expected)
+        self.assertEqual(self.op("SET_CONCEPT_FIELD", _MISSING_CONCEPT, field, 0),
+                         (404, {"code": "ENTITY_NOT_FOUND", "concept_id": "<unknown id>", "field": "description"}))
+        self.assertEqual(self.sync_state(concept_id), concept_state("<C Ethics>", "Ethics", description="First",
+                                                        description_revision=1))
+
+    def test_identity(self) -> None:
+        ethics, logic = self.made("Ethics"), self.made("Logic")
+
+        def identity(name: str, aliases: list[str]) -> dict[str, Any]:
+            return {"name": name, "aliases": aliases}
+
+        ack = {"code": "ACKNOWLEDGED", "concept_id": "<C Ethics>", "changed": True}
+        clash = {"concept_id": "<C Ethics>", "current_revision": 2, "current_value": "Moral philosophy",
+                 "requested_value": "Ethics"}
+        for concept_id, payload, base, expected in (
+                (ethics, identity("Ethics", ["Morals"]), 0,
+                 (200, {**ack, "aliases": ["Morals"], "name": "Ethics", "server_revision": 1})),
+                (ethics, identity("Moral philosophy", ["Morals"]), 1,
+                 (200, {**ack, "aliases": ["Ethics", "Morals"], "name": "Moral philosophy", "server_revision": 2})),
+                (ethics, identity("Ethics", []), 1, (409, {**clash, "code": "REVISION_CONFLICT"})),
+                (ethics, identity("Ethics", []), 9, (400, {**clash, "code": "FUTURE_REVISION"})),
+                (logic, identity("MORALS", []), 0, (409, {"code": "CONCEPT_EXISTS", "concept_id": "<C Logic>"})),
+                (logic, identity("Logic", ["ethics"]), 0, (409, {"code": "ALIAS_CONFLICT", "concept_id": "<C Logic>"})),
+                (logic, identity("Logic", ["x" * 161]), 0, _INVALID),
+                (logic, identity("Logic", ["a"] * 65), 0, _INVALID),
+                (_MISSING_CONCEPT, identity("X", []), 0, (404, {"code": "ENTITY_NOT_FOUND", "concept_id": "<unknown id>"})),
+                (logic, identity("Logic", []), None, _NO_BASE)):
+            with self.subTest(payload=str(payload)[:40], base=base):
+                self.assertEqual(self.op("SET_CONCEPT_IDENTITY", concept_id, payload, base), expected)
+        self.assertEqual(self.sync_state(ethics), concept_state("<C Ethics>", "Moral philosophy", aliases=["Ethics", "Morals"],
+                                                    identity_revision=2))
+        self.assertEqual(self.sync_state(logic), concept_state("<C Logic>", "Logic"))
+
+    def test_parents(self) -> None:
+        a, b, c = self.made("A"), self.made("B"), self.made("C")
+
+        def ack(parent_ids: list[str], revision: int, changed: bool = True) -> Any:
+            return (200, {"code": "ACKNOWLEDGED", "concept_id": "<C C>", "changed": changed, "parent_ids": parent_ids,
+                          "server_revision": revision})
+
+        for concept_id, parents, base, expected in (
+                (c, [a], 0, ack(["<C A>"], 1)),
+                (c, [a], 0, ack(["<C A>"], 1, False)),  # stale, the same set
+                (c, [b], 0, (409, {"code": "REVISION_CONFLICT", "concept_id": "<C C>", "current_count": 1,
+                                   "current_revision": 1, "requested_count": 1})),
+                (c, [b, a], 1, ack(["<C A>", "<C B>"], 2)),
+                (a, [c], 1, (409, {"code": "CONCEPT_CYCLE", "concept_id": "<C A>"})),
+                (a, [_MISSING_CONCEPT], 1, (404, {"code": "PARENT_NOT_FOUND", "concept_id": "<C A>"})),
+                (a, [" " + b], 1, _INVALID),
+                (a, [b], 7, (400, {"code": "FUTURE_REVISION", "concept_id": "<C A>", "current_count": 0,
+                                   "current_revision": 1, "requested_count": 1})),
+                (_MISSING_CONCEPT, [], 0, (404, {"code": "ENTITY_NOT_FOUND", "concept_id": "<unknown id>"}))):
+            with self.subTest(concept=concept_id, parents=parents, base=base):
+                self.assertEqual(self.op("SET_CONCEPT_PARENTS", concept_id, {"parent_ids": parents}, base), expected)
+        self.assertEqual([self.sync_state(concept) for concept in (a, b, c)], [
+            concept_state("<C A>", "A", parents_revision=1), concept_state("<C B>", "B", parents_revision=1),
+            concept_state("<C C>", "C", parent_ids=["<C A>", "<C B>"], parents_revision=2)])
+
+    def test_delete(self) -> None:
+        a, b = self.made("A"), self.made("B")
+        self.op("SET_CONCEPT_PARENTS", b, {"parent_ids": [a]}, 0)
+        work = self.library.add_work("W")
+        self.research_note(work, "[[concept:A]]")
+        self.assertEqual(self.op("DELETE_CONCEPT", a, {}), (409, {"code": "CONCEPT_IN_USE", "concept_id": "<C A>"}))
+        self.research_note(work, "")
+        deleted = {"code": "ACKNOWLEDGED", "concept_id": "<C A>"}
+        self.assertEqual(self.op("DELETE_CONCEPT", a, {}), (200, {**deleted, "changed": True}))
+        self.assertEqual(self.op("DELETE_CONCEPT", a, {}), (200, {**deleted, "changed": False}))
+        self.assertEqual(self.op("DELETE_CONCEPT", b, {"x": 1}), _INVALID)
+        self.assertEqual(self.op("DELETE_CONCEPT", b, {}, 0), _NO_BASE)
+        self.assertEqual(self.sync_state(b), concept_state("<C B>", "B", parents_revision=2))
+        self.answer(self.library.list_concepts(), [{"id": "<C B>", "parents": [], "subconcept_count": 0}])
+

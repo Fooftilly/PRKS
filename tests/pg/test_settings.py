@@ -1,7 +1,7 @@
-"""The application settings on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""The application settings on PostgreSQL (L-O-1 #633).
 
-``tests/test_settings_parity.py`` proves the facade answers as SQLite does.
-These tests cover what only PostgreSQL has: settings stored per Library,
+:class:`ReadAndPatchTests` and :class:`RouteAnswerTests` spell out the
+answers and refusals. The rest cover settings stored per Library,
 never instance settings, the ``ADMIN_LIBRARY`` gate, atomic patches,
 persistence across connections, and concurrent patches of the BibTeX
 export profile (each race holds one transaction open until the other is
@@ -14,12 +14,13 @@ import json
 from typing import Any
 from unittest import mock
 
+from backend.api import settings as settings_api
 from backend.db import Database, DatabaseConfig
 from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.settings import app_settings
-from tests.library_adapter import TestLibrary
+from tests.library_adapter import TestLibrary, call_route
 from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_people_facade import PeopleFacadeTestCase
@@ -221,3 +222,30 @@ class RaceTests(SettingsTestCase):
             lambda: self.library.patch_app_settings({"bibtex_export_fields": {"isbn": True, "doi": False}}))
         self.assertEqual((holder, contender), (None, None))
         self.assertEqual(self.profile(), {**_ALL_ON, "doi": False})  # the later write of isbn wins
+
+
+class RouteAnswerTests(SettingsTestCase):
+    """What ``/api/settings`` answers, spelled out."""
+
+    def test_the_route(self) -> None:
+        def run(method: str, data: Any = None) -> tuple[int, Any]:
+            return call_route(self.library, method, settings_api.PATH, data)
+
+        self.assertEqual(run("GET"), (200, _DEFAULTS))
+        ada = {**_DEFAULTS, "annotation_author": "Ada"}
+        self.assertEqual(run("PATCH", {"annotation_author": "  Ada  "}), (200, ada))
+        self.assertEqual(run("PATCH", {"bibtex_export_fields": {"doi": False}}),
+                         (200, {**ada, "bibtex_export_fields": {**_ALL_ON, "doi": False}}))
+        settled = {**ada, "bibtex_export_fields": {**_ALL_ON, "doi": False, "isbn": False}}
+        self.assertEqual(run("PATCH", {"bibtex_export_fields": {"isbn": False}}), (200, settled))
+        self.assertEqual(run("PATCH", {}), (200, settled))
+        self.assertEqual(run("PATCH", ["not", "object"]),
+                         (400, {"error": "JSON object body required", "code": "invalid_request"}))
+        for data, error in (({"annotation_author": "x" * 501}, "annotation_author too long"),
+                            ({"bibtex_export_fields": {"doi": "yes"}}, "bibtex_export_fields.doi must be boolean"),
+                            ({"bibtex_export_fields": {"unknown": True}}, "unknown bibtex_export_fields key: unknown")):
+            with self.subTest(data=str(data)[:40]):
+                self.assertEqual(run("PATCH", data), (400, {"error": error}))
+        self.assertEqual(run("GET"), (200, settled))
+        # The profile lists the fields in the export dialog's order.
+        self.assertEqual(list(run("GET")[1]["bibtex_export_fields"]), list(PRKS_BIBTEX_EXPORT_FIELD_IDS))

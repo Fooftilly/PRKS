@@ -1,8 +1,7 @@
 """Work field, note, source, open and delete commands on PostgreSQL (L-W-1 #628).
 
-``tests/test_works_mutations_parity.py`` proves the facade's patches and
-deletes leave SQLite's JSON and revisions. These tests drive the domain
-commands the sync handlers call: each decision table row, the revision
+:class:`AnswerTests` spells out what the patches, opens and deletes answer and
+leave. The other tests drive the domain commands the sync handlers call: each decision table row, the revision
 locking under concurrent writers (§7.2), the Work-row lock that orders an
 edit and a delete, the tombstones a delete leaves, and Library isolation.
 """
@@ -21,7 +20,7 @@ from backend.domain.identity.library_scope import LibraryScope, library_command
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.works import commands, metadata, notes, revisions, source
 from tests import acting_context as facade_context
-from tests.pg.test_works_facade import WorksFacadeTestCase
+from tests.pg.test_works_facade import WorksAnswerTestCase, WorksFacadeTestCase
 from tests.narrowing import require
 
 T = TypeVar("T")
@@ -446,3 +445,169 @@ class IsolationTests(MutationTestCase):
             self.assertEqual(require(self.library.get_work(work_id))["title"], "Mine")
         self.assertIsNone(require(self.library.get_work(work_id))["last_opened_at"])
         self.assertEqual(self.revisions_of(work_id), {})
+
+
+def _state(work: str, **changed: dict[str, Any]) -> dict[str, Any]:
+    """A metadata state: every field at revision 0 and its default, then ``changed``."""
+    fields: dict[str, Any] = {
+        "abstract": {"revision": 0}, "author_text": {"revision": 0}, "title": {"revision": 0},
+        "source_url": {"revision": 0}, "citation_style": {"revision": 0, "value": ""},
+        "doc_type": {"revision": 0, "value": "article"}, "status": {"revision": 0, "value": "Not Started"},
+        **{name: {"revision": 0, "value": ""} for name in (
+            "doi", "edition", "isbn", "issue", "journal", "location", "pages", "published_date",
+            "publisher", "thumb_page", "volume", "year")}}
+    fields.update(changed)
+    return {"work_id": work, "fields": fields}
+
+
+def _notes(work: str, private: int = 0, research: int = 0) -> dict[str, Any]:
+    return {"work_id": work, "private_note_revision": private, "research_note_revision": research}
+
+
+class AnswerTests(WorksAnswerTestCase):
+    """What the Work patches, opens and deletes answer and leave, spelled out."""
+
+    def state(self, work_id: str) -> tuple[Any, Any]:
+        return (self.library.get_work_metadata_state(work_id), self.library.get_work_notes_state(work_id))
+
+    def test_opening_orders_recent(self) -> None:
+        first = self.add("first", title="First")
+        second = self.add("second", title="Second", source_url=_VIDEO)
+        self.add("never", title="Never")
+        for work_id in (first, second, first):
+            self.assertIs(self.library.mark_work_opened(work_id), True)
+        self.answer(self.library.get_recent_browse(), [
+            {"id": "<W first>", "title": "First", "last_opened_at": "<ms>", "source_kind": None,
+             "asset_count": 0, "primary_asset_id": None},
+            {"id": "<W second>", "title": "Second", "last_opened_at": "<ms>", "source_kind": "video",
+             "asset_count": 1, "primary_asset_id": "<AS second>", "provider": "youtube"}])
+        self.answer(self.library.get_recent_works(1), [{"id": "<W first>", "last_opened_at": "<ms>"}])
+        self.answer(self.library.etag_recent_works(), 'W/"prks-recent-2-<ms>"')
+        self.answer(self.library.get_work(first), {"last_opened_at": "<ms>"})
+
+    def test_opening_a_missing_work(self) -> None:
+        self.assertIs(self.library.mark_work_opened(_MISSING), False)
+        with self.assertRaises(ValueError):
+            self.library.mark_work_opened("  ")
+
+    def test_a_metadata_patch_and_its_revisions(self) -> None:
+        work_id = self.add("work", title="Work")
+        patch = {"title": "Renamed", "status": "Completed", "abstract": "New abstract",
+                 "author_text": "Ann", "year": "1999", "published_date": "1999-02",
+                 "publisher": "Press", "location": "Rome", "edition": "3", "journal": "J",
+                 "volume": "4", "issue": "5", "pages": "6-7", "isbn": "isbn", "doi": "10.9/Y",
+                 "doc_type": "Book", "urldate": "2024-01-02", "source_url": "https://e.org/x",
+                 "hide_pdf_link_annotations": "yes", "not_a_field": "ignored"}
+        values = {"doc_type": "book", "doi": "10.9/Y", "edition": "3", "isbn": "isbn", "issue": "5",
+                  "journal": "J", "location": "Rome", "pages": "6-7", "published_date": "1999-02",
+                  "publisher": "Press", "status": "Completed", "volume": "4", "year": "1999"}
+        patched = _state("<W work>", abstract={"revision": 1}, author_text={"revision": 1},
+                         title={"revision": 1}, source_url={"revision": 1},
+                         **{name: {"revision": 1, "value": value} for name, value in values.items()})
+        work = {"title": "Renamed", "status": "Completed", "abstract": "New abstract", "author_text": "Ann",
+                "doc_type": "book", "year": "1999", "urldate": "2024-01-02", "source_url": "https://e.org/x",
+                "hide_pdf_link_annotations": 1, "publisher": "Press", "updated_at": "<s>"}
+        self.assertEqual(self.library.update_work_metadata(work_id, patch), ())
+        self.answer(self.library.get_work(work_id), work)
+        self.answer(self.state(work_id), (patched, _notes("<W work>")))
+        # The same values again change nothing and advance nothing.
+        self.library.update_work_metadata(work_id, patch)
+        self.answer(self.state(work_id), (patched, _notes("<W work>")))
+        # An unknown document type is stored as misc; None clears.
+        self.library.update_work_metadata(work_id, {"doc_type": "nonsense", "year": None})
+        cleared = _state("<W work>", **{**patched["fields"], "doc_type": {"revision": 2, "value": "misc"},
+                                        "year": {"revision": 2, "value": ""}})
+        self.answer(self.state(work_id), (cleared, _notes("<W work>")))
+        row = {"id": "<W work>", "title": "Renamed", "doc_type": "misc", "year": "", "status": "Completed",
+               "source_url": "https://e.org/x", "published_date": "1999-02"}
+        self.answer(self.library.get_all_works(), [{**row, "abstract": "New abstract", "urldate": "2024-01-02"}])
+        self.answer(self.library.get_works_browse_catalog(), [{**row, "abstract_excerpt": "New abstract"}])
+        self.answer(self.library.get_recently_added_browse(), [{**row, "publisher": "Press"}])
+
+    def test_pdf_fields(self) -> None:
+        work_id = self.add_pdf("pdf", "a.pdf", title="Pdf", source_url="https://e.org/a")
+        self.library.update_work_metadata(
+            work_id, {"thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b"})
+        self.answer(self.library.get_work(work_id), {
+            "thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b",
+            "file_path": "/api/pdfs/a.pdf", "source_kind": "pdf"})
+        self.answer(self.state(work_id), (
+            _state("<W pdf>", source_url={"revision": 1}, thumb_page={"revision": 1, "value": "4"}),
+            _notes("<W pdf>")))
+        self.answer(self.library.get_primary_thumbnail_fields(work_id), {
+            "file_path": "/api/pdfs/a.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 4})
+        # The same page as text is no change.
+        self.library.update_work_metadata(work_id, {"thumb_page": "4"})
+        self.answer(require(self.library.get_work_metadata_state(work_id))["fields"]["thumb_page"],
+                    {"revision": 1, "value": "4"})
+        self.library.update_work_metadata(work_id, {"thumb_page": None})
+        self.answer(self.library.get_work(work_id), {"thumb_page": None})
+        self.answer(require(self.library.get_work_metadata_state(work_id))["fields"]["thumb_page"],
+                    {"revision": 2, "value": ""})
+
+    def test_refused_patches_change_nothing(self) -> None:
+        work_id = self.add("work", title="Work")
+        video = self.add("video", title="Video", source_url=_VIDEO)
+        for target, patch in (
+            (work_id, {"status": "Someday"}),
+            (work_id, {"thumb_page": 0}),
+            (work_id, {"thumb_page": "abc"}),
+            (work_id, {"year": "y" * 51}),
+            (work_id, {"title": "x" * (64 * 1024 + 1)}),
+            (work_id, {"provider_id": "abc"}),
+            (work_id, {"source_kind": "video", "title": "Also refused"}),
+            (work_id, {"thumb_url": "https://t"}),
+            (video, {"source_url": "https://e.org/other"}),
+        ):
+            with self.subTest(patch=sorted(patch)):
+                with self.assertRaises(ValueError):
+                    self.library.update_work_metadata(target, patch)
+        self.answer(self.library.get_work(work_id), {"title": "Work", "source_kind": None, "thumb_page": None,
+                                                     "thumb_url": None, "year": "", "status": "Not Started"})
+        self.answer(self.library.get_work(video), {"source_url": _VIDEO, "provider_id": "dQw4w9WgXcQ"})
+        for found, label in ((work_id, "<W work>"), (video, "<W video>")):
+            self.answer(self.state(found), (_state(label), _notes(label)))
+
+    def test_a_patch_of_nothing_or_of_a_missing_work(self) -> None:
+        work_id = self.add("work", title="Work")
+        self.assertEqual(self.library.update_work_metadata(work_id, {}), ())
+        self.assertEqual(self.library.update_work_metadata(_MISSING, {"title": "Ghost"}), ())
+        self.assertIsNone(self.library.get_work_metadata_state(_MISSING))
+        self.assertIsNone(self.library.get_work_notes_state(_MISSING))
+
+    def test_the_source_state(self) -> None:
+        plain = self.add("plain", title="Plain")
+        video = self.add("video", title="Video", source_url=_VIDEO)
+        self.answer(self.library.get_work_source_state(plain), {"revision": 0, "work_id": "<W plain>"})
+        self.answer(self.library.get_work_source_state(video), {"revision": 0, "work_id": "<W video>"})
+        self.assertIsNone(self.library.get_work_source_state(_MISSING))
+
+    def test_a_private_note_through_patch(self) -> None:
+        work_id = self.add("work", title="Work", private_notes="first")
+        for value, stored, revision in (("second", "second", 1), ("second", "second", 1),
+                                        ("  spaced  ", "  spaced  ", 2), ("", None, 3), (None, None, 3)):
+            with self.subTest(value=value):
+                self.library.update_work_metadata(work_id, {"private_notes": value})
+                self.answer(self.library.get_work(work_id), {"private_notes": stored})
+                self.answer(self.state(work_id), (_state("<W work>"), _notes("<W work>", private=revision)))
+
+    def test_deleting_works(self) -> None:
+        plain = self.add("plain", title="Plain")
+        video = self.add("video", title="Video", source_url=_VIDEO)
+        for work_id, label in ((plain, "<W plain>"), (video, "<W video>")):
+            self.answer(require(self.library.delete_work_record(work_id)).__dict__,
+                        {"file_path": "", "managed_pdf_still_referenced": False, "work_id": label})
+            self.assertIsNone(self.library.get_work(work_id))
+        self.assertIsNone(self.library.delete_work_record(_MISSING))
+        self.assertEqual(self.library.get_all_works(), [])
+
+    def test_deleting_one_of_two_works_on_one_file(self) -> None:
+        first = self.add_pdf("first", "shared.pdf", title="First")
+        second = self.add("second", title="Second", file_path="/api/pdfs/shared.pdf")
+        self.answer(require(self.library.delete_work_record(first)).__dict__, {
+            "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": True, "work_id": "<W first>"})
+        self.answer(self.library.get_work(second), {
+            "file_path": "/api/pdfs/shared.pdf", "file_size_bytes": 32, "asset_count": 1,
+            "primary_asset_id": "<AS second>", "source_kind": "pdf"})
+        self.answer(require(self.library.delete_work_record(second, claim_pdf=False)).__dict__, {
+            "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": False, "work_id": "<W second>"})

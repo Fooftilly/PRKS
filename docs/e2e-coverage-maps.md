@@ -1,13 +1,13 @@
 # E2E coverage maps
 
-Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which contract left Chromium, what proves it now, and what browser boundary stays. Before removing or weakening a browser scenario in one of these families, check its row here; add a row when you move a contract. Rows cite current tests; SQLite-era tests named in older records map to their replacements in `tests/sqlite_retirement/`.
+Per-family KEEP / SPLIT / MOVE decisions (rule in `tests/e2e/AGENTS.md`): which contract left Chromium, what proves it now, and what browser boundary stays. Before removing or weakening a browser scenario in one of these families, check its row here; add a row when you move a contract. Rows cite current tests.
 
 ## Work Source family
 
 | Removed E2E | Replacement |
 | --- | --- |
 | four-column pending identity | Node `effectiveSourceOverlay` in `run_work_source_sync_selftest.js` |
-| respelling same video not a conflict | `tests/pg/test_works_sync.py` `SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row`; `test_works_sync_parity.py` `test_sources` |
+| respelling same video not a conflict | `tests/pg/test_works_sync.py` `SourceSyncTests.test_a_change_is_one_revision_and_the_ack_states_the_stored_row` |
 
 ## Work-Tag
 

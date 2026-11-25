@@ -1,7 +1,7 @@
-"""Saved Views on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Saved Views on PostgreSQL (L-O-1 #633).
 
-``tests/test_saved_views_parity.py`` proves the commands return SQLite's JSON
-and refusals. These tests cover what only PostgreSQL has: names compared by
+:class:`CrudTests` and :class:`RouteAnswerTests` spell out the answers and
+refusals. The rest cover names compared by
 identity key, the unique index as the backstop of a name race, Library
 isolation and reader refusals, timestamps, the rollback of a failed write,
 and concurrent writers (each race holds one transaction open until the
@@ -23,6 +23,7 @@ from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
+from tests.library_adapter import call_route
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 
@@ -359,3 +360,44 @@ class RaceTests(SavedViewTestCase):
         assert found is not None
         self.assertEqual((found["name"], found["search"], found["created_at"]),
                          ("New name", _TAG, view["created_at"]))
+
+
+class RouteAnswerTests(SavedViewTestCase):
+    """What ``/api/saved-views`` answers, spelled out."""
+
+    def test_the_routes(self) -> None:
+        def run(method: str, path: str, body: Any = None) -> tuple[int, Any]:
+            return call_route(self.library, method.upper(), path, body)
+
+        status, created = run("post", "/api/saved-views", {"name": "Industry", "search": _ADVANCED})
+        self.assertEqual((status, set(created)), (201, {"id", "name", "search", "created_at", "updated_at"}))
+        view = f"/api/saved-views/{created['id']}"
+        self.assertEqual(run("get", view), (200, created))
+        status, renamed = run("patch", view, {"name": "Renamed"})
+        self.assertEqual((status, renamed["name"], renamed["search"]), (200, "Renamed", _ADVANCED))
+        status, redefined = run("patch", view, {"search": _TAG})
+        self.assertEqual((status, redefined["name"], redefined["search"]), (200, "Renamed", _TAG))
+        for body in ({"name": None, "search": None}, {}):
+            self.assertEqual(run("patch", view, body), (400, {"error": "Nothing to update."}))
+        self.assertEqual(run("get", "/api/saved-views"), (200, [redefined]))
+        self.assertEqual(run("post", "/api/saved-views", {"name": "renamed", "search": _ALL}),
+                         (409, {"error": "A Saved View with that name already exists."}))
+        self.assertEqual(run("post", "/api/saved-views", {"name": "", "search": _ALL}),
+                         (400, {"error": "Name is required."}))
+        self.assertEqual(run("post", "/api/saved-views", ["not", "object"]),
+                         (400, {"error": "JSON object body required", "code": "invalid_request"}))
+        missing = f"/api/saved-views/{_MISSING}"
+        self.assertEqual(run("patch", missing, {"name": "Nope"}), (404, {"error": "Saved View not found."}))
+        self.assertEqual(run("get", missing), (404, {"error": "Saved View not found."}))
+        self.assertEqual(run("delete", missing), (404, {"error": "Saved View not found."}))
+        self.assertEqual(run("delete", view), (200, {"status": "deleted"}))
+        self.assertEqual(run("get", view), (404, {"error": "Saved View not found."}))
+        self.assertEqual(run("get", "/api/saved-views"), (200, []))
+
+    def test_the_limit_is_judged_before_the_name(self) -> None:
+        self.seed(PRKS_SAVED_VIEW_MAX - 1)
+        self.create("Seed name")
+        for name in ("One more", "seed 000"):
+            with self.subTest(name=name):
+                self.refused("The library already has the maximum number of Saved Views.", 409,
+                             self.library.create_saved_view, name, _ALL)

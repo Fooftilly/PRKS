@@ -2,10 +2,9 @@
 
 The PostgreSQL facade package these first checked (``backend/pg_facade``)
 was retired by PG-C3: ``backend/library.py`` keeps its database-plus-storage
-handle and its typed refusal. The module keeps its name because the SQLite
-retirement records name its tests. It never imports psycopg, so these run in
-the default suite. The ported-method registry and the SQLite reach tooling
-were retired with SQLite (``tests/sqlite_retirement/``).
+handle and its typed refusal. It never imports psycopg, so these run in the
+default suite. The ported-method registry and the SQLite reach tooling were
+retired with SQLite.
 """
 
 from __future__ import annotations

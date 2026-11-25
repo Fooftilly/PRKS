@@ -4,8 +4,8 @@ What SQLite has no counterpart for, or answers differently by design
 (``backend/domain/people/__init__.py``): Manifestation-scoped roles, Library
 isolation, the role decision table run against the domain commands, the
 tombstones a Work or Person delete leaves for a recreated id, and the §8.3
-Person row locks. Behaviour SQLite shares is compared directly in
-``tests/test_people_roles_parity.py``.
+Person row locks. :class:`AnswerTests` spells out what the role commands and
+reads answer.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from backend.domain.works import commands
 from tests import acting_context as facade_context
 from tests.pg.test_people_facade import PeopleFacadeTestCase
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
 
 _MISSING_PERSON = "P-" + "0" * 32
 
@@ -308,3 +309,190 @@ class ConcurrencyTests(RoleTestCase):
         self.assertIsInstance(contender, ValueError)
         self.assertIn("Work not found", str(contender))
         self.assertEqual((self.count("roles"), self.revisions("work-person-role")), (0, {}))
+
+
+_MISSING_WORK = "W-" + "0" * 32
+_NOT_A_ROLE = ("'Producer' is not a Work role; use one of Author, Editor, Reviewer, Mentioned, Translator,"
+               " Introduction, Foreword, Afterword")
+_PERSON = {"about": "", "aliases": "", "birth_date": "", "created_at": "<s>", "death_date": "", "image_url": "",
+           "link_iep": "", "link_stanford_encyclopedia": "", "link_wikipedia": "", "links_other": "",
+           "updated_at": "<s>"}
+
+
+class AnswerTests(AnswerAssertions, RoleTestCase):
+    """The JSON the Work-Person role commands and reads answer, spelled out."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.labels.name(self.ann, "<P Lee>")
+        self.labels.name(self.bo, "<P Ng>")
+        self.labels.name(self.work, "<W Essay>")
+
+    def roles(self, work_id: Optional[str] = None) -> list[tuple[str, int, Optional[str]]]:
+        return [(row["role_type"], row["order_index"], row["credit_name"])
+                for row in self.library.get_work_roles(work_id or self.work)]
+
+    def test_links_read_back_on_the_work_and_its_summaries(self) -> None:
+        self.library.add_role(self.ann, self.work, "Author", credit_name="  A. Lee ")
+        self.library.add_role(self.bo, self.work, "Editor")
+        self.library.add_role(self.bo, self.work, "Author")
+        roles = self.library.get_work_roles(self.work)
+        self.answer(roles, [
+            {**_PERSON, "aliases": "A. Lee", "credit_name": "A. Lee", "first_name": "Ann", "id": "<P Lee>",
+             "last_name": "Lee", "manifestation_id": None, "order_index": 0, "role_type": "Author"},
+            {**_PERSON, "credit_name": None, "first_name": "Bo", "id": "<P Ng>", "last_name": "Ng",
+             "manifestation_id": None, "order_index": 1, "role_type": "Editor"},
+            {"credit_name": None, "id": "<P Ng>", "order_index": 2, "role_type": "Author"}])
+        self.assertEqual(require(self.library.get_work(self.work))["roles"], roles)
+        linked = [
+            {"canonical_name": "Ann Lee", "credit_name": "A. Lee", "display_name": "A. Lee", "order_index": 0,
+             "person_id": "<P Lee>", "role_type": "Author"},
+            {"canonical_name": "Bo Ng", "credit_name": "", "display_name": "Bo Ng", "order_index": 1,
+             "person_id": "<P Ng>", "role_type": "Editor"},
+            {"canonical_name": "Bo Ng", "credit_name": "", "display_name": "Bo Ng", "order_index": 2,
+             "person_id": "<P Ng>", "role_type": "Author"}]
+        summary = {"linked_authors": "A. Lee, Bo Ng", "linked_people": linked, "primary_author": "A. Lee",
+                   "primary_editor": "Bo Ng"}
+        for rows in (self.library.get_all_works(), self.library.get_works_browse_catalog(),
+                     self.library.get_recently_added_works(),
+                     self.library.get_work_summaries_by_ids_ordered([self.work])):
+            self.answer(rows, [summary])
+        self.assertTrue(self.library.has_work_role(self.bo, self.work, "Editor"))
+        self.assertFalse(self.library.has_work_role(self.ann, self.work, "Editor"))
+        self.assertEqual(self.library.next_role_order_index(self.work), 3)
+        works = require(self.library.get_person(self.bo))["works"]
+        self.answer(works, [{"credit_name": None, "id": "<W Essay>", "order_index": 1, "role_type": "Editor", **summary},
+                            {"credit_name": None, "id": "<W Essay>", "order_index": 2, "role_type": "Author"}])
+
+    def test_a_work_without_roles(self) -> None:
+        self.assertEqual(self.library.get_work_roles(self.work), [])
+        self.assertEqual(self.library.next_role_order_index(self.work), 0)
+        self.assertEqual(self.library.get_work_roles(_MISSING_WORK), [])
+        self.answer(self.library.get_all_works(), [{"linked_authors": None, "linked_people": [],
+                                                    "primary_author": None, "primary_editor": None}])
+
+    def test_refusals(self) -> None:
+        self.library.add_role(self.ann, self.work, "Author")
+        for call, message in (
+                (lambda: self.library.add_role(self.ann, self.work, "Author"),
+                 "This person is already linked to this file as Author."),
+                (lambda: self.library.add_role(self.ann, self.work, "Producer"), _NOT_A_ROLE),
+                (lambda: self.library.add_role(self.bo, self.work, "Editor", credit_name="x" * 501),
+                 "credit_name exceeds 500 bytes"),
+                (lambda: self.library.delete_work_role(self.work, self.ann, "Producer"), _NOT_A_ROLE)):
+            self.assert_refused(call, message)
+        self.assertEqual(self.roles(), [("Author", 0, None)])
+
+    def test_credit_edits_and_removal(self) -> None:
+        self.library.add_role(self.ann, self.work, "Author")
+        self.assertTrue(self.library.update_role_credit_name(self.work, self.ann, "Author", 7, "Ann L."))
+        self.assertFalse(self.library.update_role_credit_name(self.work, self.bo, "Author", 0, "x"))
+        self.assertFalse(self.library.update_role_credit_name(self.work, self.ann, "Producer", 0, "x"))
+        # A credit that is not the name becomes an alias of the Person.
+        self.assertEqual(require(self.library.get_person(self.ann))["aliases"], "Ann L.")
+        state = require(self.library.get_person_metadata_state(self.ann))
+        self.assertEqual(state["fields"]["aliases"]["revision"], 1)
+        # Clearing the override keeps the alias; the link shows the Person's name again.
+        self.assertTrue(self.library.update_role_credit_name(self.work, self.ann, "Author", 0, ""))
+        self.assertEqual(self.library.get_all_works()[0]["linked_authors"], "Ann Lee")
+        self.assertTrue(self.library.delete_work_role(self.work, self.ann, "Author"))
+        self.assertFalse(self.library.delete_work_role(self.work, self.ann, "Author"))
+        self.assertFalse(self.library.delete_work_role(_MISSING_WORK, self.ann, "Author"))
+        self.assertEqual(self.library.get_work_roles(self.work), [])
+
+    def test_credits_that_are_the_name_or_hold_a_comma_are_not_promoted(self) -> None:
+        for role, credit in (("Author", "Ann Lee"), ("Editor", "Lee, Ann"), ("Reviewer", "A. Lee"),
+                             ("Translator", "A. Lee")):
+            self.library.add_role(self.ann, self.work, role, credit_name=credit)
+        self.assertEqual(require(self.library.get_person(self.ann))["aliases"], "A. Lee")
+        self.assertEqual(require(self.library.get_person_metadata_state(self.ann))["fields"]["aliases"],
+                         {"revision": 1})
+
+    def test_construction_keeps_the_given_order_and_skips_what_it_cannot_insert(self) -> None:
+        wanted: list[Any] = [
+            {"person_id": self.bo, "role_type": "Editor"},
+            {"person_id": self.ann, "role_type": "Author", "credit_name": "A. Lee"},
+            {"person_id": None, "role_type": "Author"},
+            {"person_id": self.bo, "role_type": "Producer"},
+            {"person_id": self.bo, "role_type": "Author", "credit_name": "x" * 501},
+            {"person_id": self.ann, "role_type": "Author"},
+            "not a role",
+            {"person_id": self.bo, "role_type": "Mentioned", "credit_name": 7},
+        ]
+        self.assertEqual(self.library.missing_initial_role_person_ids(wanted), [])
+        self.assertEqual(self.library.insert_initial_roles(self.work, wanted), 3)
+        self.assertEqual(self.roles(), [("Editor", 0, None), ("Author", 1, "A. Lee"), ("Mentioned", 7, None)])
+        self.assertEqual(require(self.library.get_person(self.ann))["aliases"], "A. Lee")
+        self.assertEqual(self.library.insert_initial_roles(self.work, []), 0)
+
+    def test_construction_with_a_missing_person_writes_nothing(self) -> None:
+        wanted = [{"person_id": self.ann, "role_type": "Author", "credit_name": "A. Lee"},
+                  {"person_id": _MISSING_PERSON, "role_type": "Editor"}]
+        self.assertEqual(self.library.missing_initial_role_person_ids(wanted), [_MISSING_PERSON])
+        self.assertEqual(self.library.missing_person_ids([self.bo, _MISSING_PERSON, " "]), [_MISSING_PERSON])
+        with self.assertRaisesRegex(ValueError, "no longer exists"):
+            self.library.insert_initial_roles(self.work, wanted)
+        self.assertEqual(self.library.get_work_roles(self.work), [])
+        self.assertEqual(require(self.library.get_person(self.ann))["aliases"], "")
+
+    def test_one_constructed_role(self) -> None:
+        self.library.insert_initial_role(self.work, self.ann, "Author", 2, "A. Lee")
+        self.library.insert_initial_role(self.work, self.bo, "Editor")
+        self.assert_refused(lambda: self.library.insert_initial_role(self.work, self.bo, "Producer"), _NOT_A_ROLE)
+        with self.assertRaisesRegex(ValueError, "no longer exists"):
+            self.library.insert_initial_role(self.work, _MISSING_PERSON, "Author")
+        self.assertEqual([(role, index) for role, index, _ in self.roles()], [("Editor", 0), ("Author", 2)])
+        self.assertEqual(self.library.next_role_order_index(self.work), 3)
+
+    def test_constructed_ties_keep_insertion_order(self) -> None:
+        cy = self.library.add_person("Cy", "Oh")
+        notes = self.library.add_work("Notes")
+        for work, indexes in ((self.work, (0, 0, 0)), (notes, (0, 1, 0))):
+            for person, index in zip((self.ann, self.bo, cy), indexes):
+                self.library.insert_initial_role(work, person, "Author", index)
+        firsts = lambda work_id: [(row["first_name"], row["order_index"]) for row in self.library.get_work_roles(work_id)]
+        self.assertEqual(firsts(self.work), [("Ann", 0), ("Bo", 0), ("Cy", 0)])
+        self.assertEqual(firsts(notes), [("Ann", 0), ("Cy", 0), ("Bo", 1)])
+        rows = sorted(self.library.get_all_works(), key=lambda row: row["title"])
+        self.assertEqual([row["linked_authors"] for row in rows], ["Ann Lee, Bo Ng, Cy Oh", "Ann Lee, Cy Oh, Bo Ng"])
+
+    def test_a_constructed_duplicate_is_refused(self) -> None:
+        self.library.insert_initial_role(self.work, self.ann, "Author")
+        with self.assertRaises(ValueError):
+            self.library.insert_initial_role(self.work, self.ann, "Author", 3)
+        self.assertEqual(self.roles(), [("Author", 0, None)])
+
+    def test_a_persons_works(self) -> None:
+        notes = self.labels.name(self.library.add_work("Notes", publisher="Verso", year="1951"), "<W Notes>")
+        self.library.add_role(self.ann, notes, "Editor")
+        self.library.add_role(self.bo, self.work, "Author")
+        self.library.add_role(self.ann, self.work, "Author", credit_name="A. Lee")
+        self.answer(require(self.library.get_person(self.ann))["works"], [
+            {"credit_name": None, "id": "<W Notes>", "linked_authors": None, "order_index": 0,
+             "primary_editor": "Ann Lee", "publisher": "Verso", "role_type": "Editor", "title": "Notes",
+             "year": "1951"},
+            {"credit_name": "A. Lee", "id": "<W Essay>", "linked_authors": "Bo Ng, A. Lee", "order_index": 1,
+             "primary_author": "Bo Ng", "role_type": "Author", "title": "Essay"}])
+
+    def test_a_linked_person_is_kept_until_unlinked(self) -> None:
+        self.library.add_role(self.ann, self.work, "Author")
+        with self.assertRaisesRegex(ValueError, "linked works"):
+            self.library.delete_person_if_unlinked(self.ann)
+        self.library.delete_work_role(self.work, self.ann, "Author")
+        self.library.delete_person_if_unlinked(self.ann)
+        self.assertIsNone(self.library.get_person(self.ann))
+
+    def test_a_deleted_work_takes_its_roles(self) -> None:
+        self.library.add_role(self.ann, self.work, "Author")
+        self.library.insert_initial_role(self.work, self.bo, "Editor", 5)
+        self.assertIsNotNone(self.library.delete_work_record(self.work))
+        self.assertEqual(require(self.library.get_person(self.ann))["works"], [])
+        self.assertEqual(self.library.get_work_roles(self.work), [])
+        self.assertIsNone(self.library.delete_person_if_unlinked(self.bo))
+
+    def test_a_rename_reaches_every_linked_work(self) -> None:
+        notes = self.library.add_work("Notes")
+        for work_id in (self.work, notes):
+            self.library.add_role(self.ann, work_id, "Author")
+        self.library.update_person_profile(self.ann, {"last_name": "Leigh"})
+        self.assertEqual([row["linked_authors"] for row in self.library.get_all_works()], ["Ann Leigh", "Ann Leigh"])

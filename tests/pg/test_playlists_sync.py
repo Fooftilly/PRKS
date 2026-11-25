@@ -1,7 +1,7 @@
 """The Playlist sync handlers and ``CREATE_WORK``'s Playlist filing on PostgreSQL (L-O-1 #633).
 
-``tests/test_playlists_parity.py`` proves each Playlist operation answers as
-on SQLite. These tests cover what only PostgreSQL has: races decided by row
+:class:`AnswerTests` spells out what each Playlist operation answers. The
+rest cover races decided by row
 locks and SERIALIZABLE retries, each held open until the other side waits
 (§7.1); one ``op_id`` replayed or reused; a stale operation after a
 Playlist or a Work was deleted and created again under its id; Library
@@ -376,3 +376,118 @@ class LedgerAndIsolationTests(PlaylistSyncTestCase):
         with self.assertRaises(AccessRefused):
             self.send(self.create("Talks") | {"device_id": str(reader.device_id)}, reader)
         self.assertEqual(self.count("playlists"), 0)
+
+
+class AnswerTests(PlaylistSyncTestCase):
+    """What each Playlist operation answers, spelled out."""
+
+    def test_create_answers(self) -> None:
+        data = self.create("  Course ", description="About", original_url="https://example.org")
+        playlist_id = data["entity_id"]
+        self.assertEqual(self.send(data), (200, {
+            "code": "ACKNOWLEDGED", "changed": True, "playlist_id": playlist_id,
+            "playlist": {"id": playlist_id, "title": "Course", "description": "About",
+                         "original_url": "https://example.org", "item_count": 0}}))
+        empty = self.create("  ")
+        self.assertEqual(self.send(empty)[1]["playlist"], {
+            "id": empty["entity_id"], "title": "Untitled playlist", "description": "", "original_url": None,
+            "item_count": 0})
+        for bad in (self.create("Base") | {"base_revision": 0}, self.create("Id", "PL-1"),
+                    self.create("Prefix", generate("F")), self.envelope("CREATE_PLAYLIST", generate("PL"), {"title": "x"}),
+                    self.create("x" * 301), self.envelope("CREATE_PLAYLIST", generate("PL"), playlist_payload() | {"description": 5})):
+            with self.subTest(entity_id=bad["entity_id"], payload=str(bad["payload"])[:40]):
+                expected = "INVALID_BASE_REVISION" if bad["base_revision"] == 0 else "INVALID_ENVELOPE"
+                self.assertEqual(self.send(bad), (400, {"code": expected}))
+
+    def test_field_decision_table(self) -> None:
+        playlist_id = self.create_playlist("Course")
+        sent = lambda field, value, base: self.send(self.playlist_field(playlist_id, field, value, base))
+        self.assertEqual(sent("title", "Renamed", 0), (200, {
+            "code": "ACKNOWLEDGED", "changed": True, "playlist_id": playlist_id, "field": "title",
+            "server_revision": 1, "value_omitted": True}))
+        self.assertEqual(sent("title", " Renamed ", 0)[1]["changed"], False)
+        self.assertEqual(sent("title", "Stale", 0), (409, {
+            "code": "REVISION_CONFLICT", "playlist_id": playlist_id, "field": "title", "current_revision": 1,
+            "current_value": "Renamed", "requested_value": "Stale"}))
+        self.assertEqual(sent("title", "Future", 7), (400, {
+            "code": "FUTURE_REVISION", "playlist_id": playlist_id, "field": "title", "current_revision": 1,
+            "current_value": "Renamed", "requested_value": "Future"}))
+        self.assertEqual(sent("title", "  ", 1)[1]["server_revision"], 2)
+        self.assertEqual(sent("original_url", "https://example.org", 0)[1]["server_revision"], 1)
+        self.assertEqual(sent("original_url", "", 1)[1]["server_revision"], 2)
+        for field, value, base in (("description", "x" * 4001, 1), ("colour", "x", 0), ("title", 5, 0)):
+            with self.subTest(field=field):
+                self.assertEqual(sent(field, value, base), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.envelope("SET_PLAYLIST_FIELD", playlist_id, {"field": "title", "value": "X"})),
+                         (400, {"code": "INVALID_BASE_REVISION"}))
+        missing = generate("PL")
+        self.assertEqual(self.send(self.playlist_field(missing, "title", "X", 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": missing, "field": "title"}))
+        detail = require(self.library.get_playlist(playlist_id))
+        self.assertEqual((detail["title"], detail["original_url"]), ("Untitled playlist", None))
+
+    def test_work_playlist_and_order_decision_tables(self) -> None:
+        a, b = self.create_playlist("A"), self.create_playlist("B")
+        first, second, third = self.works("First", "Second", "Third")
+        for work_id in (first, second, third):
+            self.assertEqual(self.send(self.put(work_id, a, 0)), (200, {
+                "code": "ACKNOWLEDGED", "changed": True, "work_id": work_id, "playlist_id": a,
+                "playlist_title": "A", "server_revision": 1}))
+        self.assertEqual(self.send(self.put(first, a, 0))[1]["changed"], False)  # converged on a stale base
+        self.assertEqual(self.send(self.put(first, b, 0)), (409, {
+            "code": "REVISION_CONFLICT", "work_id": first, "current_revision": 1, "current_value": a,
+            "requested_value": b}))
+        self.assertEqual(self.send(self.put(first, b, 4)), (400, {
+            "code": "FUTURE_REVISION", "work_id": first, "current_revision": 1, "current_value": a,
+            "requested_value": b}))
+        self.assertEqual(self.send(self.put(first, generate("PL"), 1)),
+                         (404, {"code": "PLAYLIST_NOT_FOUND", "work_id": first, "current_revision": 1}))
+        missing = generate("W")
+        self.assertEqual(self.send(self.put(missing, a, 0)), (404, {"code": "ENTITY_NOT_FOUND", "work_id": missing}))
+        for bad in (self.put(first, " a", 1), self.envelope("SET_WORK_PLAYLIST", first, {"playlist_id": a, "x": 1}, 1)):
+            self.assertEqual(self.send(bad), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.put(first, a, None)), (400, {"code": "INVALID_BASE_REVISION"}))  # type: ignore[arg-type]
+        # Unknown and repeated ids are dropped; the rest of the order follows.
+        order = [third, "x", first, third]
+        answer = (200, {"code": "ACKNOWLEDGED", "changed": True, "playlist_id": a, "server_revision": 4,
+                        "work_ids": [third, first, second]})
+        self.assertEqual(self.send(self.reorder(a, order, 3)), answer)
+        self.assertEqual(self.send(self.reorder(a, order, 3)), (200, answer[1] | {"changed": False}))
+        self.assertEqual(self.send(self.reorder(a, [second, first], 3)), (409, {
+            "code": "REVISION_CONFLICT", "playlist_id": a, "current_revision": 4, "current_count": 3,
+            "requested_count": 3}))
+        self.assertEqual(self.send(self.reorder(a, [second, first], 9))[1]["code"], "FUTURE_REVISION")
+        # A move between Playlists advances both orders: a reorder from before it is stale.
+        self.assertEqual(self.send(self.put(second, b, 1))[1]["server_revision"], 2)
+        self.assertEqual(self.send(self.reorder(a, [second, first], 4)), (409, {
+            "code": "REVISION_CONFLICT", "playlist_id": a, "current_revision": 5, "current_count": 2,
+            "requested_count": 2}))
+        unknown = generate("PL")
+        self.assertEqual(self.send(self.reorder(unknown, [], 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": unknown}))
+        for work_ids in ([" "], "x", ["x"] * 1001):
+            self.assertEqual(self.send(self.reorder(a, work_ids, 0)), (400, {"code": "INVALID_ENVELOPE"}))  # type: ignore[arg-type]
+        self.assertEqual(self.send(self.put(third, "", 1)), (200, {
+            "code": "ACKNOWLEDGED", "changed": True, "work_id": third, "playlist_id": "", "playlist_title": "",
+            "server_revision": 2}))
+        self.assertEqual((self.state(a)[1], self.state(b)[1]), (6, 1))
+
+    def test_delete_answers(self) -> None:
+        doomed, kept = self.create_playlist("Doomed"), self.create_playlist("Kept")
+        [member] = self.works("Member")
+        self.send(self.put(member, doomed, 0))
+        self.assertEqual(self.send(self.envelope("DELETE_PLAYLIST", doomed, {"x": 1})), (400, {"code": "INVALID_ENVELOPE"}))
+        self.assertEqual(self.send(self.envelope("DELETE_PLAYLIST", doomed, {}, 0)), (400, {"code": "INVALID_BASE_REVISION"}))
+        self.assertEqual(self.send(self.delete(doomed)), (200, {"code": "ACKNOWLEDGED", "changed": True,
+                                                                "playlist_id": doomed}))
+        self.assertEqual(self.send(self.delete(doomed))[1]["changed"], False)
+        self.assertEqual(self.send(self.put(member, doomed, 2)),
+                         (404, {"code": "PLAYLIST_NOT_FOUND", "work_id": member, "current_revision": 2}))
+        # The release advanced the Work: a base from before it is stale.
+        self.assertEqual(self.send(self.put(member, kept, 1))[1], {
+            "code": "REVISION_CONFLICT", "work_id": member, "current_revision": 2, "current_value": "",
+            "requested_value": kept})
+        self.assertEqual(self.send(self.put(member, kept, 2))[1]["server_revision"], 3)
+        self.assertEqual(self.send(self.playlist_field(doomed, "title", "X", 0)),
+                         (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": doomed, "field": "title"}))
+        self.assertEqual(self.send(self.reorder(doomed, [], 0)), (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": doomed}))

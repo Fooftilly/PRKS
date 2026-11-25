@@ -406,9 +406,9 @@ that calls domain commands and queries with the served Library's database
 and the admitted `RequestContext`; `library_command` and `library_query`
 authorize inside each transaction. `backend/library.py` keeps
 `PostgresLibrary` (the database-plus-storage handle the routes hold) and
-`NotPortedError` (answered 501). Tests keep the old facade method names over
-the same commands (`tests/library_adapter.py`) so recorded parity answers
-still replay.
+`NotPortedError` (answered 501). Some tests still call the old facade
+method names over the same commands (`tests/library_adapter.py`); #1426
+moves them to direct domain calls.
 
 ---
 
@@ -2617,9 +2617,10 @@ The job counters and queue depth are served to the Library owner at
 - **CI**: `test-gate.yml` and `e2e-gate.yml` add a `services: postgres:18`
   container with the builtin locale; a nightly or label-triggered matrix adds
   PostgreSQL 19 once it is released.
-- **Parity**: parity modules replay the recorded SQLite answers
-  (`tests/parity_reference/`) against PostgreSQL; the SQLite Library is
-  deleted, so a changed call needs a PostgreSQL-only assertion.
+- **Answers**: the recorded SQLite answers are retired (#1426). Each
+  family's PostgreSQL tests spell out the fields they check
+  (`tests/pg/answers.py`): a dict in the expected value names only the keys
+  it checks, so a new field on a row does not break them.
 
 ### 13.2 New gates
 
@@ -2796,10 +2797,9 @@ The job counters and queue depth are served to the Library owner at
 
 ### 13.4 Retirement checklist
 
-Done (#641). Every retired SQLite test module is listed in
-`tests/sqlite_retirement/<module>.json` with the PostgreSQL tests that
-replace it or the reason none does; `tests/test_sqlite_retirement.py`
-checks the listing.
+Done (#641). Every retired SQLite test module was listed with the
+PostgreSQL tests that replace it or the reason none does; the listing was
+deleted with the recorded answers (#1426) and stays in git history.
 
 **Rule for deleting a test**: a SQLite-specific test is deleted only in the
 PR that adds the PostgreSQL test covering the same guarantee, and the PR

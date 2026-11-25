@@ -1,7 +1,7 @@
-"""Playlists, their fields, membership and order on PostgreSQL: what parity cannot show (L-O-1 #633).
+"""Playlists, their fields, membership and order on PostgreSQL (L-O-1 #633).
 
-``tests/test_playlists_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: refusals of what PostgreSQL text
+:class:`AnswerTests` spells out the JSON each command answers. The rest
+cover refusals of what PostgreSQL text
 cannot hold, the tombstones a Playlist or Work delete leaves, Library
 isolation, and concurrent writers (each race holds one transaction open
 until the other is waiting on it).
@@ -10,17 +10,19 @@ until the other is waiting on it).
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 from unittest import mock
 
 from backend.domain.identity.authorization import AccessRefused
-from backend.domain.organization import playlists
+from backend.domain.organization import playlist_commands, playlists
 from backend.domain.works import commands
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
 from backend.domain.organization.playlist_rules import PlaylistRuleError, scope_key
 from tests.pg.test_tags import OrganizationTestCase
+from backend.web.etags import etag_for_representation
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
 
 _NOT_FOUND = "Playlist or work not found."
 
@@ -471,3 +473,113 @@ class RaceTests(PlaylistTestCase):
         with self.assertRaises(PlaylistRuleError):
             self.run_command(lambda scope: playlists.set_field(scope, generate("PL"), "title", "X"))
         self.assertEqual(self.revisions("playlist-field"), {})
+
+
+_MISSING_PLAYLIST = "PL-" + "0" * 32
+_MISSING_WORK = "W-" + "0" * 32
+
+
+class AnswerTests(AnswerAssertions, PlaylistTestCase):
+    """The JSON each Playlist command and read answers, spelled out."""
+
+    def named(self, title: str, description: str = "", original_url: str = "", label: str = "") -> str:
+        playlist_id = playlist_commands.create(self.db, self.actor.context, title, description, original_url)
+        return self.labels.name(playlist_id, f"<PL {label or title}>")
+
+    def named_work(self, title: str) -> str:
+        return self.labels.name(self.library.add_work(title), f"<W {title}>")
+
+    def detail(self, playlist_id: str) -> Optional[dict[str, Any]]:
+        return playlist_commands.detail(self.db, self.actor.context, playlist_id, self.storage.pdfs_dir)
+
+    def order(self, playlist_id: str) -> list[tuple[str, int]]:
+        return self.labels.show([(item["id"], item["position"]) for item in require(self.detail(playlist_id))["items"]])
+
+    def fields(self, playlist_id: str) -> tuple[dict[str, int], int]:
+        state = require(playlist_commands.sync_state(self.db, self.actor.context, playlist_id))
+        return {field: value["revision"] for field, value in state["fields"].items()}, state["order_revision"]
+
+    def test_create_read_update_and_list(self) -> None:
+        db, ctx = self.db, self.actor.context
+        course = self.named("Course", "About", "https://example.org/course")
+        bare = self.named("  ", label="Bare")
+        self.answer(self.detail(course), {
+            "created_at": "<s>", "description": "About", "id": "<PL Course>", "items": [],
+            "original_url": "https://example.org/course", "title": "Course", "updated_at": "<s>"})
+        # The default title, and no original URL.
+        self.answer(self.detail(bare), {"description": "", "id": "<PL Bare>", "items": [], "original_url": None,
+                                        "title": "Untitled playlist"})
+        self.assertIsNone(self.detail(_MISSING_PLAYLIST))
+        for fields in ({"title": "Renamed", "description": " About ", "original_url": "", "ignored": "x"},
+                       {"title": " Renamed "}, {}):
+            self.assertIsNone(playlist_commands.update(db, ctx, course, fields))
+        playlist_commands.update(db, ctx, bare, {"description": None, "original_url": False})
+        self.assert_refused(lambda: playlist_commands.update(db, ctx, _MISSING_PLAYLIST, {"title": "X"}), "Playlist not found.")
+        self.assert_refused(lambda: playlist_commands.update(db, ctx, course, {"title": "x" * 301}), "title exceeds 300 bytes.")
+        self.assert_refused(lambda: playlist_commands.create(db, ctx, "x" * 301), "title exceeds 300 bytes.")
+        self.assertEqual(self.fields(course), ({"description": 0, "original_url": 1, "title": 1}, 0))
+        self.assertEqual(self.fields(bare), (_UNTOUCHED, 0))
+        self.assertIsNone(playlist_commands.sync_state(db, ctx, _MISSING_PLAYLIST))
+        self.answer(self.detail(course), {"description": "About", "original_url": None, "title": "Renamed"})
+        catalog = playlist_commands.catalog(db, ctx)
+        row = {"created_at": "<s>", "item_count": 0, "original_url": None, "updated_at": "<s>"}
+        self.answer(sorted(self.labels.show(catalog), key=lambda found: found["id"]), [
+            {**row, "description": "", "id": "<PL Bare>", "title": "Untitled playlist"},
+            {**row, "description": "About", "id": "<PL Course>", "title": "Renamed"}])
+        self.assertRegex(etag_for_representation("playlists", catalog), r'^W/"prks-playlists-2-[0-9a-f]+"$')
+
+    def test_membership_order_and_the_work_projection(self) -> None:
+        db, ctx = self.db, self.actor.context
+        a, b = self.named("A"), self.named("B")
+        first, second, third = self.named_work("First"), self.named_work("Second"), self.named_work("Third")
+        self.answer(playlist_commands.work_state(db, ctx, first),
+                    {"playlist_id": "", "revision": 0, "work_id": "<W First>"})
+        for playlist_id, work_id in ((_MISSING_PLAYLIST, first), (a, _MISSING_WORK), (" ", first), (a, " ")):
+            with self.subTest(playlist=playlist_id, work=work_id):
+                self.assert_refused(lambda: playlist_commands.add_item(db, ctx, playlist_id, work_id), _NOT_FOUND)
+        for work_id in (first, first, second):  # the second add changes nothing
+            self.assertIsNone(playlist_commands.add_item(db, ctx, a, work_id))
+        playlist_commands.add_item(db, ctx, a, third, 0)  # then moved to the front
+        self.assertEqual(self.order(a), [("<W Third>", 0), ("<W First>", 1), ("<W Second>", 2)])
+        self.assertEqual((self.fields(a)[1], self.fields(b)[1]), (4, 0))
+        for work_id, label in ((first, "<W First>"), (second, "<W Second>"), (third, "<W Third>")):
+            self.answer(playlist_commands.work_state(db, ctx, work_id),
+                        {"playlist_id": "<PL A>", "revision": 1, "work_id": label})
+        self.answer(require(self.library.get_work(first)), {"playlist_id": "<PL A>", "playlist_title": "A"})
+        # Unknown and repeated ids are dropped; the Works not named keep their order after the named ones.
+        playlist_commands.reorder(db, ctx, a, [second, "x", first, second])
+        playlist_commands.reorder(db, ctx, a, [])
+        self.assert_refused(lambda: playlist_commands.reorder(db, ctx, _MISSING_PLAYLIST, ["x"]), "Playlist not found.")
+        self.assertEqual(self.order(a), [("<W Second>", 0), ("<W First>", 1), ("<W Third>", 2)])
+        # A move takes the Work out of one order and appends it to the other.
+        playlist_commands.add_item(db, ctx, b, second, 5)
+        playlist_commands.remove_item(db, ctx, a, second)  # not in it: nothing changes
+        playlist_commands.remove_item(db, ctx, a, _MISSING_WORK)
+        self.assertEqual(self.order(a), [("<W First>", 1), ("<W Third>", 2)])
+        self.assertEqual(self.order(b), [("<W Second>", 0)])
+        self.assertEqual((self.fields(a)[1], self.fields(b)[1]), (6, 1))
+        playlist_commands.remove_item(db, ctx, b, second)
+        self.answer(playlist_commands.work_state(db, ctx, second),
+                    {"playlist_id": "", "revision": 3, "work_id": "<W Second>"})
+        self.answer(require(self.library.get_work(second)), {"playlist_id": None, "playlist_title": None})
+        self.answer(sorted((row["title"], row["item_count"]) for row in playlist_commands.catalog(db, ctx)),
+                    [("A", 2), ("B", 0)])
+
+    def test_delete(self) -> None:
+        db, ctx = self.db, self.actor.context
+        doomed, kept = self.named("Doomed"), self.named("Kept")
+        member, other = self.named_work("Member"), self.named_work("Other")
+        playlist_commands.add_item(db, ctx, doomed, member)
+        playlist_commands.add_item(db, ctx, kept, other)
+        self.assertIsNone(playlist_commands.delete(db, ctx, doomed))
+        self.assertIsNone(playlist_commands.delete(db, ctx, doomed))  # already gone
+        self.assertIsNone(self.detail(doomed))
+        self.assertIsNone(playlist_commands.sync_state(db, ctx, doomed))
+        self.answer(playlist_commands.work_state(db, ctx, member),
+                    {"playlist_id": "", "revision": 2, "work_id": "<W Member>"})
+        self.answer(require(self.library.get_work(member)), {"playlist_id": None, "playlist_title": None})
+        self.answer([(row["id"], row["item_count"]) for row in playlist_commands.catalog(db, ctx)], [("<PL Kept>", 1)])
+        # A Work delete takes the Work out of its Playlist.
+        self.assertTrue(self.library.delete_work_record(other))
+        self.assertEqual(self.order(kept), [])
+        self.answer([(row["id"], row["item_count"]) for row in playlist_commands.catalog(db, ctx)], [("<PL Kept>", 0)])

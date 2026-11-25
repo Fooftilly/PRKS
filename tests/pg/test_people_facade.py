@@ -1,7 +1,7 @@
-"""Persons, Person Groups and publishers on PostgreSQL: what parity cannot show (L-P-1 #632).
+"""Persons, Person Groups and publishers on PostgreSQL (L-P-1 #632).
 
-``tests/test_people_core_parity.py`` proves the facade returns SQLite's JSON.
-These tests cover what only PostgreSQL has: the bound actor and Library
+:class:`AnswerTests` spells out the JSON each command answers. The rest
+cover the bound actor and Library
 isolation, identity keys, refusals of what PostgreSQL text cannot hold, the
 revision decision tables the sync handlers will call, tombstones, and
 concurrent writers (each race holds one transaction open until the other
@@ -27,7 +27,9 @@ from backend.domain.people import groups, persons, publishers, queries
 from tests import acting_context as facade_context
 from backend.domain.people.group_rules import GroupRuleError
 from tests.pg.test_works_facade import WorksFacadeTestCase
+from backend.web.etags import etag_for_representation
 from tests.narrowing import require
+from tests.pg.answers import AnswerAssertions
 
 _MISSING_GROUP = "PG-" + "0" * 32
 
@@ -764,3 +766,218 @@ class PublisherCatalogTests(CatalogTestCase):
         rows, large = self.statements(self.library.get_publishers_in_use)
         self.assertEqual((len(small), len(large)), (3, 3))
         self.assertTrue(all(row["work_count"] == 2 for row in rows if row["name"].startswith("Bulk Press")))
+
+
+_PROFILE = {
+    "first_name": "Hannah", "aliases": "H. Arendt, Hannah Arendt", "about": "Political theorist",
+    "image_url": "https://example.org/arendt.jpg", "link_wikipedia": "https://en.wikipedia.org/wiki/HA",
+    "link_stanford_encyclopedia": "https://plato.stanford.edu/arendt",
+    "link_iep": "https://iep.utm.edu/arendt", "links_other": "https://example.org/more",
+    "birth_date": "1906-10-14", "death_date": "1975-12-04",
+}
+_EMPTY_PROFILE = {field: "" for field in _PROFILE}
+_MISSING_PERSON = "P-" + "0" * 32
+
+
+class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
+    """The JSON each Person, Person Group and publisher command answers, spelled out."""
+
+    def person(self, last_name: str, **fields: Any) -> str:
+        fields.setdefault("first_name", "")
+        return self.labels.name(self.library.add_person(last_name=last_name, **fields), f"<P {last_name}>")
+
+    def group(self, name: str, **fields: Any) -> str:
+        return self.labels.name(self.library.add_person_group_with_parent_options(name, **fields), f"<PG {name}>")
+
+    def refused_with(self, message: str, call: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+        self.assert_refused(lambda: call(*args, **kwargs), message)
+
+    def test_a_person_and_its_states(self) -> None:
+        arendt = self.person("Arendt", **_PROFILE)
+        self.answer(self.library.get_person(arendt), {
+            **_PROFILE, "created_at": "<s>", "groups": [], "id": "<P Arendt>", "last_name": "Arendt",
+            "updated_at": "<s>", "works": []})
+        self.answer(self.library.get_person_metadata_state(arendt), {
+            "fields": {field: {"revision": 0} for field in sorted([*_PROFILE, "last_name"])},
+            "person_id": "<P Arendt>"})
+        for read in (self.library.get_person, self.library.get_person_metadata_state,
+                     self.library.get_person_groups_state):
+            self.assertIsNone(read(_MISSING_PERSON))
+        self.refused_with("javascript:alert(1) is not a valid value for image_url", self.library.update_person_profile, arendt,
+                          {"image_url": "javascript:alert(1)"})
+        self.assertEqual(require(self.library.get_person(arendt))["image_url"], _PROFILE["image_url"])
+
+    def test_the_person_catalog(self) -> None:
+        for name in ("beta", "Alpha", "_under", "Zed", "Ärzt"):
+            self.person(name)
+        thinkers = self.group("Thinkers")
+        rows = self.library.get_all_persons()
+        self.assertEqual([row["last_name"] for row in rows], ["Alpha", "Zed", "_under", "beta", "Ärzt"])
+        self.library.add_person_to_group(rows[0]["id"], thinkers)
+        rows = self.library.get_all_persons()
+        self.answer(rows[0], {**_EMPTY_PROFILE, "assigned_roles": [], "created_at": "<s>",
+                              "groups": [{"id": "<PG Thinkers>", "name": "Thinkers"}], "id": "<P Alpha>",
+                              "last_name": "Alpha", "updated_at": "<s>"})
+        self.assertNotIn("works", rows[0])
+        self.assertEqual(self.library.etag_persons_catalog(rows), etag_for_representation("persons", rows))
+
+    def test_profile_edits_and_their_groups(self) -> None:
+        weil = self.person("Weil", first_name="Simone")
+        for fields in ({"about": "Philosopher"}, {"about": "Philosopher"},
+                       {"first_name": "S.", "aliases": "Simone Weil"}, {"not_a_field": "ignored"}):
+            self.assertIsNone(self.library.update_person_profile(weil, fields))
+        revisions = {field: value["revision"]
+                     for field, value in require(self.library.get_person_metadata_state(weil))["fields"].items()}
+        self.assertEqual({field: n for field, n in revisions.items() if n}, {"about": 1, "first_name": 1, "aliases": 1})
+        adorno = self.person("Adorno")
+        frankfurt, critical = self.group("Frankfurt"), self.group("Critical theory")
+        self.library.update_person_profile(adorno, {"about": "T"}, [frankfurt, critical, frankfurt, ""])
+        self.library.update_person_profile(adorno, {}, [critical])
+        state = self.labels.show(require(self.library.get_person_groups_state(adorno)))
+        self.assertEqual(sorted(state["groups"], key=lambda group: group["group_id"]), [
+            {"group_id": "<PG Critical theory>", "present": True, "revision": 1},
+            {"group_id": "<PG Frankfurt>", "present": False, "revision": 2}])
+        self.answer(require(self.library.get_person(adorno)), {
+            "about": "T", "groups": [{"id": "<PG Critical theory>", "name": "Critical theory", "parent_id": None}]})
+        benjamin = self.person("Benjamin")
+        self.refused_with(f"Unknown group id: {_MISSING_GROUP}", self.library.update_person_profile, benjamin,
+                          {"about": "Critic"}, [_MISSING_GROUP])
+        self.assertEqual(require(self.library.get_person(benjamin))["about"], "")
+        self.refused_with("group_ids must be a JSON array", self.library.update_person_profile, benjamin, {},
+                          "not-a-list")
+        # An unknown Person is refused with groups and ignored without.
+        self.refused_with("Person not found.", self.library.update_person_profile, _MISSING_PERSON, {"about": "x"}, [])
+        self.assertIsNone(self.library.update_person_profile(_MISSING_PERSON, {"about": "x"}))
+
+    def test_a_person_delete(self) -> None:
+        leaving, club = self.person("Leaving"), self.group("Club")
+        self.library.add_person_to_group(leaving, club)
+        self.assertIsNone(self.library.delete_person_if_unlinked(leaving))
+        self.assertIsNone(self.library.get_person(leaving))
+        self.answer(self.library.get_person_group(club), {"member_count": 0, "members": []})
+        self.answer(self.library.get_person_group_sync_state(club), {
+            "fields": {"description": {"revision": 0}, "name": {"revision": 0}, "parent_id": {"revision": 0}},
+            "group_id": "<PG Club>", "members": [{"person_id": "<P Leaving>", "present": False, "revision": 2}]})
+        for missing in (leaving, ""):
+            self.refused_with("Person not found.", self.library.delete_person_if_unlinked, missing)
+
+    def test_groups_their_parents_and_the_catalog(self) -> None:
+        child = self.group("Frankfurt School", parent_name="Philosophy", description="Critical theory")
+        parent = self.labels.name(self.group_id("Philosophy"), "<PG Philosophy>")
+        self.answer(self.library.get_person_group(child), {
+            "children": [], "created_at": "<s>", "description": "Critical theory", "id": "<PG Frankfurt School>",
+            "member_count": 0, "members": [], "name": "Frankfurt School",
+            "parent": {"id": "<PG Philosophy>", "name": "Philosophy"}, "parent_id": "<PG Philosophy>",
+            "updated_at": "<s>"})
+        self.answer(require(self.library.get_person_group(parent))["children"], [
+            {"description": "Critical theory", "id": "<PG Frankfurt School>", "member_count": 0,
+             "name": "Frankfurt School", "parent_id": "<PG Philosophy>"}])
+        rows = self.library.get_all_person_groups()
+        self.answer(rows, [
+            {"child_count": 0, "created_at": "<s>", "description": "Critical theory", "id": "<PG Frankfurt School>",
+             "member_count": 0, "name": "Frankfurt School", "parent_id": "<PG Philosophy>", "updated_at": "<s>"},
+            {"child_count": 1, "created_at": "<s>", "description": "", "id": "<PG Philosophy>", "member_count": 0,
+             "name": "Philosophy", "parent_id": None, "updated_at": "<s>"}])
+        self.assertEqual(self.library.etag_person_groups_catalog(rows), etag_for_representation("person-groups", rows))
+        # An existing parent is found by name.
+        self.group("Ethics", parent_name="philosophy")
+        self.assertEqual(require(self.library.get_person_group(parent))["children"][0]["name"], "Ethics")
+        for fields, message in (({"name": "frankfurt school"}, "A group with this name already exists."),
+                                ({"name": ""}, "Group name is required."),
+                                ({"name": "Same", "parent_name": "SAME"},
+                                 "Parent group cannot have the same name as the new group."),
+                                ({"name": "x" * 201}, "Group name exceeds 200 bytes."),
+                                ({"name": "Orphan", "parent_id": _MISSING_GROUP}, "Parent group not found."),
+                                ({"name": "Long", "description": "d" * 2001}, "Group description exceeds 2000 bytes.")):
+            with self.subTest(message=message):
+                self.refused_with(message, self.library.add_person_group_with_parent_options, **fields)
+
+    def test_group_edits_the_hierarchy_and_a_delete(self) -> None:
+        group = self.group("Old name")
+        self.group("Other")
+        self.library.update_person_group(group, {"name": "New name", "description": "About"})
+        self.library.update_person_group(group, {"name": "New name"})
+        self.library.update_person_group(group, {"parent_name": "Created parent"})
+        self.answer(self.library.get_person_group_sync_state(group), {
+            "fields": {"description": {"revision": 1}, "name": {"revision": 1}, "parent_id": {"revision": 1}}})
+        self.refused_with("A group with this name already exists.", self.library.update_person_group, group,
+                          {"name": "other"})
+        self.refused_with("Group not found.", self.library.update_person_group, _MISSING_GROUP, {"name": "x"})
+        self.library.update_person_group(group, {"parent_id": None})
+        self.assertIsNone(require(self.library.get_person_group(group))["parent"])
+        top = self.group("Top")
+        middle = self.group("Middle", parent_name="Top")
+        bottom = self.group("Bottom", parent_name="Middle")
+        self.refused_with("Cannot set parent to a subgroup (cycle).", self.library.update_person_group, top,
+                          {"parent_name": "Bottom"})
+        self.refused_with("A group cannot be its own parent.", self.library.update_person_group, top,
+                          {"parent_name": "Top"})
+        member = self.person("Member")
+        self.library.add_person_to_group(member, middle)
+        # A delete moves the children to its parent and drops its members.
+        self.assertIsNone(self.library.delete_person_group(middle))
+        self.answer(self.library.get_person_group(bottom), {"parent": {"id": "<PG Top>", "name": "Top"},
+                                                           "parent_id": "<PG Top>"})
+        self.assertEqual(require(self.library.get_person_group_sync_state(bottom))["fields"]["parent_id"],
+                         {"revision": 1})
+        self.assertEqual(require(self.library.get_person(member))["groups"], [])
+        self.refused_with("Group not found.", self.library.delete_person_group, middle)
+
+    def test_membership_from_both_ends(self) -> None:
+        readers = self.group("Readers")
+        people = [self.person(name) for name in ("b", "A", "c")]
+        for person in (*people, people[0]):
+            self.library.add_person_to_group(person, readers)
+        for _ in range(2):
+            self.library.remove_person_from_group(people[2], readers)
+        detail = require(self.library.get_person_group(readers))
+        self.answer(detail, {"member_count": 2, "members": [
+            {**_EMPTY_PROFILE, "assigned_roles": [], "created_at": "<s>",
+             "groups": [{"id": "<PG Readers>", "name": "Readers"}], "id": "<P A>", "last_name": "A",
+             "updated_at": "<s>"},
+            {"id": "<P b>", "last_name": "b"}]})
+        state = require(self.library.get_person_group_sync_state(readers))
+        # Members come in id order, which the run makes up.
+        self.answer(sorted(self.labels.show(state["members"]), key=lambda member: member["person_id"]), [
+            {"person_id": "<P A>", "present": True, "revision": 1},
+            {"person_id": "<P b>", "present": True, "revision": 1},
+            {"person_id": "<P c>", "present": False, "revision": 2}])
+        self.answer(self.library.get_person_groups_state(people[2]), {
+            "groups": [{"group_id": "<PG Readers>", "present": False, "revision": 2}], "person_id": "<P c>"})
+        self.answer([row["groups"] for row in self.library.get_all_persons()],
+                    [[{"id": "<PG Readers>", "name": "Readers"}]] * 2 + [[]])
+        self.refused_with("Person or group not found.", self.library.add_person_to_group, people[0], _MISSING_GROUP)
+        self.refused_with("Person or group not found.", self.library.add_person_to_group, _MISSING_PERSON, readers)
+
+    def test_publishers(self) -> None:
+        created = self.library.add_publisher("Verso")
+        verso = self.labels.name(created["id"], "<R Verso>")
+        self.answer(created, {"existed": False, "id": "<R Verso>", "name": "Verso"})
+        self.answer(self.library.add_publisher("  verso "), {"existed": True, "id": "<R Verso>", "name": "Verso"})
+        self.refused_with("publisher name is empty", self.library.add_publisher, "   ")
+        penguin = self.library.add_publisher("Penguin")["id"]
+        self.library.add_publisher_alias(verso, "Verso Books")
+        self.assertIsNone(self.library.add_publisher_alias(verso, "verso books"))
+        for publisher_id, alias, message in ((verso, "", "alias is empty"),
+                                             (verso, "VERSO", "alias matches canonical publisher name"),
+                                             (verso, "penguin", "alias conflicts with another publisher name"),
+                                             ("R-" + "0" * 32, "x", "publisher not found"),
+                                             (penguin, "Verso Books", "alias already used")):
+            with self.subTest(alias=alias):
+                self.refused_with(message, self.library.add_publisher_alias, publisher_id, alias)
+        self.labels.name(self.library.add_publisher("beta press")["id"], "<R beta>")
+        self.library.delete_publisher(penguin)
+        for title, publisher in (("one", "Verso"), ("two", " verso books "), ("three", "Unknown"), ("four", "")):
+            self.library.add_work(title, publisher=publisher)
+        self.answer(self.library.get_publishers_in_use(), [
+            {"aliases": [], "id": "<R beta>", "name": "beta press", "work_count": 0},
+            {"aliases": ["Verso Books"], "id": "<R Verso>", "name": "Verso", "work_count": 2}])
+        self.assertIs(self.library.delete_publisher_alias(verso, "VERSO BOOKS"), True)
+        self.assertIs(self.library.delete_publisher_alias(verso, "Verso Books"), False)
+        self.assertIs(self.library.delete_publisher_alias(verso, "  "), False)
+        self.library.add_publisher_alias(verso, "Verso Books")
+        self.assertIsNone(self.library.delete_publisher(verso))
+        self.assertIsNone(self.library.delete_publisher(verso))
+        # The alias went with its publisher, so another may take it.
+        other = self.library.add_publisher("Other")["id"]
+        self.assertIsNone(self.library.add_publisher_alias(other, "Verso Books"))
