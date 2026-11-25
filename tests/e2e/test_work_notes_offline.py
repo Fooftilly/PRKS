@@ -129,6 +129,19 @@ class _WorkNotesPage(_PageBase):
             "id => window.createPrksOfflineStore().getEntity('work', id).then(row => row && row.value)",
             work_id)
 
+    def wait_cached_field(self, page, work_id, field, expected, timeout=8):
+        """The cached Work once it holds `expected`. An ACK whose cached Work
+        was read after the edit was made cannot prove that copy, so it drops
+        it and the open editor's corrective read stores the server's Work."""
+        deadline = time.time() + timeout
+        cached = None
+        while time.time() < deadline:
+            cached = self.cached_work(page, work_id)
+            if cached and cached.get(field) == expected:
+                return cached
+            page.wait_for_timeout(50)
+        return cached
+
 
 class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
 
@@ -154,7 +167,8 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         names = {row['name'] for row in self.db_for(server).query(
             postgres='SELECT name FROM prks.concepts')}
         self.assertIn('Culture Industry', names)
-        cached = self.cached_work(page, work)
+        cached = self.wait_cached_field(page, work, 'text_content', 'See [[concept:Culture Industry]].')
+        self.assertIsNotNone(cached)
         self.assertEqual(cached['text_content'], 'See [[concept:Culture Industry]].')
 
     def test_private_notes_are_independent_of_research_and_do_not_create_concepts(self):
