@@ -363,11 +363,16 @@
             const workResult = accepted(stateResult)
                 ? await root.prksOfflineReadEntity('work', state.workId,
                     '/api/works/' + encodeURIComponent(state.workId),
-                    Object.assign({ validate: value => !!value && value.id === state.workId }, policy))
+                    Object.assign({ validate: value => !!value && value.id === state.workId },
+                        stateResult.source === 'server' ? { requestPolicy: { dedupe: false } } : policy))
                 : null;
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            const usable = accepted(stateResult) && accepted(workResult);
+            /* A server revision pairs only with a server Work read after it:
+             * an older cached or joined Work would pair an older identity
+             * with that revision and let a Save overwrite a source unseen. */
+            const usable = accepted(stateResult) && accepted(workResult) &&
+                (stateResult.source !== 'server' || workResult.source === 'server');
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */

@@ -530,6 +530,22 @@ async function mountedSourceCorrectiveRead() {
         assert.equal(ctx.entity.provider_id, 'CCC', 'the Work still takes the server source');
         listeners.length = 0;
     }
+    /* Preparing the editor: a server revision with a Work answered from the
+     * cache is not a base, and the Work read never joins an older GET. */
+    {
+        const policies = [];
+        globalThis.prksOfflineReadEntity = async (kind, _id, _path, options) => {
+            policies.push(options && options.requestPolicy && options.requestPolicy.dedupe);
+            return kind === 'work-source-state' ? serverState(2) : { ...serverWork('ZZZ'), source: 'cache' };
+        };
+        const ctx = mountedOwner(core.observe({ id: 'W', title: 'Clip', ...video('ZZZ') }, Date.now()));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        const state = ctx.resources.workSourceEditor;
+        await state.preparing;
+        assert.equal(state.observed, null, 'a server revision never pairs with a cached Work');
+        assert.equal(policies[1], false, 'the Work read after a server revision is fresh');
+        listeners.length = 0;
+    }
     /* A revision answered from the cache adopts nothing and keeps the ACK's base. */
     {
         globalThis.prksOfflineReadEntity = async kind => (kind === 'work-source-state' ? serverState(0) : serverWork('ZZZ'));
