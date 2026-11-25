@@ -265,6 +265,11 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const edits = core.pinnedEdits(cleared, Object.assign({}, cleared, { title: "Talks" }), pinned);
         assert.deepEqual(edits.unknown || [], [], "a new title is not refused as changed elsewhere");
         assert.equal(edits.changes.title, "Talks");
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const queued = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        assert.equal(queued.length, 1, "the new title replaces the queued empty one");
+        assert.equal(queued[0].payload.value, "Talks");
+        assert.equal(queued[0].base_revision, 3, "measured against the base the empty title was");
     }
 }
 
