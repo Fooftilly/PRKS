@@ -69,7 +69,8 @@ class StorageStatusFactsTests(StatusTestCase):
         request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/storage-status")
         api.validate_request(request)
         data = json.dumps(self.body(conninfo="postgresql://prks:hunter2@db:5432/prks")).encode()
-        api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json"))
+        api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json",
+                                                    headers={"Cache-Control": "no-store"}))
 
     def test_identity_and_root_come_from_the_marker_and_the_binding(self) -> None:
         body = self.body()
