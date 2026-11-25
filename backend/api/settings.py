@@ -45,6 +45,6 @@ ROUTES = (
         "updateSettings", "Change some of the Library's settings", "settings",
         {200: ok(AppSettings, "The settings as they now are."),
          400: error("A refused value; nothing was written.")},
-        request=body(AppSettingsPatch),
+        request=body(AppSettingsPatch, "Left out: nothing changes.", required=False),
         description="Every key is checked before any is written. Needs the Library owner.")),
 )

@@ -197,6 +197,12 @@ class OpenApiDocumentTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(pattern.search(text) is not None, parse_epoch(text) is not None)
 
+    def test_a_body_the_route_does_not_need_is_optional(self) -> None:
+        for method, path in (("post", "/api/backups/progress"), ("patch", "/api/settings"),
+                             ("post", "/api/client-errors")):
+            with self.subTest(path=path):
+                self.assertFalse(self.document["paths"][path][method]["requestBody"]["required"])
+
     def test_a_stream_publishes_its_line_schema(self) -> None:
         media = self.document["paths"]["/api/backups/progress"]["post"]["responses"]["200"]["content"]
         self.assertEqual(media["application/x-ndjson"]["x-line-schema"],

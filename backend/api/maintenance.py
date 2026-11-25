@@ -317,7 +317,7 @@ ROUTES = (
                                                    "BackupProgressLine object."},
                  "One JSON object per line until `ready` (with the download token) or `failed`.",
                  media_type="application/x-ndjson", headers=_NO_STORE, line_schema=BackupProgressLine)},
-        request=body({"type": "object"}, "A JSON object, ignored. Send `{}`."),
+        request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False),
         description="Queues the Library's backup job, or follows the one already queued or running.")),
     route("POST", "/api/backups/stage", stage, Body.STREAM, contract=Operation(
         "stageBackup", "Upload a backup archive and verify it for a restore", _TAG,

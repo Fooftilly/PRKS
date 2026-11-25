@@ -95,7 +95,8 @@ ROUTES: tuple[Route, ...] = (
         "reportClientError", "Log a browser error as metadata only", _TAG,
         {200: ok(ClientErrorLogged, "Logged.")},
         request=body(ClientErrorReport,
-                     "Every field is optional; a value the log does not take is replaced, never refused."))),
+                     "Every field is optional, and so is the body; a value the log does not take is "
+                     "replaced, never refused.", required=False))),
     route("GET", "/api/openapi.json", document, contract=Operation(
         "getOpenApiDocument", "This OpenAPI document", "meta",
         {200: ok({"type": "object"}, "The OpenAPI 3.1 document of every typed route.")})),
