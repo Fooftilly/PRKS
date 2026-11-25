@@ -101,7 +101,9 @@ ROUTES = (
                           "ETag": Header("The saved copy's SHA-256, when saved.")}),
          304: Reply("The browser holds the saved copy's bytes.", headers={"ETag": Header("Its SHA-256.")}),
          404: error("A URL the Library does not name, not public http(s), or a failed fetch "
-                    "(IMAGE_NOT_AVAILABLE).")},
+                    "(IMAGE_NOT_AVAILABLE)."),
+         503: error("The Library is unavailable, or in maintenance when an editor's miss saves the copy "
+                    "(unavailable, MAINTENANCE).")},
         params=(Param("url", required=True, description="The image's http(s) URL as the Library names it."),
                 IF_NONE_MATCH),
         description="On a miss an editor fetches and saves the copy; a reader is served it uncached.")),

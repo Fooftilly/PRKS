@@ -109,6 +109,9 @@ UNTYPED = frozenset({
 #: one leaves this set and documents its success.
 _NOT_PORTED = frozenset({"linearizeExistingPdfs"})
 
+#: Unfenced reads that save what they serve on a miss, through a command.
+_FILLS_ON_READ = frozenset({("GET", "/api/remote-images")})
+
 
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
     return {(method.upper(), path): op for path, item in document["paths"].items()
@@ -168,12 +171,17 @@ class OpenApiDocumentTests(unittest.TestCase):
                         {"$ref": "#/components/responses/BadRequest"}))
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
-                    # Only library_command takes the maintenance lock (#1431).
+                    # Only library_command takes the maintenance lock (#1431): an
+                    # unfenced read may be refused for maintenance only when it runs
+                    # one to fill a cache on a miss.
                     unavailable = op["responses"]["503"]
                     if "$ref" in unavailable:
                         name = unavailable["$ref"].rsplit("/", 1)[-1]
                         unavailable = self.document["components"]["responses"][name]
-                    self.assertNotIn("MAINTENANCE", unavailable["description"])
+                    if (method.upper(), path) in _FILLS_ON_READ:
+                        self.assertIn("MAINTENANCE", unavailable["description"])
+                    else:
+                        self.assertNotIn("MAINTENANCE", unavailable["description"])
 
     def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
         for (method, path), op in _operations(self.document).items():

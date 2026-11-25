@@ -2982,7 +2982,14 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "description": "The Library is unavailable, or in maintenance when an editor's miss saves the copy (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
           }
         }
       }
