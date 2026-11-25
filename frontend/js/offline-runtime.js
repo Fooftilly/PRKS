@@ -989,7 +989,7 @@
             return true;
         }
 
-        async function reconcilePdfAnnotation(result) {
+        async function reconcilePdfAnnotation(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
             const annotationId = result.annotation_id;
@@ -1008,6 +1008,35 @@
                 return true;
             }
             const present = result.present !== false && !!result.annotation;
+            /* Shared ordering rule (#1425, #1074): the snapshot holds this
+             * annotation's revision (its row, or its deletion tombstone), and
+             * an ACK older than that is superseded -- the body and revision it
+             * carries would undo another device's newer edit. An equal
+             * revision cannot turn a live annotation into a deleted one. An id
+             * the snapshot does not name is proven by the snapshot's read
+             * time; an unproven snapshot is dropped for re-hydration. */
+            const heldRow = snap.annotations.find(row => row && row.annotation_id === annotationId);
+            const tombstone = snap.known_absent && snap.known_absent[annotationId];
+            const held = heldRow && reconcileCore.isRevision(heldRow.revision)
+                ? { revision: heldRow.revision, present: true }
+                : (reconcileCore.isRevision(tombstone) ? { revision: tombstone, present: false } : null);
+            if (held) {
+                if (superseded(result.server_revision, held.revision)) return true;
+                if (held.revision === result.server_revision && held.present && !present) return true;
+            } else {
+                const plan = reconcileCore.planAck({
+                    ackRevision: result.server_revision,
+                    agrees: !present,
+                    observedAt: observedAtOf(envelope),
+                    operationCreatedAt: op && op.created_at,
+                });
+                if (plan === 'unproven') {
+                    markEntityChanged(kind, id);
+                    await invalidateEntity(kind, id);
+                    return true;
+                }
+                if (plan !== 'apply') return true;
+            }
             let nextItems = snap.items.filter(function (item) {
                 if (!item || typeof item !== 'object') return true;
                 const itemId = item.id || item.uuid || item.annotationId || item.annotation_id;
@@ -1051,7 +1080,7 @@
                 }
                 // else: keep snap.canonical_annotation_set_revision unchanged
             }
-            if (!await cacheEntityIfCurrent(kind, id, nextSnap, token)) {
+            if (!await cacheEntityIfCurrent(kind, id, nextSnap, token, observedAtOf(envelope))) {
                 return false;
             }
             return true;
@@ -3671,7 +3700,7 @@
         prksOfflineReconcilePrivateNote: (result, op) =>
             production.reconcilePrivateNote(result, op),
         prksOfflineReconcileWorkRole: result => production.reconcileWorkRole(result),
-        prksOfflineReconcilePdfAnnotation: result => production.reconcilePdfAnnotation(result),
+        prksOfflineReconcilePdfAnnotation: (result, op) => production.reconcilePdfAnnotation(result, op),
         prksOfflineReconcileRecentOpen: result => production.reconcileRecentOpen(result),
         prksOfflineReconcileCreatedFolder: result => production.reconcileCreatedFolder(result),
         prksOfflineReconcileFolderField: (result, op) =>
