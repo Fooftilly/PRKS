@@ -1393,6 +1393,22 @@ async function aPendingMoveShowsTheNewParent() {
     assert.equal(toTop.parent, null, "a move to the top level shows no parent");
     assert.deepEqual(globalThis.prksEffectivePersonGroupDetail(group, [], [], catalogue).parent,
         { id: "PG-OLD", name: "Old" }, "no pending move leaves the parent alone");
+    /* The destination is deleted offline after the move: the page shows the
+     * ancestor the catalogue moved the group up to. */
+    const rows = [{ id: "PG-ANC", name: "Ancestor", parent_id: null },
+        { id: "PG-NEW", name: "New", parent_id: "PG-ANC" },
+        { id: "PG-OLD", name: "Old", parent_id: null },
+        { id: "PG-C", name: "Child", parent_id: "PG-OLD" }];
+    const both = ops.concat([{ operation: "DELETE_PERSON_GROUP", entity_type: "person-group", entity_id: "PG-NEW",
+        status: "pending", sequence: 2, payload: {} }]);
+    const effective = globalThis.prksEffectivePersonGroups(rows, both);
+    const orphaned = globalThis.prksEffectivePersonGroupDetail(group, both, [], effective);
+    assert.deepEqual(orphaned.parent, { id: "PG-ANC", name: "Ancestor" },
+        "a deleted destination shows the surviving ancestor");
+    assert.equal(orphaned.parent_id, "PG-NEW", "the queued move stays the value the edit pin compares");
+    const atRoot = globalThis.prksEffectivePersonGroupDetail(group, both, [],
+        globalThis.prksEffectivePersonGroups(rows.map(r => (r.id === "PG-NEW" ? { ...r, parent_id: null } : r)), both));
+    assert.equal(atRoot.parent, null, "a destination at the top level leaves the group at the top level");
 }
 
 async function main() {
