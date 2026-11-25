@@ -244,4 +244,22 @@ describe('applyOwnerAck', () => {
     expect(state.value).toBe(newer)
     expect(state.adopted).toBe(1)
   })
+
+  it('adopts only the merged part of the re-read, stamped with its read time', async () => {
+    type Held = Work & { folder: string }
+    const newer = observe({ id: 'W', tags: ['N'], folder: 'server' }, 50)
+    const state = { value: observe({ id: 'W', tags: [], folder: 'pending' } as Held, 30) as Held }
+    const plan = applyOwnerAck<Held>({ ackRevision: 1, operationCreatedAt: 20 }, {
+      get: () => state.value,
+      set: (value) => { state.value = value },
+      agrees: (value) => value.tags.includes('T'),
+      patch: (value) => ({ ...value, tags: [...value.tags, 'T'] }),
+      read: async () => ({ value: newer, source: 'server' }),
+      merge: (held, fresh) => ({ ...held, tags: fresh.tags }),
+    })
+    expect(plan).toBe('unproven')
+    await flush()
+    expect(state.value).toEqual({ id: 'W', tags: ['N'], folder: 'pending' })
+    expect(observedAt(state.value)).toBe(50)
+  })
 })

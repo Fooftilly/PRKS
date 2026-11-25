@@ -11,7 +11,8 @@ import folderStateSource from '../../../../frontend/js/folder-state.js?raw'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
-import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workNotesStateClassic from '../../../../frontend/js/work-notes-state.js?raw'
+import syncReconcileSource from '../../../../frontend/js/sync-reconcile.js?raw'
 import workNoteRecoverySource from '../../../../frontend/js/work-note-recovery.js?raw'
 import type { EditorRecoveryRuntime } from '../../lifecycle/editor-recovery/runtime'
 import { type DraftRecord } from '../../lifecycle/editor-recovery/schema'
@@ -19,6 +20,9 @@ import { createFakeBrowser, TEST_NAMES } from '../../lifecycle/editor-recovery/t
 import { createFakeIdb, settle } from '../../lifecycle/editor-recovery/test-support/fake-idb'
 import { memoryStorage, startRecoveryPage, type RecoveryPage } from '../work/test-support/work-note-harness'
 import { createFolderQueue, type FolderRow, type FolderServer } from './test-support/folder-note-queue'
+
+// The notes state loads the shared ACK core as the page does, from its global.
+const workNotesStateSource = syncReconcileSource + '\n' + workNotesStateClassic
 
 type Session = {
   key: string
