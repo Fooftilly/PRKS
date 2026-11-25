@@ -135,6 +135,65 @@ var prksSyncReconcile = (function(exports) {
 		}).catch(() => false);
 		return plan;
 	}
+	function isFieldBase(value) {
+		if (!value || typeof value !== "object") return false;
+		const entry = value;
+		return typeof entry.value === "string" && isRevision(entry.revision);
+	}
+	/**
+	* Pin each field's base when an editor opens. A field keeps the revision that
+	* was read only where that read holds the value the form shows: a read that
+	* already holds another value is newer than the form, so the revision the form
+	* was shown at is unknown and that field is null. Null when nothing was read.
+	*
+	* `pending` holds this device's own unsent edit per field (its value and the
+	* revision it was measured against). The form shows that value, and the field
+	* keeps that revision, so editing it again replaces the unsent edit rather
+	* than measuring it against a base the form never showed.
+	*/
+	function pinEditBase(shown, read, pending) {
+		if (!read || typeof read !== "object") return null;
+		const pinned = {};
+		for (const field of Object.keys(shown)) {
+			const entry = read[field];
+			const own = pending ? pending[field] : void 0;
+			const value = shown[field] == null ? "" : String(shown[field]);
+			if (!isFieldBase(entry)) pinned[field] = null;
+			else if (own !== void 0) pinned[field] = isFieldBase(own) && own.value === value ? {
+				value: entry.value,
+				revision: own.revision
+			} : null;
+			else pinned[field] = entry.value === value ? {
+				value: entry.value,
+				revision: entry.revision
+			} : null;
+		}
+		return pinned;
+	}
+	/**
+	* The fields this session changed, each measured against its pinned base. A
+	* changed field whose base is unknown is listed in `unknown` and must not be
+	* sent: the caller tells the user it changed elsewhere and keeps the draft.
+	*/
+	function pinnedEdits(shown, draft, pinned) {
+		const changes = {};
+		const base = {};
+		const unknown = [];
+		for (const field of Object.keys(shown)) {
+			const entry = pinned[field];
+			if (entry) base[field] = entry;
+			if (!Object.prototype.hasOwnProperty.call(draft, field)) continue;
+			const desired = draft[field] == null ? "" : String(draft[field]);
+			if (desired === (shown[field] == null ? "" : String(shown[field]))) continue;
+			changes[field] = desired;
+			if (!entry) unknown.push(field);
+		}
+		return {
+			changes,
+			base,
+			unknown
+		};
+	}
 	exports.adoptFresh = adoptFresh;
 	exports.applyOwnerAck = applyOwnerAck;
 	exports.carryObservation = carryObservation;
@@ -146,6 +205,8 @@ var prksSyncReconcile = (function(exports) {
 	exports.observedAt = observedAt;
 	exports.overlay = overlay;
 	exports.pendingFor = pendingFor;
+	exports.pinEditBase = pinEditBase;
+	exports.pinnedEdits = pinnedEdits;
 	exports.planAck = planAck;
 	exports.readBefore = readBefore;
 	exports.timeOf = timeOf;

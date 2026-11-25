@@ -1,5 +1,5 @@
 import { nextTick } from 'vue'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dismissRouteSurface, readRouteSurface } from '../../route-surface/lifecycle'
 import {
   PLAYLISTS_RETAIN_SURFACE_KEY,
@@ -9,8 +9,15 @@ import {
   resetPlaylistsSessionForTests,
 } from './session'
 
+beforeEach(() => {
+  /* Edit pins each shown field at revision 1. */
+  window.prksPinPlaylistEdit = vi.fn(async (_id: string, shown: Record<string, string>) =>
+    Object.fromEntries(Object.entries(shown).map(([field, value]) => [field, { value, revision: 1 }])))
+})
+
 afterEach(() => {
   resetPlaylistsSessionForTests()
+  delete window.prksPinPlaylistEdit
   document.body.innerHTML = ''
   vi.unstubAllGlobals()
   delete window.prksVuePresentRoute
@@ -233,7 +240,9 @@ describe('Playlists route surface', () => {
     el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
     await nextTick()
     await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
-    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Edited' }, {})
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Edited' }, {
+      base: expect.objectContaining({ description: { value: 'A description', revision: 1 } }),
+    })
 
     presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 3 })
     el.querySelector<HTMLButtonElement>('#prks-playlist-edit-cancel')?.click()
@@ -268,7 +277,9 @@ describe('Playlists route surface', () => {
     expect(el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')?.value).toBe('A description')
     el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
     await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
-    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { title: 'Retitled' }, {})
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { title: 'Retitled' }, {
+      base: expect.objectContaining({ title: { value: 'Course', revision: 1 } }),
+    })
   })
 
   it('does not let a finished save close a later edit of the same playlist', async () => {
@@ -327,6 +338,59 @@ describe('Playlists route surface', () => {
     expect(window.prksReloadPlaylistDetail).not.toHaveBeenCalled()
     expect(window.renderPlaylistDetail).not.toHaveBeenCalled()
     expect(window.updatePanelContent).not.toHaveBeenCalled()
+  })
+
+  it('locks the form while its save is pending so later typing is not lost (#974)', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let releaseSave: (value: unknown) => void = () => {}
+    window.updatePlaylist = vi.fn(() => new Promise((resolve) => { releaseSave = resolve }))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    window.updatePanelContent = vi.fn()
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    await nextTick()
+    const description = el.querySelector<HTMLTextAreaElement>('#prks-playlist-edit-desc')
+    description!.value = 'Saved text'
+    description!.dispatchEvent(new Event('input'))
+    await nextTick()
+    expect(description!.readOnly).toBe(false)
+    el.querySelector<HTMLButtonElement>('#prks-playlist-edit-save')?.click()
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+    await nextTick()
+    for (const id of ['#prks-playlist-edit-title', '#prks-playlist-edit-desc', '#prks-playlist-edit-original-url']) {
+      expect(el.querySelector<HTMLInputElement>(id)?.readOnly).toBe(true)
+    }
+    releaseSave({})
+    await flushView()
+    expect(pane.ui.playlistEditing).toBe(false)
+  })
+
+  it('keeps a pending rename from being canceled and reopened under it (#974)', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let releaseRename: (value: unknown) => void = () => {}
+    window.prksSaveWorkFieldDurably = vi.fn(() => new Promise((resolve) => { releaseRename = resolve }))
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    pane.ui.playlistEditing = true
+    const el = host()
+    presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 1 })
+    el.querySelector<HTMLButtonElement>('[data-pl-rename="W1"]')?.click()
+    await nextTick()
+    const input = el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')
+    input!.value = 'Renamed'
+    input!.dispatchEvent(new Event('input'))
+    await nextTick()
+    el.querySelector<HTMLButtonElement>('[data-pl-rename-save="W1"]')?.click()
+    await vi.waitFor(() => expect(window.prksSaveWorkFieldDurably).toHaveBeenCalled())
+    await nextTick()
+    expect(el.querySelector<HTMLInputElement>('#prks-pl-rename-input-W1')?.readOnly).toBe(true)
+    expect(el.querySelector<HTMLButtonElement>('[data-pl-rename-cancel="W1"]')?.disabled).toBe(true)
+    releaseRename({})
+    await flushView()
+    expect(el.querySelector('#prks-pl-rename-input-W1')).toBeNull()
   })
 
   it('drops a canceled rename when edit ends and when the next edit starts', async () => {

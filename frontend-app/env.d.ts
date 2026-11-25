@@ -459,8 +459,13 @@ interface Window {
   updatePlaylist?: (
     playlistId: string,
     fields: Record<string, string>,
-    options?: object,
+    options: { base: Record<string, { value: string; revision: number }> },
   ) => Promise<unknown>
+  /** Field revisions an edit session saves against, read when Edit opens. Null when unknown. */
+  prksPinPlaylistEdit?: (
+    playlistId: string,
+    shown: Record<string, string>,
+  ) => Promise<Record<string, { value: string; revision: number } | null> | null>
   reorderPlaylist?: (playlistId: string, workIds: string[]) => Promise<unknown>
   addWorkToPlaylist?: (playlistId: string, workId: string) => Promise<unknown>
   removeWorkFromPlaylist?: (playlistId: string, workId: string) => Promise<unknown>

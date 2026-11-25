@@ -179,9 +179,19 @@ async function scenario(name, write, expectedOperations = 1) {
         globalThis.prksOfflineReconcilePlaylistOrder = originalOrder;
     }
 }
+/* What an edit session pins when it opens on the cached detail (#894). */
+async function editBase(id) {
+    const detail = (await cache.getEntity("playlist", id)).value;
+    const base = await globalThis.prksPinPlaylistEdit(id, {
+        title: detail.title || "", description: detail.description || "",
+        original_url: detail.original_url || "",
+    });
+    assert(base, "the edit session pins a base");
+    return base;
+}
 async function main() {
     await scenario("description", async () => {
-        await updatePlaylist(ID, {description: "New description"});
+        await updatePlaylist(ID, {description: "New description"}, {base: await editBase(ID)});
     }).then(async ({before, state, detail, envelope}) => {
         assert.equal(envelope.operation, "SET_PLAYLIST_FIELD");
         assert.deepEqual(envelope.payload, {field: "description", value: "New description"});
@@ -199,7 +209,7 @@ async function main() {
         // wrapper call. Keep the two independent durable operations, ACKs and
         // revision fences; testing only title would silently lose coverage.
         await updatePlaylist(ID,
-            {title: "Renamed title", description: ""});
+            {title: "Renamed title", description: ""}, {base: await editBase(ID)});
     }, 2).then(async ({state, detail, envelopes}) => {
         assert.deepEqual(envelopes.map(e => e.operation),
             ["SET_PLAYLIST_FIELD", "SET_PLAYLIST_FIELD"]);

@@ -13,6 +13,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const FIELDS = root.PRKS_LOCAL_PERSON_GROUP_FIELDS ||
         Object.freeze(['name', 'description', 'parent_id']);
@@ -422,20 +425,34 @@
         return group ? observedGroupFields(group, state) : null;
     }
 
-    /** What this editing session changed, measured against what it was showing. */
-    function dirtyGroupFields(groupId, draft, base, operations) {
-        const changes = {};
-        if (!draft || !base) return changes;
-        const pending = pendingFieldValues(operations, groupId);
-        FIELDS.forEach(function (field) {
-            if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
-            const observed = base[field];
-            if (!observed || typeof observed.value !== 'string') return;
-            const shown = pending.has(field) ? pending.get(field) : observed.value;
-            const desired = String(draft[field] == null ? '' : draft[field]);
-            if (desired !== shown) changes[field] = desired;
-        });
-        return changes;
+    /**
+     * This device's newest unsent edit per field: the value an editor shows
+     * and the revision that edit was measured against.
+     */
+    function pendingFieldBases(operations, groupId) {
+        const out = {};
+        unsettled(operations, 'SET_PERSON_GROUP_FIELD', groupId)
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+            .forEach(function (op) {
+                const field = op.payload && op.payload.field;
+                if (!isSupportedField(field)) return;
+                out[field] = {
+                    value: String((op.payload && op.payload.value) || ''),
+                    revision: op.base_revision,
+                };
+            });
+        return out;
+    }
+
+    /**
+     * The base an edit session saves against, pinned when the editor opens:
+     * each field's revision where the read holds what the form shows (see
+     * `prksSyncReconcile.pinEditBase`). Null when the revisions cannot be read.
+     */
+    async function pinGroupEditBase(groupId, shown, operations) {
+        const read = await acknowledgedGroupBase(groupId, operations);
+        return reconcileCore.pinEditBase(shown, read, pendingFieldBases(operations, groupId));
     }
 
     /**
@@ -699,7 +716,7 @@
         prksNewPersonGroupState: newGroupState,
         prksObservedPersonGroupFields: observedGroupFields,
         prksAcknowledgedPersonGroupBase: acknowledgedGroupBase,
-        prksDirtyPersonGroupFields: dirtyGroupFields,
+        prksPinPersonGroupEditBase: pinGroupEditBase,
         prksAcknowledgedPersonGroupMembership: acknowledgedMembership,
         prksCreatePersonGroupDurably: createGroupDurably,
         prksSavePersonGroupFieldsDurably: saveGroupFieldsDurably,

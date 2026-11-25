@@ -14,6 +14,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const FIELDS = root.PRKS_LOCAL_PLAYLIST_FIELDS ||
         Object.freeze(['title', 'description', 'original_url']);
@@ -424,6 +427,36 @@
     }
 
     /**
+     * This device's newest unsent edit per field: the value an editor shows
+     * and the revision that edit was measured against.
+     */
+    function pendingFieldBases(operations, playlistId) {
+        const out = {};
+        unsettled(operations, 'SET_PLAYLIST_FIELD', playlistId)
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+            .forEach(function (op) {
+                const field = op.payload && op.payload.field;
+                if (!isSupportedField(field)) return;
+                out[field] = {
+                    value: String((op.payload && op.payload.value) || ''),
+                    revision: op.base_revision,
+                };
+            });
+        return out;
+    }
+
+    /**
+     * The base an edit session saves against, pinned when the editor opens:
+     * each field's revision where the read holds what the form shows (see
+     * `prksSyncReconcile.pinEditBase`). Null when the revisions cannot be read.
+     */
+    async function pinPlaylistEditBase(playlistId, shown, operations) {
+        const read = await acknowledgedPlaylistBase(playlistId, operations);
+        return reconcileCore.pinEditBase(shown, read, pendingFieldBases(operations, playlistId));
+    }
+
+    /**
      * The ACKNOWLEDGED order an edit is measured against: `{work_ids, revision}`.
      *
      * A playlist created here and never sent has an empty order at revision 0,
@@ -461,22 +494,6 @@
             if (!value) return null;
             return { playlist_id: value.playlist_id, revision: value.revision };
         } catch (_e) { return null; }
-    }
-
-    /** What this editing session changed, measured against what it was showing. */
-    function dirtyPlaylistFields(playlistId, draft, base, operations) {
-        const changes = {};
-        if (!draft || !base) return changes;
-        const pending = pendingFieldValues(operations, playlistId);
-        FIELDS.forEach(function (field) {
-            if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
-            const observed = base[field];
-            if (!observed || typeof observed.value !== 'string') return;
-            const shown = pending.has(field) ? pending.get(field) : observed.value;
-            const desired = String(draft[field] == null ? '' : draft[field]);
-            if (desired !== shown) changes[field] = desired;
-        });
-        return changes;
     }
 
     /* ---- durable writers ---- */
@@ -664,9 +681,9 @@
         prksNewPlaylistState: newPlaylistState,
         prksObservedPlaylistFields: observedPlaylistFields,
         prksAcknowledgedPlaylistBase: acknowledgedPlaylistBase,
+        prksPinPlaylistEditBase: pinPlaylistEditBase,
         prksAcknowledgedPlaylistOrder: acknowledgedPlaylistOrder,
         prksAcknowledgedWorkPlaylist: acknowledgedWorkPlaylist,
-        prksDirtyPlaylistFields: dirtyPlaylistFields,
         prksCreatePlaylistDurably: createPlaylistDurably,
         prksSavePlaylistFieldsDurably: savePlaylistFieldsDurably,
         prksSetWorkPlaylistDurably: setWorkPlaylistDurably,

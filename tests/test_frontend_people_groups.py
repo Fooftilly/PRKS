@@ -1,12 +1,13 @@
 """Regression contracts for Person Group presentation and ownership."""
-import os
 import json
+import os
 import subprocess
 import unittest
 
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _GROUPS = os.path.join(_ROOT, "frontend", "js", "components", "people-groups.js")
+_RECONCILE = os.path.join(_ROOT, "frontend", "js", "sync-reconcile.js")
 _APP = os.path.join(_ROOT, "frontend", "js", "app.js")
 _TAB_CONTEXT = os.path.join(_ROOT, "frontend", "js", "tab-context.js")
 _UI = os.path.join(_ROOT, "frontend", "js", "ui.js")
@@ -337,7 +338,9 @@ process.stdout.write('ok');
     def test_failed_save_does_not_create_a_parent(self):
         src = _read(_GROUPS)
         save = _extract_function(src, "savePersonGroupEditor")
-        self.assertLess(save.index("prksAcknowledgedPersonGroupBase"), save.index("prksMatchPersonGroupParent"))
+        self.assertLess(save.index("prksPersonGroupEditPin"), save.index("prksMatchPersonGroupParent"))
+        self.assertNotIn("prksAcknowledgedPersonGroupBase", save,
+                         "Save is measured against the base pinned at Edit, not one read at Save (#783)")
         script = "\n".join((
             _extract_function(src, "prksMatchPersonGroupParent"),
             _extract_function(src, "savePersonGroupEditor"),
@@ -345,7 +348,7 @@ process.stdout.write('ok');
 let created = 0;
 function prksPersonGroupEditSessionStill() { return true; }
 function prksDurableOperationsOrNone() { return Promise.resolve([]); }
-function prksAcknowledgedPersonGroupBase() { return Promise.resolve(null); }
+function prksPersonGroupEditPin() { return Promise.resolve(null); }
 function prksCreatePersonGroupDurably() { created += 1; return Promise.resolve({ entity_id: 'new-parent' }); }
 function prksEffectivePersonGroupCatalogue() { return Promise.resolve([]); }
 function prksAlertMessage() { return Promise.resolve(); }
@@ -375,12 +378,16 @@ savePersonGroupEditor(ctx, 'g1', {
         script = "\n".join((
             _extract_function(src, "prksMatchPersonGroupParent"),
             _extract_function(src, "savePersonGroupEditor"),
+            "const window = { prksSyncReconcile: require(%s) };" % json.dumps(_RECONCILE),
             r"""
 let created = 0;
 let handed = null;
 function prksPersonGroupEditSessionStill() { return true; }
 function prksDurableOperationsOrNone() { return Promise.resolve([]); }
-function prksAcknowledgedPersonGroupBase() { return Promise.resolve({ name: 'Child' }); }
+function prksPersonGroupEditPin() {
+  return Promise.resolve({ name: { value: 'Child', revision: 1 }, description: { value: '', revision: 0 },
+    parent_id: { value: '', revision: 0 } });
+}
 function prksCreatePersonGroupDurably() { created += 1; return Promise.resolve({ entity_id: 'orphan' }); }
 function prksEffectivePersonGroupCatalogue() { return Promise.resolve([]); }
 function prksPersonGroupSaveMessage() { return 'failed'; }

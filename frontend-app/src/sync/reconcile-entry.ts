@@ -15,6 +15,8 @@ export {
   observedAt,
   overlay,
   pendingFor,
+  pinEditBase,
+  pinnedEdits,
   planAck,
   readBefore,
   timeOf,

@@ -27,6 +27,7 @@ require("../../frontend/js/person-metadata-state.js");
 require("../../frontend/js/person-group-state.js");
 require("../../frontend/js/work-role-state.js");
 globalThis.window = globalThis.window || globalThis;
+globalThis.prksSyncReconcile = require("../../frontend/js/sync-reconcile.js");
 require("../../frontend/js/components/people-groups.js");
 
 let sequence = 0;
@@ -494,12 +495,12 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(base.name.revision, 0, "at revision 0 -- known, not assumed");
 
     const draft = { name: "Analysts", description: "Engine", parent_id: "" };
-    assert.deepEqual(globalThis.prksDirtyPersonGroupFields(created.entity_id, draft, base, ops), {},
+    const pinned = await globalThis.prksPinPersonGroupEditBase(created.entity_id, draft, ops);
+    const core = globalThis.prksSyncReconcile;
+    assert.deepEqual(core.pinnedEdits(draft, draft, pinned).changes, {},
         "reopening the form and saving changes nothing");
-    assert.deepEqual(
-        globalThis.prksDirtyPersonGroupFields(created.entity_id,
-            Object.assign({}, draft, { name: "Engineers" }), base, ops),
-        { name: "Engineers" }, "only what was typed");
+    assert.deepEqual(core.pinnedEdits(draft, Object.assign({}, draft, { name: "Engineers" }), pinned),
+        { changes: { name: "Engineers" }, base: pinned, unknown: [] }, "only what was typed");
 
     /* A group the server has never heard of and this device did not create is
      * UNKNOWN, not empty: guessing revision 0 would overwrite whatever another
@@ -699,6 +700,12 @@ async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     assert.ok(runtime.notifications() >= 1, "a committed field edit still notifies sync");
 }
 
+/* The edit-session pin `openPersonGroupEdit` stores: revisions read at Edit. */
+function pinFor(groupId, session, shown, base) {
+    const fields = { name: shown.name, description: shown.description, parent_id: shown.parent_id };
+    return { groupId, session, base: Promise.resolve(globalThis.prksSyncReconcile.pinEditBase(fields, base)) };
+}
+
 async function aStaleGroupEditDoesNotCreateATypedParent() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
@@ -722,7 +729,8 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
     function editingContext() {
         return {
             destroyed: false,
-            ui: { personGroupEditing: true, personGroupEditSession: 4 },
+            ui: { personGroupEditing: true, personGroupEditSession: 4,
+                personGroupEditPin: pinFor("PG-A", 4, shown, base) },
             lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
             getEntity: () => ({ id: "PG-A", name: "Group A" }),
         };
@@ -804,6 +812,109 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
     }
 }
 
+/* #783: two tabs open Edit at revision 0. Tab A saves; tab B's later Save is
+ * still measured against revision 0, so the server sees a conflict instead of
+ * B silently replacing A's description. */
+async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+    };
+    const alerts = [];
+    let current = baseAt({ name: 2, description: 0, parent_id: 0 },
+        { name: "Group B", description: "original" });
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    /* The server as each read finds it: revisions from the sync state, values
+     * from the group's own record. */
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "person-group-state") {
+            const fields = {};
+            Object.keys(current).forEach((name) => { fields[name] = { revision: current[name].revision }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        const row = { id };
+        Object.keys(current).forEach((name) => { row[name] = current[name].value; });
+        return { value: row, source: "server" };
+    };
+    function tab() {
+        return {
+            tabId: "tab-b", destroyed: false,
+            ui: { personGroupEditing: false, personGroupEditSession: 0 },
+            lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-B" } },
+            getEntity: () => ({ id: "PG-B", name: "Group B", description: "original", parent: null }),
+        };
+    }
+    const writes = async () => (await store.listOperations())
+        .filter(row => row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-B");
+    try {
+        const b = tab();
+        globalThis.openPersonGroupEdit(b);
+        assert.equal(b.ui.personGroupEditPin.groupId, "PG-B", "Edit pins the base when it opens");
+        await b.ui.personGroupEditPin.base;
+        /* Tab A saves the description; the acknowledged revision moves to 1. */
+        current = baseAt({ name: 2, description: 1, parent_id: 0 },
+            { name: "Group B", description: "from A" });
+        const shown = b.ui.personGroupFieldBaseline;
+        const saved = await globalThis.savePersonGroupEditor(b, "PG-B",
+            { name: "Group B", description: "from stale B", parent_id: "", parent_name: "" },
+            shown, b.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true);
+        const [row] = await writes();
+        assert.equal(row.payload.value, "from stale B");
+        assert.equal(row.base_revision, 0,
+            "the stale tab sends the revision its form opened on, not the one read at Save");
+
+        /* A form whose own read already held a newer value has no base for
+         * that field: editing it is refused and the draft kept. */
+        const store2 = newStore();
+        runtimeForStore(store2);
+        globalThis.prksDurableOperationsOrNone = async () => store2.listOperations();
+        const c = tab();
+        current = baseAt({ name: 2, description: 1, parent_id: 0 },
+            { name: "Group B", description: "from A" });
+        globalThis.openPersonGroupEdit(c);
+        const refused = await globalThis.savePersonGroupEditor(c, "PG-B",
+            { name: "Group B", description: "mine", parent_id: "", parent_name: "" },
+            c.ui.personGroupFieldBaseline, c.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "an unknown base refuses the changed field");
+        assert.match(alerts.join(" "), /changed in another tab/);
+        assert.deepEqual((await store2.listOperations()).filter(r => r.entity_id === "PG-B"), [],
+            "nothing is queued for a field whose base is unknown");
+        const renamed = await globalThis.savePersonGroupEditor(c, "PG-B",
+            { name: "Renamed", description: "original", parent_id: "", parent_name: "" },
+            c.ui.personGroupFieldBaseline, c.ui.personGroupEditSession);
+        assert.equal(renamed && renamed.ok, true, "an untouched unknown field does not block another");
+        const [name] = (await store2.listOperations()).filter(r => r.entity_id === "PG-B");
+        assert.equal(name.payload.field, "name");
+        assert.equal(name.base_revision, 2);
+
+        globalThis.closePersonGroupEdit(c);
+        assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
+
+        /* This device's own unsent edit is what the form shows: editing it
+         * again keeps the revision that edit was measured against. */
+        const d = tab();
+        d.getEntity = () => ({ id: "PG-B", name: "Renamed", description: "from A", parent: null });
+        globalThis.openPersonGroupEdit(d);
+        const again = await globalThis.savePersonGroupEditor(d, "PG-B",
+            { name: "Renamed twice", description: "from A", parent_id: "", parent_name: "" },
+            d.ui.personGroupFieldBaseline, d.ui.personGroupEditSession);
+        assert.equal(again && again.ok, true, "an unsent edit can be edited again");
+        const rows = (await store2.listOperations()).filter(r => r.entity_id === "PG-B");
+        assert.equal(rows.length, 1, "the unsent rename is replaced, not stacked");
+        assert.equal(rows[0].payload.value, "Renamed twice");
+        assert.equal(rows[0].base_revision, 2);
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
 async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
@@ -828,7 +939,9 @@ async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     globalThis.prksEffectivePersonGroupCatalogue = async () => [];
     const ctx = {
         destroyed: false,
-        ui: { personGroupEditing: true, personGroupEditSession: 4 },
+        ui: { personGroupEditing: true, personGroupEditSession: 4,
+            personGroupEditPin: pinFor("PG-A", 4,
+                { name: "Group A", description: "Kept", parent_id: "" }, base) },
         lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
         getEntity: () => ({ id: "PG-A", name: "Group A" }),
     };
@@ -1191,6 +1304,7 @@ async function main() {
     await aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn();
     await aStaleGroupEditDoesNotCreateATypedParent();
     await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
+    await aSaveUsesTheRevisionsPinnedWhenEditOpened();
     console.log("All " + checks + " person group checks passed");
 }
 

@@ -1,9 +1,20 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserPlaylistIntents, type PlaylistIntentOwner } from './intents'
 import type { PlaylistFieldDraft } from './types'
 
+/* Every field at revision 1, as Edit pins it when the form shows the read value. */
+function pinAll(fields: PlaylistFieldDraft) {
+  return Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, { value, revision: 1 }]))
+}
+
+beforeEach(() => {
+  window.prksPinPlaylistEdit = vi.fn(async (_id: string, fields: Record<string, string>) =>
+    pinAll(fields as unknown as PlaylistFieldDraft))
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
+  delete window.prksPinPlaylistEdit
   delete window.prksOpenNewPlaylistModalFromPlaylistsPage
   delete window.updatePlaylist
   delete window.reorderPlaylist
@@ -35,7 +46,11 @@ function owner(overrides: Partial<PlaylistIntentOwner> = {}): PlaylistIntentOwne
     isCurrent: () => true,
     lastResolvedRoute: { name: 'playlist-detail', params: { playlistId: 'PL-1' } },
     root: document.createElement('div'),
-    ui: { playlistEditing: true, playlistRename: {} },
+    ui: {
+      playlistEditing: true,
+      playlistRename: {},
+      playlistEditPin: { playlistId: 'PL-1', session: 0, base: Promise.resolve(pinAll(shown)) },
+    },
     getEntity: () => ({ id: 'PL-1' }),
     ...overrides,
   }
@@ -63,6 +78,7 @@ describe('Playlist intents', () => {
     expect(pane.ui?.playlistEditing).toBe(false)
 
     pane.ui!.playlistEditing = true
+    intents.pinEditBase('PL-1', shown)
     vi.mocked(window.renderPlaylistDetail).mockClear()
     vi.mocked(window.updatePanelContent).mockClear()
     const saved = await intents.saveFields(
@@ -71,10 +87,60 @@ describe('Playlist intents', () => {
       shown,
     )
     expect(saved.ok).toBe(true)
-    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, {})
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, { base: pinAll(shown) })
     expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
     expect(window.renderPlaylistDetail).toHaveBeenCalled()
     expect(window.updatePanelContent).toHaveBeenCalledWith('details')
+  })
+
+  it('saves against the revisions pinned when Edit opened, not newer ones (#894)', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    intents.invalidateEditSession()
+    expect(pane.ui?.playlistEditPin).toBeNull()
+    window.prksPinPlaylistEdit = vi.fn(async () => ({
+      title: { value: 'Course', revision: 4 },
+      description: { value: 'Old', revision: 0 },
+      original_url: { value: 'https://example.test/old', revision: 2 },
+    }))
+    intents.pinEditBase('PL-1', shown)
+    expect(window.prksPinPlaylistEdit).toHaveBeenCalledWith('PL-1', shown)
+    /* Another tab saves the description afterwards; this tab's Save keeps revision 0. */
+    const saved = await intents.saveFields('PL-1', { ...shown, description: 'Stale tab' }, shown)
+    expect(saved.ok).toBe(true)
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Stale tab' }, {
+      base: {
+        title: { value: 'Course', revision: 4 },
+        description: { value: 'Old', revision: 0 },
+        original_url: { value: 'https://example.test/old', revision: 2 },
+      },
+    })
+  })
+
+  it('refuses a changed field whose pinned base is unknown and keeps the draft', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    const pane = owner()
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: 0,
+      base: Promise.resolve({ ...pinAll(shown), description: null }),
+    }
+    const intents = browserPlaylistIntents(pane, 2)
+    const refused = await intents.saveFields('PL-1', { ...shown, description: 'Mine' }, shown)
+    expect(refused.ok).toBe(false)
+    expect(refused.message).toContain('changed in another tab')
+    expect(window.updatePlaylist).not.toHaveBeenCalled()
+    expect(pane.ui?.playlistEditing).toBe(true)
+
+    pane.ui!.playlistEditPin = { playlistId: 'PL-1', session: 0, base: Promise.resolve(null) }
+    const unavailable = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
+    expect(unavailable.ok).toBe(false)
+    expect(unavailable.message).toContain('cannot be changed offline yet')
   })
 
   it('refreshes the details panel when a save changes nothing', async () => {

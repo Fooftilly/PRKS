@@ -47,7 +47,7 @@ function loadTopLevelFunction(source, name) {
     loadTopLevelFunction(app, "prksDurableOperationsOrNone");
     for (const name of [
         "prksPlaylistSaveMessage", "prksPlaylistBaseUnavailable",
-        "createPlaylist", "updatePlaylist", "prksSetWorkPlaylist",
+        "createPlaylist", "updatePlaylist", "prksPinPlaylistEdit", "prksSetWorkPlaylist",
         "addWorkToPlaylist", "reorderPlaylist", "deletePlaylistCanonical"
     ]) {
         loadTopLevelFunction(playlist, name);
@@ -371,13 +371,12 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(base.title.revision, 0, "at revision 0 -- known, not assumed");
 
     const draft = { title: "Lectures", description: "Term one", original_url: "" };
-    assert.deepEqual(
-        globalThis.prksDirtyPlaylistFields(created.entity_id, draft, base, ops), {},
+    const pinned = await globalThis.prksPinPlaylistEditBase(created.entity_id, draft, ops);
+    const core = require("../../frontend/js/sync-reconcile.js");
+    assert.deepEqual(core.pinnedEdits(draft, draft, pinned).changes, {},
         "reopening the form and saving changes nothing");
-    assert.deepEqual(
-        globalThis.prksDirtyPlaylistFields(created.entity_id,
-            Object.assign({}, draft, { description: "Term two" }), base, ops),
-        { description: "Term two" }, "only what was typed");
+    assert.deepEqual(core.pinnedEdits(draft, Object.assign({}, draft, { description: "Term two" }), pinned),
+        { changes: { description: "Term two" }, base: pinned, unknown: [] }, "only what was typed");
 
     /* The order of a playlist created here is genuinely empty at revision 0:
      * nothing else can have written to an id no other device has seen. */
@@ -420,7 +419,10 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     };
     globalThis.prksOfflineInvalidateEntity = async () => true;
 
-    await globalThis.updatePlaylist(existing, { title: "Temporary" });
+    const shown = { title: "Lectures", description: "", original_url: "" };
+    const base = await globalThis.prksPinPlaylistEdit(existing, shown);
+    assert.deepEqual(base.title, { value: "Lectures", revision: 3 }, "Edit pins the shown revision");
+    await globalThis.updatePlaylist(existing, { title: "Temporary" }, { base });
     let rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
     assert.equal(rows.length, 1);
     assert.equal(rows[0].payload.field, "title");
@@ -433,15 +435,27 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     const write = globalThis.prksSavePlaylistFieldsDurably;
     try {
         globalThis.prksSavePlaylistFieldsDurably = async () => null;
-        await globalThis.updatePlaylist(existing, { title: "Lectures" });
+        await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
         rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
         assert.throws(() => assert.deepEqual(rows, []), /AssertionError|Expected values/);
     } finally {
         globalThis.prksSavePlaylistFieldsDurably = write;
     }
-    await globalThis.updatePlaylist(existing, { title: "Lectures" });
+    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
     assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
         "real updatePlaylist A→B→A leaves no intent");
+
+    /* #894: another tab saves the title after this editor opened. This
+     * session's Save keeps the revision it was shown, so the server can
+     * refuse it as a conflict instead of it replacing that save. */
+    state.fields.title.revision = 4;
+    await globalThis.updatePlaylist(existing, { title: "From a stale tab" }, { base });
+    rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].base_revision, 3, "a stale editor never adopts the newer revision");
+    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
+    assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), []);
+    state.fields.title.revision = 3;
 
     await globalThis.reorderPlaylist(existing, ["W-2", "W-1"]);
     rows = await rowsFor(store, "REORDER_PLAYLIST_ITEMS");

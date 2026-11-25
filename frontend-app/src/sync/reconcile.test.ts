@@ -11,6 +11,8 @@ import {
   observedAt,
   overlay,
   pendingFor,
+  pinEditBase,
+  pinnedEdits,
   planAck,
   readBefore,
   timeOf,
@@ -243,5 +245,55 @@ describe('applyOwnerAck', () => {
     expect(state.reads).toBe(1)
     expect(state.value).toBe(newer)
     expect(state.adopted).toBe(1)
+  })
+})
+
+describe('edit-session bases', () => {
+  const shown = { name: 'Group', description: 'old' }
+
+  it('pins the revision read for each field the form shows', () => {
+    const pinned = pinEditBase(shown, {
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'old', revision: 0 },
+    })
+    expect(pinned).toEqual({ name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } })
+  })
+
+  it('leaves a field unknown when the read already holds a newer value', () => {
+    const pinned = pinEditBase(shown, {
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'from another tab', revision: 1 },
+      extra: { value: 'ignored', revision: 9 },
+    })
+    expect(pinned).toEqual({ name: { value: 'Group', revision: 3 }, description: null })
+    expect(pinEditBase(shown, { name: { value: 'Group', revision: -1 } })).toEqual({ name: null, description: null })
+    expect(pinEditBase(shown, null)).toBeNull()
+  })
+
+  it('pins an unsent edit of this device at the revision it was measured against', () => {
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 4 } }
+    const showsPending = { name: 'Group', description: 'unsent' }
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2 } })).toEqual({
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'old', revision: 2 },
+    })
+    expect(pinEditBase(shown, read, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
+    expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()
+  })
+
+  it('sends changed fields against the pinned revision, never a newer one', () => {
+    const pinned = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } }
+    expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned)).toEqual({
+      changes: { description: 'mine' },
+      base: pinned,
+      unknown: [],
+    })
+  })
+
+  it('refuses a changed field whose base is unknown, but not an untouched one', () => {
+    const pinned = { name: { value: 'Group', revision: 3 }, description: null }
+    expect(pinnedEdits(shown, { name: 'Renamed', description: 'old' }, pinned).unknown).toEqual([])
+    expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned).unknown).toEqual(['description'])
+    expect(pinnedEdits(shown, {}, pinned).changes).toEqual({})
   })
 })

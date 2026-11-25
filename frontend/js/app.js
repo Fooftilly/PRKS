@@ -3234,6 +3234,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         ctx.ui.personGroupEditing = false;
                         ctx.ui.personGroupMembersEditing = false;
                         ctx.ui.personGroupFieldBaseline = null;
+                        ctx.ui.personGroupEditPin = null;
                     }
                     prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
                         availability: 'unavailable',
