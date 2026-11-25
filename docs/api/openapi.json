@@ -184,7 +184,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -263,7 +263,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           },
           "507": {
             "description": "The archive could not be copied for the restore; nothing changed.",
@@ -379,7 +379,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -480,7 +480,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -550,7 +550,7 @@
             "$ref": "#/components/responses/EpochChanged"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       },
@@ -779,7 +779,7 @@
             }
           },
           "503": {
-            "description": "The database cannot be read (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
+            "description": "The database cannot be read (unavailable). Also: The Library is unavailable (unavailable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1006,7 +1006,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1082,7 +1082,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       },
@@ -1200,7 +1200,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1493,7 +1493,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1566,7 +1566,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1642,7 +1642,7 @@
             }
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       },
@@ -1767,7 +1767,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1878,7 +1878,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -1908,7 +1908,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "One byte range, `bytes=<first>-[<last>]`."
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
           }
         ],
         "responses": {
@@ -1981,7 +1981,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "One byte range, `bytes=<first>-[<last>]`."
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
           }
         ],
         "responses": {
@@ -2013,7 +2013,7 @@
             "description": "The range is outside the file."
           },
           "503": {
-            "description": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE)."
+            "description": "The Library is unavailable (unavailable)."
           }
         }
       }
@@ -2127,7 +2127,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2187,7 +2187,7 @@
             "$ref": "#/components/responses/EpochChanged"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2271,7 +2271,7 @@
             "$ref": "#/components/responses/EpochChanged"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       },
@@ -2341,7 +2341,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2544,7 +2544,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2614,7 +2614,7 @@
             "$ref": "#/components/responses/EpochChanged"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       },
@@ -2739,7 +2739,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2841,7 +2841,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -2881,7 +2881,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "503": {
-            "description": "Storage is not bound (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
+            "description": "Storage is not bound (unavailable). Also: The Library is unavailable (unavailable).",
             "content": {
               "application/json": {
                 "schema": {
@@ -2978,7 +2978,7 @@
             "$ref": "#/components/responses/UnsupportedMediaType"
           },
           "503": {
-            "$ref": "#/components/responses/Unavailable"
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
           }
         }
       }
@@ -7078,6 +7078,16 @@
         }
       },
       "Unavailable": {
+        "description": "The Library is unavailable (unavailable).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
+      "UnavailableOrMaintenance": {
         "description": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
         "content": {
           "application/json": {

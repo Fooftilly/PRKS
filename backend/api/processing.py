@@ -360,7 +360,7 @@ _PDF = Operation(
                                               required=True)}),
      404: _refusal("No ready item with that id (ENTITY_NOT_FOUND)."),
      416: Reply("The range is outside the file.")},
-    params=(Param("Range", "header", description="One byte range, `bytes=<first>-[<last>]`."),))
+    params=(Param("Range", "header", description="One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."),))
 
 ROUTES = (
     route("GET", COLLECTION, queue, contract=Operation(

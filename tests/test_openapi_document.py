@@ -177,6 +177,8 @@ class OpenApiDocumentTests(unittest.TestCase):
                         {"$ref": "#/components/responses/BadRequest"}))
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
+                    # Only library_command takes the maintenance lock (#1431).
+                    self.assertNotIn("MAINTENANCE", json.dumps(op["responses"]["503"]))
 
     def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
         for (method, path), op in _operations(self.document).items():
@@ -280,7 +282,7 @@ class OpenApiDocumentTests(unittest.TestCase):
         op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["get"]
         self.assertTrue(op["responses"]["206"]["headers"]["Content-Range"]["required"])
         self.assertIn({"name": "Range", "in": "header", "required": False,
-                       "schema": {"type": "string"}, "description": "One byte range, `bytes=<first>-[<last>]`."},
+                       "schema": {"type": "string"}, "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."},
                       op["parameters"])
 
     def test_a_rest_parameter_is_one_openapi_parameter(self) -> None:

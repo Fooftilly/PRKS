@@ -2189,8 +2189,17 @@ export interface components {
                 "application/json": components["schemas"]["ApiErrorEnvelope"];
             };
         };
-        /** @description The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+        /** @description The Library is unavailable (unavailable). */
         Unavailable: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiErrorEnvelope"];
+            };
+        };
+        /** @description The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+        UnavailableOrMaintenance: {
             headers: {
                 [name: string]: unknown;
             };
@@ -2304,6 +2313,7 @@ export type ResponseInvalidRequest = components['responses']['InvalidRequest'];
 export type ResponseNotAuthenticated = components['responses']['NotAuthenticated'];
 export type ResponseRequestTooLarge = components['responses']['RequestTooLarge'];
 export type ResponseUnavailable = components['responses']['Unavailable'];
+export type ResponseUnavailableOrMaintenance = components['responses']['UnavailableOrMaintenance'];
 export type ResponseUnsupportedMediaType = components['responses']['UnsupportedMediaType'];
 export type $defs = Record<string, never>;
 export interface operations {
@@ -2380,7 +2390,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     restoreBackup: {
@@ -2430,7 +2440,7 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
             /** @description The archive could not be copied for the restore; nothing changed. */
             507: {
                 headers: {
@@ -2507,7 +2517,7 @@ export interface operations {
                     "application/json": components["schemas"]["BackupRefusal"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     listCitationStyles: {
@@ -2572,7 +2582,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getCitationStyle: {
@@ -2645,7 +2655,7 @@ export interface operations {
                 };
             };
             409: components["responses"]["EpochChanged"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     exportCitations: {
@@ -2769,7 +2779,7 @@ export interface operations {
                     "text/plain": string;
                 };
             };
-            /** @description The database cannot be read (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+            /** @description The database cannot be read (unavailable). Also: The Library is unavailable (unavailable). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2927,7 +2937,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getPosition: {
@@ -3008,7 +3018,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     updatePosition: {
@@ -3061,7 +3071,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getPositionSyncState: {
@@ -3243,7 +3253,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getProcessingItem: {
@@ -3324,7 +3334,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     updateProcessingItem: {
@@ -3385,7 +3395,7 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     importProcessingItem: {
@@ -3456,14 +3466,14 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getProcessingItemPdf: {
         parameters: {
             query?: never;
             header?: {
-                /** @description One byte range, `bytes=<first>-[<last>]`. */
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
                 Range?: string;
             };
             path: {
@@ -3518,7 +3528,7 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
-                /** @description One byte range, `bytes=<first>-[<last>]`. */
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
                 Range?: string;
             };
             path: {
@@ -3572,7 +3582,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+            /** @description The Library is unavailable (unavailable). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -3620,7 +3630,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     listPublishersInUse: {
@@ -3688,7 +3698,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     deletePublisher: {
@@ -3718,7 +3728,7 @@ export interface operations {
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["EpochChanged"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     addPublisherAlias: {
@@ -3762,7 +3772,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     removePublisherAlias: {
@@ -3811,7 +3821,7 @@ export interface operations {
                 };
             };
             409: components["responses"]["EpochChanged"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getRemoteImage: {
@@ -3936,7 +3946,7 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getSavedView: {
@@ -4009,7 +4019,7 @@ export interface operations {
                 };
             };
             409: components["responses"]["EpochChanged"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     updateSavedView: {
@@ -4070,7 +4080,7 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getSettings: {
@@ -4136,7 +4146,7 @@ export interface operations {
             409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     getStorageStatus: {
@@ -4161,7 +4171,7 @@ export interface operations {
             };
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Storage is not bound (unavailable). Also: The Library is unavailable or in maintenance (unavailable, MAINTENANCE). */
+            /** @description Storage is not bound (unavailable). Also: The Library is unavailable (unavailable). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4228,7 +4238,7 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
-            503: components["responses"]["Unavailable"];
+            503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
     healthz: {
