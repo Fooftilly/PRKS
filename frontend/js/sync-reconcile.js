@@ -87,7 +87,7 @@ var prksSyncReconcile = (function(exports) {
 	}
 	/** The acknowledged base with every matching pending operation folded over it, oldest first. */
 	function overlay(base, operations, match, apply) {
-		return pendingFor(operations, match).reduce(apply, base);
+		return pendingFor(operations, match).reduce((value, op) => apply(value, op), base);
 	}
 	var observations = /* @__PURE__ */ new WeakMap();
 	/** Record that `value` came from a read that finished no later than `at`. */
@@ -132,7 +132,7 @@ var prksSyncReconcile = (function(exports) {
 		if (plan === "unproven") adoptFresh(owner.read, owner.get, next, (fresh) => {
 			owner.set(fresh);
 			if (owner.adopted) owner.adopted(fresh);
-		});
+		}).catch(() => false);
 		return plan;
 	}
 	exports.adoptFresh = adoptFresh;
