@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from scripts.benchmark_classic_script_bundle import EXPECTED_CLASSIC_COUNTS
+from scripts.classic_script_bundle import EXPECTED_CLASSIC_COUNTS
 from scripts.build_classic_distribution import (
     BODY_BUNDLE,
     HEAD_BUNDLE,

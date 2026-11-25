@@ -14,7 +14,7 @@ import re
 import shutil
 import tempfile
 
-from .benchmark_classic_script_bundle import (
+from .classic_script_bundle import (
     BODY_URL,
     CLASSIC_PREFIX,
     EXPECTED_CLASSIC_COUNTS,
