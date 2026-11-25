@@ -229,6 +229,27 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].base_revision, 3,
             "against the pinned revision: a server that moved on refuses it as a conflict");
     }
+    /* A title cleared offline shows as the default name: reopening Edit pins
+     * it, so a new title replaces the unsent edit. */
+    {
+        const store = newStore();
+        await store.savePlaylistFields(id, { title: "" }, read);
+        const state = { playlist_id: id, order_revision: 0, fields: Object.fromEntries(
+            globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name, { revision: name === "title" ? 3 : 0 }])) };
+        const previous = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async kind => (kind === "playlist-state"
+            ? { value: state, source: "server" }
+            : { value: { id, title: "Lectures", description: "", original_url: "" }, source: "server" });
+        const ops = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        const cleared = { title: "Untitled playlist", description: "", original_url: "" };
+        const pinned = await globalThis.prksPinPlaylistEditBase(id, cleared, ops);
+        globalThis.prksOfflineReadEntity = previous;
+        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "" },
+            "the default name stands for the pending empty title");
+        const edits = core.pinnedEdits(cleared, Object.assign({}, cleared, { title: "Talks" }), pinned);
+        assert.deepEqual(edits.unknown || [], [], "a new title is not refused as changed elsewhere");
+        assert.equal(edits.changes.title, "Talks");
+    }
 }
 
 /* ---- membership ---- */

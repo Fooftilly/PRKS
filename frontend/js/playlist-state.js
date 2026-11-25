@@ -463,7 +463,14 @@
      */
     async function pinPlaylistEditBase(playlistId, shown, operations) {
         const read = await acknowledgedPlaylistBase(playlistId, operations);
-        return reconcileCore.pinEditBase(shown, read, pendingFieldBases(operations, playlistId));
+        const pending = pendingFieldBases(operations, playlistId);
+        /* An empty title is shown as the default name. Compare the stored
+         * empty title, pending or read, as the value the form shows. */
+        const own = pending.title;
+        const stored = own ? own.value : (read && read.title ? read.title.value : null);
+        const compared = shown && shown.title === DEFAULT_TITLE && stored === ''
+            ? Object.assign({}, shown, { title: '' }) : shown;
+        return reconcileCore.pinEditBase(compared, read, pending);
     }
 
     /**
