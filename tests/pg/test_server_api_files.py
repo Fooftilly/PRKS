@@ -321,6 +321,11 @@ class ManagedPdfTests(ManagedPdfTestCase):
                             400)
         self.assertEqual(body.get("error"), "file_path is not a managed PDF")
         self.assertNotIn("Dotdot create", self.titles())
+        # A key naming a directory is no managed PDF: 400, not a storage error.
+        os.makedirs(os.path.join(self.storage.pdfs_dir, "folder.pdf"), exist_ok=True)
+        body = self.refused(self.send("POST", "/api/works", {"title": "Folder create", "file_path": "/api/pdfs/folder.pdf"}),
+                            400)
+        self.assertEqual(body.get("error"), "the managed PDF does not exist")
         work = self.create_work("Dotdot patch target")
         res = self.send("PATCH", f"/api/works/{work['id']}", {"file_path": "/api/pdfs/.."})
         self.assertEqual((res.status, res.body.get("code")), (501, "not_ported"), res.raw)  # any file_path change

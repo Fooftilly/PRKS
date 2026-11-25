@@ -73,8 +73,8 @@ def catalog(req: Request) -> Response:
 
     # ``?projection=browse`` is an explicit, additive contract: the compact
     # catalog the browse routes cache. The default keeps its semantics for
-    # every other caller. Each list is built once: file_size_bytes is read
-    # from the managed PDF, so the ETag comes from these rows.
+    # every other caller. Each list is built once and the ETag comes from
+    # these rows; file_size_bytes is the primary Asset's byte_size.
     if req.query_value("projection") == "browse":
         return revalidated(req, "works-browse", work_commands.browse_catalog(*req.actor))
     return revalidated(req, "works", work_commands.catalog(*req.actor))

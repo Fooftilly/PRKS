@@ -527,6 +527,8 @@ class AnswerTests(WorksAnswerTestCase):
         # A file size is the Asset's byte_size (#1427): no catalogue read touches the data root,
         # and a file gone from the disk still reports the size the database holds.
         self.catalog()
+        opened = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened))
         os.remove(os.path.join(self.storage.pdfs_dir, "f.pdf"))
         root = os.path.realpath(self.storage.root)
         touched: list[str] = []
@@ -555,7 +557,7 @@ class AnswerTests(WorksAnswerTestCase):
         with mock.patch("os.stat", stat), mock.patch("builtins.open", opened):
             answers = {name: read() for name, read in reads.items()}
         self.assertEqual(touched, [])
-        for name in ("catalog", "browse_catalog", "recently_added_browse"):
+        for name in reads:
             with self.subTest(read=name):
                 self.assertEqual([row["file_size_bytes"] for row in answers[name] if row["title"] == "file"], [32])
 

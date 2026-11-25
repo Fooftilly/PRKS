@@ -377,7 +377,9 @@ def _new_asset(objects: StorageBackend, kind: Optional[str], file_path: str, url
 def _managed_file(objects: StorageBackend, file_path: str) -> Any:
     from backend.domain.works import commands
     from backend.pdf.managed_pdf_names import managed_pdf_filename
-    from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, InvalidStorageKey, ObjectNotFound, StorageKey
+    from backend.storage.objects import (
+        NAMESPACE_ASSET_OBJECTS, InvalidStorageKey, ObjectIntegrityError, ObjectNotFound, StorageKey,
+    )
 
     name = managed_pdf_filename(file_path)
     try:
@@ -393,7 +395,8 @@ def _managed_file(objects: StorageBackend, file_path: str) -> Any:
             for chunk in iter(lambda: handle.read(_HASH_CHUNK), b""):
                 digest.update(chunk)
                 size += len(chunk)
-    except ObjectNotFound:
+    except (ObjectNotFound, ObjectIntegrityError):
+        # A key that names no regular file (a directory, a link) is no managed PDF either.
         raise ValueError("the managed PDF does not exist") from None
     return commands.ManagedFile(storage_locator=name, sha256=digest.hexdigest(), byte_size=size)
 
