@@ -95,7 +95,7 @@ class TestAnnotationNormalizer(unittest.TestCase):
         wide = {"id": "a", "geometry": {"points": list(range(1_000_000)), "label": "x"}}
         for walk in (_holds_non_finite, _holds_unstorable_text):
             with self.subTest(walk=walk.__name__):
-                # Every branch of the walk once, before measuring: a coverage
+                # Every path the measured input takes, once, before measuring: a coverage
                 # tracer records each new line or arc on first execution, and
                 # that bookkeeping is not the walk's own memory.
                 self.assertFalse(walk({"id": "a", "geometry": {"points": [0, 1.5], "label": "x"}}))
