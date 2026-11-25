@@ -1,14 +1,11 @@
 """The managed-PDF name rules (``backend/pdf/managed_pdf_names.py``).
 
 Pure rules with no database: which ``/api/pdfs/`` spellings name a managed
-file, which basename a row owns or protects, and the containment check.
+file, which basename a row owns or protects, and the storage key a route name gives.
 Moved out of ``tests/test_work_deletion.py`` and ``tests/test_db_manager.py``
 when PG-C2 (#641) retired their SQLite tests; the rules stay in use on PostgreSQL.
 """
 
-import os
-import shutil
-import tempfile
 import unittest
 
 from backend.pdf.managed_pdf_names import (
@@ -18,8 +15,9 @@ from backend.pdf.managed_pdf_names import (
     referenced_managed_pdf_filename,
     row_references_managed_pdf,
     row_strongly_references_managed_pdf,
-    safe_pdf_path_under_dir,
+    managed_pdf_key,
 )
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS
 
 
 class TestManagedPdfPathHelpers(unittest.TestCase):
@@ -128,75 +126,31 @@ class TestManagedPdfPathHelpers(unittest.TestCase):
             managed_basenames_protected_by("/api/pdfs/foo%2Fx.pdf"), ()
         )
 
-    def test_safe_pdf_path_under_dir_rejects_nul(self):
-        pdfs = tempfile.mkdtemp()
-        try:
-            self.assertIsNone(safe_pdf_path_under_dir(pdfs, "bad\x00name.pdf"))
-        finally:
-            shutil.rmtree(pdfs)
+    def test_managed_pdf_key_names_one_asset_object(self):
+        key = managed_pdf_key("keep.pdf")
+        self.assertEqual((key.namespace, key.name) if key else None, (NAMESPACE_ASSET_OBJECTS, "keep.pdf"))
+        decoded = managed_pdf_key("a%20b.pdf")
+        self.assertEqual(decoded.name if decoded else None, "a b.pdf")
 
-    def _assert_posix_child(self, actual, root, *parts):
-        """Assert a POSIX acceptance result, skipping the check on Windows.
-
-        ``windows_semantics=False`` disables drive-prefix *validation* only; the
-        join still uses native ``Path`` semantics. On Windows a drive-looking
-        segment re-anchors regardless, so the helper returns None (or another
-        path) and there is no POSIX expectation to assert.
-        """
-        if os.name == "nt":
-            return
-        self.assertEqual(actual, os.path.realpath(os.path.join(root, *parts)))
-
-    def test_safe_pdf_path_rejects_path_shaped_input(self):
-        pdfs = tempfile.mkdtemp()
-        try:
-            for unsafe in (
-                "..",
-                "%2e%2e",
-                "../keep.pdf",
-                "%2e%2e%2fkeep.pdf",
-                "nested/keep.pdf",
-                "nested%2Fkeep.pdf",
-                r"nested\\keep.pdf",
-                "bad\x00name.pdf",
-                " victim.pdf",
-                "victim.pdf ",
-            ):
-                with self.subTest(unsafe=unsafe):
-                    self.assertIsNone(safe_pdf_path_under_dir(pdfs, unsafe))
-            safe = os.path.join(pdfs, "keep.pdf")
-            with open(safe, "w", encoding="utf-8") as f:
-                f.write("x")
-            resolved = safe_pdf_path_under_dir(pdfs, "keep.pdf")
-            self.assertEqual(resolved, os.path.realpath(safe))
-        finally:
-            shutil.rmtree(pdfs)
-
-    def test_safe_pdf_path_rejects_a_drive_qualified_filename(self):
-        """The managed-PDF validator shares the hazard.
-
-        ``managed_pdf_filename("/api/pdfs/C:foo.pdf")`` returns ``C:foo.pdf``,
-        and on Windows joining that onto pdfs/ resolves to ``pdfs/foo.pdf`` --
-        a different managed PDF, silently, and still inside the root.
-        """
-        pdfs = tempfile.mkdtemp()
-        try:
-            for name in ("C:foo.pdf", "D:foo.pdf", "c:foo.pdf"):
-                with self.subTest(name=name):
-                    self.assertIsNone(
-                        safe_pdf_path_under_dir(pdfs, name, windows_semantics=True)
-                    )
-                    self._assert_posix_child(
-                        safe_pdf_path_under_dir(pdfs, name, windows_semantics=False),
-                        pdfs,
-                        name,
-                    )
-            self.assertEqual(
-                safe_pdf_path_under_dir(pdfs, "keep.pdf", windows_semantics=True),
-                os.path.realpath(os.path.join(pdfs, "keep.pdf")),
-            )
-        finally:
-            shutil.rmtree(pdfs)
+    def test_managed_pdf_key_refuses_path_shaped_input(self):
+        for unsafe in (
+            "",
+            "..",
+            "%2e%2e",
+            "../keep.pdf",
+            "%2e%2e%2fkeep.pdf",
+            "nested/keep.pdf",
+            "nested%2Fkeep.pdf",
+            r"nested\\keep.pdf",
+            "bad\x00name.pdf",
+            "bad%00name.pdf",
+            " victim.pdf",
+            "victim.pdf ",
+            "%20victim.pdf",
+            ".prks-write-x.tmp",
+        ):
+            with self.subTest(unsafe=unsafe):
+                self.assertIsNone(managed_pdf_key(unsafe))
 
 
 if __name__ == "__main__":

@@ -6,20 +6,22 @@ one satisfiable range, ``416`` for an unsatisfiable one and ``200`` for the
 whole file; the Processing queue's preview uses it too. PDF answers are
 never stored (``no-store``).
 
-The whole ``<filename>`` is validated (``managed_pdf_names``), not just its
-last ``/``-separated piece: ``/api/pdfs/nested/victim.pdf`` is 404, never
-``victim.pdf``. The data root is shared by every Library, so the file must
-also be one of the acting Library's Assets.
+The whole ``<filename>`` is one storage key (``managed_pdf_key``), not just
+its last ``/``-separated piece: ``/api/pdfs/nested/victim.pdf`` is 404,
+never ``victim.pdf``. The data root is shared by every Library, so the
+object must also be one of the acting Library's Assets; the bytes and their
+size come from the Library's ``StorageBackend`` (#1427).
 """
 
 from __future__ import annotations
 
+import io
 import logging
-import os
 from typing import BinaryIO
 
 from backend.web.byte_range import parse_byte_range
-from backend.pdf.managed_pdf_names import safe_pdf_path_under_dir
+from backend.pdf.managed_pdf_names import managed_pdf_key
+from backend.storage.objects import ObjectNotFound, StorageObjectError
 from backend.web.http import Request, Response, Write, error_response
 from backend.web.routing import route
 
@@ -89,19 +91,35 @@ def pdf_response(req: Request, file_size: int, stream: BinaryIO) -> Response:
     return Response(status, headers, stream=send, cleanup=stream.close)
 
 
+def _object_size(stream: BinaryIO) -> int:
+    """The byte size of an open object stream, read from the stream itself."""
+    end = stream.seek(0, io.SEEK_END)
+    stream.seek(0)
+    return end
+
+
 def managed_pdf(req: Request) -> Response:
     """``GET``/``HEAD /api/pdfs/<filename>``: a managed PDF of the acting Library."""
     from backend.api import works as works_api
+    from backend.api.common import objects
 
-    pdf_path = safe_pdf_path_under_dir(req.app.pdfs_dir, req.params["filename"])
-    if pdf_path is None or not os.path.exists(pdf_path):
+    key = managed_pdf_key(req.params["filename"])
+    if key is None or not works_api.holds_managed_pdf(req, key.name):
         return error_response(404, "PDF not found")
-    if not works_api.holds_managed_pdf(req, os.path.basename(pdf_path)):
+    store = objects(req)
+    try:
+        stream = store.open_read(key)
+    except (StorageObjectError, OSError):
         return error_response(404, "PDF not found")
     try:
-        file_size = os.path.getsize(pdf_path)
-        stream = open(pdf_path, "rb")
-    except OSError:
+        file_size = _object_size(stream) if stream.seekable() else None
+        if file_size is None:
+            info = store.stat(key)
+            if info is None:
+                raise ObjectNotFound("key does not exist")
+            file_size = info.size
+    except (StorageObjectError, OSError):
+        stream.close()
         return error_response(404, "PDF not found")
     return pdf_response(req, file_size, stream)
 

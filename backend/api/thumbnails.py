@@ -3,9 +3,10 @@
 A page of the Work's managed PDF (``page``, else the Work's ``thumb_page``,
 else 1), rendered card-sized and encoded as lossy WebP (JPEG, then PNG when
 WebP encoding is unavailable; ``PRKS_THUMB_LOSSLESS=1`` keeps lossless
-WebP/PNG for debugging). Renders are cached under the root's thumbs
+WebP/PNG for debugging). The PDF is read through the Library's
+``StorageBackend`` (#1427). Renders are cached under the root's thumbs
 directory, keyed by Work, page, primary Asset and PDF name; a copy older
-than the PDF is a miss. A cache write is best effort: a read-only volume
+than the stored object is a miss. A cache write is best effort: a read-only volume
 still serves the rendered image.
 """
 
@@ -22,8 +23,9 @@ from backend.media.derived_caches import (
     prks_thumb_cache_stem,
 )
 from backend.runtime.log_safety import safe_error_type, safe_log_id
-from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+from backend.pdf.managed_pdf_names import managed_pdf_filename, managed_pdf_key
 from backend.runtime.performance import clock_ns, record_counter, record_span
+from backend.storage.objects import StorageObjectError, readable_path
 from backend.web.http import Request, Response, bytes_response, error_response
 from backend.web.routing import route
 
@@ -253,6 +255,7 @@ def _count(name: str) -> None:
 
 def thumbnail(req: Request) -> Response:
     from backend.api import works as works_api
+    from backend.api.common import objects
 
     w_id = req.params["work_id"]
     thumb = works_api.thumbnail_fields(req, w_id)
@@ -262,16 +265,18 @@ def thumbnail(req: Request) -> Response:
     # that is not exactly /api/pdfs/<filename> does not own a managed PDF
     # and must not resolve to some other one.
     pdf_filename = managed_pdf_filename(str(thumb.get("file_path") or ""))
-    if not pdf_filename:
+    key = managed_pdf_key(pdf_filename) if pdf_filename else None
+    if key is None:
         return error_response(404, "PDF not found")
-    pdf_path = safe_pdf_path_under_dir(req.app.pdfs_dir, pdf_filename)
-    if not pdf_path or not os.path.exists(pdf_path):
+    store = objects(req)
+    try:
+        info = store.stat(key)
+    except (StorageObjectError, OSError):
+        info = None
+    if info is None:
         return error_response(404, "PDF not found")
     page = _page(req, thumb)
-    try:
-        pdf_mtime = float(os.path.getmtime(pdf_path))
-    except OSError:
-        pdf_mtime = 0.0
+    pdf_mtime = float(info.modified_at or 0.0)
     cache_base = prks_thumb_cache_stem(w_id, page, thumb.get("primary_asset_id"), source=pdf_filename)
     thumbs_root = req.app.thumbs_dir
     path_webp = os.path.join(thumbs_root, cache_base + ".webp")
@@ -294,7 +299,8 @@ def thumbnail(req: Request) -> Response:
                        safe_error_type(e), safe_log_id(req.request_id))
         return error_response(404, "Thumbnail unavailable")
     try:
-        image, subtype = _render(req, pdf_path, page)
+        with readable_path(store, key) as pdf_path:
+            image, subtype = _render(req, pdf_path, page)
     except Exception as exc:
         # A PDF that cannot be rendered never takes down the request path.
         LOGGER.warning(

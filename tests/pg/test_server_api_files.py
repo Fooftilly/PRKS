@@ -12,12 +12,13 @@ These replace the matching ``tests/test_server_api.py`` cases.
 from __future__ import annotations
 
 import base64
+import io
 import os
 from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
-from backend.api import thumbnails
+from backend.api import common, thumbnails
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -38,6 +39,58 @@ class ManagedPdfTests(ManagedPdfTestCase):
         res = self.get(work["file_path"])
         self.assertEqual(res.status, 200)
         self.assertIn(b"%PDF", res.raw[:32])
+
+    def test_the_pdf_and_its_thumbnail_are_read_through_the_storage_backend(self) -> None:
+        """#1427: a backend with no local path and unseekable streams serves both, with ranges."""
+        work = self.upload("Backend Work", "backend token", "backend.pdf")
+        data = self.get(work["file_path"]).raw
+        reads: list[str] = []
+
+        class Unseekable(io.RawIOBase):
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, buffer: Any) -> int:
+                chunk = self.inner.read(len(buffer))
+                buffer[:len(chunk)] = chunk
+                return len(chunk)
+
+            def close(self) -> None:
+                self.inner.close()
+                super().close()
+
+        class RemoteLike:
+            """Only the generic StorageBackend surface: no ``local_path``."""
+
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+
+            def open_read(self, key: Any) -> Any:
+                reads.append(f"open {key}")
+                return Unseekable(self.inner.open_read(key))
+
+            def stat(self, key: Any) -> Any:
+                reads.append(f"stat {key}")
+                return self.inner.stat(key)
+
+        real = common.objects
+        with mock.patch.object(common, "objects", lambda req: RemoteLike(real(req))):
+            whole = self.get(work["file_path"])
+            part = self.get(work["file_path"], headers=[("Range", "bytes=2-6")])
+            beyond = self.get(work["file_path"], headers=[("Range", f"bytes={len(data)}-")])
+            thumb = self.get(f"/api/works/{work['id']}/thumbnail?page=1")
+            missing = self.get("/api/pdfs/not-stored.pdf")
+        self.assertEqual((whole.status, whole.raw), (200, data))
+        self.assertEqual((part.status, part.raw, part.header("Content-Range")), (206, data[2:7], [f"bytes 2-6/{len(data)}"]))
+        self.assertEqual(beyond.status, 416)
+        self.assertEqual(thumb.status, 200, thumb.raw[:300])
+        self.assertEqual(missing.status, 404)
+        name = work["file_path"].rsplit("/", 1)[1]
+        self.assertIn(f"open asset-objects/{name}", reads)
+        self.assertIn(f"stat asset-objects/{name}", reads)
 
     def test_pdf_text_is_found_by_any_mode_only_once_extracted(self) -> None:
         term = "UniqPdfSearchTermAlpha"

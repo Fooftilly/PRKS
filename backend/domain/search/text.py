@@ -51,10 +51,7 @@ exceed the limit is halved until they fit and is marked ``truncated``.
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from typing import Any, LiteralString, Optional
 
 from backend.db.errors import DatabaseError
@@ -63,7 +60,7 @@ from backend.domain.identity.library_scope import LibraryScope
 from backend.jobs import queue
 from backend.jobs.handlers import HandlerRegistry
 from backend.jobs.runner import JobRun
-from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, LocalPathCapable, StorageBackend, StorageKey
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageBackend, StorageKey, readable_path
 
 LOGGER = logging.getLogger("prks.search.text")
 
@@ -173,7 +170,7 @@ def extract_asset(run: JobRun, storage: StorageBackend, asset_id: str,
     sha256 = str(asset["content_sha256"])
     key = StorageKey(NAMESPACE_ASSET_OBJECTS, str(asset["storage_locator"]))
     try:
-        with _readable_path(storage, key) as path:
+        with readable_path(storage, key) as path:
             text, truncated = extractor(path)
         status = "indexed" if text.strip() else "empty"
     except PDFTextExtractionError as exc:
@@ -195,19 +192,6 @@ def extract_asset(run: JobRun, storage: StorageBackend, asset_id: str,
             continue
         return status if written else None
     raise RuntimeError("the extracted text does not fit a tsvector")
-
-
-@contextmanager
-def _readable_path(storage: StorageBackend, key: StorageKey) -> Iterator[str]:
-    """A local file holding the object: the stored file itself when the backend has one, else a copy."""
-    if isinstance(storage, LocalPathCapable):
-        with storage.local_path(key) as path:
-            yield path
-        return
-    with tempfile.NamedTemporaryFile(suffix=".pdf") as copy, storage.open_read(key) as source:
-        shutil.copyfileobj(source, copy)
-        copy.flush()
-        yield copy.name
 
 
 def _read_asset(scope: LibraryScope, asset_id: str) -> Optional[dict[str, Any]]:

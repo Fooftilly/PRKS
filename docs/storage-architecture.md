@@ -1249,7 +1249,7 @@ maps, ACLs, multipart APIs or generic repository.
 | `verify` | Streams the object and compares its SHA-256, three-valued. |
 | `iter_keys` | Only for maintenance: audit, orphan sweep, backup, relocation. **Never on a request path.** It ignores temporaries and reserved names. |
 | `list_keys` | Maintenance only, like `iter_keys`: at most `limit` keys named after `after`, in name order, holding at most a page of names. The orphan sweep pages through a namespace with it. |
-| Key validation | Every operation refuses an invalid key before touching storage. The name grammar is the current `safe_pdf_path_under_dir` rules plus a byte bound; legacy names that it accepts remain valid. |
+| Key validation | Every operation refuses an invalid key before touching storage. The name grammar (`validate_key_name`) is a single plain segment plus a byte bound and the reserved temporary prefixes; a route name becomes a key through `managed_pdf_key`. |
 
 ### 10.3 LocalFilesystemStorage specifics
 

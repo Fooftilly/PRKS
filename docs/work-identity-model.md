@@ -75,7 +75,7 @@ The model must keep each one or say explicitly why it changes.
    identity resynchronizes it or relies on reconciliation.
 5. **I5: Managed bytes are never lost to a crash.** A basename is minted
    unique, published durably, never trusted as a path
-   (`safe_pdf_path_under_dir`), copy-on-written when shared, and claimed in
+   (a `StorageKey` read through the `StorageBackend`), copy-on-written when shared, and claimed in
    `pending_pdf_cleanup` inside the delete transaction.
 6. **I6: Annotation metadata is canonical.** The bytes are a materialization.
    Semantic ACK never waits on bytes. Canonical > materialized means "rebuild",

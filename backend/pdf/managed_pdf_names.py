@@ -1,4 +1,4 @@
-"""Managed PDF file names and safe paths under the PDF directory.
+"""Managed PDF file names and the storage keys they name.
 
 Which file names PRKS owns, how new ones are minted and bounded, and
 which Work rows reference them. No database access. Moved from
@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple
 from urllib.parse import unquote, urlparse
 
-from backend.storage import paths
+from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 
 
 def _processing_safe_dest_name(filename: str) -> str:
@@ -26,43 +26,21 @@ def _processing_safe_dest_name(filename: str) -> str:
     return safe
 
 
-def safe_pdf_path_under_dir(
-    pdfs_dir: str,
-    url_last_segment: str,
-    *,
-    windows_semantics: Optional[bool] = None,
-) -> Optional[str]:
-    """Resolve exactly one decoded PDF filename beneath pdfs_dir.
+def managed_pdf_key(url_segment: object) -> Optional[StorageKey]:
+    """The storage key ``/api/pdfs/<url_segment>`` names; ``None`` for anything else.
 
-    Path-shaped input is rejected rather than normalized to a different
-    filename. ``resolved_child_path()`` remains the final filesystem boundary
-    and also refuses a drive-qualified name, which on Windows would otherwise
-    re-anchor onto a different managed PDF.
-
-    ``windows_semantics`` defaults to this platform and exists so the Windows
-    branch is exercised by the suite on any host; callers must not set it.
+    The whole segment is one decoded name: path-shaped input is refused
+    rather than normalized to a different name. The storage backend stays
+    the final boundary (a drive-qualified name, for one, cannot be placed
+    beneath its namespace on Windows).
     """
-    if url_last_segment is None:
-        return None
-    raw_name = str(url_last_segment)
-    if not raw_name or raw_name != raw_name.strip():
+    if not isinstance(url_segment, str) or not url_segment or url_segment != url_segment.strip():
         return None
     try:
-        name = unquote(raw_name)
+        name = unquote(url_segment)
+        return StorageKey(NAMESPACE_ASSET_OBJECTS, name)
     except (TypeError, ValueError):
         return None
-    if (
-        not name
-        or name != name.strip()
-        or name in (".", "..")
-        or "/" in name
-        or "\\" in name
-        or "\x00" in name
-    ):
-        return None
-    return paths.resolved_child_path(
-        pdfs_dir, name, windows_semantics=windows_semantics
-    )
 
 
 def _managed_pdf_basename_from_path(
