@@ -407,6 +407,12 @@ AFFECTED_RULES = (
             "tests/e2e/install_browser.py",
             "scripts/ci/install_pinned_python.py",
             "tests/e2e/fixtures.py",
+            # Shared test helpers the E2E seeds and assertions import.
+            "tests/acting_context.py",
+            "tests/narrowing.py",
+            "tests/people_fixtures.py",
+            "tests/works_fixtures.py",
+            "tests/library_adapter.py",
             "tests/e2e/timing-baseline.json",
             "tests/e2e/__init__.py",
             "tests/browser/pointer_capture.py",

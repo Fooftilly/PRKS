@@ -1585,6 +1585,15 @@ class AffectedMappingTests(unittest.TestCase):
         )
         self.assertFalse(early_ptr_fail)
 
+    def test_shared_helpers_the_e2e_suite_imports_select_the_full_suite(self):
+        for helper in ("tests/acting_context.py", "tests/narrowing.py", "tests/people_fixtures.py",
+                       "tests/works_fixtures.py"):
+            with self.subTest(helper=helper):
+                rule, _feats, skip, _note = policy.match_affected_path(helper)
+                self.assertEqual(rule, "e2e-framework")
+                self.assertFalse(skip)
+                self.assertEqual(policy.plan_ci_e2e([helper])["mode"], "full")
+
     def test_ci_workflow_selection_preserves_full_e2e_boundary(self):
         # Changes to E2E orchestration or its shared Python installer still
         # require the full browser suite; the independent Test Gate does not.
