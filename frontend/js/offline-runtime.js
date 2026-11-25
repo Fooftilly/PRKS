@@ -3149,10 +3149,19 @@
          * open owner may be left to re-read it. The read starts after the
          * drop and is fenced like any other; a later unproven ACK drops and
          * refills it again. */
-        function refillDroppedWork(kind, id) {
+        function refillDroppedWork(kind, id, attempt) {
             if (kind !== 'work' || state === STATE_OFFLINE) return;
+            const tries = attempt || 0;
+            const generation = currentEntityGeneration(kind, id);
             void readThroughEntity('work', id, '/api/works/' + encodeURIComponent(id), {
                 validate: value => !!value && value.id === id, requestPolicy: { dedupe: false },
+            }).then(function (read) {
+                /* A later ACK for this Work fenced the read's write: read
+                 * again, a few times at most, so the Work is not left out. */
+                if (read && read.source === 'server' && read.value &&
+                    currentEntityGeneration(kind, id) !== generation && tries < 3) {
+                    refillDroppedWork(kind, id, tries + 1);
+                }
             }).catch(function () { return null; });
         }
 

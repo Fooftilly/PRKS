@@ -624,6 +624,24 @@ async function mountedSourceCorrectiveRead() {
         assert.equal(state.observed.revision, 0, 'the hidden draft keeps the revision it was typed over');
         listeners.length = 0;
     }
+    /* A queued replacement BBB is shown over the acknowledged ZZZ and the
+     * draft was typed over BBB. A read finds DDD at revision 1: the draft's
+     * baseline matches only the queued video, never the read one, so the
+     * draft keeps revision 0 and its Save conflicts with DDD. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        const effective = globalThis.prksEffectiveWorkSource;
+        globalThis.prksEffectiveWorkSource = work => ({ ...work, ...video('BBB') });
+        ctx.entity = { ...ctx.entity, ...video('BBB') };
+        ctx.ui = { workMetaDraftWorkId: 'W', workMetaDraft: { source_url: WATCH('CCC') },
+            workMetaBaseline: { source_url: WATCH('BBB') } };
+        globalThis.prksOfflineReadEntity = answer(serverState(1, 'DDD'));
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        globalThis.prksEffectiveWorkSource = effective;
+        assert.equal(state.observed.revision, 0, 'a queued video does not stand in for the read one');
+        listeners.length = 0;
+    }
     /* "Use server" on a conflict is the user's explicit choice: it replaces
      * an unsaved draft and editing resumes on the server's source. */
     {
