@@ -166,6 +166,18 @@
         state.refreshTries = 0;
         state.preparing = prepare(ctx, state, { dedupe: false });
     }
+    /* The links of the held Folder, read again from the server. Only the links
+     * are taken, and only while this tab still holds the value it read past. */
+    async function rereadLinks(ctx, state) {
+        const id = state.folderId;
+        const held = ctx.getEntity('folder');
+        if (!held || held.id !== id) return;
+        await reconcileCore.adoptFresh(
+            () => root.prksOfflineReadEntity('folder', id, '/api/folders/' + encodeURIComponent(id), { validate: v => !!(v && typeof v === 'object' && v.id === id), domain: 'folders', requestPolicy: { dedupe: false } }),
+            () => ctx.getEntity('folder'), held,
+            fresh => ctx.setEntity('folder', reconcileCore.carryObservation(fresh,
+                { ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags })));
+    }
     /* A corrective refresh takes only a server answer that agrees with the
      * adopted links. A cached fallback still holds the delayed ACK's base, and
      * two server reads can straddle another device's change: either would let
@@ -192,6 +204,9 @@
                     state.options = null;
                     // Another device may have moved a link between the reads: read again, a bounded number of times.
                     if (read && read.source === 'server' && (state.refreshTries = (state.refreshTries || 0) + 1) < 3) {
+                        // Either read may be the older one, so both are read again.
+                        await rereadLinks(ctx, state);
+                        if (!live(ctx, state) || readVersion !== state.readVersion) return;
                         await (state.preparing = prepare(ctx, state, { dedupe: false }));
                         return;
                     }

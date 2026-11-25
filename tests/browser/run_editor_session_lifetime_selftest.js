@@ -690,8 +690,9 @@ async function tagAckReReadRefreshesOptions() {
  * base that disagrees with the adopted links. A REMOVE ACK at revision 1, a
  * Work re-read showing the Tag back at revision 2, then an options read that
  * falls back to the cache the ACK just wrote (Tag absent at 1): editing stays
- * off. A server answer that disagrees is read again, a bounded number of
- * times, and editing stays off while it keeps disagreeing. */
+ * off. A server answer that disagrees reads the detail and the options
+ * again, a bounded number of times: editing stays off while they disagree,
+ * and comes back once a newer detail agrees with the options. */
 async function tagAckRefreshRejectsInconsistentOptions() {
     prksDestroyAllTabContexts();
     hosts();
@@ -706,20 +707,22 @@ async function tagAckRefreshRejectsInconsistentOptions() {
     const previousOptions = global.prksReadWorkTagOptions;
     const previousRead = global.prksOfflineReadEntity;
     let mode = 'cache';
+    // 'cache': the options read falls back to the cache; 'disagree': the server answers the older base.
     let refreshReads = 0;
     const stale = { assigned: [], known_absent: { 'tag-1': 1 } };
-    const fresh = { assigned: [{ tag_id: 'tag-1', relation_revision: 2 }], known_absent: {} };
     global.prksReadWorkTagOptions = async function (_id, options) {
         const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
         if (!refreshed) return { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 0 }], known_absent: {} }, source: 'server' };
         refreshReads += 1;
         if (mode === 'cache') return { value: stale, source: 'cache' };
-        if (mode === 'disagree') return { value: stale, source: 'server' };
-        return { value: fresh, source: 'server' };
+        return { value: stale, source: 'server' };
     };
+    let workReads = 0;
+    let workTags = function () { return [tag]; };
     global.prksOfflineReadEntity = async function (kind, id) {
         if (kind !== 'work') return previousRead(kind, id);
-        return { source: 'server', value: core.observe({ id: id, tags: [tag] }, Date.now()) };
+        workReads += 1;
+        return { source: 'server', value: core.observe({ id: id, tags: workTags() }, Date.now()) };
     };
     function ack(revision) {
         emitLive({
@@ -747,11 +750,17 @@ async function tagAckRefreshRejectsInconsistentOptions() {
             refreshReads >= 3 && refreshReads <= 4);
         assertEq('a disagreeing server answer is not taken as the base', state.options, null);
 
-        mode = 'agree';
+        // The detail was the older read: another device removed the Tag
+        // after it. Reading both again makes them agree on the removal.
+        workReads = 0;
+        workTags = function () { return workReads > 1 ? [] : [tag]; };
         ack(1);
         await flush();
-        assertEq('a server answer that agrees with the adopted links is taken', state.options, fresh);
-        assertEq('the refresh settles once consistent', state.refreshing, false);
+        assert('a disagreement reads the detail again too', workReads >= 2);
+        assertEq('the re-read detail takes the newer links', ctx.getEntity('work').tags.length, 0);
+        assertEq('the options that agree with the re-read detail are taken', state.options, stale);
+        assertEq('the refresh settles once both reads agree', state.refreshing, false);
+
     } finally {
         global.prksReadWorkTagOptions = previousOptions;
         global.prksOfflineReadEntity = previousRead;
