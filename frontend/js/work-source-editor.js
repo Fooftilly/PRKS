@@ -229,7 +229,9 @@
     }
 
     /* True when the draft's baseline is the source `identity` names: the
-     * draft was typed over that source, so its revision is the draft's base. */
+     * draft was typed over that source, so its revision is the draft's base.
+     * `identity` is the acknowledged one from the same snapshot as the
+     * revision, never a queued replacement shown over it. */
     function typedOver(ctx, state, identity) {
         const ui = ctx && ctx.ui;
         const baseline = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaBaseline;
@@ -489,7 +491,7 @@
              * revision here would let its Save replace a source the user
              * never saw instead of conflicting with it. */
             if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '') &&
-                !typedOver(ctx, state, identityOf(effective))) {
+                !typedOver(ctx, state, identity)) {
                 return true;
             }
             state.observed = baseOf(stateResult.value.revision, identity);
