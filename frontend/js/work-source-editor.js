@@ -253,7 +253,7 @@
          * value the server does not have. */
         writeInput(ctx, state, ack.source_url);
         if (plan === 'unproven') {
-            void readBase(ctx, state, { adopt: true })
+            void readBase(ctx, state, { adopt: true, keep: true })
                 .then(read => (read && live(ctx, state) ? safePaint(ctx, state) : null))
                 .catch(() => null);
         }
@@ -336,24 +336,36 @@
     async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         const adopt = !!(options && options.adopt);
+        /* The revision is read before the Work, so the identity is never older
+         * than the revision paired with it: a save in between pairs a newer
+         * identity with an older revision, which conflicts, where the reverse
+         * would pair an older identity with a newer revision and turn a return
+         * to the old video into a cancellation. A corrective read replaces
+         * what the tab holds, so it takes fresh server answers only. */
+        const policy = adopt ? { requestPolicy: { dedupe: false } } : {};
+        const accepted = result => !!(result && result.value && (adopt
+            ? result.source === 'server' : result.source !== 'unavailable'));
         try {
-            const [stateResult, workResult] = await Promise.all([
-                root.prksOfflineReadEntity('work-source-state', state.workId,
-                    '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
-                    { validate: sourceStateShape(state.workId) }),
-                root.prksOfflineReadEntity('work', state.workId,
+            const stateResult = await root.prksOfflineReadEntity('work-source-state', state.workId,
+                '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
+                Object.assign({ validate: sourceStateShape(state.workId) }, policy));
+            const workResult = accepted(stateResult)
+                ? await root.prksOfflineReadEntity('work', state.workId,
                     '/api/works/' + encodeURIComponent(state.workId),
-                    { validate: value => !!value && value.id === state.workId }),
-            ]);
+                    Object.assign({ validate: value => !!value && value.id === state.workId }, policy))
+                : null;
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            const usable = stateResult && stateResult.source !== 'unavailable' &&
-                stateResult.value && workResult && workResult.source !== 'unavailable' &&
-                workResult.value;
+            const usable = accepted(stateResult) && accepted(workResult);
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
-            if (!usable) { state.observed = null; return true; }
+            /* An ACK's own base stays when its corrective read fails: that
+             * revision and identity are a pair the server did store. */
+            if (!usable) {
+                if (!(options && options.keep)) state.observed = null;
+                return true;
+            }
             state.observed = baseOf(stateResult.value.revision,
                 root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
             /* The server's Work replaces what this tab was holding. After
@@ -372,7 +384,7 @@
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            state.observed = null;
+            if (!(options && options.keep)) state.observed = null;
             return true;
         }
     }
