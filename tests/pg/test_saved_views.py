@@ -18,12 +18,12 @@ import unicodedata
 from typing import Any, Callable
 from unittest import mock
 
-from backend.api import saved_views as saved_views_api
 from backend.domain.saved_views.rules import PRKS_SAVED_VIEW_MAX, SavedViewError
 from backend.domain.identity.authorization import AccessRefused
 from backend.domain.saved_views import views
 from backend.domain.entity_ids import generate
 from tests import acting_context as facade_context
+from tests.library_adapter import call_route
 from tests.pg.test_tags import OrganizationTestCase
 from tests.narrowing import require
 
@@ -362,26 +362,12 @@ class RaceTests(SavedViewTestCase):
                          ("New name", _TAG, view["created_at"]))
 
 
-class _Handler:
-    """The parts of a request handler ``backend/api/saved_views.py`` uses."""
-
-    def __init__(self, ctx: Any) -> None:
-        self._prks_request_context = ctx
-        self.calls: list[tuple[int, Any]] = []
-
-    def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
-        self.calls.append((status, body))
-
-
 class RouteAnswerTests(SavedViewTestCase):
     """What ``/api/saved-views`` answers, spelled out."""
 
     def test_the_routes(self) -> None:
-        handler = _Handler(self.actor.context)
-
-        def run(method: str, path: str, *body: Any) -> tuple[int, Any]:
-            self.assertTrue(getattr(saved_views_api, f"handle_{method}")(handler, self.library, path, *body))
-            return handler.calls[-1]
+        def run(method: str, path: str, body: Any = None) -> tuple[int, Any]:
+            return call_route(self.library, method.upper(), path, body)
 
         status, created = run("post", "/api/saved-views", {"name": "Industry", "search": _ADVANCED})
         self.assertEqual((status, set(created)), (201, {"id", "name", "search", "created_at", "updated_at"}))
@@ -399,7 +385,7 @@ class RouteAnswerTests(SavedViewTestCase):
         self.assertEqual(run("post", "/api/saved-views", {"name": "", "search": _ALL}),
                          (400, {"error": "Name is required."}))
         self.assertEqual(run("post", "/api/saved-views", ["not", "object"]),
-                         (400, {"error": "JSON object body required"}))
+                         (400, {"error": "JSON object body required", "code": "invalid_request"}))
         missing = f"/api/saved-views/{_MISSING}"
         self.assertEqual(run("patch", missing, {"name": "Nope"}), (404, {"error": "Saved View not found."}))
         self.assertEqual(run("get", missing), (404, {"error": "Saved View not found."}))

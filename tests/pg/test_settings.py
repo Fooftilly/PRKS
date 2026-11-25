@@ -20,7 +20,7 @@ from backend.domain.settings.rules import PRKS_BIBTEX_EXPORT_FIELD_IDS
 from backend.domain.identity.authorization import AccessRefused, Refusal
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.settings import app_settings
-from tests.library_adapter import TestLibrary
+from tests.library_adapter import TestLibrary, call_route
 from tests import acting_context as facade_context
 from tests.pg.facade_context import provision_actor
 from tests.pg.test_people_facade import PeopleFacadeTestCase
@@ -224,29 +224,12 @@ class RaceTests(SettingsTestCase):
         self.assertEqual(self.profile(), {**_ALL_ON, "doi": False})  # the later write of isbn wins
 
 
-class _Handler:
-    """The parts of a request handler ``backend/api/settings.py`` uses."""
-
-    def __init__(self, ctx: RequestContext) -> None:
-        self._prks_request_context = ctx
-        self.calls: list[tuple[int, Any]] = []
-
-    def send_json(self, status: int, body: Any, etag: Any = None, precondition_checked: bool = False) -> None:
-        self.calls.append((status, body))
-
-
 class RouteAnswerTests(SettingsTestCase):
     """What ``/api/settings`` answers, spelled out."""
 
     def test_the_route(self) -> None:
-        handler = _Handler(self.actor.context)
-
         def run(method: str, data: Any = None) -> tuple[int, Any]:
-            if method == "GET":
-                self.assertTrue(settings_api.handle_get(handler, self.library, settings_api.PATH))
-            else:
-                self.assertTrue(settings_api.handle_patch(handler, self.library, settings_api.PATH, data))
-            return handler.calls[-1]
+            return call_route(self.library, method, settings_api.PATH, data)
 
         self.assertEqual(run("GET"), (200, _DEFAULTS))
         ada = {**_DEFAULTS, "annotation_author": "Ada"}
@@ -256,8 +239,9 @@ class RouteAnswerTests(SettingsTestCase):
         settled = {**ada, "bibtex_export_fields": {**_ALL_ON, "doi": False, "isbn": False}}
         self.assertEqual(run("PATCH", {"bibtex_export_fields": {"isbn": False}}), (200, settled))
         self.assertEqual(run("PATCH", {}), (200, settled))
-        for data, error in ((["not", "object"], "JSON object body required"),
-                            ({"annotation_author": "x" * 501}, "annotation_author too long"),
+        self.assertEqual(run("PATCH", ["not", "object"]),
+                         (400, {"error": "JSON object body required", "code": "invalid_request"}))
+        for data, error in (({"annotation_author": "x" * 501}, "annotation_author too long"),
                             ({"bibtex_export_fields": {"doi": "yes"}}, "bibtex_export_fields.doi must be boolean"),
                             ({"bibtex_export_fields": {"unknown": True}}, "unknown bibtex_export_fields key: unknown")):
             with self.subTest(data=str(data)[:40]):
