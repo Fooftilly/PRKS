@@ -1032,9 +1032,10 @@
                     operationCreatedAt: op && op.created_at,
                 });
                 if (plan === 'unproven') {
+                    /* The in-memory block ends with the page: a snapshot that
+                     * could not be dropped keeps the operation queued. */
                     markEntityChanged(kind, id);
-                    await invalidateEntity(kind, id);
-                    return true;
+                    return await invalidateEntity(kind, id) !== false;
                 }
                 if (plan !== 'apply') return true;
             }
