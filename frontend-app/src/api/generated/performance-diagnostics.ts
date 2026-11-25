@@ -74,10 +74,6 @@ export interface components {
             db_read: number;
             /** Db Write */
             db_write: number;
-            /** Pdf File Stat Files */
-            pdf_file_stat_files: number;
-            /** Pdf File Stat Rows */
-            pdf_file_stat_rows: number;
             /** Thumbnail Cache Hits */
             thumbnail_cache_hits: number;
             /** Thumbnail Cache Misses */

@@ -74,7 +74,7 @@ _UNTOUCHED = {"description": 0, "original_url": 0, "title": 0}
 class FieldTests(PlaylistTestCase):
     def test_only_a_change_advances_a_field(self) -> None:
         playlist_id = self.add("Course", description="About")
-        before = playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir)
+        before = playlist_commands.detail(self.db, self.ctx, playlist_id)
         assert before is not None
         self.assertEqual((before["description"], before["original_url"]), ("About", None))
         playlist_commands.update(self.db, self.ctx, playlist_id, {"title": " Course ", "description": "About ",
@@ -84,9 +84,9 @@ class FieldTests(PlaylistTestCase):
         playlist_commands.update(self.db, self.ctx, playlist_id, {"original_url": "https://example.org", "x": 1})
         playlist_commands.update(self.db, self.ctx, playlist_id, {"original_url": ""})
         self.assertEqual(self.state(playlist_id)[0]["original_url"], 2)
-        self.assertIsNone(require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["original_url"])
+        self.assertIsNone(require(playlist_commands.detail(self.db, self.ctx, playlist_id))["original_url"])
         playlist_commands.update(self.db, self.ctx, playlist_id, {"title": "  "})
-        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["title"], "Untitled playlist")
+        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id))["title"], "Untitled playlist")
         self.refused("Playlist not found.", partial(playlist_commands.update, self.db, self.ctx), generate("PL"), {"title": "X"})
 
     def test_what_postgresql_cannot_hold_or_the_schema_bounds_is_refused_before_any_write(self) -> None:
@@ -100,8 +100,8 @@ class FieldTests(PlaylistTestCase):
             with self.subTest(args=[str(arg)[:12] for arg in args]), self.assertRaises(ValueError):
                 call(*args)
         self.assertEqual((self.count("playlists"), self.state(playlist_id)), (1, (_UNTOUCHED, 0)))
-        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["title"], "Course")  # the batch rolled back
-        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, self.add("é" * 150), self.pdfs_dir))["title"], "é" * 150)  # 300 bytes
+        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id))["title"], "Course")  # the batch rolled back
+        self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, self.add("é" * 150)))["title"], "é" * 150)  # 300 bytes
 
 
 class MembershipTests(PlaylistTestCase):
@@ -114,7 +114,7 @@ class MembershipTests(PlaylistTestCase):
         playlist_commands.add_item(self.db, self.ctx, a, second)
         self.assertEqual((self.membership(first), self.state(a)[1], self.items(a)),
                          ((a, 1), 2, [(first, 0), (second, 1)]))
-        detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, first)
+        detail = work_commands.detail(self.db, self.ctx, first)
         assert detail is not None
         self.assertEqual((detail["playlist_id"], detail["playlist_title"]), (a, "A"))
         playlist_commands.add_item(self.db, self.ctx, b, first)
@@ -123,7 +123,7 @@ class MembershipTests(PlaylistTestCase):
         playlist_commands.remove_item(self.db, self.ctx, a, first)  # not in it: nothing changes
         playlist_commands.remove_item(self.db, self.ctx, b, first)
         self.assertEqual((self.membership(first), self.state(b)[1]), (("", 3), 2))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first))["playlist_title"], None)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, first))["playlist_title"], None)
         self.assertEqual({row["title"]: row["item_count"] for row in playlist_commands.catalog(self.db, self.ctx)},
                          {"A": 1, "B": 0})
 
@@ -134,14 +134,14 @@ class MembershipTests(PlaylistTestCase):
         (work_id,) = self.works("Rollback Work")
         playlist_commands.add_item(self.db, self.ctx, playlist_id, work_id)
         before = (self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
-                  require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["updated_at"])
+                  require(playlist_commands.detail(self.db, self.ctx, playlist_id))["updated_at"])
         # The timestamp write runs after the item is deleted and the order
         # advanced, so failing it is exactly the partial-commit window.
         with mock.patch.object(playlists, "_touch", side_effect=RuntimeError("forced timestamp failure")):
             with self.assertRaises(RuntimeError):
                 playlist_commands.remove_item(self.db, self.ctx, playlist_id, work_id)
         self.assertEqual((self.membership(work_id), self.state(playlist_id), self.items(playlist_id),
-                          require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["updated_at"]), before)
+                          require(playlist_commands.detail(self.db, self.ctx, playlist_id))["updated_at"]), before)
         # The ordinary removal still works once the injected failure is gone.
         playlist_commands.remove_item(self.db, self.ctx, playlist_id, work_id)
         self.assertEqual(self.items(playlist_id), [])
@@ -171,7 +171,7 @@ class MembershipTests(PlaylistTestCase):
         playlist_commands.add_item(self.db, self.ctx, playlist_id, third, 1)
         self.assertEqual(self.items(playlist_id), [(first, 0), (third, 1), (second, 2)])
         self.assertEqual(self.state(playlist_id)[1], 4)
-        self.assertEqual([item["id"] for item in require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["items"]],
+        self.assertEqual([item["id"] for item in require(playlist_commands.detail(self.db, self.ctx, playlist_id))["items"]],
                          [first, third, second])
 
 
@@ -216,8 +216,8 @@ class DeleteTests(PlaylistTestCase):
             scope_key(playlist_id, "original_url"): 1})
         self.assertEqual(self.revisions("playlist-order"), {playlist_id: 3})
         self.assertEqual(self.revisions("work-playlist"), {member: 2, other: 2})
-        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, member))["playlist_id"], None)
+        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, playlist_id))
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, member))["playlist_id"], None)
         # A Playlist created again under the id starts from the tombstones.
         self.run_command(lambda scope: playlists.insert(scope, playlist_id, "Again"))
         self.assertEqual(self.state(playlist_id), ({"description": 1, "original_url": 1, "title": 2}, 3))
@@ -230,16 +230,16 @@ class DeleteTests(PlaylistTestCase):
         self.assertEqual((self.items(playlist_id), self.state(playlist_id)[1]), ([(kept, 1)], 3))
         # Both tombstoned, the never-listed Work's from revision 0.
         self.assertEqual(self.revisions("work-playlist"), {member: 2, kept: 1, never: 1})
-        self.assertEqual([item["id"] for item in require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["items"]], [kept])
+        self.assertEqual([item["id"] for item in require(playlist_commands.detail(self.db, self.ctx, playlist_id))["items"]], [kept])
         playlist_commands.delete(self.db, self.ctx, playlist_id)
 
-    def test_a_missing_playlist_reads_as_missing_without_a_data_root(self) -> None:
+    def test_a_playlist_reads_from_the_database_alone(self) -> None:
         member, = self.works("Member")
         playlist_id = self.add("Listed", member)
-        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, "PL-missing", None))
-        # Finishing a Work summary needs the PDF directory.
-        with self.assertRaisesRegex(RuntimeError, "no data root"):
-            playlist_commands.detail(self.db, self.ctx, playlist_id, None)
+        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, "PL-missing"))
+        # A Work summary's file size comes from its Asset row, not the disk (#1427).
+        items = require(playlist_commands.detail(self.db, self.ctx, playlist_id))["items"]
+        self.assertEqual([(item["id"], item["file_size_bytes"]) for item in items], [(member, None)])
 
 
 class IsolationTests(PlaylistTestCase):
@@ -249,7 +249,7 @@ class IsolationTests(PlaylistTestCase):
             their_work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Their work")
             theirs = self.add("Theirs", their_work)
         mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")
-        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, theirs, self.pdfs_dir))
+        self.assertIsNone(playlist_commands.detail(self.db, self.ctx, theirs))
         self.assertIsNone(playlist_commands.sync_state(self.db, self.ctx, theirs))
         self.assertIsNone(playlist_commands.work_state(self.db, self.ctx, their_work))
         self.assertEqual(playlist_commands.catalog(self.db, self.ctx), [])
@@ -260,7 +260,7 @@ class IsolationTests(PlaylistTestCase):
         playlist_commands.remove_item(self.db, self.ctx, theirs, their_work)
         playlist_commands.delete(self.db, self.ctx, theirs)
         with facade_context.acting_as(other.context):
-            found = playlist_commands.detail(self.db, self.ctx, theirs, self.pdfs_dir)
+            found = playlist_commands.detail(self.db, self.ctx, theirs)
             assert found is not None
             self.assertEqual((found["title"], [item["id"] for item in found["items"]]), ("Theirs", [their_work]))
 
@@ -268,7 +268,7 @@ class IsolationTests(PlaylistTestCase):
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
         playlist_id = self.add("A", work_id)
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["title"], "A")
+            self.assertEqual(require(playlist_commands.detail(self.db, self.ctx, playlist_id))["title"], "A")
             for call in (lambda: playlist_commands.create(self.db, self.ctx, "B"),
                          lambda: playlist_commands.update(self.db, self.ctx, playlist_id, {"title": "B"}),
                          lambda: playlist_commands.remove_item(self.db, self.ctx, playlist_id, work_id),
@@ -489,7 +489,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
         return self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, title), f"<W {title}>")
 
     def detail(self, playlist_id: str) -> Optional[dict[str, Any]]:
-        return playlist_commands.detail(self.db, self.actor.context, playlist_id, self.storage.pdfs_dir)
+        return playlist_commands.detail(self.db, self.actor.context, playlist_id)
 
     def order(self, playlist_id: str) -> list[tuple[str, int]]:
         return self.labels.show([(item["id"], item["position"]) for item in require(self.detail(playlist_id))["items"]])
@@ -544,7 +544,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
         for work_id, label in ((first, "<W First>"), (second, "<W Second>"), (third, "<W Third>")):
             self.answer(playlist_commands.work_state(db, ctx, work_id),
                         {"playlist_id": "<PL A>", "revision": 1, "work_id": label})
-        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first)), {"playlist_id": "<PL A>", "playlist_title": "A"})
+        self.answer(require(work_commands.detail(self.db, self.ctx, first)), {"playlist_id": "<PL A>", "playlist_title": "A"})
         # Unknown and repeated ids are dropped; the Works not named keep their order after the named ones.
         playlist_commands.reorder(db, ctx, a, [second, "x", first, second])
         playlist_commands.reorder(db, ctx, a, [])
@@ -560,7 +560,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
         playlist_commands.remove_item(db, ctx, b, second)
         self.answer(playlist_commands.work_state(db, ctx, second),
                     {"playlist_id": "", "revision": 3, "work_id": "<W Second>"})
-        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, second)), {"playlist_id": None, "playlist_title": None})
+        self.answer(require(work_commands.detail(self.db, self.ctx, second)), {"playlist_id": None, "playlist_title": None})
         self.answer(sorted((row["title"], row["item_count"]) for row in playlist_commands.catalog(db, ctx)),
                     [("A", 2), ("B", 0)])
 
@@ -576,7 +576,7 @@ class AnswerTests(AnswerAssertions, PlaylistTestCase):
         self.assertIsNone(playlist_commands.sync_state(db, ctx, doomed))
         self.answer(playlist_commands.work_state(db, ctx, member),
                     {"playlist_id": "", "revision": 2, "work_id": "<W Member>"})
-        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, member)), {"playlist_id": None, "playlist_title": None})
+        self.answer(require(work_commands.detail(self.db, self.ctx, member)), {"playlist_id": None, "playlist_title": None})
         self.answer([(row["id"], row["item_count"]) for row in playlist_commands.catalog(db, ctx)], [("<PL Kept>", 1)])
         # A Work delete takes the Work out of its Playlist.
         self.assertTrue(work_commands.delete(self.db, self.ctx, other))

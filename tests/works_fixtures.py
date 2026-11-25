@@ -1,9 +1,8 @@
 """Work fixtures and reads a test arranges or checks a Library with (#1426).
 
 Each takes the database, the acting context and the Library's storage, as
-a route has them. The Work commands want the PDF directory and the object
-store the storage holds; these find both, and build what a command takes
-from plain arguments.
+a route has them. The Work commands want the object store the storage
+holds; these find it, and build what a command takes from plain arguments.
 """
 
 from __future__ import annotations
@@ -20,13 +19,6 @@ from backend.storage.objects import LocalFilesystemStorage
 NO_DATA_ROOT = "this PostgreSQL library has no data root"
 
 
-def pdfs_dir(storage: Optional[StorageConfig]) -> str:
-    """The storage's PDF directory; a Library without a data root has none."""
-    if storage is None:
-        raise RuntimeError(NO_DATA_ROOT)
-    return storage.pdfs_dir
-
-
 def objects(storage: Optional[StorageConfig]) -> LocalFilesystemStorage:
     """The storage's object store; a Library without a data root has none."""
     if storage is None:
@@ -39,7 +31,7 @@ def add_work(database: Database, ctx: RequestContext, storage: Optional[StorageC
     """A new Work's id: an existing managed PDF (``file_path``), a stream, or no file."""
     from backend.domain.works import work_commands
 
-    return work_commands.create(database, ctx, pdfs_dir(storage), objects(storage),
+    return work_commands.create(database, ctx, objects(storage),
                                 work_commands.new_work_fields(title=title, **fields))
 
 
@@ -50,16 +42,14 @@ def add_work_with_pdf(database: Database, ctx: RequestContext, storage: Optional
 
     if "file_path" in fields:
         raise TypeError("the uploaded PDF is the Work's file")
-    return work_commands.create(database, ctx, pdfs_dir(storage), objects(storage),
+    return work_commands.create(database, ctx, objects(storage),
                                 work_commands.new_work_fields(**fields), (file_name, write))
 
 
 def summaries(database: Database, ctx: RequestContext, storage: Optional[StorageConfig],
               read: Callable[[Any], list[dict]]) -> list[dict]:
-    """Search rows ``read`` finds, finished as Work summaries."""
-    from backend.domain.search import search_commands
-
-    return search_commands.finish(library_query(database, ctx, read), pdfs_dir(storage))
+    """The Work summaries ``read`` finds."""
+    return library_query(database, ctx, read)
 
 
 def summaries_by_ids(database: Database, ctx: RequestContext, storage: Optional[StorageConfig],
@@ -77,24 +67,18 @@ def recent_works(database: Database, ctx: RequestContext, storage: Optional[Stor
                  limit: int = 30) -> list[dict]:
     """The most recently opened Works as summaries, without their Folder."""
     from backend.domain.works import projection, queries
-    from backend.domain.works.rules import finish_work_summary_rows
 
     cores = library_query(database, ctx, lambda scope: queries.works_by_opened(scope, limit))
-    rows = [projection.work_summary(core, with_folder=False) for core in cores]
-    finish_work_summary_rows(rows, pdfs_dir(storage))
-    return rows
+    return [projection.work_summary(core, with_folder=False) for core in cores]
 
 
 def recently_added_works(database: Database, ctx: RequestContext, storage: Optional[StorageConfig],
                          limit: int = 50) -> list[dict]:
     """The most recently created Works as summaries."""
     from backend.domain.works import projection, queries
-    from backend.domain.works.rules import finish_work_summary_rows
 
     cores = library_query(database, ctx, lambda scope: queries.works_by_created(scope, limit))
-    rows = [projection.work_summary(core) for core in cores]
-    finish_work_summary_rows(rows, pdfs_dir(storage))
-    return rows
+    return [projection.work_summary(core) for core in cores]
 
 
 def materialize_refused(result: Any) -> Any:

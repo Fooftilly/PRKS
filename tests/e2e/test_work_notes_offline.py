@@ -136,11 +136,11 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        original = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content']
+        original = require(self.db_for(server).run(work_commands.detail, work))['text_content']
         self.offline(page, context)
         self.set_notes(page, 'See [[concept:Culture Industry]].')
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 1)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['text_content'],
                          original)
 
         page.reload(wait_until='domcontentloaded')
@@ -149,7 +149,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['text_content'],
                          'See [[concept:Culture Industry]].')
         names = {row['name'] for row in self.db_for(server).query(
             postgres='SELECT name FROM prks.concepts')}
@@ -185,8 +185,8 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         self.pending(page, 'SET_WORK_RESEARCH_NOTE', 0)
         self.pending(page, 'SET_WORK_PRIVATE_NOTE', 0)
         db = self.db_for(server)
-        self.assertEqual(require(db.run(work_commands.detail, db.pdfs_dir, work))['text_content'], 'Research B')
-        self.assertEqual(require(db.run(work_commands.detail, db.pdfs_dir, work))['private_notes'],
+        self.assertEqual(require(db.run(work_commands.detail, work))['text_content'], 'Research B')
+        self.assertEqual(require(db.run(work_commands.detail, work))['private_notes'],
                          'Remind me: [[concept:Should Not Exist]].')
         names = {row['name'] for row in db.query(postgres='SELECT name FROM prks.concepts')}
         self.assertNotIn('Should Not Exist', names)
@@ -240,7 +240,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
         last_saving = len(log) - 1 - log[::-1].index('Saving...')
         self.assertNotIn('All changes saved', log[:last_saving],
                          'saved was claimed while B was unsent: %r' % log)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'], 'Body A then B')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['text_content'], 'Body A then B')
 
         page.reload(wait_until='domcontentloaded')
         page.wait_for_selector('.CodeMirror')
@@ -266,7 +266,7 @@ class OfflineWorkNotesTests(_WorkNotesPage, unittest.TestCase):
             return row && row.server_result;
         })""")
         self.assertEqual(result['code'], 'REVISION_CONFLICT')
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content'],
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['text_content'],
                          'Other device wrote C')
 
 
@@ -342,7 +342,7 @@ class _RecoveryPage(_WorkNotesPage):
 
     def server_text(self, server, work):
         from backend.domain.works import work_commands
-        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['text_content']
+        return require(self.db_for(server).run(work_commands.detail, work))['text_content']
 
     def wait_server_text(self, page, work, text):
         wait_for_async(
@@ -1016,7 +1016,7 @@ class WorkRemindersRecoveryTests(_RecoveryPage, unittest.TestCase):
 
     def server_reminder(self, server, work):
         from backend.domain.works import work_commands
-        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['private_notes'] or ''
+        return require(self.db_for(server).run(work_commands.detail, work))['private_notes'] or ''
 
     def set_server_reminder(self, server, work, text):
         from backend.domain.works import notes
@@ -1225,12 +1225,12 @@ class WorkDeleteRecoveryCleanupTests(_RecoveryPage, unittest.TestCase):
             message='the delete request did not replace the unsent Reminders row')
         # Requested, not acknowledged: the draft stays.
         self.assertEqual(self.work_records(page, work), ['work-private-note:active'])
-        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))
+        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, work))
 
         self.reconnect(page, context)
         wait_for_async(page, "() => prksSync.store.listOperations().then(rows => rows.length === 0)",
                        timeout=30000, message='the delete was never acknowledged')
-        self.assertIsNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))
+        self.assertIsNone(self.db_for(server).run(work_commands.detail, work))
         wait_for_async(
             page,
             '(workId) => (' + _WORK_RECOVERY_RECORDS + ')(workId).then(rows => rows.length === 0)',

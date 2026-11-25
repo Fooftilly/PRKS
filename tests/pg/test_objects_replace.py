@@ -130,7 +130,7 @@ class SuccessTests(ReplaceTestCase):
                                 "content_sha256": sha(NEW), "ingest_sha256": sha(NEW), "byte_size": len(NEW),
                                 "canonical_annotation_set_revision": 1,
                                 "materialized_pdf_annotation_revision": 1, "stale": False})
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["file_path"], done["file_path"])
         # Nothing was modified in place; the old object is claimed and kept until settled.
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
@@ -499,7 +499,7 @@ class RestartTests(ReplaceTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
         library = PostgresLibrary(self.db, storage=self.storage)
-        self.assertEqual(require(work_commands.detail(library.database, current_context(), works_fixtures.pdfs_dir(library.storage), work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(library.database, current_context(), work_id))["file_path"], done["file_path"])
         status = require(annotation_commands.materialization(library.database, current_context(), work_id))
         self.assertEqual((status["canonical_annotation_set_revision"], status["stale"]), (2, True))
         self.assertEqual(self.claims(), {"p.pdf"})

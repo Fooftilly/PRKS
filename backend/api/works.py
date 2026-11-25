@@ -35,7 +35,7 @@ from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
 from backend.domain.works import source_rules
-from backend.api.common import objects, pdfs_dir, revalidated, text_field
+from backend.api.common import objects, revalidated, text_field
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
 from backend.runtime.log_safety import safe_error_type, safe_log_id, safe_log_label
@@ -76,8 +76,8 @@ def catalog(req: Request) -> Response:
     # every other caller. Each list is built once: file_size_bytes is read
     # from the managed PDF, so the ETag comes from these rows.
     if req.query_value("projection") == "browse":
-        return revalidated(req, "works-browse", work_commands.browse_catalog(*req.actor, pdfs_dir(req)))
-    return revalidated(req, "works", work_commands.catalog(*req.actor, pdfs_dir(req)))
+        return revalidated(req, "works-browse", work_commands.browse_catalog(*req.actor))
+    return revalidated(req, "works", work_commands.catalog(*req.actor))
 
 
 def metadata_state(req: Request) -> Response:
@@ -115,7 +115,7 @@ def detail(req: Request) -> Response:
 
     w_id = req.params["work_id"]
     database, ctx = req.actor
-    data = work_commands.detail(database, ctx, pdfs_dir(req), w_id)
+    data = work_commands.detail(database, ctx, w_id)
     if not data:
         return error_response(404, "Work not found")
     try:
@@ -134,13 +134,13 @@ def detail(req: Request) -> Response:
 def recent(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    return revalidated(req, "recent", work_commands.recent_browse(*req.actor, pdfs_dir(req)))
+    return revalidated(req, "recent", work_commands.recent_browse(*req.actor))
 
 
 def recently_added(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    return revalidated(req, "recently-added", work_commands.recently_added_browse(*req.actor, pdfs_dir(req)))
+    return revalidated(req, "recently-added", work_commands.recently_added_browse(*req.actor))
 
 
 def bibtex(req: Request) -> Response:
@@ -214,7 +214,7 @@ def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]],
         writing = (name, write)
     # An upload is the Work's file: a path echoed beside it is not read.
     stored_path = "" if upload is not None else file_path
-    return work_commands.create(*req.actor, pdfs_dir(req), objects(req),
+    return work_commands.create(*req.actor, objects(req),
                                 work_commands.new_work_fields(file_path=stored_path, **fields), writing)
 
 

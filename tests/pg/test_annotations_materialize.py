@@ -148,7 +148,7 @@ class SuccessTests(MaterializeTestCase):
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
         self.assertEqual((after["id"], after["source_locator"]), (before["id"], before["source_locator"]))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["file_path"], done["file_path"])
         status = require(annotation_commands.materialization(self.db, self.ctx, work_id))
         self.assertEqual((status["stale"], status["code"]), (False, None))
         self.assertEqual(works_fixtures.accept_materialization_claim(self.db, self.ctx, work_id, canonical), canonical)
@@ -565,7 +565,7 @@ class RestartTests(MaterializeTestCase):
         status = require(annotation_commands.materialization(library.database, current_context(), work_id))
         self.assertEqual((status["canonical_annotation_set_revision"], status["materialized_pdf_annotation_revision"],
                           status["stale"]), (canonical + 1, canonical, True))
-        self.assertEqual(require(work_commands.detail(library.database, current_context(), works_fixtures.pdfs_dir(library.storage), work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(library.database, current_context(), work_id))["file_path"], done["file_path"])
         self.assertEqual(self.read(done["file_path"][len("/api/pdfs/"):]), RENDERED)
         self.assertEqual(self.claims(), {"p.pdf"})
         annotation_commands.materialize_pdf(library.database, current_context(), works_fixtures.objects(library.storage), work_id, writing(RENDERED + b"later"), canonical + 1)

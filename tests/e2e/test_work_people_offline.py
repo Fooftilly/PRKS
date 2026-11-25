@@ -354,7 +354,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.pending(page, 0)
         self.pending(page, 0, self.FIELD_OPS)
         self.assertEqual(self.roles(server, work), set())
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], 'New Text Author')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['author_text'], 'New Text Author')
 
     # ---- 5: credit override -------------------------------------------------
 
@@ -386,7 +386,7 @@ class OfflineWorkPeopleTests(unittest.TestCase):
         self.pending(page, 0)
         stored = self.db_for(server).run(library_query, lambda scope: roles.work_roles(scope, work))
         self.assertEqual(stored[0]['credit_name'], 'Mark Twain')
-        self.assertIn('Mark Twain', require(self.db_for(server).run(person_commands.detail, server.ids['jane'], self.db_for(server).pdfs_dir))['aliases'],
+        self.assertIn('Mark Twain', require(self.db_for(server).run(person_commands.detail, server.ids['jane']))['aliases'],
                       'and the override became a Person alias, as it always has')
 
     # ---- 6: Research Graph --------------------------------------------------

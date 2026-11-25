@@ -534,7 +534,7 @@ describes where today's value goes; §12 covers how.
 | Source / provenance | **A** for bytes (`origin`, `origin_url`, `imported_from_processing_file_id`). **M** field provenance for metadata. | `origin = 'legacy'` | Bytes and metadata have different provenance. |
 | File path (`file_path`) | **A** (`storage_locator`, the working/served bytes) | copied | The Work projection keeps `file_path` (§13). `source_locator` (pristine bytes) stays NULL for legacy files (§9.4). |
 | MIME / media type (`source_mime`) | **A** (`media_type`) | Copy `source_mime` when it is non-empty. Otherwise infer `application/pdf` for managed PDFs, and leave it NULL for everything else. | `POST /api/works` accepts and stores a caller-supplied `source_mime`, so a user database may hold values even though the audited library had none. The backfill must never overwrite them. |
-| Byte size | **A** (`byte_size`) | filled by the fingerprint pass (§12.4) | It replaces the per-row `stat()` in `finish_work_summary_rows` once trusted. |
+| Byte size | **A** (`byte_size`) | filled by the fingerprint pass (§12.4) | Work summaries report it as `file_size_bytes`; no read stats the file (#1427). |
 | Content hash | **A** (`ingest_sha256` for the source bytes, `content_sha256` for the working bytes) | `content_sha256` from the fingerprint pass. `ingest_sha256` stays NULL for legacy files. | §9.4 and §10.2. |
 | Derived text / OCR / thumbnails | **A**, derived | the rebuilt index is keyed by `asset_id` | They stay derived and are never backed up (I4). |
 | Annotation materialization revisions | **A** | copied from `works` | They describe one file's bytes. |

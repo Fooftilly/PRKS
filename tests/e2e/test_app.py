@@ -150,7 +150,7 @@ def _server_work_title(server, work_id):
     two can legitimately disagree until an operation is acknowledged."""
     from backend.domain.works import work_commands
     from tests.e2e.library_store import library_for
-    return require(library_for(server).run(work_commands.detail, library_for(server).pdfs_dir, work_id))["title"]
+    return require(library_for(server).run(work_commands.detail, work_id))["title"]
 
 
 def _wait_queue_drained(page):

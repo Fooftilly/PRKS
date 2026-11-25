@@ -223,7 +223,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
 
     def columns(self, server, work_id):
         from backend.domain.works import work_commands
-        row = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work_id))
+        row = require(self.db_for(server).run(work_commands.detail, work_id))
         return {k: row[k] for k in ('source_kind', 'provider', 'provider_id', 'source_url')}
 
     def conflicts(self, page, count):
@@ -385,7 +385,7 @@ class OfflineWorkSourceTests(unittest.TestCase):
         self.url(page, WATCH_TWO)
         self.save(page)
         self.pending(page, 0)
-        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_url'])
+        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, work))['thumb_url'])
         cached = self.cached_work(page, work)
         self.assertIsNone(cached['thumb_url'],
                           'the previous video\'s image is gone from the cache too')

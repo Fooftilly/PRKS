@@ -39,8 +39,10 @@ add them to this projection. The detail's ``tags`` are the Organization
 lane's and its ``annotations`` the Annotations lane's: ``get_work`` reads
 them in the same snapshot (``backend.domain.organization.links``,
 ``backend.domain.annotations.store``).
-The facade adds ``file_size_bytes`` and ``html_content``, which come from the
-file system and the wiki-link resolver rather than from these tables.
+- ``file_size_bytes``: the managed file's ``byte_size`` (the Asset records the
+  size of the bytes it holds, so no row is stat'ed on disk), else ``None``.
+
+The detail's ``html_content`` comes from the wiki-link resolver.
 """
 
 from __future__ import annotations
@@ -81,6 +83,7 @@ WORK_DETAIL_COLUMNS: tuple[str, ...] = (
 # Added to every Work-shaped row by the Slice-C projection.
 PROJECTION_EXTRAS: tuple[str, ...] = (
     "primary_manifestation_id", "primary_asset_id", "manifestation_count", "asset_count",
+    "file_size_bytes",
 )
 MANIFESTATION_FIELDS: tuple[str, ...] = (
     "doc_type", "year", "published_date", "edition", "publisher", "location", "journal",
@@ -115,6 +118,7 @@ SELECT
   m.primary_asset_id,
   a.kind AS asset_kind,
   a.storage_locator,
+  a.byte_size,
   a.url AS asset_url,
   a.media_type,
   a.provider,
@@ -207,6 +211,7 @@ def work_core(row: Mapping[str, Any]) -> dict[str, Any]:
         "text_content": research if research is not None else "",
         "private_notes": row["private_note"],
         "file_path": "/api/pdfs/" + str(row["storage_locator"]) if managed else "",
+        "file_size_bytes": int(row["byte_size"]) if managed and row["byte_size"] is not None else None,
         "source_kind": "video" if stream else "pdf" if managed else None,
         "source_url": row["asset_url"] if stream else row["manifestation_url"],
         "source_mime": _asset_value(row, "media_type", None),
@@ -295,7 +300,7 @@ def role_row(credit: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def work_detail(core: Mapping[str, Any]) -> dict[str, Any]:
-    """``get_work`` less ``file_size_bytes`` and ``html_content``."""
+    """``get_work`` less ``html_content``."""
     out = _pick(core, WORK_DETAIL_COLUMNS)
     out.update(_pick(core, PROJECTION_EXTRAS))
     out.update({

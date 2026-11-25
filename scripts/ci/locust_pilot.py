@@ -102,7 +102,7 @@ def seeder(extra: int) -> Callable[[str], dict[str, Any]]:
             for index in range(extra)
         ]
         # The whole seeded library, so a catalog or tag list missing any fixture fails.
-        ids["catalog_size"] = len(work_commands.catalog(db, ctx, works_fixtures.pdfs_dir(storage)))
+        ids["catalog_size"] = len(work_commands.catalog(db, ctx))
         ids["tag_count"] = len(tag_commands.all_tags(db, ctx))
         return ids
 

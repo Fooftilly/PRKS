@@ -457,7 +457,7 @@ class SyncDeleteReplayTests(ObjectsTestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.env = Environment(pdfs_dir=self.storage.pdfs_dir)
+        self.env = Environment()
         device = self.actor.context.device_id
         assert device is not None
         self.op = {

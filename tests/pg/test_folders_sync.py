@@ -45,7 +45,7 @@ class FolderSyncTestCase(SyncTestCase, FolderTestCase):  # pyright: ignore[repor
     def setUp(self) -> None:
         super().setUp()
         # The real filing: this lane's Folder, then the People lane's roles.
-        self.env = Environment(pdfs_dir=self.storage.pdfs_dir)
+        self.env = Environment()
 
     def envelope(self, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int] = None, **changes: Any) -> dict[str, Any]:
@@ -153,9 +153,9 @@ class EnvelopeTests(FolderSyncTestCase):
 
     def test_an_empty_title_becomes_the_placeholder_on_both_paths(self) -> None:
         folder_id = self.create_folder("   ")
-        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir))["title"], "Untitled Folder")
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_id))["title"], "Untitled Folder")
         top = self.create_folder("Top")
-        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_commands.create(self.db, self.ctx, "  ", "", top), self.pdfs_dir))["title"],
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, folder_commands.create(self.db, self.ctx, "  ", "", top)))["title"],
                          "Untitled Folder")
 
     def test_clearing_a_parent_by_sync_leaves_no_parent(self) -> None:
@@ -164,7 +164,7 @@ class EnvelopeTests(FolderSyncTestCase):
         self.assertEqual(self.send(self.folder_field(child, "parent_id", "", 0))[1]["server_revision"], 1)
         self.assertEqual(self.sql("SELECT parent_id FROM prks.folders WHERE id = %s", (child,)),
                          [{"parent_id": None}])
-        self.assertIsNone(require(folder_commands.detail(self.db, self.ctx, child, self.pdfs_dir))["parent"])
+        self.assertIsNone(require(folder_commands.detail(self.db, self.ctx, child))["parent"])
 
 
 class FieldTests(FolderSyncTestCase):
@@ -308,9 +308,9 @@ class CreateWorkFilingTests(FolderSyncTestCase):
         uncategorized = result["folder_id"]
         self.assertEqual((result["changed"], result["playlist_id"], result["role_count"]), (True, "", 0))
         self.assertEqual(self.send(second)[1]["folder_id"], uncategorized)
-        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, uncategorized, self.pdfs_dir))["title"], "Uncategorized")
+        self.assertEqual(require(folder_commands.detail(self.db, self.ctx, uncategorized))["title"], "Uncategorized")
         self.assertEqual(folder_commands.catalog(self.db, self.ctx)[0]["work_count"], 2)
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first["entity_id"]))["folder_title"], "Uncategorized")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, first["entity_id"]))["folder_title"], "Uncategorized")
         # Filing is construction: no revision moved.
         self.assertEqual(self.work_folder(first["entity_id"]), (uncategorized, 0))
         self.assertEqual(self.revisions("work-folder"), {})
@@ -440,7 +440,7 @@ class LedgerAndIsolationTests(FolderSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "folder_id": folder_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((require(folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir))["title"], self.filed()), ("Mine", []))
+        self.assertEqual((require(folder_commands.detail(self.db, self.ctx, folder_id))["title"], self.filed()), ("Mine", []))
 
     def test_a_reader_cannot_send_folder_operations(self) -> None:
         reader = self.reader_context()

@@ -79,7 +79,7 @@ class BulkTestCase(FolderTestCase):
                 "occurred_at": "2026-10-22T10:00:00Z", "created_at": "2026-10-22T10:00:00Z",
                 "depends_on": []}
         return protocol.process_operation(self.db, self.actor.context, data,
-                                          Environment(pdfs_dir=self.storage.pdfs_dir))
+                                          Environment())
 
     def held_bulk(self, action: str, work_ids: list[str], **body: Any) -> Any:
         """A race holder running the bulk action in the race's open transaction."""

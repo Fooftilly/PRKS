@@ -52,7 +52,7 @@ class MetadataSyncTestCase(SyncTestCase):
 
     def value(self, field: str, work: Optional[str] = None) -> Any:
         """The Work record's value: typed for ``thumb_page``, as stored for every other field."""
-        return require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work or self.work))[field]
+        return require(work_commands.detail(self.db, self.ctx, work or self.work))[field]
 
     def wire_value(self, field: str) -> str:
         return rules.database_to_wire(field, self.value(field))
@@ -248,7 +248,7 @@ class PatchBoundaryTests(MetadataSyncTestCase):
                           state["isbn"]["value"], state["thumb_page"]["value"]),
                          ("Planned", "book", "10.1/initial", "999", "4"))
         self.assertEqual((state["title"], state["author_text"]), ({"revision": 0}, {"revision": 0}))
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, created)
+        work = work_commands.detail(self.db, self.ctx, created)
         assert work is not None
         self.assertEqual((work["title"], work["author_text"], work["thumb_page"]),
                          ("Fresh Title", "Jane Smith", 4))
@@ -380,7 +380,7 @@ class LargeFieldTests(MetadataSyncTestCase):
         self.assertEqual(result["value"], "10.1/echoed")
         self.assertNotIn("value_omitted", result)
         self.assertEqual(self.state()["doi"], {"value": "10.1/echoed", "revision": 1})
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["title"], "A Renamed Work")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.work))["title"], "A Renamed Work")
 
     def test_large_conflicts_report_sizes_and_previews_within_the_bound(self) -> None:
         for field, server, device in (("author_text", "S" * (40 * 1024), "D" * (40 * 1024)),
@@ -420,7 +420,7 @@ class LargeFieldTests(MetadataSyncTestCase):
         self.assertNotIn("current_value", result)
         with self.assertRaises(ValueError):
             self.patch({"source_url": "https://x/B"}, video)
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, video)
+        work = work_commands.detail(self.db, self.ctx, video)
         assert work is not None
         self.assertEqual((work["source_url"], work["provider_id"]), (_WATCH % "AAA", "AAA"))
         self.patch({"source_url": "https://example.com/other"})
@@ -598,7 +598,7 @@ class ProjectionTests(MetadataSyncTestCase):
 
     def test_recently_added_carries_publisher_for_its_local_filter(self) -> None:
         self.patch({"publisher": "Fixture Press"})
-        row = next(r for r in work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir) if r["id"] == self.work)
+        row = next(r for r in work_commands.recently_added_browse(self.db, self.ctx) if r["id"] == self.work)
         self.assertEqual(row["publisher"], "Fixture Press")
 
     def test_year_and_published_date_are_independent_conflict_units(self) -> None:

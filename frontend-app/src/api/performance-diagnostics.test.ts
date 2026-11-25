@@ -39,8 +39,6 @@ export function performanceSnapshotFixture() {
     counters: {
       thumbnail_cache_hits: 1,
       thumbnail_cache_misses: 1,
-      pdf_file_stat_rows: 0,
-      pdf_file_stat_files: 0,
       db_read: 2,
       db_write: 0,
     },

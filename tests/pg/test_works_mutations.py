@@ -241,7 +241,7 @@ class WaitedForLockTests(MutationTestCase):
         self.assertEqual(first[1]["server_revision"], 1)
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "REVISION_CONFLICT", 1))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["doi"], "10.1/new")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["doi"], "10.1/new")
 
     def test_the_same_video_on_one_base_converges(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Video", source_url=_VIDEO)
@@ -263,7 +263,7 @@ class WaitedForLockTests(MutationTestCase):
                 scope, work_id, {"kind": "video", "url": _VIDEO}, 0))
         self.assertEqual((second[0], second[1]["code"], second[1]["current_revision"]),
                          (409, "SOURCE_REVISION_CONFLICT", 1))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["source_url"], _OTHER_VIDEO)
 
 
 class NoteDecisionTests(MutationTestCase):
@@ -310,7 +310,7 @@ class SourceDecisionTests(MutationTestCase):
         status, body = self.set_source(work_id, _VIDEO, 0)
         self.assertEqual((status, body["code"], body["current_revision"]), (409, "SOURCE_REVISION_CONFLICT", 1))
         self.assertEqual(self.set_source(work_id, _VIDEO, 2)[1]["code"], "FUTURE_REVISION")
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["source_url"], _OTHER_VIDEO)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["source_url"], _OTHER_VIDEO)
         state = self.run_command(lambda scope: source.source_state(scope, work_id))
         self.assertEqual(state, {"work_id": work_id, "revision": 1})
 
@@ -342,7 +342,7 @@ class OpenTests(MutationTestCase):
             (lambda moment=moment: self.run_command(lambda scope: commands.mark_opened(scope, work_id, moment)))
             for moment in reversed(moments)
         ])
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["last_opened_at"], "2026-01-02 03:04:05.727")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["last_opened_at"], "2026-01-02 03:04:05.727")
         # An older event changes nothing and reports the recorded value.
         self.assertEqual(self.run_command(lambda scope: commands.mark_opened(scope, work_id, start)),
                          (True, False, "2026-01-02 03:04:05.727"))
@@ -410,7 +410,7 @@ class DeleteTests(MutationTestCase):
         assert deleted is not None
         self.assertEqual((deleted.file_path, deleted.managed_pdf_still_referenced), (path, False))
         with facade_context.acting_as(other.context):
-            self.assertIsNotNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, theirs))
+            self.assertIsNotNone(work_commands.detail(self.db, self.ctx, theirs))
 
 
 class IsolationTests(MutationTestCase):
@@ -431,7 +431,7 @@ class IsolationTests(MutationTestCase):
         with facade_context.acting_as(ctx):
             work_commands.update_metadata(self.db, self.ctx, work_id, {"title": "Stolen"})
             self.assertIsNone(work_commands.metadata_state(self.db, self.ctx, work_id))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Mine")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["title"], "Mine")
         self.assertEqual(self.revisions_of(work_id), {})
 
     def test_a_reader_cannot_change_a_work(self) -> None:
@@ -444,8 +444,8 @@ class IsolationTests(MutationTestCase):
                 with self.assertRaises(AccessRefused) as caught:
                     call()
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-            self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Mine")
-        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["last_opened_at"])
+            self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["title"], "Mine")
+        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, work_id))["last_opened_at"])
         self.assertEqual(self.revisions_of(work_id), {})
 
 
@@ -478,14 +478,14 @@ class AnswerTests(WorksAnswerTestCase):
         self.add("never", title="Never")
         for work_id in (first, second, first):
             self.assertIs(work_commands.mark_opened(self.db, self.ctx, work_id), True)
-        self.answer(work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir), [
+        self.answer(work_commands.recent_browse(self.db, self.ctx), [
             {"id": "<W first>", "title": "First", "last_opened_at": "<ms>", "source_kind": None,
              "asset_count": 0, "primary_asset_id": None},
             {"id": "<W second>", "title": "Second", "last_opened_at": "<ms>", "source_kind": "video",
              "asset_count": 1, "primary_asset_id": "<AS second>", "provider": "youtube"}])
         self.answer(works_fixtures.recent_works(self.db, self.ctx, self.storage, 1), [{"id": "<W first>", "last_opened_at": "<ms>"}])
         self.answer(works_fixtures.etag_recent(self.db, self.ctx), 'W/"prks-recent-2-<ms>"')
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, first), {"last_opened_at": "<ms>"})
+        self.answer(work_commands.detail(self.db, self.ctx, first), {"last_opened_at": "<ms>"})
 
     def test_opening_a_missing_work(self) -> None:
         self.assertIs(work_commands.mark_opened(self.db, self.ctx, _MISSING), False)
@@ -510,7 +510,7 @@ class AnswerTests(WorksAnswerTestCase):
                 "doc_type": "book", "year": "1999", "urldate": "2024-01-02", "source_url": "https://e.org/x",
                 "hide_pdf_link_annotations": 1, "publisher": "Press", "updated_at": "<s>"}
         self.assertIsNone(work_commands.update_metadata(self.db, self.ctx, work_id, patch))
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), work)
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), work)
         self.answer(self.state(work_id), (patched, _notes("<W work>")))
         # The same values again change nothing and advance nothing.
         work_commands.update_metadata(self.db, self.ctx, work_id, patch)
@@ -522,14 +522,14 @@ class AnswerTests(WorksAnswerTestCase):
         self.answer(self.state(work_id), (cleared, _notes("<W work>")))
         row = {"id": "<W work>", "title": "Renamed", "doc_type": "misc", "year": "", "status": "Completed",
                "source_url": "https://e.org/x", "published_date": "1999-02"}
-        self.answer(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [{**row, "abstract": "New abstract", "urldate": "2024-01-02"}])
-        self.answer(work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir), [{**row, "abstract_excerpt": "New abstract"}])
-        self.answer(work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir), [{**row, "publisher": "Press"}])
+        self.answer(work_commands.catalog(self.db, self.ctx), [{**row, "abstract": "New abstract", "urldate": "2024-01-02"}])
+        self.answer(work_commands.browse_catalog(self.db, self.ctx), [{**row, "abstract_excerpt": "New abstract"}])
+        self.answer(work_commands.recently_added_browse(self.db, self.ctx), [{**row, "publisher": "Press"}])
 
     def test_pdf_fields(self) -> None:
         work_id = self.add_pdf("pdf", "a.pdf", title="Pdf", source_url="https://e.org/a")
         work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b"})
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), {
             "thumb_page": 4, "source_mime": "application/pdf", "source_url": "https://e.org/b",
             "file_path": "/api/pdfs/a.pdf", "source_kind": "pdf"})
         self.answer(self.state(work_id), (
@@ -542,7 +542,7 @@ class AnswerTests(WorksAnswerTestCase):
         self.answer(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["thumb_page"],
                     {"revision": 1, "value": "4"})
         work_commands.update_metadata(self.db, self.ctx, work_id, {"thumb_page": None})
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"thumb_page": None})
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), {"thumb_page": None})
         self.answer(require(work_commands.metadata_state(self.db, self.ctx, work_id))["fields"]["thumb_page"],
                     {"revision": 2, "value": ""})
 
@@ -563,9 +563,9 @@ class AnswerTests(WorksAnswerTestCase):
             with self.subTest(patch=sorted(patch)):
                 with self.assertRaises(ValueError):
                     work_commands.update_metadata(self.db, self.ctx, target, patch)
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"title": "Work", "source_kind": None, "thumb_page": None,
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), {"title": "Work", "source_kind": None, "thumb_page": None,
                                                      "thumb_url": None, "year": "", "status": "Not Started"})
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, video), {"source_url": _VIDEO, "provider_id": "dQw4w9WgXcQ"})
+        self.answer(work_commands.detail(self.db, self.ctx, video), {"source_url": _VIDEO, "provider_id": "dQw4w9WgXcQ"})
         for found, label in ((work_id, "<W work>"), (video, "<W video>")):
             self.answer(self.state(found), (_state(label), _notes(label)))
 
@@ -589,7 +589,7 @@ class AnswerTests(WorksAnswerTestCase):
                                         ("  spaced  ", "  spaced  ", 2), ("", None, 3), (None, None, 3)):
             with self.subTest(value=value):
                 work_commands.update_metadata(self.db, self.ctx, work_id, {"private_notes": value})
-                self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {"private_notes": stored})
+                self.answer(work_commands.detail(self.db, self.ctx, work_id), {"private_notes": stored})
                 self.answer(self.state(work_id), (_state("<W work>"), _notes("<W work>", private=revision)))
 
     def test_deleting_works(self) -> None:
@@ -598,16 +598,16 @@ class AnswerTests(WorksAnswerTestCase):
         for work_id, label in ((plain, "<W plain>"), (video, "<W video>")):
             self.answer(require(work_commands.delete(self.db, self.ctx, work_id)).__dict__,
                         {"file_path": "", "managed_pdf_still_referenced": False, "work_id": label})
-            self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
+            self.assertIsNone(work_commands.detail(self.db, self.ctx, work_id))
         self.assertIsNone(work_commands.delete(self.db, self.ctx, _MISSING))
-        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])
+        self.assertEqual(work_commands.catalog(self.db, self.ctx), [])
 
     def test_deleting_one_of_two_works_on_one_file(self) -> None:
         first = self.add_pdf("first", "shared.pdf", title="First")
         second = self.add("second", title="Second", file_path="/api/pdfs/shared.pdf")
         self.answer(require(work_commands.delete(self.db, self.ctx, first)).__dict__, {
             "file_path": "/api/pdfs/shared.pdf", "managed_pdf_still_referenced": True, "work_id": "<W first>"})
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, second), {
+        self.answer(work_commands.detail(self.db, self.ctx, second), {
             "file_path": "/api/pdfs/shared.pdf", "file_size_bytes": 32, "asset_count": 1,
             "primary_asset_id": "<AS second>", "source_kind": "pdf"})
         self.answer(require(work_commands.delete(self.db, self.ctx, second, claim_pdf=False)).__dict__, {

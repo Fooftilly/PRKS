@@ -500,7 +500,7 @@ class ImportTests(QueueTestCase):
         key = self.row(item["id"])["object_locator"]
         done = self.import_(item["id"])
         self.assertTrue(done.created)
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, done.work_id)
+        work = work_commands.detail(self.db, self.ctx, done.work_id)
         assert work is not None
         self.assertEqual((work["title"], work["status"], work["abstract"], work["year"], work["journal"]),
                          ("On Computable Numbers", "Planned", "A", "1936", "PLMS"))
@@ -531,7 +531,7 @@ class ImportTests(QueueTestCase):
 
     def test_no_target_folder_files_the_work_in_uncategorized_and_names_it_after_the_file(self) -> None:
         done = self.import_(self.ready(filename="Some Paper.pdf")["id"])
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, done.work_id)
+        work = work_commands.detail(self.db, self.ctx, done.work_id)
         assert work is not None
         self.assertEqual(work["title"], "Some Paper")
         (filed,) = self.sql("SELECT f.title FROM prks.folder_files ff JOIN prks.folders f ON f.id = ff.folder_id"
@@ -643,7 +643,7 @@ class ImportRaceTests(QueueTestCase):
         request = items.parse_update({"title": "Edited"})
         _after, waited = self.hold_then(lambda scope: items.update(scope, item["id"], 0, request),
                                         lambda: self.import_(item["id"]))
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, waited.work_id)
+        work = work_commands.detail(self.db, self.ctx, waited.work_id)
         assert work is not None
         self.assertEqual(work["title"], "Edited")
 

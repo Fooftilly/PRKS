@@ -105,7 +105,7 @@ class _FolderRemindersPage(_PageBase):
     def server_notes(self, server, folder_id):
         from backend.domain.organization import folder_commands
         store = self.db(server)
-        return require(store.run(folder_commands.detail, folder_id, store.pdfs_dir))['private_notes']
+        return require(store.run(folder_commands.detail, folder_id))['private_notes']
 
 
 class FolderRemindersSessionTests(_FolderRemindersPage, unittest.TestCase):

@@ -338,16 +338,6 @@
             "title": "Thumbnail Cache Misses",
             "type": "integer"
           },
-          "pdf_file_stat_rows": {
-            "minimum": 0,
-            "title": "Pdf File Stat Rows",
-            "type": "integer"
-          },
-          "pdf_file_stat_files": {
-            "minimum": 0,
-            "title": "Pdf File Stat Files",
-            "type": "integer"
-          },
           "db_read": {
             "minimum": 0,
             "title": "Db Read",
@@ -362,8 +352,6 @@
         "required": [
           "thumbnail_cache_hits",
           "thumbnail_cache_misses",
-          "pdf_file_stat_rows",
-          "pdf_file_stat_files",
           "db_read",
           "db_write"
         ],

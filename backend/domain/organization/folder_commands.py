@@ -24,7 +24,6 @@ from backend.domain.identity.library_scope import LibraryScope, library_command,
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import folders, links
 from backend.domain.works import projection, queries
-from backend.domain.works.rules import finish_work_summary_rows
 from backend.domain.entity_ids import generate
 
 T = TypeVar("T")
@@ -59,14 +58,8 @@ def catalog(db: Database, ctx: RequestContext) -> list[dict[str, Any]]:
     return library_query(db, ctx, folders.catalog)
 
 
-def detail(db: Database, ctx: RequestContext, folder_id: str,
-           pdfs_dir: Optional[str]) -> Optional[dict[str, Any]]:
-    """One Folder with its children, parent, Works and Tags, or ``None``.
-
-    The Works' file sizes are read from ``pdfs_dir`` after the snapshot, as
-    every Work summary's are; a Library without a data root (``None``) can
-    still answer that one is missing.
-    """
+def detail(db: Database, ctx: RequestContext, folder_id: str) -> Optional[dict[str, Any]]:
+    """One Folder with its children, parent, Works and Tags, or ``None``."""
 
     def read(scope: LibraryScope) -> Optional[dict[str, Any]]:
         folder = folders.folder_row(scope, folder_id)
@@ -79,12 +72,7 @@ def detail(db: Database, ctx: RequestContext, folder_id: str,
         folder["tags"] = links.tags_of(scope, links.FOLDER, folder_id)
         return folder
 
-    found = library_query(db, ctx, read)
-    if found is not None:
-        if pdfs_dir is None:
-            raise RuntimeError("this PostgreSQL library has no data root")
-        finish_work_summary_rows(found["works"], pdfs_dir)
-    return found
+    return library_query(db, ctx, read)
 
 
 def member_work_ids(db: Database, ctx: RequestContext, folder_id: str) -> list[str]:

@@ -180,7 +180,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         and duplicating it into a second projection would double what every
         read costs -- so the projection is the wrong place to ask."""
         from backend.domain.works import work_commands
-        return require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work_id))[field]
+        return require(self.db_for(server).run(work_commands.detail, work_id))[field]
 
     def record_paths(self, page):
         seen = []
@@ -1277,7 +1277,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.assertEqual(self.server_fields(server, work)['author_text'], {'revision': 1},
                          'the projection carries the revision alone')
         self.assertEqual(
-            require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], big,
+            require(self.db_for(server).run(work_commands.detail, work))['author_text'], big,
             'while the Work record has the whole value')
         ledger = self.ledger(server)[0]['result_json']
         self.assertNotIn(big, ledger, 'the ledger never became a second copy of it')
@@ -1323,7 +1323,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['author_text'], 'D' * (8 * 1024))
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['author_text'], 'D' * (8 * 1024))
 
     def test_a_conflict_the_browser_could_not_store_still_reaches_the_user(self):
         """The 2I.2 regression, end to end. The server's answer used to be
@@ -1377,7 +1377,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         self.field(page, 'title', 'A Durable Rename')
         page.locator('#save-work-identity-btn').click()
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], 'A Durable Rename')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['title'], 'A Durable Rename')
         self.assertEqual(self.server_fields(server, work)['title'], {'revision': 1})
 
     def pick_doc_type(self, page, value):
@@ -1411,7 +1411,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
         from backend.domain.works import work_commands
         server, page, context = self.start()
         work = server.ids['work_a']
-        before = require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type']
+        before = require(self.db_for(server).run(work_commands.detail, work))['doc_type']
         self.assertNotEqual(before, 'phdthesis')
         # Types reads the browse catalog, so that catalog has to be cached
         # before the network goes away or there is nothing to group at all.
@@ -1427,12 +1427,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                       'the pending type decides where the Work is filed')
         self.assertNotIn(work, self.type_group_ids(page, before),
                          'and it has left the group it was filed under')
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type'], before,
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['doc_type'], before,
                          'while the server still holds the old one')
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['doc_type'], 'phdthesis')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['doc_type'], 'phdthesis')
         self.assertIn(work, self.type_group_ids(page, 'phdthesis'),
                       'and the acknowledged type keeps it there')
 
@@ -1476,7 +1476,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], renamed)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['title'], renamed)
         self.assertEqual(
             self.cached_list_field(page, 'works-browse:index', work, 'title'), renamed,
             'the acknowledgement patches the cached row rather than dropping the catalog')
@@ -1506,12 +1506,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             }"""),
             provenance,
             'the link goes where the pending value says, not where the cache does')
-        self.assertFalse(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['source_url'],
+        self.assertFalse(require(self.db_for(server).run(work_commands.detail, work))['source_url'],
                          'and the server still holds the old provenance')
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['source_url'], provenance)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['source_url'], provenance)
         self.assertEqual(self.server_fields(server, work)['source_url'], {'revision': 1},
                          'a byte-limited field carries its revision alone')
 
@@ -1593,7 +1593,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         self.reconnect(page, context)
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 5)
         self.assertEqual(self.server_fields(server, work)['thumb_page'],
                          {'value': '5', 'revision': 2},
                          'metadata-state keeps the wire form; the Work record is typed')
@@ -1647,14 +1647,14 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             src = self.thumb_src(page, work)
             self.assertIn('page=1', src, 'a pending clear means page 1, immediately')
             self.assertNotIn('page=5', src, 'not the page the server still stores')
-            self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5,
+            self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 5,
                              'and the server has not been told anything yet')
             self.assertTrue(blocked, 'the gate actually held a send')
         finally:
             page.unroute('**/api/sync/operations', hold)
 
         self.pending(page, 0)
-        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'])
+        self.assertIsNone(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'])
         self.navigate(page, self.PROGRESS)
         page.wait_for_selector('[data-work-id="%s"]' % work)
         self.assertIn('page=1', self.thumb_src(page, work),
@@ -1686,12 +1686,12 @@ class OfflineWorkMetadataTests(unittest.TestCase):
             self.navigate(page, self.PROGRESS)
             page.wait_for_selector('[data-work-id="%s"]' % work)
             self.assertIn('page=5', self.thumb_src(page, work))
-            self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 2,
+            self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 2,
                              'the column still says 2')
         finally:
             page.unroute('**/api/sync/operations', hold)
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 5)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 5)
 
     def test_a_cached_card_makes_no_thumbnail_request_for_a_pending_page(self):
         """Offline suppression is absolute and decided before any URL exists.
@@ -1751,7 +1751,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
                 self.assertEqual(
                     page.locator('[data-prks-work-field="thumb_page"]').input_value(), bad,
                     'the draft is preserved')
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 3,
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 3,
                          'and the stored page is untouched')
 
     def test_a_thumb_page_conflict_uses_the_existing_field_level_ux(self):
@@ -1778,7 +1778,7 @@ class OfflineWorkMetadataTests(unittest.TestCase):
 
         page.get_by_role('button', name='Apply my value', exact=True).click()
         self.pending(page, 0)
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['thumb_page'], 7)
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['thumb_page'], 7)
 
     def test_recently_added_filters_on_the_pending_author_text(self):
         """That filter indexes the RAW field, which is deliberately not the
