@@ -13,6 +13,7 @@ from typing import Annotated, Any, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.api_contract.boundary import omittable
+from backend.domain.works.rules import PRKS_BULK_WORK_MAX
 
 _FORBID = ConfigDict(extra="forbid")
 # A request names the fields it changes; the routes ignore keys they do not know.
@@ -402,8 +403,8 @@ class WorkStatus(BaseModel):
 class _BulkWorks(BaseModel):
     model_config = _IGNORE
 
-    work_ids: list[str] = Field(min_length=1, max_length=500, description=(
-        "1 to 500 entries; the limit counts repeats, which then count once."))
+    work_ids: list[str] = Field(min_length=1, max_length=PRKS_BULK_WORK_MAX, description=(
+        f"1 to {PRKS_BULK_WORK_MAX} entries; the limit counts repeats, which then count once."))
 
 
 class BulkSetStatus(_BulkWorks):
@@ -419,12 +420,12 @@ class BulkMoveFolder(_BulkWorks):
 
 class BulkTags(_BulkWorks):
     action: Literal["add_tags", "remove_tags"]
-    tag_ids: list[str] = Field(min_length=1, max_length=500, description=(
-        "The Tags to add or remove: 1 to 500 entries; the limit counts repeats."))
+    tag_ids: list[str] = Field(min_length=1, max_length=PRKS_BULK_WORK_MAX, description=(
+        f"The Tags to add or remove: 1 to {PRKS_BULK_WORK_MAX} entries; the limit counts repeats."))
 
 
 BulkWorkRequest = Annotated[Union[BulkSetStatus, BulkMoveFolder, BulkTags], Field(discriminator="action")]
-"""``POST /api/works/bulk``: one action on up to 500 Works, all or nothing; ``action`` picks the fields."""
+"""``POST /api/works/bulk``: one action on up to ``PRKS_BULK_WORK_MAX`` (500) Works, all or nothing; ``action`` picks the fields."""
 
 
 class BulkWorkResult(BaseModel):
