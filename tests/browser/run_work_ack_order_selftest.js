@@ -480,6 +480,38 @@ async function mountedSourceCorrectiveRead() {
         assert.equal(ctx.entity.text_content, 'note', 'only the source columns move');
         listeners.length = 0;
     }
+    /* The same corrective read through the real runtime: each answer passes
+     * its own validator, and the Work it re-reads lands in the offline cache
+     * (the tab keeps its own copy). */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test',
+            indexedDB: createFakeIndexedDBFactory() });
+        const served = { '/api/works/W/source-state': stateOf(2, 'CCC'),
+            '/api/works/W': { id: 'W', title: 'Server title', ...video('CCC') } };
+        const paths = [];
+        const runtime = createPrksOfflineRuntime({ store: cache, window: null,
+            prksRequest: async path => {
+                paths.push(path);
+                return { ok: true, status: 200, json: async () => served[path] };
+            } });
+        globalThis.prksOfflineReadEntity = runtime.readThroughEntity;
+        const op = createdNow();
+        await later();
+        ctx.entity = core.observe({ ...ctx.entity, ...video('BBB') }, Date.now());
+        listeners.forEach(fn => fn({ operation: 'SET_WORK_SOURCE', acknowledged: ackAAA, op }));
+        for (let i = 0; i < 20 && paths.length < 2; i += 1) await flush();
+        await flush(); await flush();
+        assert.deepEqual(paths, ['/api/works/W/source-state', '/api/works/W']);
+        assert.deepEqual(state.observed, { revision: 2, identity: identity('CCC') });
+        const cachedWork = await cache.getEntity('work', 'W');
+        assert.ok(cachedWork, 'the re-read Work is cached');
+        assert.equal(cachedWork.value.provider_id, 'CCC', 'with the server source');
+        assert.equal(cachedWork.value.title, 'Server title');
+        assert.equal((await cache.getEntity('work-source-state', 'W')).value.revision, 2);
+        assert.equal(ctx.entity.title, 'Clip', 'the tab keeps its own Work beyond the source');
+        listeners.length = 0;
+    }
     /* Cold-parked while the read is in flight: nothing is adopted. */
     {
         const { ctx, state } = await mounted('ZZZ');
@@ -569,8 +601,46 @@ async function mountedSourceCorrectiveRead() {
             assert.equal(ctx.entity.provider_id, BBB, 'the queued video stays on screen');
             assert.deepEqual(state.observed, { revision: 1, identity: identity('AAA') },
                 'measured against the acknowledged pair');
+            /* Cancelling the replacement by saving the server's video, then
+             * choosing it again in the same editor, queues it again: the
+             * second Save is measured against the base and the queue, not
+             * against the replacement still held in the tab's Work. */
+            let rows = [{ op_id: 'op-b', operation: 'SET_WORK_SOURCE', entity_type: 'work',
+                entity_id: 'W', status: 'pending', attempt_count: 0,
+                payload: { source: { kind: 'video', url: WATCH(BBB) } } }];
+            const saves = [];
+            globalThis.prksRefreshPendingWorkSources = async () => {
+                globalThis.prksSetPendingWorkSources(rows);
+                return rows;
+            };
+            globalThis.prksSync.changed = () => {};
+            globalThis.prksSync.store = {
+                saveWorkSource: async (_workId, source, observed) => {
+                    saves.push(source.url);
+                    rows = source.identity === observed.identity ? [] : [{ op_id: 'op-' + saves.length,
+                        operation: 'SET_WORK_SOURCE', entity_type: 'work', entity_id: 'W',
+                        status: 'pending', attempt_count: 0,
+                        payload: { source: { kind: 'video', url: source.url } } }];
+                },
+            };
+            globalThis.prksGetFocusedTabContext = () => ctx;
+            globalThis.document = { activeElement: null, getElementById: () => null };
+            ctx.ui = { workMetaDraft: { source_url: WATCH('AAA') } };
+            await globalThis.prksSaveWorkSource('W');
+            assert.deepEqual(rows, [], 'saving the server video cancels the replacement');
+            assert.equal(ctx.entity.provider_id, 'AAA', 'and the tab shows the server video again');
+            ctx.ui.workMetaDraft.source_url = WATCH(BBB);
+            await globalThis.prksSaveWorkSource('W');
+            assert.deepEqual(saves, [WATCH('AAA'), WATCH(BBB)], 'choosing the replacement again is saved');
+            assert.equal(rows.length, 1, 'and queued again');
+            assert.equal(rows[0].payload.source.url, WATCH(BBB));
+            assert.equal(ctx.entity.provider_id, BBB, 'the tab shows the queued video');
         } finally {
             globalThis.prksSetPendingWorkSources([]);
+            globalThis.prksRefreshPendingWorkSources = async () => [];
+            delete globalThis.prksGetFocusedTabContext;
+            delete globalThis.document;
+            delete globalThis.prksSync.store;
         }
         listeners.length = 0;
     }
