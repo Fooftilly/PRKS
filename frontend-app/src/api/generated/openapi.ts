@@ -3873,7 +3873,15 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            503: components["responses"]["Unavailable"];
+            /** @description The Library is unavailable, or in maintenance when an editor's miss saves the copy (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
         };
     };
     listSavedViews: {
