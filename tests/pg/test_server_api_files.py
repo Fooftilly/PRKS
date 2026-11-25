@@ -338,6 +338,14 @@ class ManagedPdfTests(ManagedPdfTestCase):
         current = self.get(new["file_path"])
         self.assertEqual(current.status, 200)
         self.assertEqual(hashlib.sha256(current.raw).hexdigest()[:16], new["file_path"][-16:])
+        # Nor does a create adopt B's bytes through A's URL.
+        body = self.refused(self.send("POST", "/api/works", {"title": "Stale adopt", "file_path": old_url}), 400)
+        self.assertEqual(body.get("error"), "file_path is not a managed PDF")
+        self.assertNotIn("Stale adopt", self.titles())
+        created = self.ok(self.send("POST", "/api/works", {"title": "Current adopt", "file_path": new["file_path"]}))
+        adopted = self.ok(self.get(f"/api/works/{created['id']}"))
+        self.assertEqual(adopted["file_path"][-16:], new["file_path"][-16:], "the same bytes, so the same version")
+        self.assertEqual(hashlib.sha256(self.get(adopted["file_path"]).raw).hexdigest()[:16], new["file_path"][-16:])
 
     def test_an_unknown_work_is_404_and_a_search_is_a_list(self) -> None:
         self.assertEqual(self.get("/api/works/W-00000000-NOTFOUND").status, 404)

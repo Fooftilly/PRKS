@@ -12,14 +12,14 @@ newer bytes under the older URL.
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Optional, Tuple
 from urllib.parse import quote
 
 PREFIX = "/api/assets/"
 SUFFIX = "/content"
 VERSION_CHARS = 16
 
-_URL = re.compile(r"^/api/assets/(AS-[0-9A-Za-z-]+)/content(?:\?v=[0-9a-f]{1,64})?$")
+_URL = re.compile(r"^/api/assets/(AS-[0-9A-Za-z-]+)/content(?:\?v=([0-9a-f]{1,64}))?$")
 
 
 def asset_content_url(asset_id: str, sha256: Optional[str]) -> str:
@@ -35,9 +35,18 @@ def is_current_version(version: Optional[str], sha256: Optional[str]) -> bool:
     return bool(sha256) and version == str(sha256)[:VERSION_CHARS]
 
 
-def asset_id_from_url(url: object) -> Optional[str]:
-    """The Asset id a content URL names; ``None`` for any other spelling."""
+def parse_content_url(url: object) -> Optional[Tuple[str, Optional[str]]]:
+    """The Asset id and the version (``None`` when unversioned) a content URL names.
+
+    ``None`` for any other spelling.
+    """
     if not isinstance(url, str):
         return None
     found = _URL.match(url)
-    return found.group(1) if found else None
+    return (found.group(1), found.group(2)) if found else None
+
+
+def asset_id_from_url(url: object) -> Optional[str]:
+    """The Asset id a content URL names; ``None`` for any other spelling."""
+    parsed = parse_content_url(url)
+    return parsed[0] if parsed else None

@@ -6,7 +6,7 @@ and a Work's bytes are addressed by its Asset id, never by that name.
 
 import unittest
 
-from backend.domain.objects.content_url import asset_content_url, asset_id_from_url, is_current_version
+from backend.domain.objects.content_url import asset_content_url, asset_id_from_url, is_current_version, parse_content_url
 from backend.pdf.managed_pdf_names import bound_managed_pdf_basename, mint_managed_pdf_filename
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 
@@ -48,6 +48,8 @@ class ContentUrlTests(unittest.TestCase):
         self.assertEqual(url, f"/api/assets/{_ASSET}/content?v={_SHA[:16]}")
         self.assertEqual(asset_id_from_url(url), _ASSET)
         self.assertEqual(asset_id_from_url(asset_content_url(_ASSET, None)), _ASSET)
+        self.assertEqual(parse_content_url(url), (_ASSET, _SHA[:16]))
+        self.assertEqual(parse_content_url(asset_content_url(_ASSET, None)), (_ASSET, None))
 
     def test_other_spellings_name_no_asset(self):
         for url in ("", None, "/api/pdfs/paper.pdf", f"/api/assets/{_ASSET}", f"/api/assets/{_ASSET}/content/",

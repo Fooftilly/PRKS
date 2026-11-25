@@ -34,7 +34,7 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
-from backend.domain.objects.content_url import asset_id_from_url
+from backend.domain.objects.content_url import parse_content_url
 from backend.domain.works import source_rules
 from backend.api.common import objects, revalidated, text_field
 from backend.domain.people.errors import MissingPersonError
@@ -210,9 +210,11 @@ def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]],
     stored_key = ""
     if upload is None and file_path:
         # Adopting a file is sharing the bytes of an Asset of this Library,
-        # named by its content URL (#1427); nothing else names a file.
-        asset_id = asset_id_from_url(file_path)
-        stored_key = (work_commands.asset_object(*req.actor, asset_id) if asset_id else None) or ""
+        # named by its content URL (#1427); nothing else names a file. A
+        # versioned URL adopts only the bytes it names: an earlier version is
+        # refused, never resolved to a replacement's bytes.
+        reference = parse_content_url(file_path)
+        stored_key = (work_commands.asset_object(*req.actor, *reference) if reference else None) or ""
         if not stored_key:
             raise ValueError("file_path is not a managed PDF")
     return work_commands.create(*req.actor, objects(req),
