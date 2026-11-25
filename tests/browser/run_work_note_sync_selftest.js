@@ -540,6 +540,42 @@ async function busyNoteHarness(tabId, options) {
     return h;
 }
 
+/* A corrective body adopted into a clean editor (#1450 review): the tab's
+ * clean committed session for the old text gives way, so a remount reads the
+ * new body; a session with typing keeps the editor's base. */
+async function adoptedBodyRetiresTheCleanSession() {
+    {
+        const h = await busyNoteHarness('adopt-clean');
+        const entry = h.session();
+        assert.equal(entry.state, 'committed');
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'other'), false,
+            'a session holding other text is kept');
+        assert.equal(h.session(), entry);
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'A'), true,
+            'the clean session for the shown text gives way');
+        assert.equal(h.session(), null, 'and is no longer the tab session');
+        /* Once A is acknowledged (no pending overlay), a remount reads B. */
+        const pending = globalThis.prksPendingWorkNoteText;
+        globalThis.prksPendingWorkNoteText = (_id, _kind, server) => server;
+        try {
+            assert.equal(globalThis.prksResearchNotesTextForWork('W-1', 'B', h.ctx), 'B',
+                'a remount does not bring the old text back');
+        } finally {
+            globalThis.prksPendingWorkNoteText = pending;
+        }
+        h.done();
+    }
+    {
+        const h = await busyNoteHarness('adopt-typing');
+        h.type('A B');
+        const entry = h.session();
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'A B'), false,
+            'a session with typing keeps its base');
+        assert.equal(h.session(), entry);
+        h.done();
+    }
+}
+
 async function scopeBusyBodyRetriesAfterBlockingSaveSettles() {
     const h = await busyNoteHarness('busy-retry');
     await h.blockB();
@@ -1329,6 +1365,7 @@ async function main() {
     await mutationTestAtoBtoA();
     await durableSaveThroughObservedBaseCancels();
     await enqueuePathAtoBtoACancels();
+    await adoptedBodyRetiresTheCleanSession();
     await scopeBusyBodyRetriesAfterBlockingSaveSettles();
     await ackOfOlderBodyNeverPaintsSaved();
     await leaveFlushSendsBlockedBodyWithoutTimer();
