@@ -2761,8 +2761,7 @@
             if (plan === 'unproven') {
                 /* The in-memory block ends with the page; a record that could
                  * not be dropped keeps the operation queued. */
-                markEntityChanged(kind, id);
-                return await invalidateEntity(kind, id) !== false;
+                return dropUnprovenEntity(kind, id);
             }
             if (plan !== 'apply') return true;
             const next = mutate(value);
