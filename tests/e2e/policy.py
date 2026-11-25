@@ -1626,7 +1626,7 @@ PACKAGED_FULL_PATHS = (
     "Dockerfile",
     "scripts/build_classic_distribution.py",
     "scripts/e2e_classic_sw_transitions.py",
-    "scripts/benchmark_classic_script_bundle.py",
+    "scripts/classic_script_bundle.py",
     "tests/e2e/test_classic_sw_transitions.py",
     "tests/test_classic_distribution.py",
     "tests/test_e2e_classic_sw_transitions.py",
