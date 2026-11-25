@@ -583,6 +583,50 @@ async function mountedSourceCorrectiveRead() {
         assert.deepEqual(accepted, [], 'the unsaved draft is not overwritten');
         assert.equal(state.observed.revision, 1, 'and keeps the ACK revision, as a focused field does');
         assert.equal(state.observed.identity, identity('CCC'));
+        /* Returning to the pane prepares the editor again. The Work already
+         * shows CCC, so nothing differs, but the draft still belongs to
+         * revision 1: its Save must conflict, not replace CCC unseen. */
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        assert.equal(ctx.entity.provider_id, 'CCC');
+        assert.equal(state.observed.revision, 1, 'a second prepare keeps the draft on its revision');
+        /* Without the draft the same prepare takes the server's revision. */
+        ctx.ui.workMetaDraft.source_url = WATCH('ZZZ');
+        globalThis.prksMountWorkSourceEditor(ctx, 'W', { editing: true });
+        await state.preparing;
+        assert.equal(state.observed.revision, 2, 'a clean editor takes the newer revision');
+        listeners.length = 0;
+    }
+    /* "Use server" on a conflict is the user's explicit choice: it replaces
+     * an unsaved draft and editing resumes on the server's source. */
+    {
+        const { ctx, state } = await mounted('ZZZ');
+        globalThis.prksOfflineReadEntity = answer(serverState(2, 'DDD'));
+        globalThis.prksRightPanelOwnedBy = () => true;
+        globalThis.prksOwnerTabIsFocused = () => true;
+        globalThis.prksGetFocusedTabContext = () => ctx;
+        globalThis.prksOfflineMarkEntityChanged = () => {};
+        const resolved = [];
+        globalThis.prksSync.store = { resolveConflict: async (opId, apply) => { resolved.push([opId, apply]); } };
+        globalThis.prksSync.changed = () => {};
+        const accepted = [];
+        globalThis.prksVueWorkMetadataEditorOwns = () => true;
+        globalThis.prksVueAcceptWorkMetadataField = (_ctx, field, value) => accepted.push([field, value]);
+        globalThis.document = { activeElement: null, getElementById: () => null };
+        ctx.ui = { workMetaDraftWorkId: 'W', workMetaDraft: { source_url: WATCH('CCC') },
+            workMetaBaseline: { source_url: WATCH('ZZZ') } };
+        const conflict = { op_id: 'op-1', status: 'conflict', entity_id: 'W' };
+        state.operations = [conflict];
+        await globalThis.prksResolveWorkSourceConflict('op-1', false);
+        delete globalThis.document;
+        delete globalThis.prksVueWorkMetadataEditorOwns;
+        delete globalThis.prksVueAcceptWorkMetadataField;
+        delete globalThis.prksGetFocusedTabContext;
+        globalThis.prksRightPanelOwnedBy = () => false;
+        globalThis.prksOwnerTabIsFocused = () => false;
+        assert.deepEqual(resolved, [['op-1', false]]);
+        assert.deepEqual(accepted, [['source_url', WATCH('DDD')]], 'the server source replaces the draft');
+        assert.deepEqual(state.observed, { revision: 2, identity: identity('DDD') }, 'editing resumes');
         listeners.length = 0;
     }
     /* Reopened offline: the cached Work may be older or newer than the
