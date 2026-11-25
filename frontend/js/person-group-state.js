@@ -675,7 +675,8 @@
                 case 'ACKNOWLEDGED':
                     return typeof data.changed === 'boolean' &&
                         typeof data.present === 'boolean' &&
-                        Number.isSafeInteger(data.server_revision);
+                        Number.isSafeInteger(data.server_revision) &&
+                        typeof data.group_name === 'string';
                 case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
                     return Number.isSafeInteger(data.current_revision) &&
                         typeof data.current_present === 'boolean';

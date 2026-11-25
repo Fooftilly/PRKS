@@ -584,9 +584,10 @@ class AnswerTests(WorksAnswerTestCase):
         # The revision and the source it belongs to, from one snapshot.
         plain_state = work_commands.source_state(self.db, self.ctx, plain)
         assert isinstance(plain_state, dict)
-        self.assertEqual({key: plain_state[key] for key in ("revision", "source_kind", "provider", "provider_id",
-                                                            "source_url")},
-                         {"revision": 0, "source_kind": "", "provider": "", "provider_id": "", "source_url": ""})
+        self.assertEqual({key: plain_state[key] for key in ("work_id", "revision", "source_kind", "provider",
+                                                            "provider_id", "source_url")},
+                         {"work_id": plain, "revision": 0, "source_kind": "", "provider": "", "provider_id": "",
+                          "source_url": ""})
         video_state = work_commands.source_state(self.db, self.ctx, video)
         assert isinstance(video_state, dict)
         self.assertEqual({key: video_state[key] for key in ("work_id", "revision", "source_kind", "provider",

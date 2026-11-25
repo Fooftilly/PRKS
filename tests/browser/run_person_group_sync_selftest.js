@@ -62,7 +62,7 @@ function fieldAck(op, revision) {
 function memberAck(op, revision) {
     return { code: "ACKNOWLEDGED", group_id: op.entity_id, person_id: op.payload.person_id,
         changed: true, present: op.operation === "ADD_PERSON_GROUP_MEMBER",
-        server_revision: revision };
+        server_revision: revision, group_name: "Group" };
 }
 function personAck(op) {
     return { code: "ACKNOWLEDGED", person_id: op.entity_id, changed: true,
