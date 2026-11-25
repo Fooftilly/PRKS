@@ -491,8 +491,13 @@
             (work.tags || []).find(t => t.id === tagId) ||
             (state.catalog || []).find(t => t.id === tagId);
         if (!base.present || tag) {
-            applyWorkTagEntityAck(ctx, { work_id: state.workId, tag_id: tagId, present: base.present,
-                server_revision: base.revision, tag }, op);
+            /* The mounted editor's own adoption: a corrective re-read that
+             * replaces the links also refreshes the options it measures edits
+             * against, under the same consistency checks as acceptAck. */
+            const ack = { work_id: state.workId, tag_id: tagId, present: base.present,
+                server_revision: base.revision, tag };
+            applyWorkTagAck(ctx, ack, op, state.options ? base.revision : null,
+                () => refreshOptions(ctx, state));
         }
         return base;
     }

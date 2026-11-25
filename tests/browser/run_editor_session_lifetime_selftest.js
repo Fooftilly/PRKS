@@ -782,6 +782,78 @@ async function tagAckRefreshRejectsInconsistentOptions() {
     }
 }
 
+/* #1088 review: a change settled in ANOTHER tab reaches this editor through
+ * paint, not an ACK. When its corrective Work re-read contradicts the settled
+ * base (another device removed the Tag after the ADD landed), the options are
+ * refreshed too, so the next inverse edit is measured against the newer base
+ * instead of coalescing away against the stale one. */
+async function crossTabSettlementRefreshesOptions() {
+    prksDestroyAllTabContexts();
+    hosts();
+    const core = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
+    const workId = 'work-tag-cross-tab';
+    const ctx = mountTab('tag-cross-tab');
+    const created = Date.now() - 1000;
+    const tag = { id: 'tag-1', name: 'Alpha' };
+    const op = {
+        op_id: 'op-cross-tab', entity_type: 'work', entity_id: workId, operation: 'ADD_WORK_TAG',
+        payload: { tag_id: 'tag-1' }, status: 'syncing', attempt_count: 1, base_revision: 0,
+        created_at: new Date(created).toISOString(), local_context: { tag: tag },
+    };
+    const work = showWork(ctx, workId);
+    // Read after the ADD was created: nothing proves it older than the ACK.
+    ctx.setEntity('work', core.observe({ ...work, tags: [] }, Date.now()));
+    own(ctx);
+    const previousOptions = global.prksReadWorkTagOptions;
+    const previousRead = global.prksOfflineReadEntity;
+    const previousList = prksSync.store.listOperations;
+    const previousBase = global.prksWorkTagBase;
+    // The real base read (work-tag-state.js): this path measures revisions.
+    global.prksWorkTagBase = function (options, tagId) {
+        const row = options.assigned.find(t => t.tag_id === tagId);
+        return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
+    };
+    let phase = 'before';
+    global.prksReadWorkTagOptions = async function (_id, options) {
+        const refreshed = !!(options && options.requestPolicy && options.requestPolicy.dedupe === false);
+        if (refreshed) return { value: { assigned: [], known_absent: { 'tag-1': 2 } }, source: 'server' };
+        if (phase === 'before') return { value: { assigned: [], known_absent: {} }, source: 'server' };
+        return { value: { assigned: [{ tag_id: 'tag-1', relation_revision: 1 }], known_absent: {} }, source: 'server' };
+    };
+    global.prksOfflineReadEntity = async function (kind, id) {
+        if (kind !== 'work') return previousRead(kind, id);
+        return { source: 'server', value: core.observe({ id: id, tags: [] }, Date.now()) };
+    };
+    prksSync.store.listOperations = async function () { return phase === 'before' ? [op] : []; };
+    ctx.ui.workDetailsMode = 'tags';
+    try {
+        prksMountWorkTags(ctx, workId);
+        await flush();
+        const state = ctx.getResource('workTagEditor');
+        assertEq('the in-flight ADD is held', state.operations.length, 1);
+        phase = 'settled';
+        emitLive({});
+        await flush();
+        assertEq('the corrective re-read keeps the Tag removed', ctx.getEntity('work').tags.length, 0);
+        const base = state.options && global.prksWorkTagBase(state.options, 'tag-1');
+        assert('the options are refreshed past the settled base',
+            !!base && base.present === false && base.revision === 2);
+        assertEq('the refresh settles', state.refreshing, false);
+        // The inverse edit (Add again) is measured against the removal at 2.
+        const writes = tagWrites.length;
+        await prksWorkTagEdit(ctx, 'tag-1', true, tag);
+        const write = tagWrites[writes];
+        assert('the inverse edit is recorded, not coalesced away', !!write);
+        assertEq('the inverse edit is measured against the newer base',
+            write && write.slice(2, 5).join(','), 'true,false,2');
+    } finally {
+        global.prksReadWorkTagOptions = previousOptions;
+        global.prksOfflineReadEntity = previousRead;
+        prksSync.store.listOperations = previousList;
+        global.prksWorkTagBase = previousBase;
+    }
+}
+
 async function main() {
     processListenerMark = listeners.slice();
     function editorLive() {
@@ -1208,6 +1280,7 @@ async function main() {
 
     await tagAckReReadRefreshesOptions();
     await tagAckRefreshRejectsInconsistentOptions();
+    await crossTabSettlementRefreshesOptions();
     console.log(passed + ' checks passed, ' + failed + ' failed');
     if (failed) process.exit(1);
 }
