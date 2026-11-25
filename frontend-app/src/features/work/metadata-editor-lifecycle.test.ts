@@ -1,5 +1,5 @@
 import { nextTick } from 'vue'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
 import uiSource from '../../../../frontend/js/ui.js?raw'
@@ -552,11 +552,13 @@ describe('work metadata editor lifecycle', () => {
     panelWindow.prksMountWorkSourceEditor(ctx, 'work-a', { editing: true })
     const secondPrepare = state?.preparing
     if (!state || !firstPrepare || !secondPrepare) throw new Error('source read missing')
-    expect(reads.length).toBe(4)
+    // The revision is read first; the Work only after it answers.
+    expect(reads.length).toBe(2)
     const newerWork = work()
     newerWork.source_url = 'https://example.test/newer'
-    reads[2].resolve({ source: 'server', value: { ...newerWork, revision: 7 } })
-    reads[3].resolve({ source: 'server', value: newerWork })
+    reads[1].resolve({ source: 'server', value: { ...newerWork, revision: 7 } })
+    await vi.waitFor(() => expect(reads.length).toBe(3))
+    reads[2].resolve({ source: 'server', value: newerWork })
     await secondPrepare
     expect(state.observed).toEqual({ revision: 7, identity: 'https://example.test/newer' })
     const paintsAfterNewer = paints
