@@ -2340,7 +2340,7 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description A JSON object, ignored; may be left out. */
+        /** @description A JSON object, ignored; may be left out, but the request still sends Content-Type: application/json (else 415). */
         requestBody?: {
             content: {
                 "application/json": Record<string, never>;
