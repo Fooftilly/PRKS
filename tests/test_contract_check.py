@@ -12,6 +12,9 @@ from backend.web.http import Request, Response
 from tests.contract_check import ContractCheck
 
 _JOBS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/diagnostics/jobs")
+_CREATE_POSITION = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/positions")
+_IMPORT_ONE = next(r for r in ROUTES if r.method == "POST" and r.pattern.endswith("/import")
+                   and "{item_id}" in r.pattern)
 _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/openapi.json")
 
 
@@ -54,6 +57,14 @@ class ContractCheckTests(unittest.TestCase):
         answer = Response(404, [("Content-Type", "text/plain; charset=utf-8")], b"404 API endpoint not found\n")
         self.check.check(_JOBS, _request(), answer)
         self.assertEqual(self.check.violations, [])
+
+    def test_a_success_without_a_required_body_is_a_violation(self) -> None:
+        self.check.check(_CREATE_POSITION, _request(), _json(201, {}))
+        self.assertTrue(any("requires one" in v for v in self.check.violations), self.check.violations)
+
+    def test_a_success_without_an_optional_body_is_not(self) -> None:
+        self.check.check(_IMPORT_ONE, _request(), _json(201, {}))
+        self.assertFalse(any("request" in v for v in self.check.violations), self.check.violations)
 
 
 if __name__ == "__main__":

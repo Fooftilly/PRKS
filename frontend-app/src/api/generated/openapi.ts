@@ -3400,8 +3400,8 @@ export interface operations {
             };
             cookie?: never;
         };
-        /** @description A JSON object, ignored. Send `{}`. */
-        requestBody: {
+        /** @description A JSON object, ignored; may be left out. */
+        requestBody?: {
             content: {
                 "application/json": Record<string, never>;
             };

@@ -423,6 +423,6 @@ ROUTES = (
          404: _NOT_FOUND,
          409: _refusal("A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted "
                        "(IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING).")},
-        request=body({"type": "object"}, "A JSON object, ignored. Send `{}`."),
+        request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False),
         description="A retry of a finished import answers with the same Work and creates nothing.")),
 )

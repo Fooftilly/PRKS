@@ -519,9 +519,12 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         path = f"/api/processing-items/{item['id']}"
         for method, write_path in (("PATCH", path), ("POST", f"{path}/import"),
                                    ("POST", "/api/processing-items/import")):
+            # The single import reads no body, so its contract marks the body optional;
+            # the others require one. Every write still needs the JSON Content-Type.
+            optional = write_path == f"{path}/import"
             for raw in (None, b""):
                 with self.subTest(method=method, path=write_path, raw=raw):
-                    self.assertFalse(self.schema_accepts(method, write_path, None, raw=raw))
+                    self.assertEqual(self.schema_accepts(method, write_path, None, raw=raw), optional)
             with self.subTest(method=method, path=write_path, live=True):
                 res = self.call(method, write_path, cookies=self.cookies, epoch=self.library_epoch())
                 self.assertEqual(res.status, 415, res.raw)
