@@ -189,6 +189,17 @@ class LedgerTests(PeopleSyncTestCase):
                          [{"person_id": person_id, "role_type": "Author", "revision": 1, "present": True}])
         self.assertEqual(require(person_commands.metadata_state(self.db, self.ctx, person_id))["fields"]["aliases"]["revision"], 1)
 
+    def test_a_membership_acknowledgement_states_the_group_name(self) -> None:
+        """The chip a client patches comes from the ACK, not from a cache it may lack."""
+        person_id = self.create_person()
+        group_id = self.create_group("Readers")
+        self.send(self.group_field(group_id, "name", "Circle", 0))
+        status, result = self.send(self.member("ADD_PERSON_GROUP_MEMBER", group_id, person_id, 0))
+        self.assertEqual((status, result["code"], result["present"], result["group_name"]),
+                         (200, "ACKNOWLEDGED", True, "Circle"))
+        status, result = self.send(self.member("REMOVE_PERSON_GROUP_MEMBER", group_id, person_id, 1))
+        self.assertEqual((status, result["present"], result["group_name"]), (200, False, "Circle"))
+
     def test_nul_is_refused_before_the_ledger(self) -> None:
         person_id = self.create_person()
         group_id = self.create_group("Readers")
@@ -927,7 +938,7 @@ class AnswerTests(PeopleSyncTestCase):
 
     def test_person_group_members(self) -> None:
         group_id, ann = self.create_group("Readers"), self.create_person(last_name="Lee")
-        ack = {"code": "ACKNOWLEDGED", "group_id": group_id, "person_id": ann}
+        ack = {"code": "ACKNOWLEDGED", "group_id": group_id, "person_id": ann, "group_name": "Readers"}
         stale = {"group_id": group_id, "person_id": ann, "current_revision": 1, "current_present": True,
                  "requested_present": False}
         for operation, base, answer in (

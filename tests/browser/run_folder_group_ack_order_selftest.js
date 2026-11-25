@@ -137,7 +137,7 @@ async function groupField() {
 
 async function groupMembership() {
     const ack = (revision, present) => ({ code: 'ACKNOWLEDGED', group_id: 'G', person_id: 'P',
-        present, changed: true, server_revision: revision });
+        present, changed: true, server_revision: revision, group_name: 'G' });
     const person = { id: 'P', name: 'Ada', groups: [] };
     /* Revision-2 snapshot: removed, count 0. The revision-1 ADD ACK is late. */
     {
@@ -252,30 +252,26 @@ async function failuresAndReplays() {
         assert.equal((await cache.getList('person-groups:index')).observedAt, readAt,
             'a created Group does not make the catalogue newer');
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
-            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+            person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group' }, op));
         assert.equal(await cache.getList('person-groups:index'), null,
             'with no membership projection to remember the ACK, the count is dropped, not patched');
     }
-    /* A replay after the catalogue was dropped: the chip takes its name from
-     * the Group detail, or is not written at all. */
-    for (const named of [true, false]) {
+    /* The chip takes its name from the ACK: with no catalogue and no Group
+     * detail cached, the People index and the Person are patched, not
+     * dropped, and no chip is blank. */
+    {
         const { cache, offline } = setup();
         const person = { id: 'P', name: 'Ada', groups: [] };
         await cache.putList('people:index', [{ ...person }], '');
         await cache.putEntity('person', 'P', { ...person });
-        if (named) await cache.putEntity('person-group', 'G', { id: 'G', name: 'Group', members: [], member_count: 0 });
         await later();
         const op = createdNow();
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
-            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
-        if (named) {
-            assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Group' }],
-                'the chip is named from the Group detail');
-            assert.deepEqual((await cache.getList('people:index')).value[0].groups, [{ id: 'G', name: 'Group' }]);
-        } else {
-            assert.equal(await cache.getEntity('person', 'P'), null, 'no blank chip: the Person is dropped');
-            assert.equal(await cache.getList('people:index'), null, 'and so is the People index');
-        }
+            person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group' }, op));
+        assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Group' }],
+            'the chip is named from the ACK');
+        assert.deepEqual((await cache.getList('people:index')).value[0].groups, [{ id: 'G', name: 'Group' }],
+            'and the People index is patched, not dropped');
     }
     /* A People GET started before the ACK cannot republish its older rows. */
     {
@@ -292,7 +288,29 @@ async function failuresAndReplays() {
         await later();
         const op = createdNow();
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
-            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+            person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group' }, op));
+        release();
+        await reading;
+        await later(); await later();
+        assert.deepEqual((await cache.getList('people:index')).value[0].groups, [{ id: 'G', name: 'Group' }],
+            'the older People read is not published over the patched rows');
+    }
+    /* With no People index cached, the fence still moves: a GET started
+     * before the ACK does not publish rows without the membership. */
+    {
+        const { cache } = setup();
+        let release;
+        const gate = new Promise(resolve => { release = resolve; });
+        const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
+            await gate;
+            return { ok: true, status: 200, json: async () => [{ id: 'P', name: 'Ada', groups: [] }] };
+        } });
+        const reading = offline.readThroughList('people:index', '/api/people',
+            { domain: 'people', validate: Array.isArray });
+        await later();
+        const op = createdNow();
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group' }, op));
         release();
         await reading;
         await later(); await later();
@@ -311,14 +329,14 @@ async function failuresAndReplays() {
         await later();
         const op = createdNow();
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
-            person_id: 'P', present: true, changed: true, server_revision: 1 }, op));
+            person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group' }, op));
         release();
         await reading;
         await later(); await later();
         assert.equal(await cache.getEntity('person', 'P'), null, 'the older Person read is not published');
     }
     /* The replay after a first attempt dropped the catalogue and then failed
-     * to write the Person: the chip is named from the Group detail. */
+     * to write the Person: the chip is still named from the ACK. */
     {
         const { cache, offline } = setup();
         const person = { id: 'P', name: 'Ada', groups: [] };
@@ -334,13 +352,13 @@ async function failuresAndReplays() {
             return putEntity(kind, ...rest);
         };
         const ackOf = { code: 'ACKNOWLEDGED', group_id: 'G', person_id: 'P', present: true, changed: true,
-            server_revision: 1 };
+            server_revision: 1, group_name: 'Group' };
         assert.equal(await offline.reconcilePersonGroupMember(ackOf, op), false, 'the Person write failed');
         assert.equal(await cache.getList('person-groups:index'), null, 'after the catalogue was dropped');
         cache.putEntity = putEntity;
         assert(await offline.reconcilePersonGroupMember(ackOf, op), 'the replay retires');
         assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Group' }],
-            'the replayed chip is named from the Group detail');
+            'the replayed chip is named from the ACK');
     }
 }
 
