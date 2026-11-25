@@ -2161,6 +2161,15 @@ export interface components {
                 "application/json": components["schemas"]["ApiErrorEnvelope"];
             };
         };
+        /** @description The body is not one JSON object, or not JSON (invalid_request). */
+        InvalidRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ApiErrorEnvelope"];
+            };
+        };
         /** @description No live session (not_authenticated). */
         NotAuthenticated: {
             headers: {
@@ -2290,6 +2299,7 @@ export type ResponseBadRequest = components['responses']['BadRequest'];
 export type ResponseEpochChanged = components['responses']['EpochChanged'];
 export type ResponseEpochRequired = components['responses']['EpochRequired'];
 export type ResponseForbidden = components['responses']['Forbidden'];
+export type ResponseInvalidRequest = components['responses']['InvalidRequest'];
 export type ResponseNotAuthenticated = components['responses']['NotAuthenticated'];
 export type ResponseRequestTooLarge = components['responses']['RequestTooLarge'];
 export type ResponseUnavailable = components['responses']['Unavailable'];
@@ -2684,10 +2694,9 @@ export interface operations {
                     "application/json": components["schemas"]["ClientErrorLogged"];
                 };
             };
-            400: components["responses"]["BadRequest"];
+            400: components["responses"]["InvalidRequest"];
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
-            409: components["responses"]["EpochChanged"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["Unavailable"];

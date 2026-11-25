@@ -627,16 +627,13 @@
             }
           },
           "400": {
-            "$ref": "#/components/responses/BadRequest"
+            "$ref": "#/components/responses/InvalidRequest"
           },
           "401": {
             "$ref": "#/components/responses/NotAuthenticated"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
-          },
-          "409": {
-            "$ref": "#/components/responses/EpochChanged"
           },
           "413": {
             "$ref": "#/components/responses/RequestTooLarge"
@@ -6723,6 +6720,16 @@
       }
     },
     "responses": {
+      "InvalidRequest": {
+        "description": "The body is not one JSON object, or not JSON (invalid_request).",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ApiErrorEnvelope"
+            }
+          }
+        }
+      },
       "RequestTooLarge": {
         "description": "The body is larger than the JSON body limit (request_too_large).",
         "content": {
