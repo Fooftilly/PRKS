@@ -60,8 +60,9 @@ class OpenApiDocumentTests(unittest.TestCase):
 
     def test_the_paths_admission_answers_are_not_routed(self) -> None:
         self.assertFalse(_ADMISSION & {(r.method, r.pattern) for r in ROUTES})
-        self.assertEqual({path for _, path in _ADMISSION},
-                         {"/api/login", "/api/logout", "/api/session", "/api/setup", "/api/setup/storage"})
+        self.assertEqual(_ADMISSION, {("POST", "/api/login"), ("POST", "/api/logout"), ("GET", "/api/session"),
+                                      ("HEAD", "/api/session"), ("GET", "/api/setup"), ("HEAD", "/api/setup"),
+                                      ("POST", "/api/setup"), ("POST", "/api/setup/storage")})
 
     def test_a_route_without_a_contract_is_refused(self) -> None:
         def handler(req):  # pragma: no cover - never called
@@ -74,7 +75,7 @@ class OpenApiDocumentTests(unittest.TestCase):
         scheme = self.document["components"]["securitySchemes"]["session"]
         self.assertEqual(scheme, {"type": "apiKey", "in": "cookie", "name": "prks_session",
                                   "description": scheme["description"]})
-        optional = {("POST", "/api/logout"), ("GET", "/api/session")}
+        optional = {("POST", "/api/logout"), ("GET", "/api/session"), ("HEAD", "/api/session")}
         for (method, path), op in _operations(self.document).items():
             with self.subTest(method=method, path=path):
                 if (method, path) in optional:

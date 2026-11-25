@@ -1361,7 +1361,11 @@ export interface paths {
         post?: never;
         delete?: never;
         options?: never;
-        head?: never;
+        /**
+         * The signed-in session: user, Library, epoch and expiry (headers only)
+         * @description In loopback-owner mode every request acts as the owner and needs no cookie.
+         */
+        head: operations["getSessionHead"];
         patch?: never;
         trace?: never;
     };
@@ -1400,7 +1404,8 @@ export interface paths {
         post: operations["completeSetup"];
         delete?: never;
         options?: never;
-        head?: never;
+        /** How far first-run setup is (headers only) */
+        head: operations["getSetupStateHead"];
         patch?: never;
         trace?: never;
     };
@@ -11216,6 +11221,8 @@ export interface operations {
                 headers: {
                     /** @description The Library's current epoch. */
                     "PRKS-Library-Epoch": string;
+                    /** @description The session cookie with its renewed lifetime (session mode). */
+                    "Set-Cookie"?: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -11248,6 +11255,49 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
+            };
+        };
+    };
+    getSessionHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session; a session cookie is sent again with the renewed expiry. */
+            200: {
+                headers: {
+                    /** @description The Library's current epoch. */
+                    "PRKS-Library-Epoch": string;
+                    /** @description The session cookie with its renewed lifetime (session mode). */
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No live session (not_authenticated). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session's user is no longer a member of the Library. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
@@ -11418,6 +11468,31 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
+            };
+        };
+    };
+    getSetupStateHead: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The setup state; ready, with storage fixed, once the server serves normally. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The database is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

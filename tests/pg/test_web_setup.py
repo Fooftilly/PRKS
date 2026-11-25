@@ -309,6 +309,7 @@ class SetupHttpTests(SetupTestCase):
                 self.assertEqual(headers["cache-control"], "no-store, max-age=0")
         status, _, raw = self.request(port, "GET", "/api/setup")
         self.assertEqual((status, json.loads(raw)), (200, {"state": "unconfigured", "storage": "fixed"}))
+        self.assertEqual(self.request(port, "HEAD", "/api/setup")[::2], (200, b""))
         for method, path in (("GET", "/api/session"), ("GET", "/api/works"), ("POST", "/api/login")):
             with self.subTest(path=path):
                 status, _, raw = self.request(port, method, path, {} if method == "POST" else None)

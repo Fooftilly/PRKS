@@ -261,8 +261,9 @@ def build_document(routes: Iterable[Any], admission: Iterable[Any] = ()) -> dict
             "description": (
                 "The PRKS HTTP API, generated from the route table (backend/api) and the "
                 "Pydantic boundary models (backend/api_contract). Every /api/ request needs "
-                "a live session (POST /api/login signs in), except /api/setup; a mutation also sends "
-                "the PRKS-Library-Epoch header."
+                "a live session (POST /api/login signs in), except sign-in, sign-out and setup; a "
+                "Library mutation also sends the PRKS-Library-Epoch header. Each operation's "
+                "security and parameters say what it needs."
             ),
         },
         "tags": [{"name": tag} for tag in sorted(tags)],

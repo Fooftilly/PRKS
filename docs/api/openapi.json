@@ -3,7 +3,7 @@
   "info": {
     "title": "PRKS API",
     "version": "0.2.0",
-    "description": "The PRKS HTTP API, generated from the route table (backend/api) and the Pydantic boundary models (backend/api_contract). Every /api/ request needs a live session (POST /api/login signs in), except /api/setup; a mutation also sends the PRKS-Library-Epoch header."
+    "description": "The PRKS HTTP API, generated from the route table (backend/api) and the Pydantic boundary models (backend/api_contract). Every /api/ request needs a live session (POST /api/login signs in), except sign-in, sign-out and setup; a Library mutation also sends the PRKS-Library-Epoch header. Each operation's security and parameters say what it needs."
   },
   "tags": [
     {
@@ -7994,6 +7994,12 @@
                   "type": "string"
                 },
                 "required": true
+              },
+              "Set-Cookie": {
+                "description": "The session cookie with its renewed lifetime (session mode).",
+                "schema": {
+                  "type": "string"
+                }
               }
             },
             "content": {
@@ -8033,6 +8039,49 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {}
+        ]
+      },
+      "head": {
+        "operationId": "getSessionHead",
+        "summary": "The signed-in session: user, Library, epoch and expiry (headers only)",
+        "tags": [
+          "identity"
+        ],
+        "description": "In loopback-owner mode every request acts as the owner and needs no cookie.",
+        "responses": {
+          "200": {
+            "description": "The session; a session cookie is sent again with the renewed expiry.",
+            "headers": {
+              "PRKS-Library-Epoch": {
+                "description": "The Library's current epoch.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              },
+              "Set-Cookie": {
+                "description": "The session cookie with its renewed lifetime (session mode).",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's user is no longer a member of the Library."
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable), or the server is still in first-run setup (setup_pending)."
           }
         },
         "security": [
@@ -8182,6 +8231,22 @@
                 }
               }
             }
+          }
+        },
+        "security": []
+      },
+      "head": {
+        "operationId": "getSetupStateHead",
+        "summary": "How far first-run setup is (headers only)",
+        "tags": [
+          "identity"
+        ],
+        "responses": {
+          "200": {
+            "description": "The setup state; ready, with storage fixed, once the server serves normally."
+          },
+          "503": {
+            "description": "The database is unavailable (unavailable)."
           }
         },
         "security": []

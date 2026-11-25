@@ -51,6 +51,22 @@ _SETUP_403 = error("The bootstrap token is wrong or expired (bootstrap_token_inv
                    "bootstrap_token_expired), or the Origin is not allowed (origin_not_allowed).", SetupRefusal)
 _SETUP_429 = _throttled("Too many refused tokens (too_many_attempts).", SetupRefusal)
 
+_SESSION_READ = Operation(
+    "getSession", "The signed-in session: user, Library, epoch and expiry", _TAG,
+    {200: ok(SessionState, "The session; a session cookie is sent again with the renewed expiry.",
+             headers={"PRKS-Library-Epoch": _EPOCH,
+                      "Set-Cookie": Header("The session cookie with its renewed lifetime (session mode).")}),
+     401: error("No live session (not_authenticated)."),
+     403: error("The session's user is no longer a member of the Library."),
+     503: _SIGN_IN_UNAVAILABLE},
+    session="optional",
+    description="In loopback-owner mode every request acts as the owner and needs no cookie.")
+_SETUP_READ = Operation(
+    "getSetupState", "How far first-run setup is", _TAG,
+    {200: ok(SetupState, "The setup state; ready, with storage fixed, once the server serves normally."),
+     503: _UNAVAILABLE},
+    session="none")
+
 IDENTITY_ROUTES = (
     route("POST", "/api/login", _answered_by_admission, contract=Operation(
         "login", "Sign in to the Library this server serves", _TAG,
@@ -72,20 +88,10 @@ IDENTITY_ROUTES = (
          404: error("The server acts as its owner without sign-in (loopback-owner mode)."),
          503: _SIGN_IN_UNAVAILABLE},
         session="optional")),
-    route("GET", "/api/session", _answered_by_admission, contract=Operation(
-        "getSession", "The signed-in session: user, Library, epoch and expiry", _TAG,
-        {200: ok(SessionState, "The session; a session cookie is sent again with the renewed expiry.",
-                 headers={"PRKS-Library-Epoch": _EPOCH}),
-         401: error("No live session (not_authenticated)."),
-         403: error("The session's user is no longer a member of the Library."),
-         503: _SIGN_IN_UNAVAILABLE},
-        session="optional",
-        description="In loopback-owner mode every request acts as the owner and needs no cookie.")),
-    route("GET", "/api/setup", _answered_by_admission, contract=Operation(
-        "getSetupState", "How far first-run setup is", _TAG,
-        {200: ok(SetupState, "The setup state; ready, with storage fixed, once the server serves normally."),
-         503: _UNAVAILABLE},
-        session="none")),
+    route("GET", "/api/session", _answered_by_admission, contract=_SESSION_READ),
+    route("HEAD", "/api/session", _answered_by_admission, contract=_SESSION_READ.head()),
+    route("GET", "/api/setup", _answered_by_admission, contract=_SETUP_READ),
+    route("HEAD", "/api/setup", _answered_by_admission, contract=_SETUP_READ.head()),
     route("POST", "/api/setup", _answered_by_admission, contract=Operation(
         "completeSetup", "Create the owner and the Library with the bootstrap token", _TAG,
         {200: ok(SetupDone, "Setup is complete; signed_in: a session cookie for the owner is set.",
