@@ -147,6 +147,9 @@
         // is still settling. Nothing here is canonical or persisted.
         const entityCoherence = new Map();
         const ineligibleEntities = new Set();
+        // List snapshots an ACK proved stale, until their deletion commits or
+        // a newer snapshot replaces them. Offline fallback never serves them.
+        const ineligibleLists = new Set();
         // Domain-level coherence. Some cached read models span many canonical
         // records (a Concept rename changes that Concept's detail, the Concept
         // index, and every cached relative that displays its name), so
@@ -1100,8 +1103,7 @@
             if (work) {
                 const plan = planFor(work, snapshots[0]);
                 if (plan === 'unproven') {
-                    markEntityChanged('work', id);
-                    await invalidateEntity('work', id);
+                    if (!await dropUnprovenEntity('work', id)) return false;
                 } else if (plan === 'apply') {
                     const patched = patchedWithSource(work, source);
                     if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0],
@@ -1128,7 +1130,7 @@
                     /* The domain token above already stops an in-flight GET
                      * republishing it; a snapshot that could not be dropped
                      * would still serve the old source offline. */
-                    if (await invalidateList(listKey) === false) return false;
+                    if (!await dropUnprovenList(listKey)) return false;
                     continue;
                 }
                 if (plan !== 'apply') continue;
@@ -1150,8 +1152,7 @@
                     const plans = summaries.filter(summary => summary && summary.id === id)
                         .map(summary => planFor(summary, envelope));
                     if (plans.includes('unproven')) {
-                        markEntityChanged(spec.kind, envelope.id);
-                        await invalidateEntity(spec.kind, envelope.id);
+                        if (!await dropUnprovenEntity(spec.kind, envelope.id)) return false;
                         continue;
                     }
                     if (!plans.includes('apply')) continue;
@@ -1227,8 +1228,7 @@
                     operationCreatedAt: op.created_at,
                 });
                 if (plan === 'unproven') {
-                    markEntityChanged('work', id);
-                    await invalidateEntity('work', id);
+                    if (!await dropUnprovenEntity('work', id)) return false;
                 } else {
                     const nextWork = Object.assign({}, work);
                     nextWork[field] = body;
@@ -1425,8 +1425,12 @@
             const merged = typeof root.prksMergeRecentOpen === 'function'
                 ? root.prksMergeRecentOpen(rows, result) : null;
             if (!merged) return false;
-            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token,
-                observedAtOf(cached));
+            /* The merge upserts a row the server answered just now, and a list
+             * has one read time. Its newest row decides: an older time would
+             * let a delayed ACK prove itself against that fresh row. Older
+             * rows judged too new are only dropped by a later ACK, never
+             * overwritten. */
+            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token, now());
         }
 
         async function reconcileCreatedPerson(result) {
@@ -3124,6 +3128,18 @@
             return next;
         }
 
+        /* The list form of dropUnprovenEntity: unservable at once, and the
+         * result is whether the deletion committed. A failed deletion keeps
+         * the snapshot unservable for this session. */
+        function dropUnprovenList(listKey) {
+            ineligibleLists.add(listKey);
+            return invalidateList(listKey).then(function (ok) {
+                if (ok !== true) return false;
+                ineligibleLists.delete(listKey);
+                return true;
+            });
+        }
+
         /** Remove a disposable list snapshot. Never changes connectivity or server state. */
         function invalidateList(listKey) {
             if (!store || typeof store.deleteList !== 'function') return Promise.resolve(false);
@@ -3162,7 +3178,10 @@
                 return Promise.resolve(store.putList(listKey, value, '', observedAt))
                     .then(function (ok) {
                         if (!ok) return false;
-                        if (domainCacheEligible(domain, domainToken)) return true;
+                        if (domainCacheEligible(domain, domainToken)) {
+                            ineligibleLists.delete(listKey);
+                            return true;
+                        }
                         void invalidateList(listKey);
                         return false;
                     })
@@ -3242,12 +3261,12 @@
          * generation does not wait and cannot write over the newer sweep.
          * Paint never waits on this.
          */
-        async function publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken) {
+        async function publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken, readAt) {
             const pending = domain ? domainInvalidation.get(domain) : null;
             if (pending && pending.generation === domainToken && pending.promise) {
                 await pending.promise;
             }
-            await cacheListForDomain(listKey, raw, domain, domainToken);
+            await cacheListForDomain(listKey, raw, domain, domainToken, readAt);
         }
 
         /** Same policy as readThroughEntity but for a named list snapshot. */
@@ -3268,6 +3287,7 @@
                 typeof store.getList === 'function' &&
                 typeof options2.validate === 'function' &&
                 !(options2.signal && options2.signal.aborted) &&
+                !ineligibleLists.has(listKey) &&
                 !isDomainBlocked(domain)) {
                 let cached = null;
                 try { cached = await store.getList(listKey); }
@@ -3281,6 +3301,7 @@
                 if (valid && state === STATE_OFFLINE &&
                     connectivityGeneration === connectionToken &&
                     currentDomainGeneration(domain) === domainToken &&
+                    !ineligibleLists.has(listKey) &&
                     !isDomainBlocked(domain)) {
                     reconcileCore.observe(cached.value, observedAtOf(cached));
                     return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
@@ -3305,7 +3326,7 @@
                     throw err;
                 }
                 noteRequestFailure();
-                if (isDomainBlocked(domain)) {
+                if (ineligibleLists.has(listKey) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
                 const fallbackOnlineToken = onlineGeneration;
@@ -3320,6 +3341,7 @@
                     if (cached &&
                         onlineGeneration === fallbackOnlineToken &&
                         currentDomainGeneration(domain) === domainToken &&
+                        !ineligibleLists.has(listKey) &&
                         !isDomainBlocked(domain)) {
                         reconcileCore.observe(cached.value, observedAtOf(cached));
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
@@ -3333,8 +3355,8 @@
             assertAcceptableShape(options2.validate, raw);
             // Return before the sweep. The publish waits for a same-generation
             // delete, then stores the list. A skipped write stays skipped.
-            void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken);
             const readAt = now();
+            void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken, readAt);
             reconcileCore.observe(raw, readAt);
             return { value: raw, source: 'server', cachedAt: readAt };
         }
