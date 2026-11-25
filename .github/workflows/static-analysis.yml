@@ -192,8 +192,7 @@ jobs:
       # portrait encoder and PDF text extraction (#69), plus scripts/ (#1269)
       # and tests/ (#1273). Resolve psycopg, argon2, Pillow, PyMuPDF and
       # pydantic imports, the scripts' Playwright, requests and markdown-it-py
-      # imports, the Locust pilot's locust import (#859), and the tests'
-      # openapi-core and Hypothesis imports, rather than
+      # imports, and the tests' openapi-core and Hypothesis imports, rather than
       # suppressing diagnostics. Install only pinned type imports from
       # requirements.txt and requirements-dev.txt.
       - name: Set up Python for PostgreSQL and identity type imports
@@ -213,13 +212,13 @@ jobs:
           mapfile -t pymupdf_pins < <(grep -E '^PyMuPDF==[^[:space:]]+$' requirements.txt)
           mapfile -t pydantic_pins < <(grep -E '^pydantic==[^[:space:]]+$' requirements.txt)
           mapfile -t uvicorn_pins < <(grep -E '^uvicorn==[^[:space:]]+$' requirements.txt)
-          mapfile -t script_pins < <(grep -E '^(playwright|requests|markdown-it-py|openapi-core|hypothesis|locust)==[^[:space:]]+$' requirements-dev.txt)
+          mapfile -t script_pins < <(grep -E '^(playwright|requests|markdown-it-py|openapi-core|hypothesis)==[^[:space:]]+$' requirements-dev.txt)
           if [[ "${#pg_pins[@]}" -ne 3 || "${#argon_pins[@]}" -ne 1 || "${#pillow_pins[@]}" -ne 1 || "${#pymupdf_pins[@]}" -ne 1 || "${#pydantic_pins[@]}" -ne 1 || "${#uvicorn_pins[@]}" -ne 1 ]]; then
             echo "Expected three pinned PostgreSQL packages, one argon2-cffi package, one Pillow package, one PyMuPDF package, one pydantic package and one uvicorn package in requirements.txt" >&2
             exit 1
           fi
-          if [[ "${#script_pins[@]}" -ne 6 ]]; then
-            echo "Expected pinned playwright, requests, markdown-it-py, openapi-core, hypothesis and locust packages in requirements-dev.txt" >&2
+          if [[ "${#script_pins[@]}" -ne 5 ]]; then
+            echo "Expected pinned playwright, requests, markdown-it-py, openapi-core and hypothesis packages in requirements-dev.txt" >&2
             exit 1
           fi
           python -m pip install --disable-pip-version-check --only-binary=:all: "${pg_pins[@]}" "${argon_pins[@]}" "${pillow_pins[@]}" "${pymupdf_pins[@]}" "${pydantic_pins[@]}" "${uvicorn_pins[@]}" "${script_pins[@]}"
@@ -231,7 +230,7 @@ jobs:
 
       # Genuine standard type checking for the #69 typed slice: all of backend/,
       # prks_app.py, scripts/ and tests/ (#1429; scopes pinned in
-      # scripts/check_invariants.py PYRIGHT_TYPED_SLICE_SCOPES).
+      # scripts/invariants/pyright_slice.py PYRIGHT_TYPED_SLICE_SCOPES).
       - name: Run Pyright typed slice (backend, prks_app.py, scripts, tests; standard)
         if: steps.docs-scope.outputs.docs_only != 'true'
         run: npm exec --yes --ignore-scripts --package="pyright@${PYRIGHT_VERSION}" -- pyright --project pyrightconfig.typed-slice.json
