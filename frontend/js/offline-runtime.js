@@ -589,11 +589,7 @@
                 observedAt: observedAtOf(snapshots[0]),
                 operationCreatedAt: op && op.created_at,
             });
-            if (plan === 'unproven') {
-                markEntityChanged(ownerKind, id);
-                await invalidateEntity(ownerKind, id);
-                return true;
-            }
+            if (plan === 'unproven') return dropUnprovenEntity(ownerKind, id);
             if (plan !== 'apply') return true;
             detail.tags = detail.tags.filter(t => t.id !== result.tag_id);
             if (result.present) detail.tags.push(result.tag);
@@ -655,8 +651,12 @@
              * this is it for the record itself. */
             if (work) work[result.field] = root.prksWorkFieldToEntity(result.field, result.value);
             const values = [work, state];
+            /* Each record keeps the time of the read behind it: one patched
+             * field does not make the rest of the record fresh, and a later
+             * ACK (a Tag link, a note) proves its order from that time. */
             for (let i = 0; i < kinds.length; i++) {
-                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i])) return false;
+                if (values[i] && !await cacheEntityIfCurrent(kinds[i], id, values[i], tokens[i],
+                    observedAtOf(snapshots[i]))) return false;
             }
             if (!await reconcileFieldProjections(result)) return false;
             if (!await reconcileEmbeddedSummaries(result)) return false;
@@ -3095,6 +3095,18 @@
                 entityKinds: ['person'], listKeys: [],
             });
             return true;
+        }
+
+        /* An unproven cached value must go before its operation retires: it
+         * is fenced from publication and reads at once, and the result is
+         * whether the deletion COMMITTED. False keeps the operation, so a
+         * replay deletes it again; retiring it instead would let a reload
+         * serve the stale value with nothing left to overlay or retry. */
+        function dropUnprovenEntity(kind, id) {
+            const key = entityKey(kind, id);
+            entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
+            ineligibleEntities.add(key);
+            return invalidateEntity(kind, id).then(ok => ok === true);
         }
 
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */

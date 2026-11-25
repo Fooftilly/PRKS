@@ -120,18 +120,6 @@
       "notes": "Test runner mutmut drives in the advisory mutation workflow (#651 B2); the unit suites run under unittest. No production runtime."
     },
     {
-      "name": "locust",
-      "scope": "test",
-      "authoritative_source": "requirements-dev.txt",
-      "manifest": "requirements-dev.txt",
-      "lockfile": null,
-      "generated_assets": [],
-      "version_metadata": null,
-      "exact_installed_version_check": true,
-      "dependabot_monitored": true,
-      "notes": "Manual read-only Locust load pilot on a disposable loopback --testing server (#859); no production runtime."
-    },
-    {
       "name": "markdown-it-py",
       "scope": "test",
       "authoritative_source": "requirements-dev.txt",

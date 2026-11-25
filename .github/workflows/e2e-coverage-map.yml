@@ -94,10 +94,10 @@ jobs:
         run: python scripts/ci/install_pinned_python.py e2e
 
       - name: Install pinned coverage.py
-        # The same pin as the Python coverage pilot.
+        # The requirements-dev.txt pin, which Dependabot keeps current.
         run: >-
           python -m pip install --isolated --disable-pip-version-check
-          "--only-binary=:all:" "coverage==7.16.2"
+          "--only-binary=:all:" "$(grep -E '^coverage==[^[:space:]]+$' requirements-dev.txt)"
 
       - name: Ensure Chromium in repo cache
         run: python tests/e2e/install_browser.py
