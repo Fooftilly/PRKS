@@ -98,6 +98,25 @@ function prksResearchNotesTextForWork(workId, serverText, ctx) {
     return entry.text;
 }
 
+/**
+ * A corrective body is about to replace the text this tab shows. A clean
+ * committed session for that text gives way, so a remount reads the new
+ * body instead of the retained old one. A session with typing, a save in
+ * flight, or other text keeps the editor's base: returns false.
+ */
+function prksResearchNotesAdoptBody(ctx, workId, shown) {
+    const id = String(workId || '');
+    const entry = ctx && id ? prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id)) : null;
+    if (!entry || String(entry.ownerTabId) !== String(ctx.tabId != null ? ctx.tabId : '')) return true;
+    if (entry.state !== 'committed' || entry.promise || entry.text !== String(shown == null ? '' : shown)) {
+        return false;
+    }
+    prksWorkResearchDrafts.delete(entry.key);
+    prksResearchRecoveryRelease(entry);
+    if (ctx.ui && ctx.ui.workResearchNoteSession === entry) ctx.ui.workResearchNoteSession = null;
+    return true;
+}
+
 function prksResearchNotesMayPaint(owner, workId, generation) {
     if (!owner || owner.destroyed) return false;
     if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return false;
@@ -386,6 +405,7 @@ window.prksRefreshResearchNotesRecovery = function (ctx, workId) {
 };
 window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
+window.prksResearchNotesAdoptBody = prksResearchNotesAdoptBody;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
 window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;

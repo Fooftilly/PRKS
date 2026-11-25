@@ -319,10 +319,15 @@
     function editorFor(ctx, workId, field, shown) {
         if (field === 'text_content') {
             const notes = ctx.getResource && ctx.getResource('workNotes');
-            if (!notes || !notes.editor || String(notes.workId) !== String(workId)) return true;
-            if (notes.drafting || notes.pendingSave ||
-                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown) return null;
-            return typeof root.prksResearchNotesApplyText === 'function' ? notes : null;
+            const mounted = !!(notes && notes.editor && String(notes.workId) === String(workId));
+            if (mounted && (notes.drafting || notes.pendingSave ||
+                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown ||
+                typeof root.prksResearchNotesApplyText !== 'function')) return null;
+            /* Last, because it retires the tab's clean session for the old
+             * text: a remount must not bring that text back over the body. */
+            if (typeof root.prksResearchNotesAdoptBody === 'function' &&
+                !root.prksResearchNotesAdoptBody(ctx, workId, shown)) return null;
+            return mounted ? notes : true;
         }
         /* Reminders keep a live session while their editor is open. */
         const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
