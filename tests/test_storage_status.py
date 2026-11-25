@@ -166,7 +166,7 @@ class StorageRouteTests(StatusTestCase):
         self.assertIs(route_capability("GET", storage_api.PATH), Capability.ADMIN_LIBRARY)
 
     def test_routes_are_logged_as_themselves(self) -> None:
-        for route in (storage_api.PATH, "/api/openapi/storage-status.json"):
+        for route in (storage_api.PATH, "/api/openapi.json"):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), route)
 

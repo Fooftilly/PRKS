@@ -61,7 +61,7 @@ class ProcessingItemsContractTests(unittest.TestCase):
             (f"/api/processing-items/{_ID}", "/api/processing-items/:id"),
             (f"/api/processing-items/{_ID}/pdf", "/api/processing-items/:id/pdf"),
             (f"/api/processing-items/{_ID}/import", "/api/processing-items/:id/import"),
-            ("/api/openapi/processing-items.json", "/api/openapi/processing-items.json"),
+            ("/api/openapi.json", "/api/openapi.json"),
         ):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), logged)

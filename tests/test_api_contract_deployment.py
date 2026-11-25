@@ -64,7 +64,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.assertIs(route_capability("GET", deployment_api.PATH), Capability.ADMIN_LIBRARY)
 
     def test_routes_are_logged_as_themselves(self) -> None:
-        for route in (deployment_api.PATH, "/api/openapi/deployment-settings.json"):
+        for route in (deployment_api.PATH, "/api/openapi.json"):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), route)
 

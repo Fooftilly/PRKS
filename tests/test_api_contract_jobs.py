@@ -53,7 +53,7 @@ class JobDiagnosticsContractTests(unittest.TestCase):
                 JobDiagnostics.model_validate(bad)
 
     def test_routes_are_logged_as_themselves(self):
-        for route in ("/api/diagnostics/jobs", "/api/openapi/job-diagnostics.json"):
+        for route in ("/api/diagnostics/jobs", "/api/openapi.json"):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), route)
 
