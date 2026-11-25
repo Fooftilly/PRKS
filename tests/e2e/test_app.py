@@ -3286,7 +3286,7 @@ _SAME_MOUNTED_VIEWER_JS = """() => {
         node: !!was && node === was.node && node.isConnected,
         docId: !!was && (pdf.viewer.getDocumentId ? pdf.viewer.getDocumentId() : null) === was.docId,
         page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
-        filePath: String(pdf.filePath || '').split('?')[0],
+        filePath: String(pdf.filePath || ''),
     };
 }"""
 

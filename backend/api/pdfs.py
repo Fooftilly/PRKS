@@ -106,13 +106,17 @@ def _object_size(stream: BinaryIO) -> int:
 def asset_content(req: Request) -> Response:
     """``GET``/``HEAD /api/assets/<asset id>/content``: a managed Asset's bytes in the acting Library.
 
-    ``?v=`` only versions the URL for caches; the bytes are always what the
-    Asset names now.
+    A ``?v=`` that no longer names the Asset's bytes is 404: a viewer or a
+    cache holding an earlier version never receives newer bytes (or ranges
+    of them) under the older URL.
     """
     from backend.api.common import objects
     from backend.domain.works import work_commands
 
-    name = work_commands.asset_object(*req.actor, req.params["asset_id"])
+    versions = req.query.get("v") or [None]
+    if len(versions) > 1:
+        return error_response(404, "PDF not found")
+    name = work_commands.asset_object(*req.actor, req.params["asset_id"], versions[0])
     try:
         key = StorageKey(NAMESPACE_ASSET_OBJECTS, name) if name else None
     except InvalidStorageKey:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import io
+import hashlib
 import os
 from typing import Any
 from unittest import mock
@@ -309,8 +310,11 @@ class ManagedPdfTests(ManagedPdfTestCase):
         self.assertTrue(os.path.isfile(target))
         for method in ("GET", "HEAD"):
             self.assertEqual(self.call(method, f"/api/assets/{asset}/content", cookies=self.cookies).status, 200)
-            self.assertEqual(self.call(method, f"/api/assets/{asset}/content?v=stale", cookies=self.cookies).status,
-                             200, "v only versions the URL")
+            self.assertEqual(self.call(method, work["file_path"], cookies=self.cookies).status, 200)
+            for stale in ("?v=stale", "?v=0123456789abcdef", "?v=" + work["file_path"][-16:] + "&v=x"):
+                with self.subTest(method=method, version=stale):
+                    self.assertEqual(self.call(method, f"/api/assets/{asset}/content{stale}",
+                                               cookies=self.cookies).status, 404)
         # The storage key is no address: neither the retired route nor a key in place of the id serves it.
         for path in (f"/api/pdfs/{name}", f"/api/assets/{name}/content", f"/api/assets/..%2F{asset}/content",
                      f"/api/assets/{asset}%2F..%2F{asset}/content", "/api/assets/AS-0/content"):
@@ -318,6 +322,22 @@ class ManagedPdfTests(ManagedPdfTestCase):
                 with self.subTest(path=path, method=method):
                     self.assertEqual(self.call(method, path, cookies=self.cookies).status, 404)
         self.assertTrue(os.path.isfile(target))
+
+    def test_an_earlier_version_is_never_served_the_newer_bytes(self) -> None:
+        # A viewer that loaded version A keeps reading ranges from A's URL. After a replace,
+        # that URL must not answer with B's bytes at A's offsets: it is 404, whole or ranged.
+        work = self.upload("Version Guard", "versionold", "version_guard.pdf")
+        old_url = work["file_path"]
+        self.assertEqual(self.get(old_url, headers=[("Range", "bytes=0-3")]).status, 206)
+        new = self.replace_pdf(work["id"], "versionnew")
+        self.assertNotEqual(new["file_path"], old_url)
+        self.assertEqual(new["file_path"].split("?")[0], old_url.split("?")[0], "the Asset id stays")
+        for headers in ([], [("Range", "bytes=0-3")]):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.get(old_url, headers=headers).status, 404)
+        current = self.get(new["file_path"])
+        self.assertEqual(current.status, 200)
+        self.assertEqual(hashlib.sha256(current.raw).hexdigest()[:16], new["file_path"][-16:])
 
     def test_an_unknown_work_is_404_and_a_search_is_a_list(self) -> None:
         self.assertEqual(self.get("/api/works/W-00000000-NOTFOUND").status, 404)

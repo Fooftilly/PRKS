@@ -25,6 +25,7 @@ from backend.db.database import Database, Isolation
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
+from backend.domain.objects.content_url import is_current_version
 from backend.domain.works import projection, queries
 from backend.storage.objects import StorageBackend, Writer
 
@@ -221,21 +222,24 @@ def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
     return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
 
 
-def asset_object(db: Database, ctx: RequestContext, asset_id: str) -> Optional[str]:
+def asset_object(db: Database, ctx: RequestContext, asset_id: str, version: Optional[str] = None) -> Optional[str]:
     """The storage key name the acting Library's managed Asset ``asset_id`` names now.
 
     One data root serves every Library, so the content route serves bytes
     only through an Asset of the acting Library: an id from another Library,
-    a stream or an unknown id reads as missing (``None``).
+    a stream or an unknown id reads as missing (``None``). So does a
+    ``version`` (a content URL's ``v``) that no longer names the Asset's bytes.
     """
 
     def read(scope: LibraryScope) -> Optional[str]:
         row = scope.execute(
-            "SELECT storage_locator FROM prks.assets WHERE library_id = %(library_id)s"
+            "SELECT storage_locator, content_sha256 FROM prks.assets WHERE library_id = %(library_id)s"
             " AND id = %(asset_id)s AND kind = 'managed_file'",
             {"asset_id": asset_id},
         ).fetchone()
-        return None if row is None else str(row["storage_locator"])
+        if row is None or not is_current_version(version, row["content_sha256"]):
+            return None
+        return str(row["storage_locator"])
 
     return library_query(db, ctx, read)
 

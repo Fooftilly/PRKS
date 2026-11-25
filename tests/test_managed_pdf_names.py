@@ -6,7 +6,7 @@ and a Work's bytes are addressed by its Asset id, never by that name.
 
 import unittest
 
-from backend.domain.objects.content_url import asset_content_url, asset_id_from_url
+from backend.domain.objects.content_url import asset_content_url, asset_id_from_url, is_current_version
 from backend.pdf.managed_pdf_names import bound_managed_pdf_basename, mint_managed_pdf_filename
 from backend.storage.objects import NAMESPACE_ASSET_OBJECTS, StorageKey
 
@@ -32,6 +32,15 @@ class MintedNameTests(unittest.TestCase):
 
 
 class ContentUrlTests(unittest.TestCase):
+    def test_only_the_current_version_is_current(self):
+        self.assertTrue(is_current_version(None, _SHA))
+        self.assertTrue(is_current_version(None, None))
+        self.assertTrue(is_current_version(_SHA[:16], _SHA))
+        for version in (_SHA[:15], _SHA[:17], _SHA, "", "0" * 16):
+            with self.subTest(version=version):
+                self.assertFalse(is_current_version(version, _SHA))
+        self.assertFalse(is_current_version(_SHA[:16], None))
+
     def test_the_url_names_the_asset_and_versions_the_bytes(self):
         url = asset_content_url(_ASSET, _SHA)
         self.assertEqual(url, f"/api/assets/{_ASSET}/content?v={_SHA[:16]}")
