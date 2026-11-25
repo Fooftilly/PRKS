@@ -284,7 +284,7 @@ class TagIdentityTests(OrganizationTestCase):
             tag_commands.tag_work(self.db, self.ctx, work, tag)
         self.forbid_tag_deletion()
         self.library.bulk_update_works({"action": "remove_tags", "work_ids": works, "tag_ids": [tag]})
-        self.assertEqual([library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)) for work in works], [[], [], []])
+        self.assertEqual([library_query(self.db, self.ctx, lambda scope, work=work: links.tags_of(scope, links.WORK, work)) for work in works], [[], [], []])
         self.assertEqual(self.count("tags"), 1)
 
     def test_deleting_a_work_keeps_its_tags(self) -> None:
