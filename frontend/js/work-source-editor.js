@@ -283,9 +283,12 @@
             set: value => ctx.setEntity('work', value),
             agrees: work => Object.keys(columns).every(column => work[column] === columns[column]),
             patch: work => Object.assign({}, work, columns),
+            /* Fresh, never joined: an older in-flight GET could hold the
+             * source from before another device's save. */
             read: () => (reread ? root.prksOfflineReadEntity('work', ack.work_id,
                 '/api/works/' + encodeURIComponent(ack.work_id),
-                { validate: value => !!value && value.id === ack.work_id }) : Promise.resolve(null)),
+                { validate: value => !!value && value.id === ack.work_id,
+                    requestPolicy: { dedupe: false } }) : Promise.resolve(null)),
             merge: (held, fresh) => adoptSourceOf(held, fresh),
         });
     }
@@ -340,6 +343,20 @@
      * `options.adopt` says this read follows a discard, so its result replaces
      * what the tab is holding rather than merely establishing a base.
      */
+    /* Two cached answers pair only when the Work was read no earlier than
+     * the revision: the revision is cached as soon as it answers, so a Work
+     * read that failed after it leaves an older identity beside a newer
+     * revision, and reopening offline would pair them. */
+    function readNoEarlier(workResult, stateResult) {
+        const at = result => {
+            const observed = reconcileCore.observedAt(result.value);
+            return observed !== null ? observed : (Number.isFinite(result.cachedAt) ? result.cachedAt : null);
+        };
+        const work = at(workResult);
+        const revision = at(stateResult);
+        return work !== null && revision !== null && work >= revision;
+    }
+
     async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         const adopt = !!(options && options.adopt);
@@ -372,7 +389,9 @@
              * an older cached or joined Work would pair an older identity
              * with that revision and let a Save overwrite a source unseen. */
             const usable = accepted(stateResult) && accepted(workResult) &&
-                (stateResult.source !== 'server' || workResult.source === 'server');
+                (stateResult.source !== 'server' || workResult.source === 'server') &&
+                (stateResult.source === 'server' || workResult.source === 'server' ||
+                    readNoEarlier(workResult, stateResult));
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
