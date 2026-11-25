@@ -17,6 +17,8 @@ export interface PlaylistIntentOwner {
     playlistEditSession?: number
     /** The base the current edit session saves against, pinned when it opened. */
     playlistEditPin?: { playlistId: string; session: number; base: Promise<PinnedBase | null> } | null
+    /** A Save found the held Playlist older than the server: Cancel reloads it. */
+    playlistStale?: string | null
     playlistRename?: Record<string, boolean>
     workPlaylistEditing?: boolean
   }
@@ -164,12 +166,17 @@ export function browserPlaylistIntents(
     cancelEdit(playlistId) {
       if (!ownsDetail(owner, generation, playlistId) || !owner) return
       bumpEditSession(owner)
+      const stale = owner.ui?.playlistStale === playlistId
       if (owner.ui) {
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
+        owner.ui.playlistStale = null
       }
       repaint(owner, playlistId)
       if (typeof window.updatePanelContent === 'function') window.updatePanelContent('details')
+      // The refusal asked the user to cancel and edit again: the next Edit
+      // has to open on the current version, not the held one it refused.
+      if (stale) void reloadIfOwned(owner, generation, playlistId)
     },
 
     editSession() {
@@ -231,6 +238,7 @@ export function browserPlaylistIntents(
       }
       const edits = pinnedEdits({ ...baseline }, { ...draft }, pinned)
       if (edits.unknown.length) {
+        if (owner.ui) owner.ui.playlistStale = playlistId
         return {
           ok: false,
           message:

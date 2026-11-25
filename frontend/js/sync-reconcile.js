@@ -160,9 +160,13 @@ var prksSyncReconcile = (function(exports) {
 			const own = pending ? pending[field] : void 0;
 			const value = shown[field] == null ? "" : String(shown[field]);
 			if (!isFieldBase(entry)) pinned[field] = null;
-			else if (own !== void 0) pinned[field] = isFieldBase(own) && own.value === value ? {
+			else if (own !== void 0) pinned[field] = isFieldBase(own) && own.value === value ? own.value === entry.value ? {
 				value: entry.value,
 				revision: own.revision
+			} : {
+				value: entry.value,
+				revision: own.revision,
+				pending: own.value
 			} : null;
 			else pinned[field] = entry.value === value ? {
 				value: entry.value,

@@ -211,7 +211,7 @@
       "runtime_files": [
         {
           "path": "/js/sync-reconcile.js",
-          "sha256": "d993b028350004732bbaf1f2a803f5e30b583f4d54a2fc094955145813a2ae59"
+          "sha256": "eebfc3e923632e318be1a933b826da612db3ae1907eb8bbfbde911b0cc2a6e61"
         }
       ],
       "source_category": "frontend-app:sync-reconcile",
@@ -233,7 +233,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "97be3075178595521180a57549e63409b973d97b1dddf4e530049ba4eec65429"
+          "sha256": "86521ea2a19397da406e25b3cf272ab0ea3f8d38eac3d3620281c7af185411f6"
         }
       ],
       "source_category": "npm:frontend-app",

@@ -293,7 +293,7 @@ describe('edit-session bases', () => {
     const showsPending = { name: 'Group', description: 'unsent' }
     expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2 } })).toEqual({
       name: { value: 'Group', revision: 3 },
-      description: { value: 'old', revision: 2 },
+      description: { value: 'old', revision: 2, pending: 'unsent' },
     })
     expect(pinEditBase(shown, read, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
     expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()

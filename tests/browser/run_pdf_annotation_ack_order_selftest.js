@@ -106,6 +106,15 @@ async function main() {
         assert.equal(await cache.getEntity(KIND, 'W'), null,
             'a snapshot read after the CREATE that does not name it is re-hydrated');
     }
+    {
+        const { cache, offline } = setup();
+        const op = createdNow();
+        await later();
+        await cache.putEntity(KIND, 'W', snapshot([], {}, 1));
+        cache.deleteEntity = async () => { throw new Error('quota'); };
+        assert.equal(await offline.reconcilePdfAnnotation(ack('N', 1, 'new'), op), false,
+            'a snapshot that could not be dropped keeps the operation queued');
+    }
     console.log('All ' + checks + ' PDF annotation ACK ordering checks passed');
 }
 

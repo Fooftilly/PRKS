@@ -3652,6 +3652,27 @@
         }
 
         /** One Save, however many of a playlist's fields it touched. */
+        /**
+         * The revision a field write is recorded against, or null when there
+         * is nothing to record. Returning to the pinned value is normally no
+         * change; but when Edit opened on this device's own unsent edit
+         * (`observed.pending`) and that edit has left the queue since, the
+         * server holds it and returning is a real change. It is measured
+         * against that edit's ACK while its row is still here, otherwise
+         * against the pinned revision, where a server that moved on refuses
+         * it as a conflict instead of this device dropping it silently.
+         */
+        function fieldWriteRevision(rows, existing, isFieldRow, desired, observed) {
+            if (desired !== observed.value) return observed.revision;
+            if (existing || typeof observed.pending !== 'string' || observed.pending === observed.value) {
+                return null;
+            }
+            const acknowledged = rows.find(r => isFieldRow(r) && r.status === STATUS_ACKNOWLEDGED &&
+                r.base_revision === observed.revision && r.payload.value === observed.pending &&
+                Number.isSafeInteger(r.server_revision));
+            return acknowledged ? acknowledged.server_revision : observed.revision;
+        }
+
         function savePlaylistFields(playlistId, changes, base) {
             if (!isNonBlankString(playlistId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope',
@@ -3680,9 +3701,10 @@
                     for (const field of Object.keys(changes)) {
                         const desired = changes[field];
                         const observed = base[field];
-                        const existing = rows.find(r => r.operation === 'SET_PLAYLIST_FIELD' &&
+                        const isFieldRow = r => r.operation === 'SET_PLAYLIST_FIELD' &&
                             r.entity_type === 'playlist' && r.entity_id === playlistId &&
-                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                            r.payload.field === field;
+                        const existing = rows.find(r => isFieldRow(r) && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
                             if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                                 throw localStoreError('scope_busy',
@@ -3694,11 +3716,12 @@
                             }
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                         }
-                        if (desired === observed.value) continue;
+                        const baseRevision = fieldWriteRevision(rows, existing, isFieldRow, desired, observed);
+                        if (baseRevision === null) continue;
                         written.push(await insertEnvelopeIn(request, {
                             operation: 'SET_PLAYLIST_FIELD', entity_type: 'playlist',
                             entity_id: playlistId, payload: { field, value: desired },
-                            base_revision: observed.revision,
+                            base_revision: baseRevision,
                             depends_on: createOp ? [createOp.op_id] : [],
                         }, null));
                     }
@@ -3975,9 +3998,10 @@
                     for (const field of Object.keys(desiredChanges)) {
                         const desired = desiredChanges[field];
                         const observed = base[field];
-                        const existing = rows.find(r => r.operation === 'SET_PERSON_GROUP_FIELD' &&
+                        const isFieldRow = r => r.operation === 'SET_PERSON_GROUP_FIELD' &&
                             r.entity_type === 'person-group' && r.entity_id === groupId &&
-                            r.payload.field === field && r.status !== STATUS_ACKNOWLEDGED);
+                            r.payload.field === field;
+                        const existing = rows.find(r => isFieldRow(r) && r.status !== STATUS_ACKNOWLEDGED);
                         if (existing) {
                             if (existing.status !== STATUS_PENDING || existing.attempt_count > 0) {
                                 throw localStoreError('scope_busy',
@@ -3992,7 +4016,8 @@
                             mutated = true;
                             abandonUnownedWrite(stillOwns, true);
                         }
-                        if (desired === observed.value) continue;
+                        const baseRevision = fieldWriteRevision(rows, existing, isFieldRow, desired, observed);
+                        if (baseRevision === null) continue;
                         if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                         /* Moving a group INTO one this device also created
                          * offline waits for that group too: the server
@@ -4011,7 +4036,7 @@
                         written.push(await insertEnvelopeIn(request, {
                             operation: 'SET_PERSON_GROUP_FIELD', entity_type: 'person-group',
                             entity_id: groupId, payload: { field, value: desired },
-                            base_revision: observed.revision,
+                            base_revision: baseRevision,
                             depends_on: [createOp, parentOp].filter(Boolean)
                                 .map(op => op.op_id),
                         }, null, stillOwns));
