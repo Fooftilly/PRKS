@@ -3138,7 +3138,22 @@
             const key = entityKey(kind, id);
             entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
             ineligibleEntities.add(key);
-            return invalidateEntity(kind, id).then(ok => ok === true);
+            return invalidateEntity(kind, id).then(function (ok) {
+                if (ok === true) refillDroppedWork(kind, id);
+                return ok === true;
+            });
+        }
+
+        /* A dropped Work is re-read at once while the server is reachable,
+         * so a Work this device was showing stays available offline: no
+         * open owner may be left to re-read it. The read starts after the
+         * drop and is fenced like any other; a later unproven ACK drops and
+         * refills it again. */
+        function refillDroppedWork(kind, id) {
+            if (kind !== 'work' || state === STATE_OFFLINE) return;
+            void readThroughEntity('work', id, '/api/works/' + encodeURIComponent(id), {
+                validate: value => !!value && value.id === id, requestPolicy: { dedupe: false },
+            }).catch(function () { return null; });
         }
 
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
