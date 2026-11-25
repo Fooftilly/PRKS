@@ -1443,8 +1443,11 @@
              * has one read time. Its newest row decides: an older time would
              * let a delayed ACK prove itself against that fresh row. Older
              * rows judged too new are only dropped by a later ACK, never
-             * overwritten. */
-            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token, now());
+             * overwritten. A merge that trimmed the row keeps the old time. */
+            const upserted = Array.isArray(merged) &&
+                merged.some(row => row && row.id === result.work_id);
+            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token,
+                upserted ? now() : observedAtOf(cached));
         }
 
         async function reconcileCreatedPerson(result) {

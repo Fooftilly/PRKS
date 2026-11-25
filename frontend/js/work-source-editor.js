@@ -349,6 +349,10 @@
             const stateResult = await root.prksOfflineReadEntity('work-source-state', state.workId,
                 '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
                 Object.assign({ validate: sourceStateShape(state.workId) }, policy));
+            /* A cold park or a newer read between the two requests ends this
+             * one: a parked tab makes no requests. */
+            if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+            if (options && typeof options.still === 'function' && !options.still()) return false;
             const workResult = accepted(stateResult)
                 ? await root.prksOfflineReadEntity('work', state.workId,
                     '/api/works/' + encodeURIComponent(state.workId),
