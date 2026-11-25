@@ -5,19 +5,25 @@ that, while a test server serves it:
 
 - the answer's status is one the route's operation documents (its own or a
   shared refusal of ``backend.api_contract.openapi``);
-- a JSON answer validates against the documented schema for that status;
+- a JSON answer validates against the documented schema for that status
+  (a ``gzip`` Content-Encoding is undone first), and an answer with no body
+  is one whose status documents none;
 - the JSON body of a request answered with ``2xx`` validates against the
   route's request schema, so a request model is never stricter than what
   the route accepts.
 
-A violation is recorded, not raised, so the route still answers as it
-would; :class:`ContractCheck` fails the test that saw it. Exceptions a route
-raises go to the dispatcher unchecked.
+A violation, or an answer the checker cannot read, is recorded, not
+raised, so the route still answers as it would; :class:`ContractCheck` fails the test that saw it. Exceptions a route
+raises go to the dispatcher unchecked, and so do the answers the dispatcher
+gives before or around a route (admission refusals, the JSON body gate, the
+exception mapper): those are the shared ``components.responses``, whose
+presence ``tests/test_openapi_document.py`` checks per route.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import json
 from typing import Any, Optional
 
@@ -61,6 +67,12 @@ class ContractCheck:
 
     def check(self, route: Route, request: Request, response: Response) -> None:
         where = f"{route.method} {route.pattern} -> {response.status}"
+        try:
+            self._check(where, route, request, response)
+        except Exception as exc:  # the checker never changes what the route answers
+            self.violations.append(f"{where}: could not be checked ({type(exc).__name__}: {exc})")
+
+    def _check(self, where: str, route: Route, request: Request, response: Response) -> None:
         operation = self._operation(route)
         reply = operation["responses"].get(str(response.status))
         if reply is None:
@@ -68,12 +80,16 @@ class ContractCheck:
             return
         content = self._reply(reply).get("content") or {}
         media = (response.header("Content-Type") or "").split(";", 1)[0].strip()
-        if response.stream is None and response.body and route.method != "HEAD":
-            if media not in content:
-                self.violations.append(f"{where}: {media or 'no Content-Type'} not documented")
-            elif media == "application/json":
-                for err in self._schema_errors(content[media]["schema"], json.loads(response.body)):
-                    self.violations.append(f"{where}: answer {err}")
+        if response.stream is None and route.method != "HEAD":
+            payload = _decoded(response)
+            if payload:
+                if media not in content:
+                    self.violations.append(f"{where}: {media or 'no Content-Type'} not documented")
+                elif media == "application/json":
+                    for err in self._schema_errors(content[media]["schema"], json.loads(payload)):
+                        self.violations.append(f"{where}: answer {err}")
+            elif content:
+                self.violations.append(f"{where}: no body, but the contract documents {sorted(content)}")
         body = operation.get("requestBody")
         if 200 <= response.status < 300 and body and not request.json_absent and request.json is not None:
             schema = body["content"].get("application/json", {}).get("schema")
@@ -100,6 +116,14 @@ class ContractCheck:
         if not self.violations:
             return None
         return "answers outside the OpenAPI contract:\n  " + "\n  ".join(dict.fromkeys(self.violations))
+
+
+def _decoded(response: Response) -> bytes:
+    """The body as the route meant it: a ``gzip`` Content-Encoding undone."""
+    body = response.body or b""
+    if body and (response.header("Content-Encoding") or "").strip().lower() == "gzip":
+        return gzip.decompress(body)
+    return body
 
 
 def _rebase(schema: Any) -> Any:
