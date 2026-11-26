@@ -620,9 +620,16 @@
             if (data.person_id !== (op.payload && op.payload.person_id)) return false;
             switch (data.code) {
                 case 'ACKNOWLEDGED':
+                    /* The Group name and its revision come as a pair or
+                     * not at all: without them the chip is not patched. */
                     return typeof data.changed === 'boolean' &&
                         typeof data.present === 'boolean' &&
-                        Number.isSafeInteger(data.server_revision);
+                        Number.isSafeInteger(data.server_revision) &&
+                        (data.group_name === undefined
+                            ? data.group_name_revision === undefined
+                            : typeof data.group_name === 'string' &&
+                                Number.isSafeInteger(data.group_name_revision) &&
+                                data.group_name_revision >= 0);
                 case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
                     return Number.isSafeInteger(data.current_revision) &&
                         typeof data.current_present === 'boolean';

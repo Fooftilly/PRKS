@@ -139,6 +139,10 @@ function domainErrorResponse(status) {
     return { ok: false, status: status };
 }
 
+/* The fake store stamps every snapshot cachedAt 9999 (1970): an operation
+ * created now provably follows each read, so the reconcile core applies it. */
+const SENT_AFTER_READS = '2026-01-01T00:00:00.000Z';
+
 async function verifyCanonicalFolderFieldAcknowledgements() {
     // These are cache ACK paths, not pending drafts: server canonical_wire
     // strips Python whitespace and substitutes a title for an empty result.
@@ -167,7 +171,7 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
         const reconciled = await runtime.reconcileFolderField({
             code: 'ACKNOWLEDGED', folder_id: id, field,
             server_revision: 7, member_work_ids: [],
-        }, { payload: { value: raw } });
+        }, { payload: { value: raw }, created_at: SENT_AFTER_READS });
         assertEq(field + ' canonical ACK applied', reconciled, true);
         const list = (await store.getList('folders:index')).value;
         assertEq(field + ' canonical Folder list row', list[0][field], expected);
@@ -182,7 +186,7 @@ async function verifyCanonicalFolderFieldAcknowledgements() {
     const moved = await runtime.reconcileFolderField({
         code: 'ACKNOWLEDGED', folder_id: id,
         field: 'parent_id', server_revision: 8,
-    }, { payload: { value: 'F-PARENT' } });
+    }, { payload: { value: 'F-PARENT' }, created_at: SENT_AFTER_READS });
     assertEq('parent-id ACK applied', moved, true);
     assertEq('parent-id list row retains the pointer',
         (await store.getList('folders:index')).value[0].parent_id, 'F-PARENT');
@@ -311,7 +315,7 @@ async function verifyFolderAckCacheFootprint() {
     assertEq('description ACK applied', await runtime.reconcileFolderField({
         changed: true, folder_id: parent.id, field: 'description',
         server_revision: 2, member_work_ids: [memberWork.id],
-    }, {payload: {value: 'Edited.'}}), true);
+    }, {created_at: SENT_AFTER_READS, payload: {value: 'Edited.'}}), true);
     assertEq('description ACK increments only Folder generation',
         runtime.currentDomainGeneration('folders'), ++foldersGeneration);
     assertEq('description ACK patches index', (await row(parent.id)).description, 'Edited.');
@@ -327,7 +331,7 @@ async function verifyFolderAckCacheFootprint() {
     assertEq('reparent ACK applied', await runtime.reconcileFolderField({
         changed: true, folder_id: child.id, field: 'parent_id',
         server_revision: 3, member_work_ids: [],
-    }, {payload: {value: ''}}), true);
+    }, {created_at: SENT_AFTER_READS, payload: {value: ''}}), true);
     assertEq('reparent ACK increments only Folder generation',
         runtime.currentDomainGeneration('folders'), ++foldersGeneration);
     assertEq('reparent ACK updates index pointer', (await row(child.id)).parent_id, null);
@@ -345,7 +349,7 @@ async function verifyFolderAckCacheFootprint() {
     assertEq('rename ACK applied', await runtime.reconcileFolderField({
         changed: true, folder_id: parent.id, field: 'title',
         server_revision: 4, member_work_ids: [memberWork.id],
-    }, {payload: {value: 'Renamed Parent'}}), true);
+    }, {created_at: SENT_AFTER_READS, payload: {value: 'Renamed Parent'}}), true);
     assertEq('rename ACK increments only Folder generation',
         runtime.currentDomainGeneration('folders'), ++foldersGeneration);
     assertEq('rename ACK patches list', (await row(parent.id)).title, 'Renamed Parent');

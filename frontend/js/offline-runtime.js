@@ -1602,12 +1602,16 @@
             const cached = await store.getList(FOLDERS_LIST_KEY)
                 .catch(function () { return null; });
             if (!cached) return null;
-            return Array.isArray(cached.value) ? cached.value : null;
+            return Array.isArray(cached.value) ? reconcileCore.observe(cached.value, observedAtOf(cached)) : null;
         }
 
-        async function writeFolderRows(rows) {
+        /* `from` is the cached rows `rows` was derived from: the write keeps
+         * their read time, since a patch from an ACK does not make the other
+         * rows newer, and a later ACK proves its order from that time. */
+        async function writeFolderRows(rows, from) {
             const token = advanceDomainGeneration(DOMAIN_FOLDERS);
-            return cacheListForDomain(FOLDERS_LIST_KEY, rows, DOMAIN_FOLDERS, token);
+            return cacheListForDomain(FOLDERS_LIST_KEY, rows, DOMAIN_FOLDERS, token,
+                reconcileCore.observedAt(from));
         }
 
         /**
@@ -1625,7 +1629,7 @@
             const rows = await cachedFolderRows();
             if (rows) {
                 const merged = rows.filter(row => row && row.id !== folder.id).concat([folder]);
-                if (!await writeFolderRows(merged)) return false;
+                if (!await writeFolderRows(merged, rows)) return false;
             }
             if (result.changed && typeof root.prksNewFolderState === 'function') {
                 await patchEntity('folder-state', folder.id,
@@ -1650,37 +1654,50 @@
                 typeof root.prksCanonicalFolderFieldValue !== 'function') return false;
             const value = field === 'parent_id' ? (raw || null)
                 : root.prksCanonicalFolderFieldValue(field, raw);
+            if (!reconcileCore.isRevision(result.server_revision)) return false;
+            const ackRevision = result.server_revision;
+            /* Shared ordering rule (#1425, #1081): the field's revision in
+             * folder-state decides first. An older ACK touches nothing -- not
+             * the hierarchy row, the detail, or member Works. */
+            const stateEnvelope = await store.getEntity('folder-state', id).catch(function () { return null; });
+            const held = stateEnvelope && stateEnvelope.value && stateEnvelope.value.fields &&
+                stateEnvelope.value.fields[field];
+            if (held && superseded(ackRevision, held.revision)) return true;
             await patchEntity('folder-state', id, function (state) {
                 if (typeof root.prksIsFolderStateShape === 'function' &&
                     !root.prksIsFolderStateShape(state, id)) return null;
                 const entry = state.fields[field];
-                if (!entry || entry.revision > result.server_revision) return null;
+                if (!entry || superseded(ackRevision, entry.revision)) return null;
                 const next = Object.assign({}, state,
                     { fields: Object.assign({}, state.fields) });
-                next.fields[field] = { revision: result.server_revision };
+                next.fields[field] = { revision: ackRevision };
                 return next;
             });
-            const rows = await cachedFolderRows();
-            if (rows && rows.some(row => row && row.id === id)) {
-                const patched = rows.map(function (row) {
-                    if (!row || row.id !== id) return row;
-                    const next = Object.assign({}, row);
-                    next[field] = value;
-                    return next;
-                });
-                if (!await writeFolderRows(patched)) return false;
-            }
+            const sameValue = row => (field === 'parent_id' ? (row[field] || null) : row[field]) === value;
+            if (!await patchProvenList(FOLDERS_LIST_KEY, DOMAIN_FOLDERS, ackRevision, op,
+                rows => rows.every(row => !row || row.id !== id || sameValue(row)),
+                function (rows) {
+                    if (!rows.some(row => row && row.id === id)) return null;
+                    return rows.map(function (row) {
+                        if (!row || row.id !== id) return row;
+                        const next = Object.assign({}, row);
+                        next[field] = value;
+                        return next;
+                    });
+                })) return false;
             if (field === 'parent_id') {
                 /* The cached detail carries a `parent` OBJECT this
                  * acknowledgement does not name. */
                 await invalidateEntity('folder', id);
             } else {
-                await patchEntity('folder', id, function (folder) {
-                    if (!folder || folder.id !== id) return null;
-                    const next = Object.assign({}, folder);
-                    next[field] = value;
-                    return next;
-                });
+                if (!await patchProvenEntity('folder', id, ackRevision, op,
+                    folder => folder.id === id && sameValue(folder),
+                    function (folder) {
+                        if (!folder || folder.id !== id) return null;
+                        const next = Object.assign({}, folder);
+                        next[field] = value;
+                        return next;
+                    })) return false;
             }
             if (field === 'title') {
                 /* A cached Work detail embeds `folder_title`, and so does every
@@ -1705,6 +1722,13 @@
         async function reconcileWorkFolder(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const workId = result.work_id;
+            if (!reconcileCore.isRevision(result.server_revision)) return false;
+            /* Shared ordering rule (#1425, #1081): the filing revision decides
+             * first; an older ACK neither patches the Work nor stales the
+             * Folder projections. */
+            const stateEnvelope = await store.getEntity('work-folder-state', workId).catch(function () { return null; });
+            if (stateEnvelope && stateEnvelope.value &&
+                superseded(result.server_revision, stateEnvelope.value.revision)) return true;
             await patchEntity('work-folder-state', workId, function (state) {
                 if (typeof root.prksIsWorkFolderStateShape === 'function' &&
                     !root.prksIsWorkFolderStateShape(state, workId)) return null;
@@ -1714,14 +1738,17 @@
             });
             /* The Work's own snapshot and its cards carry the folder's TITLE,
              * and the acknowledgement states it exactly -- so they are patched
-             * rather than dropped. */
-            await patchEntity('work', workId, function (work) {
-                if (!work || work.id !== workId) return null;
-                return Object.assign({}, work, {
-                    folder_id: result.folder_id || null,
-                    folder_title: result.folder_title || '',
-                });
-            });
+             * rather than dropped, when the snapshot provably predates it. */
+            if (!await patchProvenEntity('work', workId, result.server_revision, op,
+                work => (work.folder_id || null) === (result.folder_id || null) &&
+                    (work.folder_title || '') === (result.folder_title || ''),
+                function (work) {
+                    if (!work || work.id !== workId) return null;
+                    return Object.assign({}, work, {
+                        folder_id: result.folder_id || null,
+                        folder_title: result.folder_title || '',
+                    });
+                })) return false;
             if (!result.changed) return true;
             /* Both folders' contents changed, and this device does not know
              * which folder the Work left -- the answer names only where it
@@ -1743,7 +1770,7 @@
             const id = result.folder_id;
             const rows = await cachedFolderRows();
             if (rows) {
-                if (!await writeFolderRows(rows.filter(row => row && row.id !== id))) {
+                if (!await writeFolderRows(rows.filter(row => row && row.id !== id), rows)) {
                     return false;
                 }
             }
@@ -2699,13 +2726,14 @@
             const cached = await store.getList(PERSON_GROUPS_LIST_KEY)
                 .catch(function () { return null; });
             if (!cached) return null;
-            return Array.isArray(cached.value) ? cached.value : null;
+            return Array.isArray(cached.value) ? reconcileCore.observe(cached.value, observedAtOf(cached)) : null;
         }
 
-        async function writeGroupRows(rows) {
+        /* `from` as for writeFolderRows. */
+        async function writeGroupRows(rows, from) {
             const token = advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
             return cacheListForDomain(PERSON_GROUPS_LIST_KEY, rows,
-                DOMAIN_PERSON_GROUPS, token);
+                DOMAIN_PERSON_GROUPS, token, reconcileCore.observedAt(from));
         }
 
         async function patchEntity(kind, id, mutate) {
@@ -2717,6 +2745,72 @@
             const next = mutate(value);
             if (next === null) return true;
             return cacheEntityIfCurrent(kind, id, next, token, observedAtOf(snapshot));
+        }
+
+        /* Patch a cached record that carries no revision for the acknowledged
+         * target, under the shared ordering rule (`prksSyncReconcile.planAck`,
+         * #1425): written only when it already agrees or its read predates
+         * `op`; otherwise dropped for the next read to refetch. `agrees` and
+         * `mutate` see the cached value; `mutate` returns null for no write. */
+        async function patchProvenEntity(kind, id, ackRevision, op, agrees, mutate) {
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            const snapshot = await store.getEntity(kind, id).catch(function () { return null; });
+            const value = snapshot && snapshot.value;
+            if (!value) return true;
+            const plan = reconcileCore.planAck({
+                ackRevision, agrees: !!agrees(value),
+                observedAt: observedAtOf(snapshot), operationCreatedAt: op && op.created_at,
+            });
+            if (plan === 'unproven') {
+                /* The in-memory block ends with the page; a record that could
+                 * not be dropped keeps the operation queued. */
+                return dropUnprovenEntity(kind, id);
+            }
+            if (plan !== 'apply') return true;
+            const next = mutate(value);
+            if (next === null) return true;
+            if (next === UNSTATED_PATCH) return dropUnprovenEntity(kind, id);
+            return cacheEntityIfCurrent(kind, id, next, token, observedAtOf(snapshot));
+        }
+
+        /* The list form of patchProvenEntity: one cached list snapshot whose
+         * rows carry no revision. An unproven snapshot is dropped and its
+         * domain generation advanced, so a GET already in flight cannot
+         * republish it. Returns false only when a required write failed. */
+        async function patchProvenList(listKey, domain, ackRevision, op, agrees, mutate) {
+            const token = advanceDomainGeneration(domain);
+            const cached = await store.getList(listKey).catch(function () { return null; });
+            if (!cached || !Array.isArray(cached.value)) return true;
+            const plan = reconcileCore.planAck({
+                ackRevision, agrees: !!agrees(cached.value),
+                observedAt: observedAtOf(cached), operationCreatedAt: op && op.created_at,
+            });
+            if (plan === 'unproven') {
+                /* The domain token stops a GET already in flight; a later
+                 * offline read skips the list while it is being dropped, and
+                 * a snapshot that could not be dropped keeps the operation
+                 * queued. */
+                return dropUnprovenList(listKey);
+            }
+            if (plan !== 'apply') return true;
+            const next = mutate(cached.value);
+            if (next === null) return true;
+            if (next === UNSTATED_PATCH) return dropUnprovenList(listKey);
+            return cacheListForDomain(listKey, next, domain, token, observedAtOf(cached));
+        }
+
+        /* Returned by a `mutate` above when the ACK proves the change but
+         * does not state every value the patch would write (a chip whose
+         * name it cannot prove current). The cached value is dropped, as an
+         * unproven one is, rather than written with a guess. */
+        const UNSTATED_PATCH = Object.freeze({});
+
+        /* True when a revision projection proves the ACK older than it holds. */
+        function superseded(ackRevision, heldRevision) {
+            return reconcileCore.isRevision(heldRevision) && reconcileCore.decideAck({
+                ackRevision, heldRevision,
+            }) === 'superseded';
         }
 
         /**
@@ -2735,9 +2829,20 @@
             const group = result && result.group;
             if (!group || group.id !== result.group_id) return false;
             const rows = await cachedGroupRows();
-            if (rows) {
-                const merged = rows.filter(row => row && row.id !== group.id).concat([group]);
-                if (!await writeGroupRows(merged)) return false;
+            const cachedRow = rows ? rows.some(row => row && row.id === group.id) : false;
+            /* A row this catalogue already holds was read from the server,
+             * so it is kept as read: a ledger replay answers with the row as
+             * it was at creation, and a create of an existing Group with the
+             * row as it is now, whose member count may already include
+             * memberships committed after this catalogue was read (which a
+             * later membership ACK would then count again). A new row is
+             * added only for a create that made it; otherwise the catalogue
+             * is dropped rather than stamped with the older read time. */
+            if (rows && !cachedRow && result.changed) {
+                if (!await writeGroupRows(rows.concat([group]), rows)) return false;
+            } else if (rows && !cachedRow) {
+                advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
+                if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
             }
             if (result.changed && typeof root.prksNewPersonGroupState === 'function') {
                 await patchEntity('person-group-state', group.id,
@@ -2762,28 +2867,37 @@
                 !root.prksIsSupportedPersonGroupField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
             const value = field === 'parent_id' ? (raw || null) : raw;
+            if (!reconcileCore.isRevision(result.server_revision)) return false;
+            const ackRevision = result.server_revision;
+            /* Shared ordering rule (#1425, #1079): the field revision in
+             * person-group-state decides first; an older ACK touches no
+             * catalogue row, detail or chip. */
+            const stateEnvelope = await store.getEntity('person-group-state', id).catch(function () { return null; });
+            const held = stateEnvelope && stateEnvelope.value && stateEnvelope.value.fields &&
+                stateEnvelope.value.fields[field];
+            if (held && superseded(ackRevision, held.revision)) return true;
             await patchEntity('person-group-state', id, function (state) {
                 if (typeof root.prksIsPersonGroupStateShape === 'function' &&
                     !root.prksIsPersonGroupStateShape(state, id)) return null;
                 const entry = state.fields[field];
-                // An acknowledgement older than what the cache already holds has
-                // been superseded; applying it would move the field back.
-                if (!entry || entry.revision > result.server_revision) return null;
+                if (!entry || superseded(ackRevision, entry.revision)) return null;
                 const next = Object.assign({}, state,
                     { fields: Object.assign({}, state.fields) });
-                next.fields[field] = { revision: result.server_revision };
+                next.fields[field] = { revision: ackRevision };
                 return next;
             });
-            const rows = await cachedGroupRows();
-            if (rows && rows.some(row => row && row.id === id)) {
-                const patched = rows.map(function (row) {
-                    if (!row || row.id !== id) return row;
-                    const next = Object.assign({}, row);
-                    next[field] = value;
-                    return next;
-                });
-                if (!await writeGroupRows(patched)) return false;
-            }
+            const sameValue = row => (field === 'parent_id' ? (row[field] || null) : row[field]) === value;
+            if (!await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS, ackRevision, op,
+                rows => rows.every(row => !row || row.id !== id || sameValue(row)),
+                function (rows) {
+                    if (!rows.some(row => row && row.id === id)) return null;
+                    return rows.map(function (row) {
+                        if (!row || row.id !== id) return row;
+                        const next = Object.assign({}, row);
+                        next[field] = value;
+                        return next;
+                    });
+                })) return false;
             if (field === 'parent_id') {
                 /* The cached detail carries a `parent` OBJECT, which this
                  * acknowledgement does not name -- there is no precise patch to
@@ -2791,12 +2905,14 @@
                  * exactly when a refetch is affordable. */
                 await invalidateEntity('person-group', id);
             } else {
-                await patchEntity('person-group', id, function (group) {
-                    if (!group || group.id !== id) return null;
-                    const next = Object.assign({}, group);
-                    next[field] = value;
-                    return next;
-                });
+                if (!await patchProvenEntity('person-group', id, ackRevision, op,
+                    group => group.id === id && sameValue(group),
+                    function (group) {
+                        if (!group || group.id !== id) return null;
+                        const next = Object.assign({}, group);
+                        next[field] = value;
+                        return next;
+                    })) return false;
             }
             if (field === 'name') {
                 /* A group chip carries the NAME, and chips are embedded in the
@@ -2804,22 +2920,17 @@
                  * this device holds are patched; a Person snapshot is keyed by
                  * id and there is no list of them to walk, so the People domain
                  * is staled for those. */
-                const people = await store.getList(PEOPLE_LIST_KEY)
-                    .catch(function () { return null; });
-                const peopleRows = people && Array.isArray(people.value) ? people.value : null;
-                if (peopleRows) {
-                    const token = advanceDomainGeneration(DOMAIN_PEOPLE);
-                    const patched = peopleRows.map(function (row) {
+                if (!await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
+                    rows => rows.every(row => !row || !Array.isArray(row.groups) ||
+                        row.groups.every(g => !g || g.id !== id || g.name === raw)),
+                    rows => rows.map(function (row) {
                         if (!row || !Array.isArray(row.groups)) return row;
                         if (!row.groups.some(g => g && g.id === id)) return row;
                         return Object.assign({}, row, {
                             groups: row.groups.map(g => (g && g.id === id
                                 ? Object.assign({}, g, { name: raw }) : g)),
                         });
-                    });
-                    if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched,
-                        DOMAIN_PEOPLE, token)) return false;
-                }
+                    }))) return false;
                 await production.markDomainChanged(DOMAIN_PEOPLE, {
                     entityKinds: ['person'], listKeys: [],
                 });
@@ -2833,27 +2944,62 @@
             const groupId = result.group_id;
             const personId = result.person_id;
             const present = result.present === true;
-            await patchEntity('person-group-state', groupId, function (state) {
+            if (!reconcileCore.isRevision(result.server_revision)) return false;
+            const ackRevision = result.server_revision;
+            /* Shared ordering rule (#1425, #1079): the pair revision in EITHER
+             * membership projection proves an older ACK superseded, and then
+             * nothing moves -- no presence, no count delta, no chip. */
+            const [groupState, personState] = await Promise.all([
+                store.getEntity('person-group-state', groupId).catch(function () { return null; }),
+                store.getEntity('person-group-memberships', personId).catch(function () { return null; }),
+            ]);
+            const groupPair = groupState && groupState.value && Array.isArray(groupState.value.members)
+                ? groupState.value.members.find(m => m && m.person_id === personId) : null;
+            const personPair = personState && personState.value && Array.isArray(personState.value.groups)
+                ? personState.value.groups.find(g => g && g.group_id === groupId) : null;
+            if ((groupPair && superseded(ackRevision, groupPair.revision)) ||
+                (personPair && superseded(ackRevision, personPair.revision))) return true;
+            /* A pair already at this revision and presence was reconciled
+             * before (a ledger replay) or read after the change: either way a
+             * count patched since may already include it. */
+            const sameRevision = pair => !!pair && pair.revision === ackRevision && pair.present === present;
+            /* With neither projection cached, nothing records that this ACK
+             * was counted: a retry after a later failure would count it again. */
+            const remembered = !!(groupState && groupState.value) || !!(personState && personState.value);
+            const countUncertain = !remembered || sameRevision(groupPair) || sameRevision(personPair);
+            /* The guard above read both projections before either write; a
+             * newer read published in between is checked again inside each
+             * write. A projection already past this ACK is not regressed, and
+             * then nothing further moves: that read already counts it. */
+            let overtaken = false;
+            const newer = pair => {
+                if (pair && superseded(ackRevision, pair.revision)) { overtaken = true; return true; }
+                return false;
+            };
+            const recorded = await Promise.all([patchEntity('person-group-state', groupId, function (state) {
                 if (typeof root.prksIsPersonGroupStateShape === 'function' &&
                     !root.prksIsPersonGroupStateShape(state, groupId)) return null;
+                if (newer((state.members || []).find(m => m && m.person_id === personId))) return null;
                 const members = (state.members || [])
                     .filter(m => m.person_id !== personId)
                     .concat([{ person_id: personId, revision: result.server_revision,
                         present: present }]);
                 members.sort((a, b) => a.person_id.localeCompare(b.person_id));
                 return Object.assign({}, state, { members: members });
-            });
-            await patchEntity('person-group-memberships', personId, function (state) {
+            }), patchEntity('person-group-memberships', personId, function (state) {
                 if (typeof root.prksIsPersonGroupMembershipStateShape === 'function' &&
                     !root.prksIsPersonGroupMembershipStateShape(state, personId)) return null;
+                if (newer((state.groups || []).find(g => g && g.group_id === groupId))) return null;
                 const groups = (state.groups || [])
                     .filter(g => g.group_id !== groupId)
                     .concat([{ group_id: groupId, revision: result.server_revision,
                         present: present }]);
                 groups.sort((a, b) => a.group_id.localeCompare(b.group_id));
                 return Object.assign({}, state, { groups: groups });
-            });
-            if (!result.changed) return true;
+            })]);
+            /* The count is patched only once a projection records the ACK. */
+            if (recorded.includes(false)) return false;
+            if (overtaken || !result.changed) return true;
             const people = await store.getList(PEOPLE_LIST_KEY)
                 .catch(function () { return null; });
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;
@@ -2861,33 +3007,73 @@
                 ? peopleRows.find(row => row && row.id === personId) : null;
             const rows = await cachedGroupRows();
             const group = rows ? rows.find(row => row && row.id === groupId) : null;
-            if (rows && group) {
-                const patched = rows.map(function (row) {
+            /* A count delta is only right on a count read BEFORE this change:
+             * a catalogue read after it already counts it, so an unproven
+             * catalogue is dropped instead of counted twice. */
+            if (group && countUncertain) {
+                advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
+                if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
+            } else if (group && !await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS,
+                ackRevision, op, () => false,
+                groupRows => groupRows.map(function (row) {
                     if (!row || row.id !== groupId) return row;
                     return Object.assign({}, row, {
                         member_count: Math.max(0,
                             Number(row.member_count || 0) + (present ? 1 : -1)),
                     });
-                });
-                if (!await writeGroupRows(patched)) return false;
-            }
-            if (peopleRows && person) {
-                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
-                const chip = { id: groupId, name: group ? String(group.name || '') : '' };
-                const patched = peopleRows.map(function (row) {
-                    if (!row || row.id !== personId) return row;
-                    const chips = Array.isArray(row.groups) ? row.groups : [];
-                    const without = chips.filter(g => !g || g.id !== groupId);
-                    return Object.assign({}, row,
-                        { groups: present ? without.concat([chip]) : without });
-                });
-                if (!await cacheListForDomain(PEOPLE_LIST_KEY, patched,
-                    DOMAIN_PEOPLE, token)) return false;
-            }
+                }))) return false;
+            const hasChip = row => Array.isArray(row.groups) && row.groups.some(g => g && g.id === groupId);
+            /* The chip names the group as the server stored it when it
+             * applied this membership, at the name's own revision. The name
+             * is revisioned apart from the membership, so it is used only
+             * when no newer name is held: a delayed or replayed ACK after a
+             * rename must not bring the old name back. A name the ACK does
+             * not state or cannot prove current is never guessed: a row that
+             * would need the chip is dropped for the next read instead. */
+            const heldName = groupState && groupState.value && groupState.value.fields &&
+                groupState.value.fields.name;
+            /* The catalogue row and the Group detail name the Group without a
+             * revision. A name they disagree with is ordered by read time
+             * alone: a snapshot read before this operation is older than the
+             * ACK, and one read after it cannot be ordered, so the chip is not
+             * asserted (#1452 review). */
+            const groupDetail = await store.getEntity('person-group', groupId)
+                .catch(function () { return null; });
+            const nameEvidence = [
+                { value: group, observedAt: rows ? reconcileCore.observedAt(rows) : null },
+                { value: groupDetail && groupDetail.value, observedAt: observedAtOf(groupDetail) },
+            ].filter(entry => entry.value && typeof entry.value.name === 'string');
+            const nameKnown = typeof result.group_name === 'string' &&
+                reconcileCore.isRevision(result.group_name_revision) &&
+                !(heldName && superseded(result.group_name_revision, heldName.revision)) &&
+                nameEvidence.every(entry => reconcileCore.planAck({
+                    ackRevision: result.group_name_revision,
+                    agrees: entry.value.name === result.group_name,
+                    observedAt: entry.observedAt, operationCreatedAt: op && op.created_at,
+                }) !== 'unproven');
+            const chip = nameKnown ? { id: groupId, name: result.group_name } : null;
+            /* The People fence moves even with no row to patch: a People read
+             * started before this ACK must not publish its older rows after it. */
+            if (!person) advanceDomainGeneration(DOMAIN_PEOPLE);
+            else if (!await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
+                peopleList => peopleList.every(row => !row || row.id !== personId || hasChip(row) === present),
+                peopleList => {
+                    if (present && !chip) return UNSTATED_PATCH;
+                    return peopleList.map(function (row) {
+                        if (!row || row.id !== personId) return row;
+                        const chips = Array.isArray(row.groups) ? row.groups : [];
+                        const without = chips.filter(g => !g || g.id !== groupId);
+                        return Object.assign({}, row,
+                            { groups: present ? without.concat([chip]) : without });
+                    });
+                })) return false;
             /* The Group detail embeds whole People rows and the Person detail
              * embeds group chips. Both are patched from what this device
              * already holds; neither is invented when it does not. */
-            await patchEntity('person-group', groupId, function (value) {
+            if (!await patchProvenEntity('person-group', groupId, ackRevision, op,
+                value => Array.isArray(value.members) &&
+                    value.members.some(m => m && m.id === personId) === present,
+                function (value) {
                 if (!value || value.id !== groupId) return null;
                 const members = Array.isArray(value.members) ? value.members : [];
                 if (present) {
@@ -2903,21 +3089,21 @@
                 const next = Object.assign({}, value, { members: remaining });
                 next.member_count = remaining.length;
                 return next;
-            });
-            await patchEntity('person', personId, function (value) {
+            })) return false;
+            if (!await patchProvenEntity('person', personId, ackRevision, op,
+                value => hasChip(value) === present,
+                function (value) {
                 if (!value || value.id !== personId) return null;
                 const chips = Array.isArray(value.groups) ? value.groups : [];
                 const without = chips.filter(g => !g || g.id !== groupId);
                 if (present) {
                     if (without.length !== chips.length) return null;
-                    return Object.assign({}, value, {
-                        groups: chips.concat([{ id: groupId,
-                            name: group ? String(group.name || '') : '' }]),
-                    });
+                    if (!chip) return UNSTATED_PATCH;
+                    return Object.assign({}, value, { groups: chips.concat([chip]) });
                 }
                 if (without.length === chips.length) return null;
                 return Object.assign({}, value, { groups: without });
-            });
+            })) return false;
             return true;
         }
 
@@ -2940,7 +3126,7 @@
                     .filter(row => row && row.id !== id)
                     .map(row => (row.parent_id === id
                         ? Object.assign({}, row, { parent_id: inherited }) : row));
-                if (!await writeGroupRows(remaining)) return false;
+                if (!await writeGroupRows(remaining, rows)) return false;
             }
             await invalidateEntity('person-group', id);
             await invalidateEntity('person-group-state', id);
