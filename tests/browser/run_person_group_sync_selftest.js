@@ -1431,6 +1431,25 @@ async function aPendingMoveShowsTheNewParent() {
     const atRoot = globalThis.prksEffectivePersonGroupDetail(group, both, [],
         globalThis.prksEffectivePersonGroups(rows.map(r => (r.id === "PG-NEW" ? { ...r, parent_id: null } : r)), both));
     assert.equal(atRoot.parent, null, "a destination at the top level leaves the group at the top level");
+    /* Edit opens on that ancestor: the pin takes it as this device's pending
+     * parent, at the move's revision, rather than as changed elsewhere. */
+    const previousRead = globalThis.prksOfflineReadEntity;
+    globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "person-group-state"
+        ? { value: { group_id: id, fields: { name: { revision: 0 }, description: { revision: 0 },
+            parent_id: { revision: 2 } }, members: [] }, source: "server" }
+        : { value: { id, name: "Child", description: "", parent_id: "PG-OLD" }, source: "server" });
+    try {
+        const pinned = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-ANC" }, both);
+        assert(pinned && pinned.parent_id, "the shown ancestor is a known base");
+        assert.equal(pinned.parent_id.revision, 2, "measured against the pending move's revision");
+        assert.equal(pinned.parent_id.pending, "PG-ANC");
+        const stale = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OTHER" }, ops);
+        assert.equal(stale.parent_id, null, "without the deletion a different parent is still unknown");
+    } finally {
+        globalThis.prksOfflineReadEntity = previousRead;
+    }
 }
 
 /* A membership ACK names the Group with its name revision, or not at all
