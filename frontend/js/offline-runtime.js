@@ -2861,16 +2861,18 @@
             const group = result && result.group;
             if (!group || group.id !== result.group_id) return false;
             const rows = await cachedGroupRows();
-            if (rows && result.changed) {
-                const merged = rows.filter(row => row && row.id !== group.id).concat([group]);
-                if (!await writeGroupRows(merged, rows)) return false;
-            } else if (rows && !rows.some(row => row && row.id === group.id)) {
-                /* A replayed create answers with the row as it is NOW: its
-                 * member count may already include memberships committed
-                 * after this catalogue was read, which a later membership ACK
-                 * would then count again. A cached row is kept as read; with
-                 * none, the catalogue is dropped rather than stamped with the
-                 * older read time. */
+            const cachedRow = rows ? rows.some(row => row && row.id === group.id) : false;
+            /* A row this catalogue already holds was read from the server,
+             * so it is kept as read: a ledger replay answers with the row as
+             * it was at creation, and a create of an existing Group with the
+             * row as it is now, whose member count may already include
+             * memberships committed after this catalogue was read (which a
+             * later membership ACK would then count again). A new row is
+             * added only for a create that made it; otherwise the catalogue
+             * is dropped rather than stamped with the older read time. */
+            if (rows && !cachedRow && result.changed) {
+                if (!await writeGroupRows(rows.concat([group]), rows)) return false;
+            } else if (rows && !cachedRow) {
                 advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
                 if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
             }
@@ -3062,18 +3064,25 @@
              * would need the chip is dropped for the next read instead. */
             const heldName = groupState && groupState.value && groupState.value.fields &&
                 groupState.value.fields.name;
-            /* With no name revision held, the catalogue row and the Group
-             * detail are the only other evidence, and carry no revision: a
-             * name they disagree with cannot be ordered against the ACK's,
-             * so the chip is not asserted (#1452 review). */
-            const groupDetail = heldName ? null : await store.getEntity('person-group', groupId)
+            /* The catalogue row and the Group detail name the Group without a
+             * revision. A name they disagree with is ordered by read time
+             * alone: a snapshot read before this operation is older than the
+             * ACK, and one read after it cannot be ordered, so the chip is not
+             * asserted (#1452 review). */
+            const groupDetail = await store.getEntity('person-group', groupId)
                 .catch(function () { return null; });
-            const unorderedNames = heldName ? [] : [group, groupDetail && groupDetail.value]
-                .filter(value => value && typeof value.name === 'string').map(value => value.name);
+            const nameEvidence = [
+                { value: group, observedAt: rows ? reconcileCore.observedAt(rows) : null },
+                { value: groupDetail && groupDetail.value, observedAt: observedAtOf(groupDetail) },
+            ].filter(entry => entry.value && typeof entry.value.name === 'string');
             const nameKnown = typeof result.group_name === 'string' &&
                 reconcileCore.isRevision(result.group_name_revision) &&
-                (heldName ? !superseded(result.group_name_revision, heldName.revision)
-                    : unorderedNames.every(name => name === result.group_name));
+                !(heldName && superseded(result.group_name_revision, heldName.revision)) &&
+                nameEvidence.every(entry => reconcileCore.planAck({
+                    ackRevision: result.group_name_revision,
+                    agrees: entry.value.name === result.group_name,
+                    observedAt: entry.observedAt, operationCreatedAt: op && op.created_at,
+                }) !== 'unproven');
             const chip = nameKnown ? { id: groupId, name: result.group_name } : null;
             /* The People fence moves even with no row to patch: a People read
              * started before this ACK must not publish its older rows after it. */
