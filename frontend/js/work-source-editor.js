@@ -8,6 +8,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const unavailable = 'Video source not available offline for this file yet. Connect once and open Edit metadata to prepare it.';
 
@@ -180,6 +183,9 @@
                      * change rather than as a cancellation. */
                     state.observed = baseOf(op.server_result.current_revision,
                         root.prksWorkSourceConflictIdentity(op.server_result));
+                    /* The result names the server's video by identity and a
+                     * bounded preview only: no columns to show. */
+                    state.acknowledged = null;
                 }
             }
         } catch (_) {
@@ -194,7 +200,7 @@
          * falling back to the stale pre-conflict Work. A session that ended
          * during the resolution must not adopt that re-read. */
         if (!apply && still() && live(ctx, state)) {
-            const settled = await readBase(ctx, state, { adopt: true, still: still });
+            const settled = await readBase(ctx, state, { adopt: true, still: still, resolved: true });
             if (!settled) return;
         }
         if (still()) await safePaint(ctx, state);
@@ -208,18 +214,53 @@
      * write would never run and the editor would keep showing the URL the user
      * typed after the server had answered with another. What must not be
      * overwritten is text the user is typing right now -- and only the owner
-     * of the shared panel may write into it at all.
+     * of the shared panel may write into it at all. False when the owner's
+     * focused source field kept other text.
      */
-    function writeInput(ctx, state, url) {
+    /* Unsaved source text other than `url`: a draft that differs from its
+     * baseline is the user's, not the tab's copy of the server's. */
+    function unsavedSource(ctx, state, url) {
+        const ui = ctx && ctx.ui;
+        const draft = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaDraft;
+        const baseline = draft && ui.workMetaBaseline;
+        return !!baseline && draft.source_url != null &&
+            String(draft.source_url) !== String(baseline.source_url == null ? '' : baseline.source_url) &&
+            String(draft.source_url) !== String(url == null ? '' : url);
+    }
+
+    /* True when the draft's baseline is the source `identity` names: the
+     * draft was typed over that source, so its revision is the draft's base.
+     * `identity` is the acknowledged one from the same snapshot as the
+     * revision, never a queued replacement shown over it. */
+    function typedOver(ctx, state, identity) {
+        const ui = ctx && ctx.ui;
+        const baseline = ui && ui.workMetaDraftWorkId === String(state.workId) && ui.workMetaBaseline;
+        if (!baseline || typeof root.prksCanonicalWorkSource !== 'function') return false;
+        const source = root.prksCanonicalWorkSource(baseline.source_url == null ? '' : String(baseline.source_url));
+        return !!source && root.prksWorkSourceIdentity(source) === identity;
+    }
+
+    /* `resolved` is the user's explicit "Use server": that choice replaces an
+     * unsaved draft, which otherwise stays after the field loses focus too. */
+    function writeInput(ctx, state, url, resolved) {
+        const focused = typeof document !== 'undefined' ? document.activeElement : null;
+        const typing = !!focused && typeof focused.matches === 'function' &&
+            focused.matches('[data-prks-work-field="source_url"], #meta-video-url') &&
+            focused.value !== String(url == null ? '' : url);
+        if (typing && owns(ctx, state)) return false;
+        /* An unsaved draft is kept whether or not this pane shows it now: a
+         * hidden pane remounts the same draft when the user returns. */
+        if (!resolved && unsavedSource(ctx, state, url)) return false;
         if (typeof root.prksVueAcceptWorkMetadataField === 'function' &&
             typeof root.prksVueWorkMetadataEditorOwns === 'function' &&
             root.prksVueWorkMetadataEditorOwns(ctx)) {
             root.prksVueAcceptWorkMetadataField(ctx, 'source_url', url == null ? '' : String(url));
-            return;
+            return true;
         }
         const section = owns(ctx, state) ? sectionOf() : null;
         const input = section && section.querySelector('#meta-video-url');
         if (input && document.activeElement !== input) input.value = url;
+        return true;
     }
 
     /**
@@ -231,15 +272,18 @@
      * edit -- on a Work nobody else touched. The cached projection is patched
      * by the runtime; this is the same fact for the editor that is open.
      */
-    function acceptAck(ctx, state, ack) {
+    function acceptAck(ctx, state, ack, op) {
         if (!live(ctx, state) || ack.work_id !== state.workId) return;
         if (!Number.isSafeInteger(ack.server_revision)) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (state.observed && state.observed.revision > ack.server_revision) return;
+        /* Shared ordering rule (#1425, #1106): the observed base's revision
+         * can prove the ACK superseded; the Work is proven by its read time.
+         * An unproven Work is patched, then the whole base is re-read. */
+        const plan = applySourceAck(ctx, ack, op, state.observed ? state.observed.revision : null);
+        if (plan === 'superseded') return;
+        state.acknowledged = root.prksAcknowledgedWorkSource(ack);
         state.observed = baseOf(ack.server_revision,
-            root.prksWorkSourceIdentity(root.prksAcknowledgedWorkSource(ack)));
-        ctx.setEntity('work', Object.assign({}, ctx.getEntity('work'),
-            root.prksAcknowledgedWorkSource(ack)));
+            root.prksWorkSourceIdentity(state.acknowledged));
         /* Only the owner of the shared panel may write the panel, and only
          * inside it: this Work's acknowledgement must never be published into
          * whichever Work's editor happens to be on screen. */
@@ -247,19 +291,63 @@
          * and stored nothing of ours; showing what we asked for would claim a
          * value the server does not have. */
         writeInput(ctx, state, ack.source_url);
+        if (plan === 'unproven') {
+            void readBase(ctx, state, { adopt: true, keep: true })
+                .then(read => (read && live(ctx, state) ? safePaint(ctx, state) : null))
+                .catch(() => null);
+        }
+    }
+
+    /* One source ACK into this owner's Work under `applyOwnerAck`. `reread`
+     * false leaves the re-read to the caller (the mounted editor re-reads its
+     * whole base); a parked owner re-reads the Work alone. */
+    function applySourceAck(ctx, ack, op, heldRevision, reread) {
+        const columns = root.prksAcknowledgedWorkSource(ack);
+        return reconcileCore.applyOwnerAck({
+            ackRevision: ack.server_revision,
+            heldRevision,
+            operationCreatedAt: op && op.created_at,
+        }, {
+            get: () => {
+                const work = ctx.getEntity('work');
+                return work && work.id === ack.work_id ? work : null;
+            },
+            set: value => ctx.setEntity('work', value),
+            agrees: work => Object.keys(columns).every(column => work[column] === columns[column]),
+            patch: work => Object.assign({}, work, columns),
+            /* Fresh, never joined: an older in-flight GET could hold the
+             * source from before another device's save. */
+            read: () => (reread ? root.prksOfflineReadEntity('work', ack.work_id,
+                '/api/works/' + encodeURIComponent(ack.work_id),
+                { validate: value => !!value && value.id === ack.work_id,
+                    requestPolicy: { dedupe: false } }) : Promise.resolve(null)),
+            merge: (held, fresh) => adoptSourceOf(held, fresh),
+        });
+    }
+
+    /* The held Work with only the source columns taken from a server read.
+     * The rest of the held Work may be newer than that read: another family's
+     * ACK (a note, a Tag link) or a pending overlay (placement) applied while
+     * it was in flight, and a source re-read must not undo it. */
+    function adoptSourceOf(held, fresh) {
+        const next = Object.assign({}, held, root.prksAcknowledgedWorkSource(fresh));
+        return reconcileCore.carryObservation(fresh, next);
     }
 
     /** Entity-only source acknowledgement for a parked owner. No observed base, no paint. */
-    function applyWorkSourceEntityAck(ctx, ack) {
+    function applyWorkSourceEntityAck(ctx, ack, op) {
         if (!ctx || !ack || typeof root.prksAcknowledgedWorkSource !== 'function') return;
-        const work = ctx.getEntity('work');
-        if (!work || work.id !== ack.work_id) return;
-        ctx.setEntity('work', Object.assign({}, work, root.prksAcknowledgedWorkSource(ack)));
+        if (!Number.isSafeInteger(ack.server_revision)) return;
+        applySourceAck(ctx, ack, op, null, true);
     }
 
+    /* The revision and the source it belongs to: an answer without the
+     * source is no base. */
     function sourceStateShape(workId) {
         return value => !!value && typeof value === 'object' && value.work_id === workId &&
-            Number.isSafeInteger(value.revision) && value.revision >= 0;
+            Number.isSafeInteger(value.revision) && value.revision >= 0 &&
+            typeof value.source_kind === 'string' && typeof value.provider === 'string' &&
+            typeof value.provider_id === 'string' && typeof value.source_url === 'string';
     }
 
     /**
@@ -272,6 +360,28 @@
      * identity was re-read from the tab's Work every time -- correct until a
      * resolution moved the server somewhere that Work had never been.
      */
+    /* The source this device means right now: its queued replacement, or
+     * with none queued the identity of the base. */
+    function currentIdentity(workId, state) {
+        const stub = { id: workId };
+        const view = root.prksEffectiveWorkSource(stub);
+        return view !== stub
+            ? root.prksWorkSourceIdentity(root.prksWorkSourceOf(view))
+            : state.observed.identity;
+    }
+
+    /* After a save the tab shows what the Work route would: the acknowledged
+     * columns with the queue over them. A save that cancelled a queued
+     * replacement otherwise left that replacement on screen. */
+    function showAcknowledgedWithQueue(ctx, state) {
+        const held = ctx.getEntity('work');
+        if (!state.acknowledged || !held || held.id !== state.workId) return;
+        /* No read time is carried: the source columns are newer than the
+         * held Work's read, so its time would not describe them. A later ACK
+         * the base revision cannot order is re-read instead (#1425). */
+        ctx.setEntity('work', root.prksEffectiveWorkSource(Object.assign({}, held, state.acknowledged)));
+    }
+
     function baseOf(revision, identity) {
         return { revision, identity: identity || '' };
     }
@@ -291,43 +401,111 @@
      * `options.adopt` says this read follows a discard, so its result replaces
      * what the tab is holding rather than merely establishing a base.
      */
+    /* "Use server" invalidated the cached Work with the source state. The
+     * base never comes from it, but reopening the Work offline needs a
+     * detail snapshot, so a fresh one is read back into the cache. A failure
+     * leaves the Work to the next online read. */
+    async function refreshCachedWork(workId) {
+        try {
+            await root.prksOfflineReadEntity('work', workId, '/api/works/' + encodeURIComponent(workId),
+                { validate: value => !!value && value.id === workId, requestPolicy: { dedupe: false } });
+        } catch (_) { /* the next online read repopulates it */ }
+    }
+
     async function readBase(ctx, state, options) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         const adopt = !!(options && options.adopt);
+        /* ONE answer is the whole base. The source state carries the revision
+         * with the source it belongs to, from one server snapshot, and every
+         * cache write keeps them together (an ACK carries both). A revision
+         * beside a separately read Work could not prove which read came first:
+         * a read's time is when it finished, not when its snapshot was taken,
+         * and an older identity beside a newer revision lets a Save overwrite
+         * a source this tab never saw. A corrective read replaces what the tab
+         * holds, so it takes a fresh server answer only. */
+        const policy = adopt ? { requestPolicy: { dedupe: false } } : {};
         try {
-            const [stateResult, workResult] = await Promise.all([
-                root.prksOfflineReadEntity('work-source-state', state.workId,
-                    '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
-                    { validate: sourceStateShape(state.workId) }),
-                root.prksOfflineReadEntity('work', state.workId,
-                    '/api/works/' + encodeURIComponent(state.workId),
-                    { validate: value => !!value && value.id === state.workId }),
-            ]);
+            const stateResult = await root.prksOfflineReadEntity('work-source-state', state.workId,
+                '/api/works/' + encodeURIComponent(state.workId) + '/source-state',
+                Object.assign({ validate: sourceStateShape(state.workId) }, policy));
+            /* A cold park or a newer read ends this one: a parked tab adopts
+             * nothing. */
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            const usable = stateResult && stateResult.source !== 'unavailable' &&
-                stateResult.value && workResult && workResult.source !== 'unavailable' &&
-                workResult.value;
+            /* A cached answer comes back unvalidated, so the shape is checked
+             * here too: a revision cached without its source is no base. */
+            const usable = !!(stateResult && sourceStateShape(state.workId)(stateResult.value) && (adopt
+                ? stateResult.source === 'server' : stateResult.source !== 'unavailable'));
             /* "Not read" is not "revision 0". Saving against a base this
              * session could not establish would overwrite a decision it never
              * saw, so the control stays disabled instead. */
-            if (!usable) { state.observed = null; return true; }
-            state.observed = baseOf(stateResult.value.revision,
-                root.prksWorkSourceIdentity(root.prksWorkSourceOf(workResult.value)));
-            /* The server's Work replaces what this tab was holding. After
-             * "Use server" the tab's copy is the source the user just decided
-             * AGAINST, and leaving it would show them video A while the server
-             * holds video C -- with the pending overlay gone, nothing else
-             * would ever correct it. */
-            if (adopt) {
-                ctx.setEntity('work', workResult.value);
-                writeInput(ctx, state, workResult.value.source_url || '');
+            /* An ACK's own base stays when its corrective read fails: that
+             * revision and identity are a pair the server did store. */
+            if (!usable) {
+                if (!(options && options.keep)) state.observed = null;
+                return true;
             }
+            /* "Use server" re-reads the Work into the offline cache first,
+             * for the cache only (the tab keeps its own Work beyond the
+             * source columns), so the source the editor then shows is one
+             * an offline reopen shows too. */
+            if (adopt) {
+                await refreshCachedWork(state.workId);
+                if (!live(ctx, state) || readVersion !== state.readVersion) return false;
+                if (options && typeof options.still === 'function' && !options.still()) return false;
+            }
+            const source = root.prksAcknowledgedWorkSource(stateResult.value);
+            state.acknowledged = source;
+            const identity = root.prksWorkSourceIdentity(root.prksWorkSourceOf(source));
+            /* The tab shows the source its base belongs to. After "Use server"
+             * the tab's copy is the source the user just decided AGAINST, and
+             * a Work cached beside an older or newer state would otherwise
+             * show one video while a Save is measured against another. Only
+             * the source columns move: the rest of the held Work may be newer
+             * than this read. A focused source field keeps the user's text
+             * and the revision it was measured against: a Save from it then
+             * conflicts with the newer source instead of overwriting it. The
+             * identity is the newer one, so a draft naming the ACK's video is
+             * a change to send (and conflict), not a match that cancels. */
+            /* What the tab shows is that acknowledged source with this
+             * device's own unsent change over it, exactly as the Work route
+             * publishes it: a queued replacement stays on screen, so an
+             * untouched Save never reads as a return to the server's video. */
+            const held = ctx.getEntity('work');
+            const shown = held && held.id === state.workId ? held : null;
+            const acknowledged = Object.assign({}, shown || { id: state.workId }, source);
+            const effective = typeof root.prksEffectiveWorkSource === 'function'
+                ? root.prksEffectiveWorkSource(acknowledged) : acknowledged;
+            const identityOf = work => root.prksWorkSourceIdentity(root.prksWorkSourceOf(work));
+            const differs = !!shown && identityOf(shown) !== identityOf(effective);
+            if (adopt || differs) {
+                if (shown) ctx.setEntity('work', effective);
+                if (!writeInput(ctx, state, effective.source_url || '', !!(options && options.resolved))) {
+                    state.observed = state.observed ? baseOf(state.observed.revision, identity) : null;
+                    return true;
+                }
+            }
+            /* An unsaved draft stays measured against the base it was typed
+             * over. A corrective read may already have moved the tab's Work
+             * to the newer source while keeping that draft; taking the newer
+             * revision here would let its Save replace a source the user
+             * never saw instead of conflicting with it. */
+            /* Only the revision stays: the identity is the read one, since
+             * it decides whether a Save is a return to the server's video.
+             * Keeping the older identity would let a draft naming that older
+             * video cancel a queued replacement and queue nothing, leaving
+             * the newer server video in place without a conflict. */
+            if (!adopt && state.observed && unsavedSource(ctx, state, effective.source_url || '') &&
+                !typedOver(ctx, state, identity)) {
+                state.observed = baseOf(state.observed.revision, identity);
+                return true;
+            }
+            state.observed = baseOf(stateResult.value.revision, identity);
             return true;
         } catch (_) {
             if (!live(ctx, state) || readVersion !== state.readVersion) return false;
             if (options && typeof options.still === 'function' && !options.still()) return false;
-            state.observed = null;
+            if (!(options && options.keep)) state.observed = null;
             return true;
         }
     }
@@ -365,7 +543,7 @@
             }
             stops.sync = root.prksSync.subscribe(event => {
                 if (event && event.operation && event.operation !== 'SET_WORK_SOURCE') return;
-                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged);
+                if (event && event.acknowledged) acceptAck(ctx, next, event.acknowledged, event.op);
                 void safePaint(ctx, next);
             });
             stops.connectivity = root.prksOfflineRuntimeSubscribe(() => {
@@ -434,9 +612,20 @@
                 if (error) error.textContent = message;
                 return;
             }
-            const work = ctx.getEntity('work');
-            const current = root.prksWorkSourceOf(root.prksEffectiveWorkSource(work));
-            if (root.prksWorkSourceIdentity(current) === root.prksWorkSourceIdentity(source)) {
+            /* Measured against the base and the queue, never against the
+             * tab's Work: that Work shows a queued replacement over the
+             * acknowledged columns, and a save that cancelled the
+             * replacement leaves it naming a video nothing will send. Every
+             * paint refreshes the queue view; a match is checked again
+             * against a fresh one, since a no-op never reaches the store's
+             * transaction. A mismatch goes to that transaction anyway. */
+            const sameVideo = async () => {
+                if (currentIdentity(workId, state) !== root.prksWorkSourceIdentity(source)) return false;
+                await root.prksRefreshPendingWorkSources();
+                return currentIdentity(workId, state) === root.prksWorkSourceIdentity(source);
+            };
+            if (await sameVideo()) {
+                if (!still() || !live(ctx, state)) return;
                 // The same video the user is already looking at, however it is
                 // spelled. Nothing to record. (Returning to the ACKNOWLEDGED
                 // video over a pending change is a different case and is the
@@ -460,8 +649,10 @@
                 identity: root.prksWorkSourceIdentity(source),
             }, state.observed);
             root.prksSync.changed();
+            await root.prksRefreshPendingWorkSources();
             if (!still()) return;
             if (!live(ctx, state)) return;
+            showAcknowledgedWithQueue(ctx, state);
             if (typeof root.prksCommitWorkMetaBaseline === 'function') {
                 root.prksCommitWorkMetaBaseline(ctx, workId, session, { source_url: typed }, ['source_url']);
             }

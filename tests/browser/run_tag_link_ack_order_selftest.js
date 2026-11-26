@@ -202,8 +202,55 @@ async function parkedWorkOwner() {
     assert.deepEqual(other.entity.tags, [], 'an ACK for another Work is ignored');
 }
 
+/* A dropped Work is re-read while the server is reachable, so the device
+ * keeps the Work offline after it syncs. */
+async function droppedWorkIsRefilled() {
+    const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
+    const paths = [];
+    const offline = createPrksOfflineRuntime({ store: cache, window: null,
+        prksRequest: async path => {
+            paths.push(path);
+            return { ok: true, status: 200, json: async () => ({ id: 'X', title: 'Server', tags: [tag] }) };
+        } });
+    const op = createdNow();
+    await later();
+    await cache.putEntity('work', 'X', { id: 'X', tags: [] });
+    const work = FAMILIES[0];
+    assert.equal(await work.reconcile(offline, ackFor(work, 'X', 1, true), op), true);
+    for (let i = 0; i < 20 && !(await cache.getEntity('work', 'X')); i += 1) await later();
+    assert.deepEqual(paths, ['/api/works/X'], 'the dropped Work is re-read once');
+    const row = await cache.getEntity('work', 'X');
+    assert.ok(row, 'and cached again');
+    assert.deepEqual(row.value.tags.map(t => t.id), [tag.id], 'with the server links');
+
+    /* A later ACK for the same Work lands while the refill is in flight and
+     * fences its write: the refill reads again. */
+    const cache2 = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: createFakeIndexedDBFactory() });
+    const paths2 = [];
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    const offline2 = createPrksOfflineRuntime({ store: cache2, window: null,
+        prksRequest: async path => {
+            paths2.push(path);
+            if (paths2.length === 1) await gate;
+            return { ok: true, status: 200, json: async () => ({ id: 'X', title: 'Server', tags: [tag] }) };
+        } });
+    const op2 = createdNow();
+    await later();
+    await cache2.putEntity('work', 'X', { id: 'X', tags: [] });
+    assert.equal(await work.reconcile(offline2, ackFor(work, 'X', 1, true), op2), true);
+    await later();
+    assert.equal(await work.reconcile(offline2, ackFor(work, 'X', 2, true), createdNow()), true,
+        'the later ACK finds no cached Work');
+    release();
+    for (let i = 0; i < 30 && !(await cache2.getEntity('work', 'X')); i += 1) await later();
+    assert.equal(paths2.length, 2, 'the fenced refill reads again');
+    assert.ok(await cache2.getEntity('work', 'X'), 'and the Work is cached');
+}
+
 async function main() {
     for (const family of FAMILIES) await cacheOrdering(family);
+    await droppedWorkIsRefilled();
     await parkedWorkOwner();
     console.log('All ' + checks + ' Tag link ACK ordering checks passed');
 }

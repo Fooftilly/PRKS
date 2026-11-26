@@ -147,6 +147,9 @@
         // is still settling. Nothing here is canonical or persisted.
         const entityCoherence = new Map();
         const ineligibleEntities = new Set();
+        // List snapshots an ACK proved stale, until their deletion commits or
+        // a newer snapshot replaces them. Offline fallback never serves them.
+        const ineligibleLists = new Set();
         // Domain-level coherence. Some cached read models span many canonical
         // records (a Concept rename changes that Concept's detail, the Concept
         // index, and every cached relative that displays its name), so
@@ -172,6 +175,29 @@
         /** True while a domain's cached rows are ineligible for offline fallback. */
         function isDomainBlocked(domain) {
             return !!domain && blockedDomains.has(String(domain));
+        }
+
+        /* A reconcile starts a new domain generation so a GET already in
+         * flight cannot publish over its patch. A sweep still pending for
+         * the old generation would then never unblock the domain: it only
+         * settles its own generation. Carry its result to the new one. */
+        function advanceDomainGeneration(domain) {
+            const key = String(domain);
+            const next = currentDomainGeneration(key) + 1;
+            domainGeneration.set(key, next);
+            const pending = domainInvalidation.get(key);
+            if (pending && pending.promise && blockedDomains.has(key)) {
+                const promise = pending.promise.then(function (ok) {
+                    if (currentDomainGeneration(key) !== next) return ok;
+                    if (ok) {
+                        blockedDomains.delete(key);
+                        domainInvalidation.delete(key);
+                    }
+                    return ok;
+                });
+                domainInvalidation.set(key, { generation: next, promise: promise });
+            }
+            return next;
         }
 
         /** A read may publish its result only from the domain generation it began in. */
@@ -791,8 +817,7 @@
         async function reconcileGraphAuthorEdge(result) {
             if (result.role_type !== 'Author') return true;
             const kind = DOMAIN_RESEARCH_GRAPH_PEOPLE;
-            const token = currentDomainGeneration(kind) + 1;
-            domainGeneration.set(kind, token);
+            const token = advanceDomainGeneration(kind);
             const cached = await store.getEntity(kind, 'snapshot').catch(function () {
                 return undefined;
             });
@@ -908,8 +933,7 @@
                 }
             }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = await store.getList(listKey).catch(function () { return null; });
                 if (!cached) continue;   // a missing snapshot is nothing to patch
                 const rows = cached.value;
@@ -923,12 +947,12 @@
                     return patched;
                 });
                 if (!touched) continue;
-                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+                if (!await cacheListForDomain(listKey, merged, domain, token,
+                    observedAtOf(cached))) return false;
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
-                const token = currentDomainGeneration(spec.domain) + 1;
-                domainGeneration.set(spec.domain, token);
+                const token = advanceDomainGeneration(spec.domain);
                 const cached = await store.getEntitiesByKind(spec.kind)
                     .catch(function () { return null; });
                 // Nothing cached of this kind is nothing to reconcile; a FAILED
@@ -1057,16 +1081,32 @@
             return true;
         }
 
-        async function reconcileWorkSource(result) {
+        /* One acknowledged source identity, under the shared ordering rule
+         * (#1425, #1106). The `work-source-state` revision decides first: an
+         * ACK older than it is superseded and NOTHING is patched -- not the
+         * Work, not a browse row, not an embedded summary -- because every one
+         * of them may already show the newer video. Otherwise each record that
+         * carries source columns is patched only when it agrees or its read
+         * predates the operation; a record that cannot be proven is dropped
+         * for the next read to refetch, never overwritten with an older video.
+         * The four identity columns are always written together, per row. */
+        async function reconcileWorkSource(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.work_id;
             const source = result.source;
-            if (!source) return false;
-            /* The source-state projection is a REVISION and nothing else, and
-             * it is the base the next edit is measured against. Leaving it at
-             * the old number means a second change is created against a
-             * revision the server has already moved past -- and the user's own
-             * previous edit becomes the thing they conflict with. */
+            if (!source || !reconcileCore.isRevision(result.server_revision)) return false;
+            const createdAt = op && op.created_at;
+            const agreesWith = row => Object.keys(source).every(column =>
+                !Object.prototype.hasOwnProperty.call(row, column) || row[column] === source[column]);
+            const planFor = (row, envelope) => reconcileCore.planAck({
+                ackRevision: result.server_revision,
+                agrees: agreesWith(row),
+                observedAt: observedAtOf(envelope),
+                operationCreatedAt: createdAt,
+            });
+            /* The source-state projection is the base the next edit is
+             * measured against: a revision WITH the source it belongs to, so
+             * the two are only ever written together. */
             const kinds = ['work', 'work-source-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
@@ -1076,58 +1116,74 @@
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
             const work = snapshots[0] && snapshots[0].value;
             const state = snapshots[1] && snapshots[1].value;
-            if (work) {
-                const patched = patchedWithSource(work, source);
-                if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0])) {
-                    return false;
-                }
+            if (state && reconcileCore.isRevision(state.revision) && reconcileCore.decideAck({
+                ackRevision: result.server_revision, heldRevision: state.revision,
+            }) === 'superseded') {
+                return true;
             }
-            if (state && Number.isSafeInteger(result.server_revision)) {
-                // An acknowledgement older than the cache has been superseded;
-                // applying it would move the base backwards.
-                if (!Number.isSafeInteger(state.revision) ||
-                    state.revision <= result.server_revision) {
-                    const next = Object.assign({}, state, { revision: result.server_revision });
-                    if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) {
+            if (work) {
+                const plan = planFor(work, snapshots[0]);
+                if (plan === 'unproven') {
+                    if (!await dropUnprovenEntity('work', id)) return false;
+                } else if (plan === 'apply') {
+                    const patched = patchedWithSource(work, source);
+                    if (patched && !await cacheEntityIfCurrent('work', id, patched, tokens[0],
+                        observedAtOf(snapshots[0]))) {
                         return false;
                     }
                 }
             }
+            if (state) {
+                const next = Object.assign({}, state, source, { revision: result.server_revision });
+                if (!await cacheEntityIfCurrent('work-source-state', id, next, tokens[1])) return false;
+            }
             for (const [domain, listKey] of Object.entries(FIELD_PROJECTION_LISTS)) {
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = await store.getList(listKey).catch(function () { return null; });
                 if (!cached) continue;   // a missing snapshot is nothing to patch
                 const rows = cached.value;
                 if (!Array.isArray(rows)) return false;
-                if (!rows.some(row => row && row.id === id)) continue;
-                const merged = rows.map(row => (row && row.id === id
-                    ? (patchedWithSource(row, source) || row) : row));
-                if (!await cacheListForDomain(listKey, merged, domain, token)) return false;
+                const row = rows.find(r => r && r.id === id);
+                if (!row) continue;
+                const plan = planFor(row, cached);
+                if (plan === 'unproven') {
+                    /* The domain token above already stops an in-flight GET
+                     * republishing it; a snapshot that could not be dropped
+                     * would still serve the old source offline. */
+                    if (!await dropUnprovenList(listKey)) return false;
+                    continue;
+                }
+                if (plan !== 'apply') continue;
+                const merged = rows.map(r => (r && r.id === id ? (patchedWithSource(r, source) || r) : r));
+                if (!await cacheListForDomain(listKey, merged, domain, token, observedAtOf(cached))) return false;
             }
             for (const spec of SUMMARY_ENTITIES) {
                 if (typeof store.getEntitiesByKind !== 'function') continue;
-                const token = currentDomainGeneration(spec.domain) + 1;
-                domainGeneration.set(spec.domain, token);
+                const token = advanceDomainGeneration(spec.domain);
                 const cached = await store.getEntitiesByKind(spec.kind)
                     .catch(function () { return null; });
                 if (!Array.isArray(cached)) return false;
-                for (const row of cached) {
-                    if (!row || !row.value) continue;
-                    const summaries = spec.rows(row.value);
+                for (const envelope of cached) {
+                    if (!envelope || !envelope.value) continue;
+                    const summaries = spec.rows(envelope.value);
                     if (!Array.isArray(summaries)) continue;
-                    let touched = false;
+                    if (!summaries.some(summary => summary && summary.id === id)) continue;
+                    const plans = summaries.filter(summary => summary && summary.id === id)
+                        .map(summary => planFor(summary, envelope));
+                    if (plans.includes('unproven')) {
+                        if (!await dropUnprovenEntity(spec.kind, envelope.id)) return false;
+                        continue;
+                    }
+                    if (!plans.includes('apply')) continue;
                     summaries.forEach(function (summary, index) {
                         if (!summary || summary.id !== id) return;
                         const patched = patchedWithSource(summary, source);
-                        if (!patched) return;
-                        summaries[index] = patched;
-                        touched = true;
+                        if (patched) summaries[index] = patched;
                     });
-                    if (!touched) continue;
-                    const entityToken = currentEntityGeneration(spec.kind, row.id) + 1;
-                    entityCoherence.set(entityKey(spec.kind, row.id), entityToken);
-                    if (!await cacheEntityIfCurrent(spec.kind, row.id, row.value, entityToken)) {
+                    const entityToken = currentEntityGeneration(spec.kind, envelope.id) + 1;
+                    entityCoherence.set(entityKey(spec.kind, envelope.id), entityToken);
+                    if (!await cacheEntityIfCurrent(spec.kind, envelope.id, envelope.value, entityToken,
+                        observedAtOf(envelope))) {
                         return false;
                     }
                 }
@@ -1172,26 +1228,43 @@
             const snapshots = await Promise.all(kinds.map(kind => store.getEntity(kind, id)));
             const work = snapshots[0] && snapshots[0].value;
             const state = snapshots[1] && snapshots[1].value;
-            if (work) {
-                const nextWork = Object.assign({}, work);
-                nextWork[field] = field === 'private_notes' ? (text || null) : text;
-                if (fenceResearch && result.research_refs &&
-                    typeof result.research_refs === 'object' &&
-                    !Array.isArray(result.research_refs)) {
-                    nextWork.research_refs = result.research_refs;
-                }
-                if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0])) return false;
-            }
-            if (state) {
-                if (typeof root.prksNoteStateShape === 'function' &&
-                    !root.prksNoteStateShape(state, id)) return false;
-                const current = state[revisionKey];
-                if (!Number.isSafeInteger(current) || current <= result.server_revision) {
-                    const next = Object.assign({}, state);
-                    next[revisionKey] = result.server_revision;
-                    if (!await cacheEntityIfCurrent('work-notes-state', id, next, tokens[1])) {
-                        return false;
+            if (state && typeof root.prksNoteStateShape === 'function' &&
+                !root.prksNoteStateShape(state, id)) return false;
+            /* Shared ordering rule (#1425, #1105): the notes-state revision
+             * decides first. An older ACK patches neither the revision nor the
+             * cached body, which may already be another device's newer text. */
+            const superseded = !!state && reconcileCore.isRevision(state[revisionKey]) &&
+                reconcileCore.decideAck({
+                    ackRevision: result.server_revision, heldRevision: state[revisionKey],
+                }) === 'superseded';
+            const body = field === 'private_notes' ? (text || null) : text;
+            if (work && !superseded) {
+                const plan = reconcileCore.planAck({
+                    ackRevision: result.server_revision,
+                    /* An absent body and an empty one are the same note. */
+                    agrees: (work[field] == null ? '' : String(work[field])) === (text || ''),
+                    observedAt: observedAtOf(snapshots[0]),
+                    operationCreatedAt: op.created_at,
+                });
+                if (plan === 'unproven') {
+                    if (!await dropUnprovenEntity('work', id)) return false;
+                } else {
+                    const nextWork = Object.assign({}, work);
+                    nextWork[field] = body;
+                    if (fenceResearch && result.research_refs &&
+                        typeof result.research_refs === 'object' &&
+                        !Array.isArray(result.research_refs)) {
+                        nextWork.research_refs = result.research_refs;
                     }
+                    if (!await cacheEntityIfCurrent('work', id, nextWork, tokens[0],
+                        observedAtOf(snapshots[0]))) return false;
+                }
+            }
+            if (state && !superseded) {
+                const next = Object.assign({}, state);
+                next[revisionKey] = result.server_revision;
+                if (!await cacheEntityIfCurrent('work-notes-state', id, next, tokens[1])) {
+                    return false;
                 }
             }
             const canonicalAdvanced =
@@ -1230,8 +1303,7 @@
                 const patches = root.prksWorkReferencePatches(kind, result.field, result.value);
                 if (!patches.length) continue;   // this field reaches no row of this kind
                 const domain = REFERENCE_DOMAINS[kind] || kind;
-                const token = currentDomainGeneration(domain) + 1;
-                domainGeneration.set(domain, token);
+                const token = advanceDomainGeneration(domain);
                 const cached = typeof store.getEntitiesByKind === 'function'
                     ? await store.getEntitiesByKind(kind).catch(function () { return null; })
                     : null;
@@ -1272,8 +1344,7 @@
 
         async function reconcileSummaryKind(result, spec) {
             if (typeof store.getEntitiesByKind !== 'function') return true;
-            const token = currentDomainGeneration(spec.domain) + 1;
-            domainGeneration.set(spec.domain, token);
+            const token = advanceDomainGeneration(spec.domain);
             const cached = await store.getEntitiesByKind(spec.kind).catch(function () { return null; });
             // Nothing cached of this kind is nothing to reconcile, not a
             // failure -- and one field is never enough to invent a snapshot.
@@ -1327,8 +1398,7 @@
         }
 
         async function reconcileProjectionList(result, domain, listKey) {
-            const token = currentDomainGeneration(domain) + 1;
-            domainGeneration.set(domain, token);
+            const token = advanceDomainGeneration(domain);
             const cached = await store.getList(listKey).catch(function () { return null; });
             // No snapshot is nothing to reconcile, not a failure: one field is
             // not enough to invent a catalog from, and the next authoritative
@@ -1343,7 +1413,7 @@
             if (!patch) return true;
             const merged = rows.map(row => (row && row.id === result.work_id
                 ? Object.assign({}, row, patch) : row));
-            return cacheListForDomain(listKey, merged, domain, token);
+            return cacheListForDomain(listKey, merged, domain, token, observedAtOf(cached));
         }
 
         /* Reconcile an acknowledged open event into the cached Recent list.
@@ -1360,8 +1430,7 @@
          */
         async function reconcileRecentOpen(result) {
             if (!store || !await store.isAvailable()) return false;
-            const token = currentDomainGeneration(DOMAIN_RECENT) + 1;
-            domainGeneration.set(DOMAIN_RECENT, token);
+            const token = advanceDomainGeneration(DOMAIN_RECENT);
             const cached = await store.getList(RECENT_LIST_KEY).catch(function () { return null; });
             if (!cached) return true;
             const rows = cached.value;
@@ -1371,15 +1440,22 @@
             const merged = typeof root.prksMergeRecentOpen === 'function'
                 ? root.prksMergeRecentOpen(rows, result) : null;
             if (!merged) return false;
-            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token);
+            /* The merge upserts a row the server answered just now, and a list
+             * has one read time. Its newest row decides: an older time would
+             * let a delayed ACK prove itself against that fresh row. Older
+             * rows judged too new are only dropped by a later ACK, never
+             * overwritten. A merge that trimmed the row keeps the old time. */
+            const upserted = Array.isArray(merged) &&
+                merged.some(row => row && row.id === result.work_id);
+            return cacheListForDomain(RECENT_LIST_KEY, merged, DOMAIN_RECENT, token,
+                upserted ? now() : observedAtOf(cached));
         }
 
         async function reconcileCreatedPerson(result) {
             if (!store || !await store.isAvailable()) return false;
             const person = result && result.person;
             if (!person || person.id !== result.person_id) return false;
-            const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-            domainGeneration.set(DOMAIN_PEOPLE, token);
+            const token = advanceDomainGeneration(DOMAIN_PEOPLE);
             const cached = await store.getList(PEOPLE_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = cached.value;
@@ -1428,8 +1504,7 @@
             if (!root.prksIsSupportedPersonField || !root.prksIsSupportedPersonField(field)) {
                 return false;
             }
-            const peopleToken = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-            domainGeneration.set(DOMAIN_PEOPLE, peopleToken);
+            const peopleToken = advanceDomainGeneration(DOMAIN_PEOPLE);
             const kinds = ['person', 'person-metadata-state'];
             const tokens = kinds.map(function (kind) {
                 const token = currentEntityGeneration(kind, id) + 1;
@@ -1504,8 +1579,7 @@
                 .catch(function () { return null; });
             const rows = cached && Array.isArray(cached.value) ? cached.value : null;
             if (rows) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const remaining = rows.filter(row => row && row.id !== id);
                 if (!await cacheListForDomain(PEOPLE_LIST_KEY, remaining,
                     DOMAIN_PEOPLE, token)) return false;
@@ -1532,8 +1606,7 @@
         }
 
         async function writeFolderRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_FOLDERS) + 1;
-            domainGeneration.set(DOMAIN_FOLDERS, token);
+            const token = advanceDomainGeneration(DOMAIN_FOLDERS);
             return cacheListForDomain(FOLDERS_LIST_KEY, rows, DOMAIN_FOLDERS, token);
         }
 
@@ -1688,8 +1761,7 @@
         }
 
         async function writePositionRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_POSITIONS) + 1;
-            domainGeneration.set(DOMAIN_POSITIONS, token);
+            const token = advanceDomainGeneration(DOMAIN_POSITIONS);
             return cacheListForDomain(POSITIONS_LIST_KEY, rows, DOMAIN_POSITIONS, token);
         }
 
@@ -1979,8 +2051,7 @@
         }
 
         async function writeConceptRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_CONCEPTS) + 1;
-            domainGeneration.set(DOMAIN_CONCEPTS, token);
+            const token = advanceDomainGeneration(DOMAIN_CONCEPTS);
             return cacheListForDomain(CONCEPTS_LIST_KEY, rows, DOMAIN_CONCEPTS, token);
         }
 
@@ -2209,8 +2280,7 @@
         }
 
         async function writePlaylistRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_PLAYLISTS) + 1;
-            domainGeneration.set(DOMAIN_PLAYLISTS, token);
+            const token = advanceDomainGeneration(DOMAIN_PLAYLISTS);
             return cacheListForDomain(PLAYLISTS_LIST_KEY, rows, DOMAIN_PLAYLISTS, token);
         }
 
@@ -2415,8 +2485,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 const merged = rows.filter(row => row && row.id !== tag.id)
                     .concat([Object.assign({ aliases: [] }, tag)]);
                 if (!await cacheListForDomain(TAGS_LIST_KEY, merged, DOMAIN_TAGS, token)) {
@@ -2440,8 +2509,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 if (!await cacheListForDomain(TAGS_LIST_KEY,
                     rows.filter(row => row && row.id !== id), DOMAIN_TAGS, token)) return false;
             }
@@ -2487,8 +2555,7 @@
             const cached = await store.getList(TAGS_LIST_KEY).catch(function () { return null; });
             if (cached) {
                 const rows = Array.isArray(cached.value) ? cached.value : [];
-                const token = currentDomainGeneration(DOMAIN_TAGS) + 1;
-                domainGeneration.set(DOMAIN_TAGS, token);
+                const token = advanceDomainGeneration(DOMAIN_TAGS);
                 let sourceName = null;
                 const withoutSource = [];
                 for (let i = 0; i < rows.length; i += 1) {
@@ -2636,8 +2703,7 @@
         }
 
         async function writeGroupRows(rows) {
-            const token = currentDomainGeneration(DOMAIN_PERSON_GROUPS) + 1;
-            domainGeneration.set(DOMAIN_PERSON_GROUPS, token);
+            const token = advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
             return cacheListForDomain(PERSON_GROUPS_LIST_KEY, rows,
                 DOMAIN_PERSON_GROUPS, token);
         }
@@ -2742,8 +2808,7 @@
                     .catch(function () { return null; });
                 const peopleRows = people && Array.isArray(people.value) ? people.value : null;
                 if (peopleRows) {
-                    const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                    domainGeneration.set(DOMAIN_PEOPLE, token);
+                    const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                     const patched = peopleRows.map(function (row) {
                         if (!row || !Array.isArray(row.groups)) return row;
                         if (!row.groups.some(g => g && g.id === id)) return row;
@@ -2807,8 +2872,7 @@
                 if (!await writeGroupRows(patched)) return false;
             }
             if (peopleRows && person) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const chip = { id: groupId, name: group ? String(group.name || '') : '' };
                 const patched = peopleRows.map(function (row) {
                     if (!row || row.id !== personId) return row;
@@ -2885,8 +2949,7 @@
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;
             if (peopleRows && peopleRows.some(row => row && Array.isArray(row.groups) &&
                     row.groups.some(g => g && g.id === id))) {
-                const token = currentDomainGeneration(DOMAIN_PEOPLE) + 1;
-                domainGeneration.set(DOMAIN_PEOPLE, token);
+                const token = advanceDomainGeneration(DOMAIN_PEOPLE);
                 const patched = peopleRows.map(function (row) {
                     if (!row || !Array.isArray(row.groups)) return row;
                     const without = row.groups.filter(g => !g || g.id !== id);
@@ -2913,7 +2976,31 @@
             const key = entityKey(kind, id);
             entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
             ineligibleEntities.add(key);
-            return invalidateEntity(kind, id).then(ok => ok === true);
+            return invalidateEntity(kind, id).then(function (ok) {
+                if (ok === true) refillDroppedWork(kind, id);
+                return ok === true;
+            });
+        }
+
+        /* A dropped Work is re-read at once while the server is reachable,
+         * so a Work this device was showing stays available offline: no
+         * open owner may be left to re-read it. The read starts after the
+         * drop and is fenced like any other; a later unproven ACK drops and
+         * refills it again. */
+        function refillDroppedWork(kind, id, attempt) {
+            if (kind !== 'work' || state === STATE_OFFLINE) return;
+            const tries = attempt || 0;
+            const generation = currentEntityGeneration(kind, id);
+            void readThroughEntity('work', id, '/api/works/' + encodeURIComponent(id), {
+                validate: value => !!value && value.id === id, requestPolicy: { dedupe: false },
+            }).then(function (read) {
+                /* A later ACK for this Work fenced the read's write: read
+                 * again, a few times at most, so the Work is not left out. */
+                if (read && read.source === 'server' && read.value &&
+                    currentEntityGeneration(kind, id) !== generation && tries < 3) {
+                    refillDroppedWork(kind, id, tries + 1);
+                }
+            }).catch(function () { return null; });
         }
 
         /** Remove a disposable entity snapshot. Never changes connectivity or server state. */
@@ -2941,6 +3028,18 @@
             ineligibleEntities.add(key);
             void invalidateEntity(kind, id);
             return next;
+        }
+
+        /* The list form of dropUnprovenEntity: unservable at once, and the
+         * result is whether the deletion committed. A failed deletion keeps
+         * the snapshot unservable for this session. */
+        function dropUnprovenList(listKey) {
+            ineligibleLists.add(listKey);
+            return invalidateList(listKey).then(function (ok) {
+                if (ok !== true) return false;
+                ineligibleLists.delete(listKey);
+                return true;
+            });
         }
 
         /** Remove a disposable list snapshot. Never changes connectivity or server state. */
@@ -2974,14 +3073,17 @@
         }
 
         /** Same publication gate as cacheEntityForDomain, for a named list snapshot. */
-        function cacheListForDomain(listKey, value, domain, domainToken) {
+        function cacheListForDomain(listKey, value, domain, domainToken, observedAt) {
             if (!store || typeof store.putList !== 'function') return Promise.resolve(false);
             if (!domainCacheEligible(domain, domainToken)) return Promise.resolve(false);
             try {
-                return Promise.resolve(store.putList(listKey, value, ''))
+                return Promise.resolve(store.putList(listKey, value, '', observedAt))
                     .then(function (ok) {
                         if (!ok) return false;
-                        if (domainCacheEligible(domain, domainToken)) return true;
+                        if (domainCacheEligible(domain, domainToken)) {
+                            ineligibleLists.delete(listKey);
+                            return true;
+                        }
                         void invalidateList(listKey);
                         return false;
                     })
@@ -3061,12 +3163,12 @@
          * generation does not wait and cannot write over the newer sweep.
          * Paint never waits on this.
          */
-        async function publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken) {
+        async function publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken, readAt) {
             const pending = domain ? domainInvalidation.get(domain) : null;
             if (pending && pending.generation === domainToken && pending.promise) {
                 await pending.promise;
             }
-            await cacheListForDomain(listKey, raw, domain, domainToken);
+            await cacheListForDomain(listKey, raw, domain, domainToken, readAt);
         }
 
         /** Same policy as readThroughEntity but for a named list snapshot. */
@@ -3087,6 +3189,7 @@
                 typeof store.getList === 'function' &&
                 typeof options2.validate === 'function' &&
                 !(options2.signal && options2.signal.aborted) &&
+                !ineligibleLists.has(listKey) &&
                 !isDomainBlocked(domain)) {
                 let cached = null;
                 try { cached = await store.getList(listKey); }
@@ -3100,6 +3203,7 @@
                 if (valid && state === STATE_OFFLINE &&
                     connectivityGeneration === connectionToken &&
                     currentDomainGeneration(domain) === domainToken &&
+                    !ineligibleLists.has(listKey) &&
                     !isDomainBlocked(domain)) {
                     reconcileCore.observe(cached.value, observedAtOf(cached));
                     return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
@@ -3124,7 +3228,7 @@
                     throw err;
                 }
                 noteRequestFailure();
-                if (isDomainBlocked(domain)) {
+                if (ineligibleLists.has(listKey) || isDomainBlocked(domain)) {
                     return { value: null, source: 'unavailable', cachedAt: null };
                 }
                 const fallbackOnlineToken = onlineGeneration;
@@ -3139,6 +3243,7 @@
                     if (cached &&
                         onlineGeneration === fallbackOnlineToken &&
                         currentDomainGeneration(domain) === domainToken &&
+                        !ineligibleLists.has(listKey) &&
                         !isDomainBlocked(domain)) {
                         reconcileCore.observe(cached.value, observedAtOf(cached));
                         return { value: cached.value, source: 'cache', cachedAt: cached.cachedAt };
@@ -3152,8 +3257,8 @@
             assertAcceptableShape(options2.validate, raw);
             // Return before the sweep. The publish waits for a same-generation
             // delete, then stores the list. A skipped write stays skipped.
-            void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken);
             const readAt = now();
+            void publishListAfterSameGenerationSweep(listKey, raw, domain, domainToken, readAt);
             reconcileCore.observe(raw, readAt);
             return { value: raw, source: 'server', cachedAt: readAt };
         }
@@ -3514,7 +3619,7 @@
         prksOfflineReconcileWorkTag: (result, op) => production.reconcileWorkTag(result, op),
         prksOfflineReconcileFolderTag: (result, op) => production.reconcileFolderTag(result, op),
         prksOfflineReconcileWorkField: result => production.reconcileWorkField(result),
-        prksOfflineReconcileWorkSource: result => production.reconcileWorkSource(result),
+        prksOfflineReconcileWorkSource: (result, op) => production.reconcileWorkSource(result, op),
         prksOfflineReconcileWorkNote: (result, op) => production.reconcileWorkNote(result, op),
         prksOfflineReconcilePrivateNote: (result, op) =>
             production.reconcilePrivateNote(result, op),

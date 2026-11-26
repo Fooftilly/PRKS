@@ -197,7 +197,7 @@
         }
         if (op === 'SET_WORK_SOURCE') {
             if (ctx.getResource('workSourceEditor')) return;
-            if (typeof root.prksApplyWorkSourceEntityAck === 'function') root.prksApplyWorkSourceEntityAck(ctx, ack);
+            if (typeof root.prksApplyWorkSourceEntityAck === 'function') root.prksApplyWorkSourceEntityAck(ctx, ack, event.op);
             return;
         }
         if (op === 'SET_WORK_METADATA_FIELD') {

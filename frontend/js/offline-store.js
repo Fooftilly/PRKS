@@ -15,7 +15,7 @@
  *
  * Schema (version 1):
  *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, observedAt, sourceRevision, libraryEpoch }
- *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision, libraryEpoch }
+ *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, observedAt, sourceRevision, libraryEpoch }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
  *
  * Library epoch (#629, docs/postgresql-architecture.md §10.4): every
@@ -733,11 +733,14 @@
                 });
         }
 
-        function putList(listKey, value, sourceRevision) {
+        /* `observedAt` as for putEntity. */
+        function putList(listKey, value, sourceRevision, observedAt) {
+            const cachedAt = now();
             const envelope = {
                 listKey: String(listKey),
                 value: value,
-                cachedAt: now(),
+                cachedAt: cachedAt,
+                observedAt: Number.isFinite(observedAt) && observedAt <= cachedAt ? observedAt : cachedAt,
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
                 libraryEpoch: null,
             };
