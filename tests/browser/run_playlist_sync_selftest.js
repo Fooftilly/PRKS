@@ -244,6 +244,39 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].base_revision, 3,
             "against the pinned revision: a server that moved on refuses it as a conflict");
     }
+    /* The retired edit's revision is read back before Save: the read holds
+     * the shown edit at the revision it produced, so the next write is
+     * measured from there. A read holding another value keeps the pin. */
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        await store.deleteAcknowledgedOperation(sent.op_id);
+        const previous = globalThis.prksOfflineReadEntity;
+        const serve = (title, revision) => {
+            const state = { playlist_id: id, order_revision: 0, fields: Object.fromEntries(
+                globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name, { revision: name === "title" ? revision : 0 }])) };
+            globalThis.prksOfflineReadEntity = async kind => (kind === "playlist-state"
+                ? { value: state, source: "server" }
+                : { value: { id, title, description: "", original_url: "" }, source: "server" });
+        };
+        try {
+            serve("Seminars", 4);
+            const settled = await globalThis.prksSettlePinnedPlaylistBase(id, pinned, await store.listOperations());
+            assert.deepEqual(settled.title, { value: "Seminars", revision: 4 },
+                "a retired own edit is measured from the revision it produced");
+            const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Talks" }), settled);
+            await store.savePlaylistFields(id, edits.changes, edits.base);
+            const [row] = await rowsFor(store, "SET_PLAYLIST_FIELD");
+            assert.equal(row.base_revision, 4, "so this device's next write does not conflict with itself");
+            serve("Elsewhere", 5);
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
+                "a read holding another device's value keeps the pinned revision");
+        } finally {
+            globalThis.prksOfflineReadEntity = previous;
+        }
+    }
     /* Another pane replaced the synced edit (Seminars -> Talks) before this
      * form, opened on the unsent edit, returned to Lectures: the revert is a
      * write measured from the ACK, not a silent cancellation. */

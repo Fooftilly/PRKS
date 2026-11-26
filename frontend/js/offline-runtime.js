@@ -2377,17 +2377,27 @@
                 !root.prksIsSupportedPlaylistField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
             const value = field === 'original_url' ? (raw || null) : raw;
-            await patchEntity('playlist-state', id, function (state) {
+            let stateNewer = false;
+            const stateWritten = await patchEntity('playlist-state', id, function (state) {
                 if (typeof root.prksIsPlaylistStateShape === 'function' &&
                     !root.prksIsPlaylistStateShape(state, id)) return null;
                 const entry = state.fields[field];
+                if (entry && entry.revision > result.server_revision) stateNewer = true;
                 if (!entry || entry.revision > result.server_revision) return null;
                 const next = Object.assign({}, state,
                     { fields: Object.assign({}, state.fields) });
                 next.fields[field] = { revision: result.server_revision };
                 return next;
             });
-            const rows = await cachedPlaylistRows();
+            if (!stateWritten) return false;
+            /* The held revisions are past this ACK, so its value is older than
+             * them: written into the body, it would be paired with a revision
+             * that vouches for newer text. */
+            const held = await store.getEntity('playlist', id).catch(function () { return null; });
+            if (stateNewer) {
+                if (!await dropUnprovenEntity('playlist', id)) return false;
+            }
+            const rows = stateNewer ? null : await cachedPlaylistRows();
             if (rows && rows.some(row => row && row.id === id)) {
                 const patched = rows.map(function (row) {
                     if (!row || row.id !== id) return row;
@@ -2397,22 +2407,26 @@
                 });
                 if (!await writePlaylistRows(patched)) return false;
             }
-            await patchEntity('playlist', id, function (playlist) {
+            const bodyWritten = stateNewer || await patchEntity('playlist', id, function (playlist) {
                 if (!playlist || playlist.id !== id) return null;
                 const next = Object.assign({}, playlist);
                 next[field] = value;
                 return next;
             });
+            /* The revisions already moved: a body left at the older value
+             * would be paired with them, so it goes and the ACK is retried. */
+            if (!bodyWritten) {
+                await dropUnprovenEntity('playlist', id);
+                return false;
+            }
             if (field === 'title' && result.changed) {
                 /* `get_work()` embeds `playlist_title`, so renaming a playlist
                  * stales the cached Work of every video in it. Unlike the
                  * Folder family the acknowledgement does not name the members
                  * -- the detail this device holds does, and when it holds none
                  * there is nothing cached to be wrong. */
-                const cached = await store.getEntity('playlist', id)
-                    .catch(function () { return null; });
-                const items = cached && cached.value && Array.isArray(cached.value.items)
-                    ? cached.value.items : [];
+                const items = held && held.value && Array.isArray(held.value.items)
+                    ? held.value.items : [];
                 for (let i = 0; i < items.length; i += 1) {
                     const workId = items[i] && items[i].id;
                     if (workId) await invalidateEntity('work', workId);

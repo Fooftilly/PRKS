@@ -170,13 +170,17 @@ export function browserPlaylistIntents(
       if (owner.ui) {
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
-        owner.ui.playlistStale = null
       }
       repaint(owner, playlistId)
       if (typeof window.updatePanelContent === 'function') window.updatePanelContent('details')
       // The refusal asked the user to cancel and edit again: the next Edit
-      // has to open on the current version, not the held one it refused.
-      if (stale) void reloadIfOwned(owner, generation, playlistId)
+      // has to open on the current version, so the stale mark (which holds
+      // Edit closed) stays until that version is painted.
+      if (stale) {
+        void reloadIfOwned(owner, generation, playlistId).then((painted) => {
+          if (painted && owner.ui?.playlistStale === playlistId) owner.ui.playlistStale = null
+        })
+      }
     },
 
     editSession() {

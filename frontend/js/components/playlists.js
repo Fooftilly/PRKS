@@ -337,8 +337,15 @@ async function updatePlaylist(playlistId, fields, options) {
         changes[field] = value == null || value === false ? '' : String(value);
     });
     if (!Object.keys(changes).length) return {};
+    let settled = base;
+    if (typeof prksSettlePinnedPlaylistBase === 'function') {
+        try {
+            settled = await prksSettlePinnedPlaylistBase(playlistId, base,
+                typeof prksDurableOperationsOrNone === 'function' ? await prksDurableOperationsOrNone() : []);
+        } catch (_e) { settled = base; }
+    }
     try {
-        await prksSavePlaylistFieldsDurably(playlistId, changes, base);
+        await prksSavePlaylistFieldsDurably(playlistId, changes, settled);
     } catch (error) {
         throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
     }

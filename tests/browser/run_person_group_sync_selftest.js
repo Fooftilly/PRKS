@@ -922,14 +922,18 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
     globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
     /* The server as each read finds it: revisions from the sync state, values
      * from the group's own record. */
-    globalThis.prksOfflineReadEntity = async (kind, id) => {
+    globalThis.prksOfflineReadEntity = async (kind, id, _path, opts) => {
         if (kind === "person-group-state") {
             const fields = {};
             Object.keys(current).forEach((name) => { fields[name] = { revision: current[name].revision }; });
             return { value: { group_id: id, fields, members: [] }, source: "server" };
         }
-        const row = { id };
+        const row = { id, parent: null, children: [], members: [], member_count: 0 };
         Object.keys(current).forEach((name) => { row[name] = current[name].value; });
+        row.parent_id = row.parent_id || null;
+        if (opts && typeof opts.validate === "function" && !opts.validate(row)) {
+            return { value: null, source: "unavailable" };
+        }
         return { value: row, source: "server" };
     };
     function tab() {
@@ -989,19 +993,44 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
          * version instead of the held one it refused (#1454 review). */
         const reads = [];
         const serverRead = globalThis.prksOfflineReadEntity;
+        let reachable = false;
         globalThis.prksOfflineReadEntity = async (kind, id, ...rest) => {
             reads.push(kind);
+            if (!reachable && kind === "person-group") return { value: null, source: "unavailable" };
             return serverRead(kind, id, ...rest);
         };
-        const painted = [];
-        c.setEntity = (_name, value) => { painted.push(value); };
+        let shownGroup = { id: "PG-B", name: "Group B", description: "original", parent: null };
+        c.getEntity = () => shownGroup;
+        let repaint = null;
+        const nextPaint = () => new Promise((resolve) => { repaint = resolve; });
+        c.setEntity = (_name, value) => { shownGroup = value; if (repaint) repaint(value); };
         globalThis.closePersonGroupEdit(c);
         assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
-        for (let i = 0; i < 5 && !painted.length; i += 1) await new Promise(r => setTimeout(r, 2));
-        globalThis.prksOfflineReadEntity = serverRead;
+        assert.equal(c.ui.personGroupEditing, false, "Cancel closes the editor at once");
+        await new Promise(r => setTimeout(r, 5));
         assert(reads.includes("person-group"), "Cancel after the refusal reads the Group from the server");
-        assert.equal(painted.length && painted[0].description, "from A", "and repaints the current version");
+        assert.equal(c.ui.personGroupStale, "PG-B", "an unreachable server keeps the stale mark");
+
+        /* Edit waits for the current version: offline it stays closed and
+         * says why, and no baseline is captured from the held version. */
+        const alertsBefore = alerts.length;
+        globalThis.openPersonGroupEdit(c);
+        assert.equal(c.ui.personGroupEditing, false, "Edit does not open on the held version");
+        assert.equal(c.ui.personGroupFieldBaseline, null, "and captures no baseline");
+        await new Promise(r => setTimeout(r, 5));
+        assert.equal(alerts.length, alertsBefore + 1, "the user is told why Edit did not open");
+        assert.match(alerts[alerts.length - 1], /could not load the current version/);
+
+        reachable = true;
+        const painted = nextPaint();
+        globalThis.openPersonGroupEdit(c);
+        assert.equal((await painted).description, "from A", "a reachable server repaints the current version");
+        await new Promise(r => setTimeout(r, 5));
+        globalThis.prksOfflineReadEntity = serverRead;
         assert.equal(c.ui.personGroupStale, null, "the stale mark is spent");
+        assert.equal(c.ui.personGroupEditing, true, "and Edit then opens");
+        assert.equal(c.ui.personGroupFieldBaseline.description, "from A", "on the current version");
+        globalThis.closePersonGroupEdit(c);
 
         /* This device's own unsent edit is what the form shows: editing it
          * again keeps the revision that edit was measured against. */

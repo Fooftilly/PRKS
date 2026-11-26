@@ -289,12 +289,16 @@ describe('edit-session bases', () => {
   })
 
   it('pins an unsent edit of this device at the revision it was measured against', () => {
-    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 4 } }
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 2 } }
     const showsPending = { name: 'Group', description: 'unsent' }
     expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2 } })).toEqual({
       name: { value: 'Group', revision: 3 },
       description: { value: 'old', revision: 2, pending: 'unsent' },
     })
+    // A read at a later revision holds another device's value, not the base
+    // the unsent edit replaced.
+    const newer = { ...read, description: { value: 'theirs', revision: 4 } }
+    expect(pinEditBase(showsPending, newer, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
     expect(pinEditBase(shown, read, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
     expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()
   })
