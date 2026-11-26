@@ -226,6 +226,20 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].payload.value, "Lectures");
         assert.equal(rows[0].base_revision, 4, "measured against the shown edit's ACK");
     }
+    /* Another pane queues the same value at the old base after that ACK. */
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.status !== "acknowledged");
+        assert.equal(rows.length, 1, "a matching queued row never drops the revert after the ACK");
+        assert.equal(rows[0].payload.value, "Lectures");
+        assert.equal(rows[0].base_revision, 4);
+    }
     /* Opened on the unsent edit, which is then acknowledged: a new value
      * (not a revert) is measured from that ACK too, never from the revision
      * the edit replaced, which would conflict with this device's own write. */
@@ -642,6 +656,23 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.deepEqual(kept.title, { value: "Mine", revision: 4 }, "a late read never rolls the acknowledged pair back");
     assert.deepEqual(kept.description, { value: "Read", revision: 0 }, "and still records the fields it read");
     heldEntities.delete("playlist-edit-base:" + known);
+    /* Another device writes while the record is read: the values are past the revisions. */
+    let racedRevision = 0;
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind !== "playlist-state") {
+            racedRevision += 1;
+            return { value: { id, title: "Raced", description: "", original_url: "", items: [] }, source: "server" };
+        }
+        const state = globalThis.prksNewPlaylistState(id);
+        state.fields.title.revision = racedRevision;
+        return { value: state, source: "server" };
+    };
+    assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
+        "values read across a revision change form no base");
+    assert.equal(heldEntities.get("playlist-edit-base:" + known), undefined, "and that pair is not kept");
+    globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "playlist-state"
+        ? { value: globalThis.prksNewPlaylistState(id), source: "server" }
+        : { value: { id, title: "Read", description: "Read", original_url: "", items: [] }, source: "server" });
     /* Another tab commits its ACK after this read and before this tab's write. */
     const merge = globalThis.prksOfflineMergeEntity;
     globalThis.prksOfflineMergeEntity = async (kind, id, fn) => {
@@ -741,6 +772,17 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
         }
         assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
             "a Save cancelled during its queue read queues nothing");
+    }
+
+    /* A session that ends after its replacement deleted the queued row aborts the write. */
+    {
+        await store.savePlaylistFields(existing, { title: "Queued" }, base);
+        let checks = 0;
+        await assert.rejects(store.savePlaylistFields(existing, { title: "Replaced" }, base, () => ++checks < 2),
+            err => err.prksLocalStoreCode === "ownership_lost");
+        assert.deepEqual((await rowsFor(store, "SET_PLAYLIST_FIELD")).map(r => r.payload.value), ["Queued"],
+            "the queued row comes back");
+        await store.savePlaylistFields(existing, { title: base.title.value }, base);
     }
 
     /* #894: another tab saves the title after this editor opened. This

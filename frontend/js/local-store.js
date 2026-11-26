@@ -3679,7 +3679,7 @@
              * that edit synced is measured from its ACK and is not ours. */
             const original = existing && existing.base_revision === observed.revision &&
                 (typeof observed.pending !== 'string' || existing.payload.value === observed.pending);
-            if (original || typeof observed.pending !== 'string' || observed.pending === observed.value) {
+            if (!acknowledged && (original || typeof observed.pending !== 'string' || observed.pending === observed.value)) {
                 return null;
             }
             return acknowledged ? acknowledged.server_revision : observed.revision;
@@ -3728,6 +3728,7 @@
                                 continue;
                             }
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
+                            abandonUnownedWrite(stillOwns, true);
                         }
                         const baseRevision = fieldWriteRevision(rows, existing, isFieldRow, desired, observed);
                         if (baseRevision === null) continue;
@@ -3736,7 +3737,7 @@
                             entity_id: playlistId, payload: { field, value: desired },
                             base_revision: baseRevision,
                             depends_on: createOp ? [createOp.op_id] : [],
-                        }, null));
+                        }, null, stillOwns));
                     }
                     setResult(written);
                 });

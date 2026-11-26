@@ -30,6 +30,7 @@ function assert(name, ok, detail) {
 }
 
 const {
+    FakeIDBDatabase,
     FakeIDBKeyRange,
     FakeIDBRequest,
     createFakeIndexedDBFactory,
@@ -89,8 +90,37 @@ async function run() {
         assert('updateEntity resolves true on commit', ok === true);
         assertEq('merge sees the value another tab committed', seen, { revision: 4 });
         assertEq('so a delayed write keeps it', (await tabA.getEntity('playlist-edit-base', 'PL-1')).value, { revision: 4 });
+        /* IndexedDB orders overlapping readwrite transactions, so a read and
+         * a put in one transaction leave no gap for another tab's write. */
+        const transaction = FakeIDBDatabase.prototype.transaction;
+        const seenBy = [];
+        FakeIDBDatabase.prototype.transaction = function (names, mode) {
+            const tx = transaction.call(this, names, mode);
+            const objectStore = tx.objectStore;
+            const calls = [];
+            seenBy.push({ mode, calls });
+            tx.objectStore = function (name) {
+                const handle = objectStore(name);
+                if (name !== 'entities') return handle;
+                return Object.assign(Object.create(Object.getPrototypeOf(handle)), handle, {
+                    get: key => { calls.push('get'); return handle.get(key); },
+                    put: value => { calls.push('put'); return handle.put(value); },
+                });
+            };
+            return tx;
+        };
+        try {
+            await tabA.updateEntity('playlist-edit-base', 'PL-1', function (held) {
+                return { revision: held.revision + 1 };
+            });
+        } finally {
+            FakeIDBDatabase.prototype.transaction = transaction;
+        }
+        const touching = seenBy.filter(tx => tx.calls.length);
+        assertEq('the merge reads and writes in one readwrite transaction',
+            touching.map(tx => [tx.mode, tx.calls]), [['readwrite', ['get', 'put']]]);
         await tabA.updateEntity('playlist-edit-base', 'PL-1', function () { return null; });
-        assertEq('a null merge writes nothing', (await tabB.getEntity('playlist-edit-base', 'PL-1')).value, { revision: 4 });
+        assertEq('a null merge writes nothing', (await tabB.getEntity('playlist-edit-base', 'PL-1')).value, { revision: 5 });
         await tabA.updateEntity('playlist-edit-base', 'PL-2', function (held) { return held ? null : { revision: 0 }; });
         assertEq('merge sees null when nothing is held', (await tabB.getEntity('playlist-edit-base', 'PL-2')).value, { revision: 0 });
     }

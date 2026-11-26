@@ -815,6 +815,15 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 /* #783: two tabs open Edit at revision 0. Tab A saves; tab B's later Save is
  * still measured against revision 0, so the server sees a conflict instead of
  * B silently replacing A's description. */
+/* Resolves once `ready()` holds; fails instead of waiting forever. */
+async function until(ready) {
+    for (let turn = 0; turn < 500; turn += 1) {
+        if (ready()) return;
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    throw new Error("condition not reached");
+}
+
 /* Revisions from the server with values from the cache are two snapshots:
  * a newer revision would vouch for older text, so no base is formed. */
 async function serverRevisionsNeverPairWithCachedValues() {
@@ -878,8 +887,21 @@ async function serverRevisionsNeverPairWithCachedValues() {
         assert.deepEqual((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description,
             { value: "B", revision: 1 }, "a newer cached state or record does not change the pair");
 
-        /* Another tab commits its ACK after this read and before this tab's write. */
+        /* Another device writes while the record is read: the values are past the revisions. */
         sources.state = "server"; sources.record = "server";
+        const reader = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async (kind, id, path, options) => {
+            if (kind !== "person-group-state") { server.revision += 1; server.description = "E"; }
+            return reader(kind, id, path, options);
+        };
+        const raced = await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        globalThis.prksOfflineReadEntity = reader;
+        assert.equal(raced, null, "values read across a revision change form no base");
+        assert.deepEqual(held.get("person-group-edit-base:PG-S").fields.description, { value: "B", revision: 1 },
+            "and that pair is not kept");
+        server.revision = 2; server.description = "C";
+
+        /* Another tab commits its ACK after this read and before this tab's write. */
         const merge = globalThis.prksOfflineMergeEntity;
         globalThis.prksOfflineMergeEntity = async (kind, id, fn) => {
             const theirs = held.get(kind + ":" + id);
@@ -1058,7 +1080,7 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         globalThis.closePersonGroupEdit(c);
         assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
         assert.equal(c.ui.personGroupEditing, false, "Cancel closes the editor at once");
-        await new Promise(r => setTimeout(r, 5));
+        await until(() => reads.includes("person-group"));
         assert(reads.includes("person-group"), "Cancel after the refusal reads the Group from the server");
         assert.equal(c.ui.personGroupStale, "PG-B", "an unreachable server keeps the stale mark");
 
@@ -1068,7 +1090,7 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         globalThis.openPersonGroupEdit(c);
         assert.equal(c.ui.personGroupEditing, false, "Edit does not open on the held version");
         assert.equal(c.ui.personGroupFieldBaseline, null, "and captures no baseline");
-        await new Promise(r => setTimeout(r, 5));
+        await until(() => alerts.length > alertsBefore);
         assert.equal(alerts.length, alertsBefore + 1, "the user is told why Edit did not open");
         assert.match(alerts[alerts.length - 1], /could not load the current version/);
 
@@ -1076,7 +1098,7 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         const painted = nextPaint();
         globalThis.openPersonGroupEdit(c);
         assert.equal((await painted).description, "from A", "a reachable server repaints the current version");
-        await new Promise(r => setTimeout(r, 5));
+        await until(() => c.ui.personGroupEditing === true);
         globalThis.prksOfflineReadEntity = serverRead;
         assert.equal(c.ui.personGroupStale, null, "the stale mark is spent");
         assert.equal(c.ui.personGroupEditing, true, "and Edit then opens");
