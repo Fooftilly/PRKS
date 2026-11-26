@@ -276,9 +276,9 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const pinned = await pinFor(store);
         await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
         await store.deleteAcknowledgedOperation(sent.op_id);
-        const hold = (title, revision) => heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
-            fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
-                name === "title" ? { value: title, revision } : { value: "", revision: 0 }])) });
+        const hold = (title, revision, ackOp = sent.op_id) => heldEntities.set("playlist-edit-base:" + id, {
+            playlist_id: id, fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
+                name === "title" ? { value: title, revision, ackOp } : { value: "", revision: 0 }])) });
         try {
             hold("Seminars", 4);
             const settled = await globalThis.prksSettlePinnedPlaylistBase(id, pinned, await store.listOperations());
@@ -295,6 +295,17 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
             hold("Seminars\uFEFF", 5);
             assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
                 "a value the server stores differently keeps the pinned revision");
+            hold("Seminars", 6, null);
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
+                "the same text read at a later revision is not the pinned edit's ACK");
+            const replacement = { operation: "SET_PLAYLIST_FIELD", entity_type: "playlist", entity_id: id,
+                status: "pending", sequence: 9, op_id: "replacement", base_revision: 3,
+                payload: { field: "title", value: "Conferences" } };
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [replacement])).title,
+                pinned.title, "a replacement queued meanwhile does not make that read the ACK either");
+            hold("Seminars", 6, "another-op");
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
+                "nor is another write's ACK");
             hold("Elsewhere", 5);
             assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
                 "a snapshot holding another device's value keeps the pinned revision");
@@ -329,7 +340,7 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         await wrapper.savePlaylistFields(id, { title: "Seminars" }, read);
         heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
             fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
-                name === "title" ? { value: "Seminars", revision: 4 } : { value: "", revision: 0 }])) });
+                name === "title" ? { value: "Seminars", revision: 4, ackOp: first.op_id } : { value: "", revision: 0 }])) });
         const sync = globalThis.prksSync;
         globalThis.prksSync = { store: wrapper };
         try {

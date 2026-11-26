@@ -469,6 +469,7 @@
             if (entry === null) { base[name] = null; continue; }
             if (!entry || typeof entry.value !== 'string' || !reconcileCore.isRevision(entry.revision)) return null;
             base[name] = { value: entry.value, revision: entry.revision };
+            if (typeof entry.ackOp === 'string') base[name].ackOp = entry.ackOp;
         }
         return base;
     }
@@ -545,8 +546,7 @@
      * so a further write is measured from there. Other fields are kept.
      */
     /* The server stores a field trimmed, and an empty title as the default name. */
-    /* Only this device's own ACK writes the queued value into the snapshot
-     * verbatim, so an exact match vouches for the revision beside it. */
+    /* Only the snapshot entry the pinned edit's own ACK stamped vouches for the revision beside it. */
     async function settlePinnedPlaylistBase(playlistId, pinned, operations) {
         if (!pinned) return pinned;
         const open = pendingFieldBases(operations, playlistId);
@@ -560,7 +560,9 @@
         const out = Object.assign({}, pinned);
         settled.forEach(function (field) {
             const now = read && read[field];
-            if (now && now.value === pinned[field].pending && now.revision > pinned[field].revision) {
+            if (now && typeof now.ackOp === 'string' && now.ackOp === pinned[field].pendingOp &&
+                now.value === pinned[field].pending &&
+                now.revision > pinned[field].revision) {
                 out[field] = { value: now.value, revision: now.revision };
             }
         });

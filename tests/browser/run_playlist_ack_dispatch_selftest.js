@@ -210,7 +210,8 @@ async function main() {
         assert.equal(detail.description, "New description");
         assert.equal(state.fields.description.revision, 1);
         assert.deepEqual((await cache.getEntity("playlist-edit-base", ID)).value.fields.description,
-            {value: "New description", revision: 1}, "the offline edit base moves along its own ACK");
+            {value: "New description", revision: 1, ackOp: envelope.op_id},
+            "the offline edit base moves along its own ACK, stamped with it");
         const list = (await cache.getList("playlists:index")).value;
         assert(validation.prksIsPlaylistsIndexShape(list));
         assert.equal(list[0].description, "New description");
@@ -324,9 +325,10 @@ async function main() {
             {value: "Talks", revision: 0}, "the create seeds the pair");
         assert(await globalThis.prksOfflineReconcilePlaylistField(
             {playlist_id: NEW, field: "title", server_revision: 1, changed: true},
-            {base_revision: 0, payload: {field: "title", value: "Seminars"}, created_at: new Date().toISOString()}));
+            {op_id: "op-seminars", base_revision: 0, payload: {field: "title", value: "Seminars"},
+                created_at: new Date().toISOString()}));
         assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
-            {value: "Seminars", revision: 1}, "the first field ACK moves it");
+            {value: "Seminars", revision: 1, ackOp: "op-seminars"}, "the first field ACK moves it");
         const remove = cache.deleteEntity;
         cache.deleteEntity = async (kind, id) => kind === "playlist-edit-base" ? false : remove(kind, id);
         try {
