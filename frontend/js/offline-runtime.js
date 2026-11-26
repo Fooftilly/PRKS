@@ -1059,7 +1059,10 @@
                      * could not be dropped keeps the operation queued. */
                     return dropUnprovenEntity(kind, id);
                 }
-                if (plan !== 'apply') return true;
+                /* An absence that already agrees still records the DELETE's
+                 * tombstone: without it a delayed CREATE or SET of this id
+                 * would find nothing to supersede it and revive the row. */
+                if (plan !== 'apply' && !(plan === 'unchanged' && !present)) return true;
             }
             let nextItems = snap.items.filter(function (item) {
                 if (!item || typeof item !== 'object') return true;
