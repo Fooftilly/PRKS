@@ -418,32 +418,55 @@
             state = result && result.value;
             stateSource = result && result.source;
         } catch (_e) { state = null; }
-        if (!state) return null;
+        if (!state) return stateSource === 'server' ? null : cachedEditBase(playlistId);
+        /* Offline, two cached reads are not one snapshot: a revisions read can
+         * reach the server while the record read does not, or refresh without
+         * it, and pair newer revisions with older values. The base offline is
+         * the pair this device last read together. */
+        if (stateSource !== 'server') return cachedEditBase(playlistId);
         let playlist = null;
         try {
             const cached = await root.prksOfflineReadEntity('playlist', playlistId,
                 '/api/playlists/' + encodeURIComponent(playlistId),
                 /* A record read joined to an older flight would predate the
                  * revisions while still answering from the server. */
-                stateSource === 'server' ? { requestPolicy: { dedupe: false } } : {});
-            /* Revisions read from the server and values from an older cache
-             * are not one snapshot: a newer revision would vouch for older
-             * text, and a Save against it would replace the newer text
-             * unseen. Values read after the revisions are newer or equal,
-             * which at worst makes a Save a revision conflict. */
-            playlist = cached && (stateSource !== 'server' || cached.source === 'server') ? cached.value : null;
-            /* Two cached reads are the same pair only when the values were read
-             * at or after the revisions: a sync-state read that reached the
-             * server while the record read did not leaves newer revisions beside
-             * older values, and pairing them later would bring back the save
-             * that was just refused. */
-            if (playlist && cached.source !== 'server') {
-                const revisionsAt = reconcileCore.observedAt(state);
-                const valuesAt = reconcileCore.observedAt(playlist);
-                if (revisionsAt === null || valuesAt === null || valuesAt < revisionsAt) playlist = null;
-            }
+                { requestPolicy: { dedupe: false } });
+            /* Values read after the revisions are newer or equal, which at
+             * worst makes a Save a revision conflict. Values from the cache
+             * may be older than the revisions, so they form no base. */
+            playlist = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { playlist = null; }
-        return playlist ? observedPlaylistFields(playlist, state) : null;
+        if (!playlist) return null;
+        const base = observedPlaylistFields(playlist, state);
+        await cacheEditBase(playlistId, base);
+        return base;
+    }
+
+    /* The kind under which an edit base read as one pair is kept for offline Edit. */
+    const PLAYLIST_EDIT_BASE = 'playlist-edit-base';
+
+    async function cachedEditBase(playlistId) {
+        let held = null;
+        try {
+            held = typeof root.prksOfflinePeekEntity === 'function'
+                ? await root.prksOfflinePeekEntity(PLAYLIST_EDIT_BASE, playlistId) : null;
+        } catch (_e) { held = null; }
+        if (!held || held.playlist_id !== playlistId || !held.fields || typeof held.fields !== 'object') return null;
+        const base = {};
+        for (const name of FIELDS) {
+            const entry = held.fields[name];
+            if (entry === null) { base[name] = null; continue; }
+            if (!entry || typeof entry.value !== 'string' || !reconcileCore.isRevision(entry.revision)) return null;
+            base[name] = { value: entry.value, revision: entry.revision };
+        }
+        return base;
+    }
+
+    async function cacheEditBase(playlistId, base) {
+        if (typeof root.prksOfflineCacheEntity !== 'function') return;
+        try {
+            await root.prksOfflineCacheEntity(PLAYLIST_EDIT_BASE, playlistId, { playlist_id: playlistId, fields: base });
+        } catch (_e) { /* the next online Edit writes it again */ }
     }
 
     /**

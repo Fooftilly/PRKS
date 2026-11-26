@@ -179,6 +179,21 @@ var prksSyncReconcile = (function(exports) {
 		return pinned;
 	}
 	/**
+	* An edit base, read as one value/revision pair, after this device's own
+	* write of that field is acknowledged. `undefined` keeps the entry: it is at
+	* or past the ACK. The write's value at the ACK revision replaces an entry the
+	* write was measured against. Any other entry is null: a revision between the
+	* two holds a value nobody here has read.
+	*/
+	function acknowledgeEditBase(entry, write) {
+		if (!isFieldBase(entry)) return null;
+		if (entry.revision >= write.ackRevision) return void 0;
+		return entry.revision === write.baseRevision ? {
+			value: write.value,
+			revision: write.ackRevision
+		} : null;
+	}
+	/**
 	* The fields this session changed, each measured against its pinned base. A
 	* changed field whose base is unknown is listed in `unknown` and must not be
 	* sent: the caller tells the user it changed elsewhere and keeps the draft.
@@ -202,6 +217,7 @@ var prksSyncReconcile = (function(exports) {
 			unknown
 		};
 	}
+	exports.acknowledgeEditBase = acknowledgeEditBase;
 	exports.adoptFresh = adoptFresh;
 	exports.applyOwnerAck = applyOwnerAck;
 	exports.carryObservation = carryObservation;

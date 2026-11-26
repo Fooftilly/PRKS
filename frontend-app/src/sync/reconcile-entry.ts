@@ -4,6 +4,7 @@
  * No Vue mount, Pinia, or Vue Router.
  */
 export {
+  acknowledgeEditBase,
   adoptFresh,
   applyOwnerAck,
   carryObservation,

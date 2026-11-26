@@ -403,9 +403,9 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         self.detail(page, server.ids['person_group'])
         o._wait_content_contains(page, 'Group description')
         o._open_details_drawer_if_tiled(page)
-        page.evaluate("id => { void prksReadPersonGroupState(id); }",
-                      server.ids['person_group'])
-        o._wait_entity_cached(page, 'person-group-state', server.ids['person_group'])
+        # The base an offline Save pins is the pair read together while connected.
+        self.assertTrue(page.evaluate("id => prksAcknowledgedPersonGroupBase(id, []).then(b => !!b)",
+                                      server.ids['person_group']))
         page.evaluate('openPersonGroupEdit()')
         page.wait_for_function("() => !!document.querySelector('#gd-save-btn')?.onclick")
         page.locator('#gd-name').fill('Renamed while connected')
