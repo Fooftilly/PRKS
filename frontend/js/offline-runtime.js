@@ -2464,12 +2464,6 @@
                 next[field] = value;
                 return next;
             });
-            /* The revisions already moved: a body left at the older value
-             * would be paired with them, so it goes and the ACK is retried. */
-            if (!bodyWritten) {
-                await dropUnprovenEntity('playlist', id);
-                return false;
-            }
             if (field === 'title' && result.changed) {
                 /* `get_work()` embeds `playlist_title`, so renaming a playlist
                  * stales the cached Work of every video in it. Unlike the
@@ -2487,6 +2481,13 @@
                     prksOfflineMarkRecentChanged();
                     prksOfflineMarkRecentlyAddedChanged();
                 }
+            }
+            /* The revisions already moved: a body left at the older value
+             * would be paired with them, so it goes and the ACK is retried.
+             * The Works above were invalidated first: the retry has no body to name them. */
+            if (!bodyWritten) {
+                await dropUnprovenEntity('playlist', id);
+                return false;
             }
             return true;
         }
@@ -2590,7 +2591,7 @@
             }
             await invalidateEntity('playlist', id);
             await invalidateEntity('playlist-state', id);
-            await invalidateEntity('playlist-edit-base', id);
+            if (!await invalidateEntity('playlist-edit-base', id)) return false;
             return true;
         }
 
@@ -3231,7 +3232,7 @@
             }
             await invalidateEntity('person-group', id);
             await invalidateEntity('person-group-state', id);
-            await invalidateEntity('person-group-edit-base', id);
+            if (!await invalidateEntity('person-group-edit-base', id)) return false;
             const people = await store.getList(PEOPLE_LIST_KEY)
                 .catch(function () { return null; });
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;

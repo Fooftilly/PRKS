@@ -453,12 +453,16 @@
                 /* A record read joined to an older flight would predate the
                  * revisions while still answering from the server. */
                 { requestPolicy: { dedupe: false } });
-            /* Values read after the revisions are newer or equal, which at
-             * worst makes a Save a revision conflict. Values from the cache
-             * may be older than the revisions, so they form no base. */
+            /* Values from the cache may be older than the revisions, so they form no base. */
             group = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { group = null; }
         if (!group) return null;
+        /* Revisions unchanged across the record read prove its values are at them. */
+        let after = null;
+        try {
+            after = await readPersonGroupState(groupId, { requestPolicy: { dedupe: false } });
+        } catch (_e) { after = null; }
+        if (!after || after.source !== 'server' || !sameFieldRevisions(state, after.value)) return null;
         const base = observedGroupFields(group, state);
         await cacheEditBase(groupId, base);
         return base;
@@ -466,6 +470,15 @@
 
     /* The kind under which an edit base read as one pair is kept for offline Edit. */
     const PERSON_GROUP_EDIT_BASE = 'person-group-edit-base';
+
+    function sameFieldRevisions(before, after) {
+        if (!after || !after.fields) return false;
+        return FIELDS.every(function (name) {
+            const a = before.fields[name];
+            const b = after.fields[name];
+            return !!a && !!b && a.revision === b.revision;
+        });
+    }
 
     async function cachedEditBase(groupId) {
         let held = null;

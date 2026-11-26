@@ -274,6 +274,24 @@ async function main() {
         assert.equal((await cache.getList("playlists:index")).value[0].description, "Old description",
             "the catalogue row is not given the older value either");
     }
+    /* A body write that fails still evicts the member Works: the retry has no body to name them. */
+    await seed();
+    {
+        const put = cache.putEntity;
+        cache.putEntity = async (kind, ...rest) => kind === "playlist" ? false : put(kind, ...rest);
+        let ok;
+        try {
+            ok = await globalThis.prksOfflineReconcilePlaylistField(
+                {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+                {base_revision: 0, payload: {field: "title", value: "Renamed"}, created_at: new Date().toISOString()});
+        } finally {
+            cache.putEntity = put;
+        }
+        assert.equal(ok, false, "the ACK is retried");
+        assert.equal(await cache.getEntity("playlist", ID), null, "the unpatched body is dropped");
+        assert.equal(await cache.getEntity("work", W1), null, "and the member Works are evicted first");
+        assert.equal(await cache.getEntity("work", W2), null);
+    }
     /* A Playlist created here is known at revision 0, so the open editor's
      * next Save is measured from its first field ACK. */
     {
@@ -287,6 +305,14 @@ async function main() {
             {base_revision: 0, payload: {field: "title", value: "Seminars"}, created_at: new Date().toISOString()}));
         assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
             {value: "Seminars", revision: 1}, "the first field ACK moves it");
+        const remove = cache.deleteEntity;
+        cache.deleteEntity = async (kind, id) => kind === "playlist-edit-base" ? false : remove(kind, id);
+        try {
+            assert.equal(await globalThis.prksOfflineReconcileDeletedPlaylist({playlist_id: NEW}), false,
+                "a pair that could not be dropped keeps the delete ACK for a retry");
+        } finally {
+            cache.deleteEntity = remove;
+        }
         assert(await globalThis.prksOfflineReconcileDeletedPlaylist({playlist_id: NEW}));
         assert.equal(await cache.getEntity("playlist-edit-base", NEW), null, "a delete drops the pair");
     }
