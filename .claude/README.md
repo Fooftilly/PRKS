@@ -1,13 +1,12 @@
-# Claude Code / Sonar agent config
+# Claude Code project config
 
-Shared, portable project wiring for optional SonarQube CLI integration.
+Project skills and optional SonarQube CLI integration.
 Personal overrides stay out of git (see root `.gitignore`).
 
 ## Prerequisites (optional)
 
-These files do **nothing required** for building, testing, or running PRKS.
-They only matter if you use [Claude Code](https://code.claude.com/) with the
-[SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
+Claude Code configuration is optional. Skills do not require Sonar.
+The hooks below require the [SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
 
 1. **Python 3.14+** (already required by PRKS). The shared hooks do **not**
    hard-code a bare `python3` command on Windows. Launchers follow the same
@@ -96,3 +95,9 @@ both. `run_hook.ps1` remains in the repo for this override.
 | `.claude/settings.local.json` | No (personal MCP opt-in / Windows PowerShell override / experiments) |
 | `.codex/` | No (Codex integrate may write absolute machine paths) |
 | Root `.mcp.json` | Yes (token-free Sonar MCP for project `Fooftilly_PRKS`) |
+
+## Skills
+
+Start Claude Code from the repository root. See `skills/*/SKILL.md` for opt-in commands. Existing AGENTS.md rules apply.
+
+Smoke-test in a disposable checkout: confirm all nine skills and `prks-change-auditor` are discovered. On a synthetic diff, verify `/no-comments report-only` and `/prks-review` actually delegate to the auditor without editing or posting; fallback is not a delegation pass. Verify `/no-comments` on a synthetic diff that mixes redundant narration with comments it must keep (a sync or lock-order rule, a license header, a lint directive): it removes only the narration. Use `/verify-feature` on an isolated test and confirm the reported result matches the actual run. These are manual checks, not CI evidence.
