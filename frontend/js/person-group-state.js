@@ -488,7 +488,18 @@
      */
     async function pinGroupEditBase(groupId, shown, operations) {
         const read = await acknowledgedGroupBase(groupId, operations);
-        return reconcileCore.pinEditBase(shown, read, pendingFieldBases(operations, groupId));
+        const pending = pendingFieldBases(operations, groupId);
+        const move = pending.parent_id;
+        const shownParent = String(shown && shown.parent_id != null ? shown.parent_id : '');
+        if (move && move.value && move.value !== shownParent && pendingDeletions(operations).has(move.value)) {
+            /* The move's destination is itself waiting to be deleted, so the
+             * editor shows the ancestor the deletion moves this group up to
+             * (`effectivePersonGroupDetail`). That ancestor IS this device's
+             * pending parent; the move's revision is still what a new move
+             * replaces it against (#1454 review). */
+            pending.parent_id = Object.assign({}, move, { value: shownParent });
+        }
+        return reconcileCore.pinEditBase(shown, read, pending);
     }
 
     /**

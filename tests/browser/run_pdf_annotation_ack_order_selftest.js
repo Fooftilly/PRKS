@@ -77,9 +77,13 @@ async function main() {
         await later();
         const setOp = createdNow();
         await later();
-        assert(await offline.reconcilePdfAnnotation(ack('A', 2, null), createdNow()));
+        /* The create and the delete each advanced the set: generation 3. */
+        assert(await offline.reconcilePdfAnnotation(ack('A', 2, null, { canonical_annotation_set_revision: 3 }),
+            createdNow()));
         assert.deepEqual(await held(cache, 'A'), { revision: null, text: null, absent: 2 },
             'the agreeing DELETE keeps its tombstone');
+        assert.equal((await cache.getEntity(KIND, 'W')).value.canonical_annotation_set_revision, 1,
+            'across a gap of two set changes the snapshot keeps its older generation');
         assert(await offline.reconcilePdfAnnotation(ack('A', 1, 'ghost'), setOp));
         assert.deepEqual(await held(cache, 'A'), { revision: null, text: null, absent: 2 },
             'a delayed SET does not revive the deleted annotation');
