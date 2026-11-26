@@ -121,6 +121,7 @@ async function scenario(name, write, expectedOperations = 1) {
     const originalOrder = globalThis.prksOfflineReconcilePlaylistOrder;
     globalThis.prksOfflineReadEntity = async (kind, id) => {
         const r = await cache.getEntity(kind, id);
+        if (r) require("../../frontend/js/sync-reconcile.js").observe(r.value, Number.isFinite(r.observedAt) ? r.observedAt : r.cachedAt);
         return {value: r ? r.value : null, source: r ? "cache" : "unavailable"};
     };
     globalThis.prksOfflineReconcilePlaylistField = async (...args) => {

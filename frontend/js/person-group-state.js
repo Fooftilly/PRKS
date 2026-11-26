@@ -457,6 +457,16 @@
              * unseen. Values read after the revisions are newer or equal,
              * which at worst makes a Save a revision conflict. */
             group = cached && (stateSource !== 'server' || cached.source === 'server') ? cached.value : null;
+            /* Two cached reads are the same pair only when the values were read
+             * at or after the revisions: a sync-state read that reached the
+             * server while the record read did not leaves newer revisions beside
+             * older values, and pairing them later would bring back the save
+             * that was just refused. */
+            if (group && cached.source !== 'server') {
+                const revisionsAt = reconcileCore.observedAt(state);
+                const valuesAt = reconcileCore.observedAt(group);
+                if (revisionsAt === null || valuesAt === null || valuesAt < revisionsAt) group = null;
+            }
         } catch (_e) { group = null; }
         return group ? observedGroupFields(group, state) : null;
     }

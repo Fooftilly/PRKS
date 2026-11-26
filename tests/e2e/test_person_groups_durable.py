@@ -67,8 +67,10 @@ class DurablePersonGroupTests(unittest.TestCase):
         """
         self.detail(page, group_id)
         o._wait_entity_cached(page, 'person-group', group_id)
-        page.evaluate("id => { void Promise.resolve(prksReadPersonGroupState(id)).catch(() => {}); }",
-                      group_id)
+        # The revisions, then the record read after them: an offline base pairs
+        # only values read at or after their revisions.
+        self.assertTrue(page.evaluate("id => prksAcknowledgedPersonGroupBase(id, []).then(b => !!b)",
+                                      group_id))
         o._wait_entity_cached(page, 'person-group-state', group_id)
 
     def offline(self, page, context):
