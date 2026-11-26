@@ -459,7 +459,7 @@ interface Window {
   updatePlaylist?: (
     playlistId: string,
     fields: Record<string, string>,
-    options: { base: Record<string, { value: string; revision: number }> },
+    options: { base: Record<string, { value: string; revision: number }>; still?: () => boolean },
   ) => Promise<unknown>
   /** Field revisions an edit session saves against, read when Edit opens. Null when unknown. */
   prksPinPlaylistEdit?: (

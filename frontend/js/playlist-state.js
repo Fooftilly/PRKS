@@ -499,6 +499,12 @@
      * shows that edit, and the read now holds it at the revision it produced,
      * so a further write is measured from there. Other fields are kept.
      */
+    /* The server stores a field trimmed, and an empty title as the default name. */
+    function storedForm(field, value) {
+        const text = String(value == null ? '' : value).trim();
+        return field === 'title' && !text ? DEFAULT_TITLE : text;
+    }
+
     async function settlePinnedPlaylistBase(playlistId, pinned, operations) {
         if (!pinned) return pinned;
         const open = pendingFieldBases(operations, playlistId);
@@ -511,7 +517,8 @@
         const out = Object.assign({}, pinned);
         settled.forEach(function (field) {
             const now = read && read[field];
-            if (now && now.value === pinned[field].pending && now.revision > pinned[field].revision) {
+            if (now && storedForm(field, now.value) === storedForm(field, pinned[field].pending) &&
+                now.revision > pinned[field].revision) {
                 out[field] = { value: now.value, revision: now.revision };
             }
         });

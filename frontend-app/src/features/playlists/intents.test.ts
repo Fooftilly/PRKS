@@ -87,7 +87,7 @@ describe('Playlist intents', () => {
       shown,
     )
     expect(saved.ok).toBe(true)
-    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, { base: pinAll(shown) })
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, { base: pinAll(shown), still: expect.any(Function) })
     expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
     expect(window.renderPlaylistDetail).toHaveBeenCalled()
     expect(window.updatePanelContent).toHaveBeenCalledWith('details')
@@ -113,6 +113,7 @@ describe('Playlist intents', () => {
     const saved = await intents.saveFields('PL-1', { ...shown, description: 'Stale tab' }, shown)
     expect(saved.ok).toBe(true)
     expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Stale tab' }, {
+      still: expect.any(Function),
       base: {
         title: { value: 'Course', revision: 4 },
         description: { value: 'Old', revision: 0 },

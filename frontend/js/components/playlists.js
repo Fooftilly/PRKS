@@ -325,7 +325,8 @@ async function prksPinPlaylistEdit(playlistId, shown) {
  * Save the fields an edit session changed. `options.base` is the base pinned
  * when that session opened (`prksPinPlaylistEdit`), never one read now: a
  * field saved elsewhere since then reaches the server as a revision conflict
- * instead of silently replacing that save (#894).
+ * instead of silently replacing that save (#894). `options.still`, when given,
+ * is the caller's session check, made again just before the durable write.
  */
 async function updatePlaylist(playlistId, fields, options) {
     const base = options && options.base;
@@ -344,6 +345,9 @@ async function updatePlaylist(playlistId, fields, options) {
                 typeof prksDurableOperationsOrNone === 'function' ? await prksDurableOperationsOrNone() : []);
         } catch (_e) { settled = base; }
     }
+    /* That read can outlast the session: a Save cancelled meanwhile writes nothing. */
+    const still = options && options.still;
+    if (typeof still === 'function' && !still()) return {};
     try {
         await prksSavePlaylistFieldsDurably(playlistId, changes, settled);
     } catch (error) {
