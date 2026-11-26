@@ -3663,7 +3663,17 @@
          * it as a conflict instead of this device dropping it silently.
          */
         function fieldWriteRevision(rows, existing, isFieldRow, desired, observed) {
-            if (desired !== observed.value) return observed.revision;
+            /* The ACK of the unsent edit the form was opened on, while its row
+             * is still here: that edit is now the server's value, so any
+             * further write is measured from it, not from the revision it
+             * replaced (which would come back as a conflict with itself). */
+            const shownPending = typeof observed.pending === 'string' && observed.pending !== observed.value;
+            const acknowledged = shownPending ? rows.find(r => isFieldRow(r) &&
+                r.status === STATUS_ACKNOWLEDGED && r.base_revision === observed.revision &&
+                r.payload.value === observed.pending && Number.isSafeInteger(r.server_revision)) : null;
+            if (desired !== observed.value) {
+                return acknowledged ? acknowledged.server_revision : observed.revision;
+            }
             /* Only the edit the form was opened on is cancelled by returning
              * to the pinned value. A replacement another pane queued after
              * that edit synced is measured from its ACK and is not ours. */
@@ -3672,9 +3682,6 @@
             if (original || typeof observed.pending !== 'string' || observed.pending === observed.value) {
                 return null;
             }
-            const acknowledged = rows.find(r => isFieldRow(r) && r.status === STATUS_ACKNOWLEDGED &&
-                r.base_revision === observed.revision && r.payload.value === observed.pending &&
-                Number.isSafeInteger(r.server_revision));
             return acknowledged ? acknowledged.server_revision : observed.revision;
         }
 
