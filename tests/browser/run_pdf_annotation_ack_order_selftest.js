@@ -69,6 +69,21 @@ async function main() {
         assert.deepEqual(await held(cache, 'A'), { revision: null, text: null, absent: 4 },
             'a tombstone outranks an older ACK');
     }
+    /* A DELETE whose absence already agrees (a snapshot read before A was
+     * created) still records its tombstone, so a delayed SET cannot revive A. */
+    {
+        const { cache, offline } = setup();
+        await cache.putEntity(KIND, 'W', snapshot([], {}, 1));
+        await later();
+        const setOp = createdNow();
+        await later();
+        assert(await offline.reconcilePdfAnnotation(ack('A', 2, null), createdNow()));
+        assert.deepEqual(await held(cache, 'A'), { revision: null, text: null, absent: 2 },
+            'the agreeing DELETE keeps its tombstone');
+        assert(await offline.reconcilePdfAnnotation(ack('A', 1, 'ghost'), setOp));
+        assert.deepEqual(await held(cache, 'A'), { revision: null, text: null, absent: 2 },
+            'a delayed SET does not revive the deleted annotation');
+    }
     /* Equal revision: a live row is never turned into a deletion by a tie. */
     {
         const { cache, offline } = setup();
