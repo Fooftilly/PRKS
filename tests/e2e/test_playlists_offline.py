@@ -535,6 +535,8 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.open_details_panel(page)
         page.locator('#prks-playlist-edit-btn').click()
         page.wait_for_selector('#prks-playlist-edit-save')
+        # A Save offline measures the edit against the pair the Edit read stored.
+        o._wait_entity_cached(page, 'playlist-edit-base', pid)
         page.locator('#prks-playlist-edit-title').fill('Renamed while disconnected')
         page.locator('#prks-playlist-edit-desc').fill('Changed offline')
 
