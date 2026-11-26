@@ -442,12 +442,15 @@ function openPersonGroupEdit(owner) {
     /* A refused Save showed a held version; the next Edit waits for the
      * current one, or it would pin that held version again. */
     if (!ctx.ui.personGroupEditing && ctx.ui.personGroupStale === String(g.id)) {
+        const generation = ctx.generation;
         void prksRerenderPersonGroupDetail(ctx, g.id, { fresh: true }).then(() => {
+            const shown = ctx.getEntity ? ctx.getEntity('personGroup') : null;
+            if (ctx.destroyed || ctx.generation !== generation || !shown || String(shown.id) !== String(g.id)) return;
             if (ctx.ui && ctx.ui.personGroupStale === String(g.id)) {
                 void prksAlertMessage('PRKS could not load the current version of this group. '
                     + 'Try again when the server is reachable.', 'Changed elsewhere');
             } else {
-                openPersonGroupEdit(owner);
+                openPersonGroupEdit(ctx);
             }
         });
         return;

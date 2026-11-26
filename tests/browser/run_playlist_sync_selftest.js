@@ -270,6 +270,10 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
             await store.savePlaylistFields(id, edits.changes, edits.base);
             const [row] = await rowsFor(store, "SET_PLAYLIST_FIELD");
             assert.equal(row.base_revision, 4, "so this device's next write does not conflict with itself");
+            serve("Seminars", 4);
+            const padded = Object.assign({}, pinned, { title: Object.assign({}, pinned.title, { pending: "  Seminars " }) });
+            assert.equal((await globalThis.prksSettlePinnedPlaylistBase(id, padded, [])).title.revision, 4,
+                "the edit is matched as the server stores it, trimmed");
             serve("Elsewhere", 5);
             assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
                 "a read holding another device's value keeps the pinned revision");
@@ -676,6 +680,20 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
     assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
         "real updatePlaylist A→B→A leaves no intent");
+
+    /* A Save whose session ends while its base is settled writes nothing. */
+    {
+        let live = true;
+        const settle = globalThis.prksSettlePinnedPlaylistBase;
+        globalThis.prksSettlePinnedPlaylistBase = async (...args) => { live = false; return settle(...args); };
+        try {
+            await globalThis.updatePlaylist(existing, { title: "Cancelled" }, { base, still: () => live });
+        } finally {
+            globalThis.prksSettlePinnedPlaylistBase = settle;
+        }
+        assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
+            "a Save cancelled during its base read queues nothing");
+    }
 
     /* #894: another tab saves the title after this editor opened. This
      * session's Save keeps the revision it was shown, so the server can

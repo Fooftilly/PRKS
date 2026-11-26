@@ -256,7 +256,7 @@ export function browserPlaylistIntents(
         }
       }
       try {
-        await update(playlistId, edits.changes, { base: edits.base })
+        await update(playlistId, edits.changes, { base: edits.base, still: sessionCurrent })
       } catch (err) {
         return { ok: false, message: messageOf(err, 'Could not save this playlist.') }
       }

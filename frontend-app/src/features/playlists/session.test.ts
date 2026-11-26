@@ -242,6 +242,7 @@ describe('Playlists route surface', () => {
     await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
     expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Edited' }, {
       base: expect.objectContaining({ description: { value: 'A description', revision: 1 } }),
+      still: expect.any(Function),
     })
 
     presentPlaylistDetail({ owner: pane, host: el, playlist, editing: true, generation: 3 })
@@ -279,6 +280,7 @@ describe('Playlists route surface', () => {
     await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
     expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { title: 'Retitled' }, {
       base: expect.objectContaining({ title: { value: 'Course', revision: 1 } }),
+      still: expect.any(Function),
     })
   })
 
