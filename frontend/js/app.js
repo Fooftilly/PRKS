@@ -1354,7 +1354,8 @@ async function prksEffectivePersonGroupCatalogue(ops) {
     let rows = [];
     try {
         const cached = await prksOfflineReadList(
-            PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups', {});
+            PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups',
+            { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: prksIsPersonGroupsIndexShape });
         rows = cached && Array.isArray(cached.value) ? cached.value : [];
     } catch (_e) { rows = []; }
     return await prksEffectivePersonGroupRows(rows, ops);
