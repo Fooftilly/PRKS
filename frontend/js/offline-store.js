@@ -681,6 +681,30 @@
             return putCurrent(STORE_ENTITIES, envelope);
         }
 
+        /**
+         * Replaces one entity with `merge(heldValue)` inside the transaction
+         * that read it, so a write committed by another tab is merged, never
+         * overwritten. `merge` must be synchronous; null writes nothing.
+         */
+        function updateEntity(kind, id, merge) {
+            return inCurrentEpoch(STORE_ENTITIES, function (store, epoch) {
+                return store.get([String(kind), String(id)]).then(function (row) {
+                    const next = merge(current(row) ? row.value : null);
+                    if (next == null) return undefined;
+                    const cachedAt = now();
+                    return store.put({
+                        kind: String(kind),
+                        id: String(id),
+                        value: next,
+                        cachedAt: cachedAt,
+                        observedAt: cachedAt,
+                        sourceRevision: '',
+                        libraryEpoch: epoch,
+                    });
+                });
+            }, false);
+        }
+
         function getEntity(kind, id) {
             return runRequest(STORE_ENTITIES, 'readonly', function (store) {
                 return store.get([String(kind), String(id)]);
@@ -883,6 +907,7 @@
             isAvailable: isAvailable,
             putEntity: putEntity,
             getEntity: getEntity,
+            updateEntity: updateEntity,
             getEntitiesByKind: getEntitiesByKind,
             deleteEntity: deleteEntity,
             deleteEntitiesByKind: deleteEntitiesByKind,

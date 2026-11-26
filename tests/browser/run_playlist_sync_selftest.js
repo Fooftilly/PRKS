@@ -58,6 +58,11 @@ function loadTopLevelFunction(source, name) {
 const heldEntities = new Map();
 globalThis.prksOfflinePeekEntity = async (kind, id) => heldEntities.get(kind + ":" + id) || null;
 globalThis.prksOfflineCacheEntity = async (kind, id, value) => { heldEntities.set(kind + ":" + id, value); return true; };
+globalThis.prksOfflineMergeEntity = async (kind, id, merge) => {
+    const next = merge(heldEntities.get(kind + ":" + id) || null);
+    if (next != null) heldEntities.set(kind + ":" + id, next);
+    return true;
+};
 
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
@@ -636,6 +641,21 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     const kept = heldEntities.get("playlist-edit-base:" + known).fields;
     assert.deepEqual(kept.title, { value: "Mine", revision: 4 }, "a late read never rolls the acknowledged pair back");
     assert.deepEqual(kept.description, { value: "Read", revision: 0 }, "and still records the fields it read");
+    heldEntities.delete("playlist-edit-base:" + known);
+    /* Another tab commits its ACK after this read and before this tab's write. */
+    const merge = globalThis.prksOfflineMergeEntity;
+    globalThis.prksOfflineMergeEntity = async (kind, id, fn) => {
+        heldEntities.set(kind + ":" + id, { playlist_id: known, fields: {
+            title: { value: "Theirs", revision: 4 }, description: { value: "", revision: 0 }, original_url: { value: "", revision: 0 } } });
+        return merge(kind, id, fn);
+    };
+    try {
+        await globalThis.prksAcknowledgedPlaylistBase(known, []);
+    } finally {
+        globalThis.prksOfflineMergeEntity = merge;
+    }
+    assert.deepEqual(heldEntities.get("playlist-edit-base:" + known).fields.title, { value: "Theirs", revision: 4 },
+        "a delayed write merges against the pair another tab committed");
     heldEntities.delete("playlist-edit-base:" + known);
 }
 

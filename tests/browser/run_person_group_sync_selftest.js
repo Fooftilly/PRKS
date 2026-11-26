@@ -822,10 +822,16 @@ async function serverRevisionsNeverPairWithCachedValues() {
         read: globalThis.prksOfflineReadEntity,
         peek: globalThis.prksOfflinePeekEntity,
         cache: globalThis.prksOfflineCacheEntity,
+        merge: globalThis.prksOfflineMergeEntity,
     };
     const held = new Map();
     globalThis.prksOfflinePeekEntity = async (kind, id) => held.get(kind + ":" + id) || null;
     globalThis.prksOfflineCacheEntity = async (kind, id, value) => { held.set(kind + ":" + id, value); return true; };
+    globalThis.prksOfflineMergeEntity = async (kind, id, merge) => {
+        const next = merge(held.get(kind + ":" + id) || null);
+        if (next != null) held.set(kind + ":" + id, next);
+        return true;
+    };
     const sources = { state: "server", record: "cache" };
     const server = { revision: 1, description: "B" };
     const cachedRecord = { description: "A" };
@@ -871,10 +877,24 @@ async function serverRevisionsNeverPairWithCachedValues() {
         cachedRecord.description = "stale";
         assert.deepEqual((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description,
             { value: "B", revision: 1 }, "a newer cached state or record does not change the pair");
+
+        /* Another tab commits its ACK after this read and before this tab's write. */
+        sources.state = "server"; sources.record = "server";
+        const merge = globalThis.prksOfflineMergeEntity;
+        globalThis.prksOfflineMergeEntity = async (kind, id, fn) => {
+            const theirs = held.get(kind + ":" + id);
+            held.set(kind + ":" + id, { ...theirs, fields: { ...theirs.fields, description: { value: "D", revision: 3 } } });
+            return merge(kind, id, fn);
+        };
+        await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        globalThis.prksOfflineMergeEntity = merge;
+        assert.deepEqual(held.get("person-group-edit-base:PG-S").fields.description, { value: "D", revision: 3 },
+            "a delayed write merges against the pair another tab committed");
     } finally {
         globalThis.prksOfflineReadEntity = previous.read;
         globalThis.prksOfflinePeekEntity = previous.peek;
         globalThis.prksOfflineCacheEntity = previous.cache;
+        globalThis.prksOfflineMergeEntity = previous.merge;
     }
 }
 

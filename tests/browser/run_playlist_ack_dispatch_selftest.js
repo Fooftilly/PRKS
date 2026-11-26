@@ -27,6 +27,12 @@ const cache = {
         entities.set(entityKey(kind, id), {value, cachedAt: 1, sourceRevision: revision});
         return true;
     },
+    updateEntity: async (kind, id, merge) => {
+        const held = entities.get(entityKey(kind, id));
+        const next = merge(held ? held.value : null);
+        if (next != null) entities.set(entityKey(kind, id), {value: next, cachedAt: 1, sourceRevision: ""});
+        return true;
+    },
     deleteEntity: async (kind, id) => { entities.delete(entityKey(kind, id)); return true; },
     getEntitiesByKind: async kind => [...entities.entries()]
         .filter(([k]) => k.startsWith(kind + ":"))
