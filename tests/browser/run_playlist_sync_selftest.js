@@ -216,6 +216,21 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].payload.value, "Lectures");
         assert.equal(rows[0].base_revision, 4, "measured against the shown edit's ACK");
     }
+    /* Opened on the unsent edit, which is then acknowledged: a new value
+     * (not a revert) is measured from that ACK too, never from the revision
+     * the edit replaced, which would conflict with this device's own write. */
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Talks" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.status !== "acknowledged");
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].payload.value, "Talks");
+        assert.equal(rows[0].base_revision, 4, "a new value after the ACK is measured from it");
+    }
     {
         const store = newStore();
         const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
