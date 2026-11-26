@@ -268,6 +268,20 @@ async function main() {
         assert.equal((await cache.getList("playlists:index")).value[0].description, "Old description",
             "the catalogue row is not given the older value either");
     }
+    /* A Playlist created here is known at revision 0, so the open editor's
+     * next Save is measured from its first field ACK. */
+    {
+        const NEW = "PL-NEW";
+        assert(await globalThis.prksOfflineReconcileCreatedPlaylist({playlist_id: NEW, changed: true,
+            playlist: {id: NEW, title: "Talks", description: "", original_url: null, item_count: 0}}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
+            {value: "Talks", revision: 0}, "the create seeds the pair");
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "title", server_revision: 1, changed: true},
+            {base_revision: 0, payload: {field: "title", value: "Seminars"}, created_at: new Date().toISOString()}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
+            {value: "Seminars", revision: 1}, "the first field ACK moves it");
+    }
     console.log("All " + checks + " Playlist ACK-through-sync checks passed");
 }
 main().catch(e => {console.error(e); process.exitCode = 1;});

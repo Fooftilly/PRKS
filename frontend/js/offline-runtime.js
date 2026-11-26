@@ -2365,7 +2365,26 @@
                 await patchEntity('playlist-state', playlist.id,
                     () => root.prksNewPlaylistState(playlist.id));
             }
+            if (result.changed && !await seedEditBase('playlist-edit-base', 'playlist_id', playlist,
+                root.PRKS_PLAYLIST_FIELDS)) return false;
             return true;
+        }
+
+        /* A record this device created is known at revision 0, so its first
+         * field ACK has a pair to move. */
+        async function seedEditBase(kind, idKey, record, names) {
+            if (!Array.isArray(names)) return true;
+            const token = currentEntityGeneration(kind, record.id) + 1;
+            entityCoherence.set(entityKey(kind, record.id), token);
+            const held = await store.getEntity(kind, record.id).catch(function () { return null; });
+            if (held && held.value) return true;
+            const fields = {};
+            names.forEach(function (name) {
+                fields[name] = { value: record[name] == null ? '' : String(record[name]), revision: 0 };
+            });
+            const seed = { fields: fields };
+            seed[idKey] = record.id;
+            return cacheEntityIfCurrent(kind, record.id, seed, token);
         }
 
         /** One Playlist field the server has applied. */
@@ -2909,6 +2928,8 @@
                 await patchEntity('person-group-state', group.id,
                     () => root.prksNewPersonGroupState(group.id));
             }
+            if (result.changed && !await seedEditBase('person-group-edit-base', 'group_id', group,
+                root.PRKS_PERSON_GROUP_FIELDS)) return false;
             return true;
         }
 
