@@ -312,6 +312,7 @@ describe('edit-session bases', () => {
     expect(acknowledgeEditBase({ value: 'old', revision: 2 }, write)).toEqual({ value: 'mine', revision: 3 })
     // A read at the ACK revision comes back for the caller to stamp, whatever its text.
     expect(acknowledgeEditBase({ value: 'mine ', revision: 3 }, write)).toEqual({ value: 'mine ', revision: 3 })
+    expect(acknowledgeEditBase({ value: 'mine', revision: 3, ackOp: 'op-1' }, write)).toBeUndefined()
     expect(acknowledgeEditBase({ value: 'later', revision: 5 }, write)).toBeUndefined()
     // Read at revision 1, written against 2: revision 2's value was never read here.
     expect(acknowledgeEditBase({ value: 'older', revision: 1 }, write)).toBeNull()

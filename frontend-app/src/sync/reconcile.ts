@@ -372,8 +372,8 @@ export function newerEditBase(held: unknown, read: FieldBase | null): FieldBase 
 /**
  * An edit base, read as one value/revision pair, after this device's own
  * write of that field is acknowledged. `undefined` keeps the entry: it is
- * past the ACK. An entry at the ACK revision comes back as it is, for the
- * caller to stamp. The write's value at the ACK revision replaces an entry the
+ * past the ACK. An unstamped entry at the ACK revision comes back as it is,
+ * for the caller to stamp. The write's value at the ACK revision replaces an entry the
  * write was measured against. Any other entry is null: a revision between the
  * two holds a value nobody here has read.
  */
@@ -383,7 +383,10 @@ export function acknowledgeEditBase(
 ): FieldBase | null | undefined {
   if (!isFieldBase(entry)) return null
   if (entry.revision > write.ackRevision) return undefined
-  if (entry.revision === write.ackRevision) return { value: entry.value, revision: entry.revision }
+  /* A no-op write is acknowledged at the revision an earlier write produced: that write keeps the stamp. */
+  if (entry.revision === write.ackRevision) {
+    return typeof entry.ackOp === 'string' ? undefined : { value: entry.value, revision: entry.revision }
+  }
   return entry.revision === write.baseRevision ? { value: write.value, revision: write.ackRevision } : null
 }
 

@@ -195,15 +195,15 @@ var prksSyncReconcile = (function(exports) {
 	/**
 	* An edit base, read as one value/revision pair, after this device's own
 	* write of that field is acknowledged. `undefined` keeps the entry: it is
-	* past the ACK. An entry at the ACK revision comes back as it is, for the
-	* caller to stamp. The write's value at the ACK revision replaces an entry the
+	* past the ACK. An unstamped entry at the ACK revision comes back as it is,
+	* for the caller to stamp. The write's value at the ACK revision replaces an entry the
 	* write was measured against. Any other entry is null: a revision between the
 	* two holds a value nobody here has read.
 	*/
 	function acknowledgeEditBase(entry, write) {
 		if (!isFieldBase(entry)) return null;
 		if (entry.revision > write.ackRevision) return void 0;
-		if (entry.revision === write.ackRevision) return {
+		if (entry.revision === write.ackRevision) return typeof entry.ackOp === "string" ? void 0 : {
 			value: entry.value,
 			revision: entry.revision
 		};
