@@ -2414,7 +2414,9 @@
                     { value: value, baseRevision: op && op.base_revision, ackRevision: ackRevision });
                 if (entry === undefined) return null;
                 const fields = Object.assign({}, held.fields);
-                fields[field] = entry;
+                /* Stamped with the write it came from: a read can hold the same text at a later revision. */
+                fields[field] = entry && op && typeof op.op_id === 'string'
+                    ? Object.assign({}, entry, { ackOp: op.op_id }) : entry;
                 return Object.assign({}, held, { fields: fields });
             }, token);
         }
