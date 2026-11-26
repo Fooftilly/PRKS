@@ -3685,7 +3685,7 @@
             return acknowledged ? acknowledged.server_revision : observed.revision;
         }
 
-        function savePlaylistFields(playlistId, changes, base) {
+        function savePlaylistFields(playlistId, changes, base, stillOwns) {
             if (!isNonBlankString(playlistId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope',
                     'Invalid playlist save.'));
@@ -3706,6 +3706,7 @@
             return runIntent(
                 async (request, setResult) => {
                     const rows = await request(STORE_OPERATIONS, s => s.getAll());
+                    if (!callerStillOwns(stillOwns)) { setResult([]); return; }
                     assertPlaylistIsNotBeingDeleted(rows, playlistId, 'edited');
                     const createOp = playlistCreationDependency(rows, playlistId,
                         'it cannot be edited');
