@@ -110,9 +110,12 @@ Project skills in `skills/<name>/SKILL.md` are available in [Claude Code](https:
 | `/architect <design question>` | Compare designs; stop at the sketch. |
 | `/prks-test <scope>` | Select and run checks under PRKS test policy. |
 | `/prks-review <PR or diff>` | Inspect a change without posting or merging. |
+| `/encode-constraint <correction>` | Convert a confirmed correction to an enforceable contract. |
+| `/verify-feature <feature>` | Gather runtime evidence against the current feature contract. |
+| `/statechart <lifecycle>` | Model transitions and propose bounded event-order tests. |
 
 The `prks-change-auditor` subagent uses only read/search tools. The parent agent supplies the scoped diff, verifies its findings and reports any missing access. No skill grants production-storage access, GitHub write authorization or automatic merge permission.
 
 ### Smoke check
 
-In a disposable checkout, start a Claude Code session and check that the six commands appear in the slash menu and `prks-change-auditor` appears in `/agents`. Use a small synthetic diff containing redundant narration, a meaningful invariant comment and a lint directive; run `/no-comments report-only` and check that no files change. Then run `/no-comments` and check that only proven redundant narration is removed. Try `/prks-review` on the same diff and confirm it does not edit or post. These are manual Claude behavior checks, not application CI or a guarantee that model instructions are followed.
+In a disposable checkout, start a Claude Code session and check that the nine commands appear in the slash menu and `prks-change-auditor` appears in `/agents`. Use a small synthetic diff containing redundant narration, a meaningful invariant comment and a lint directive; run `/no-comments report-only` and check that no files change. Then run `/no-comments` and check that only proven redundant narration is removed. Try `/prks-review` on the same diff and confirm it does not edit or post. For both `/no-comments report-only` and `/prks-review`, inspect the session's tool activity for an actual `prks-change-auditor` invocation and its returned report. Discovery or a local fallback is not a delegation pass; record a missing invocation as a failed or blocked delegation check. Try `/encode-constraint` on a synthetic recurring finding and `/statechart` on a small lifecycle; confirm the outputs identify enforceable assertions without unauthorized edits. These are manual Claude behavior checks, not application CI or a guarantee that model instructions are followed.
