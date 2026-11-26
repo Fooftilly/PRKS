@@ -331,11 +331,18 @@ export function pinEditBase(
       // the same value written): the server is at that read's revision, so
       // the next write is measured from it, never from the older base the
       // edit replaced, which would conflict with this device's own write.
-      pinned[field] = isFieldBase(own) && own.value === value
-        ? (own.value === entry.value
-            ? { value: entry.value, revision: Math.max(entry.revision, own.revision) }
-            : { value: entry.value, revision: own.revision, pending: own.value })
-        : null
+      // Otherwise the read value is the base the edit replaced only when it is
+      // at the edit's own revision; a read at any other revision holds a value
+      // nobody can pair with that revision, so the base is unknown.
+      if (!isFieldBase(own) || own.value !== value) {
+        pinned[field] = null
+      } else if (own.value === entry.value) {
+        pinned[field] = { value: entry.value, revision: Math.max(entry.revision, own.revision) }
+      } else {
+        pinned[field] = entry.revision === own.revision
+          ? { value: entry.value, revision: own.revision, pending: own.value }
+          : null
+      }
     } else {
       pinned[field] = entry.value === value ? { value: entry.value, revision: entry.revision } : null
     }

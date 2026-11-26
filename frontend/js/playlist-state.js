@@ -485,6 +485,30 @@
     }
 
     /**
+     * A pinned base whose unsent edit has synced and left the queue: the form
+     * shows that edit, and the read now holds it at the revision it produced,
+     * so a further write is measured from there. Other fields are kept.
+     */
+    async function settlePinnedPlaylistBase(playlistId, pinned, operations) {
+        if (!pinned) return pinned;
+        const open = pendingFieldBases(operations, playlistId);
+        const settled = Object.keys(pinned).filter(function (field) {
+            const entry = pinned[field];
+            return entry && typeof entry.pending === 'string' && !open[field];
+        });
+        if (!settled.length) return pinned;
+        const read = await acknowledgedPlaylistBase(playlistId, operations);
+        const out = Object.assign({}, pinned);
+        settled.forEach(function (field) {
+            const now = read && read[field];
+            if (now && now.value === pinned[field].pending && now.revision > pinned[field].revision) {
+                out[field] = { value: now.value, revision: now.revision };
+            }
+        });
+        return out;
+    }
+
+    /**
      * The ACKNOWLEDGED order an edit is measured against: `{work_ids, revision}`.
      *
      * A playlist created here and never sent has an empty order at revision 0,
@@ -710,6 +734,7 @@
         prksObservedPlaylistFields: observedPlaylistFields,
         prksAcknowledgedPlaylistBase: acknowledgedPlaylistBase,
         prksPinPlaylistEditBase: pinPlaylistEditBase,
+        prksSettlePinnedPlaylistBase: settlePinnedPlaylistBase,
         prksAcknowledgedPlaylistOrder: acknowledgedPlaylistOrder,
         prksAcknowledgedWorkPlaylist: acknowledgedWorkPlaylist,
         prksCreatePlaylistDurably: createPlaylistDurably,

@@ -242,6 +242,24 @@ async function main() {
         assert(await cache.getEntity("work", W2), "reorder keeps second member Work");
         assert(await cache.getEntity("work", OTHER), "reorder keeps outside Work");
     });
+    /* An ACK older than the held revisions must not pair its value with
+     * them: the body is dropped for the next read, the revisions kept. */
+    await seed();
+    {
+        const state = globalThis.prksNewPlaylistState(ID);
+        state.fields.description = {revision: 5};
+        await cache.putEntity("playlist-state", ID, state, "");
+        const ok = await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "description", server_revision: 1, changed: true},
+            {payload: {field: "description", value: "Late"}, created_at: new Date().toISOString()});
+        assert.equal(ok, true, "the stale ACK still retires");
+        assert.equal((await cache.getEntity("playlist-state", ID)).value.fields.description.revision, 5,
+            "the newer revision stays");
+        assert.equal(await cache.getEntity("playlist", ID), null,
+            "the body is dropped rather than given the older value");
+        assert.equal((await cache.getList("playlists:index")).value[0].description, "Old description",
+            "the catalogue row is not given the older value either");
+    }
     console.log("All " + checks + " Playlist ACK-through-sync checks passed");
 }
 main().catch(e => {console.error(e); process.exitCode = 1;});

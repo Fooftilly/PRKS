@@ -368,9 +368,9 @@ window.prksOpenNewGroupModalFromGroupsPage = prksOpenNewGroupModalFromGroupsPage
 window.prksTakePersonGroupCreateNavigation = prksTakePersonGroupCreateNavigation;
 window.prksClearPersonGroupIndexCreateOrigin = prksClearPersonGroupIndexCreateOrigin;
 
-/* A record read from the server first, for an Edit refused as changed
+/* A record read from the server only, for an Edit refused as changed
  * elsewhere: the cache-first read would hand back the held version the
- * refusal was about. Falls back to that read when the server is out of reach. */
+ * refusal was about. Null when the server is out of reach. */
 async function prksFreshPersonGroupRecordFor(groupId) {
     let fresh = null;
     try {
@@ -383,23 +383,24 @@ async function prksFreshPersonGroupRecordFor(groupId) {
             fresh = result && result.source === 'server' ? result.value : null;
         }
     } catch (_e) { fresh = null; }
-    if (fresh) {
-        return typeof prksEffectivePersonGroupRecord === 'function'
-            ? await prksEffectivePersonGroupRecord(fresh) : fresh;
-    }
-    return typeof prksPersonGroupRecordFor === 'function' ? await prksPersonGroupRecordFor(groupId) : null;
+    if (!fresh) return null;
+    return typeof prksEffectivePersonGroupRecord === 'function'
+        ? await prksEffectivePersonGroupRecord(fresh) : fresh;
 }
 
 async function prksRerenderPersonGroupDetail(ctx, groupId, options) {
     if (!ctx || ctx.destroyed) return;
     const live = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!live || String(live.id) !== String(groupId)) return;
-    const group = options && options.fresh
+    const generation = ctx.generation;
+    const fresh = !!(options && options.fresh);
+    const group = fresh
         ? await prksFreshPersonGroupRecordFor(groupId)
         : (typeof prksPersonGroupRecordFor === 'function' ? await prksPersonGroupRecordFor(groupId) : null);
-    if (!group || ctx.destroyed) return;
+    if (!group || ctx.destroyed || ctx.generation !== generation) return;
     const stillLive = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!stillLive || String(stillLive.id) !== String(groupId)) return;
+    if (fresh && ctx.ui && ctx.ui.personGroupStale === String(groupId)) ctx.ui.personGroupStale = null;
     ctx.setEntity('personGroup', group);
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
@@ -438,6 +439,19 @@ function openPersonGroupEdit(owner) {
     if (!ctx || !ctx.ui) return;
     const g = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!g) return;
+    /* A refused Save showed a held version; the next Edit waits for the
+     * current one, or it would pin that held version again. */
+    if (!ctx.ui.personGroupEditing && ctx.ui.personGroupStale === String(g.id)) {
+        void prksRerenderPersonGroupDetail(ctx, g.id, { fresh: true }).then(() => {
+            if (ctx.ui && ctx.ui.personGroupStale === String(g.id)) {
+                void prksAlertMessage('PRKS could not load the current version of this group. '
+                    + 'Try again when the server is reachable.', 'Changed elsewhere');
+            } else {
+                openPersonGroupEdit(owner);
+            }
+        });
+        return;
+    }
     const same = !!(ctx.ui.personGroupEditing && ctx.ui.personGroupFieldBaseline &&
         String(ctx.ui.personGroupFieldBaseline.groupId) === String(g.id));
     if (ctx.ui.personGroupMembersEditing) prksBumpPersonGroupMemberSession(ctx);
@@ -479,7 +493,6 @@ function closePersonGroupEdit(owner) {
         ctx.ui.personGroupEditing = false;
         ctx.ui.personGroupFieldBaseline = null;
         ctx.ui.personGroupEditPin = null;
-        ctx.ui.personGroupStale = null;
     }
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
