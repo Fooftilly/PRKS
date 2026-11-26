@@ -1,13 +1,14 @@
-# Claude Code / Sonar agent config
+# Claude Code project config
 
-Shared, portable project wiring for optional SonarQube CLI integration.
+Shared, portable project skills and optional SonarQube CLI integration.
 Personal overrides stay out of git (see root `.gitignore`).
 
 ## Prerequisites (optional)
 
-These files do **nothing required** for building, testing, or running PRKS.
-They only matter if you use [Claude Code](https://code.claude.com/) with the
+Claude Code configuration is optional for building, testing, or running PRKS.
+The Sonar hooks and MCP integration require the
 [SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
+The project skills below do not require Sonar.
 
 1. **Python 3.14+** (already required by PRKS). The shared hooks do **not**
    hard-code a bare `python3` command on Windows. Launchers follow the same
@@ -96,3 +97,22 @@ both. `run_hook.ps1` remains in the repo for this override.
 | `.claude/settings.local.json` | No (personal MCP opt-in / Windows PowerShell override / experiments) |
 | `.codex/` | No (Codex integrate may write absolute machine paths) |
 | Root `.mcp.json` | Yes (token-free Sonar MCP for project `Fooftilly_PRKS`) |
+
+## Engineering skills
+
+Project skills in `skills/<name>/SKILL.md` are available in [Claude Code](https://code.claude.com/docs/en/skills) when the project configuration is loaded. They are opt-in commands; they do not modify permissions or replace `AGENTS.md`, `CLAUDE.md`, scoped rules or CI. Start Claude from the repository root (or restart the session if the commands are not discovered).
+
+| Command example | Purpose |
+| --- | --- |
+| `/no-comments report-only` | Review the branch diff without edits; omit `report-only` to remove proven redundant comments within scope. |
+| `/blast-radius backend/sync/` | Trace affected contracts and callers. |
+| `/root-cause <problem>` | Diagnose a defect; implementation requires an authorized task. |
+| `/architect <design question>` | Compare designs; stop at the sketch. |
+| `/prks-test <scope>` | Select and run checks under PRKS test policy. |
+| `/prks-review <PR or diff>` | Inspect a change without posting or merging. |
+
+The `prks-change-auditor` subagent uses only read/search tools. The parent agent supplies the scoped diff, verifies its findings and reports any missing access. No skill grants production-storage access, GitHub write authorization or automatic merge permission.
+
+### Smoke check
+
+In a disposable checkout, start a Claude Code session and check that the six commands appear in the slash menu and `prks-change-auditor` appears in `/agents`. Use a small synthetic diff containing redundant narration, a meaningful invariant comment and a lint directive; run `/no-comments report-only` and check that no files change. Then run `/no-comments` and check that only proven redundant narration is removed. Try `/prks-review` on the same diff and confirm it does not edit or post. These are manual Claude behavior checks, not application CI or a guarantee that model instructions are followed.
