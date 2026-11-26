@@ -2447,9 +2447,7 @@
              * them: written into the body, it would be paired with a revision
              * that vouches for newer text. */
             const held = await store.getEntity('playlist', id).catch(function () { return null; });
-            if (stateNewer) {
-                if (!await dropUnprovenEntity('playlist', id)) return false;
-            }
+            if (stateNewer) fenceEntity('playlist', id);
             const rows = stateNewer ? null : await cachedPlaylistRows();
             if (rows && rows.some(row => row && row.id === id)) {
                 const patched = rows.map(function (row) {
@@ -2460,7 +2458,7 @@
                 });
                 if (!await writePlaylistRows(patched)) return false;
             }
-            const bodyWritten = stateNewer || await patchEntity('playlist', id, function (playlist) {
+            const bodyWritten = !stateNewer && await patchEntity('playlist', id, function (playlist) {
                 if (!playlist || playlist.id !== id) return null;
                 const next = Object.assign({}, playlist);
                 next[field] = value;
@@ -2491,11 +2489,9 @@
                 }
             }
             /* The revisions already moved: a body left at the older value
-             * would be paired with them, so it goes and the ACK is retried. */
-            if (!bodyWritten) {
-                await dropUnprovenEntity('playlist', id);
-                return false;
-            }
+             * would be paired with them, so it goes. Only a body behind newer
+             * revisions retires the ACK once it is gone. */
+            if (!bodyWritten) return await dropUnprovenEntity('playlist', id) && stateNewer;
             return true;
         }
 

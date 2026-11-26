@@ -315,6 +315,29 @@ async function main() {
         assert.equal(await ack(), true, "the retry finishes");
         assert.equal(await cache.getEntity("work", W1), null, "and evicts it");
     }
+    /* Behind newer revisions too, the body is dropped only after its Works are evicted. */
+    await seed();
+    {
+        const state = globalThis.prksNewPlaylistState(ID);
+        state.fields.title = {revision: 5};
+        await cache.putEntity("playlist-state", ID, state, "");
+        const remove = cache.deleteEntity;
+        cache.deleteEntity = async (kind, id) => kind === "work" && id === W1 ? false : remove(kind, id);
+        const ack = () => globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+            {base_revision: 0, payload: {field: "title", value: "Late"}, created_at: new Date().toISOString()});
+        let first;
+        try {
+            first = await ack();
+        } finally {
+            cache.deleteEntity = remove;
+        }
+        assert.equal(first, false, "the ACK is retried");
+        assert(await cache.getEntity("playlist", ID), "the body that names the members is kept");
+        assert.equal(await ack(), true, "the retry finishes");
+        assert.equal(await cache.getEntity("work", W1), null, "and evicts the Work");
+        assert.equal(await cache.getEntity("playlist", ID), null, "before it drops the older body");
+    }
     /* A Playlist created here is known at revision 0, so the open editor's
      * next Save is measured from its first field ACK. */
     {
