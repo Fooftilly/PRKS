@@ -54,17 +54,14 @@ describe('live owner ACK re-read ordering', () => {
   for (const order of schedules) {
     it(order.join(' -> '), async () => {
       const initial: Work = { id: 'W', value: 'initial' }
-      const replacements: Record<Replace, Work> = {
-        reload: { id: 'W', value: 'reloaded copy' },
-        'other-work': { id: 'other-W', value: 'another Work' },
-      }
+      const otherWork: Work = { id: 'other-W', value: 'another Work' }
       const fresh = [
         { id: 'W', value: 'server read 1' },
         { id: 'W', value: 'server read 2' },
       ]
       const reads = [deferredRead(), deferredRead()]
       const labels = new Map<Work, string>([
-        [initial, 'initial'], [replacements.reload, 'reload'], [replacements['other-work'], 'other-work'],
+        [initial, 'initial'], [otherWork, 'other-work'],
         [fresh[0], 'fresh1'], [fresh[1], 'fresh2'],
       ])
       const label = (work: Work) => labels.get(work) ?? 'unlabelled'
@@ -117,9 +114,15 @@ describe('live owner ACK re-read ordering', () => {
           case 'ack1': deliverAck(0); break
           case 'ack2': deliverAck(1); break
           case 'reload':
+            // An equal copy of what the owner holds: only identity changed,
+            // so a guard that compared contents would wrongly adopt over it.
+            held = { ...held }
+            labels.set(held, 'reload')
+            model = 'reload'
+            break
           case 'other-work':
-            held = replacements[event]
-            model = event
+            held = otherWork
+            model = 'other-work'
             break
           case 'read1':
           case 'read2': {
