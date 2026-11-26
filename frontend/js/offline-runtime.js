@@ -3030,9 +3030,18 @@
              * would need the chip is dropped for the next read instead. */
             const heldName = groupState && groupState.value && groupState.value.fields &&
                 groupState.value.fields.name;
+            /* With no name revision held, the catalogue row and the Group
+             * detail are the only other evidence, and carry no revision: a
+             * name they disagree with cannot be ordered against the ACK's,
+             * so the chip is not asserted (#1452 review). */
+            const groupDetail = heldName ? null : await store.getEntity('person-group', groupId)
+                .catch(function () { return null; });
+            const unorderedNames = heldName ? [] : [group, groupDetail && groupDetail.value]
+                .filter(value => value && typeof value.name === 'string').map(value => value.name);
             const nameKnown = typeof result.group_name === 'string' &&
                 reconcileCore.isRevision(result.group_name_revision) &&
-                !(heldName && superseded(result.group_name_revision, heldName.revision));
+                (heldName ? !superseded(result.group_name_revision, heldName.revision)
+                    : unorderedNames.every(name => name === result.group_name));
             const chip = nameKnown ? { id: groupId, name: result.group_name } : null;
             /* The People fence moves even with no row to patch: a People read
              * started before this ACK must not publish its older rows after it. */

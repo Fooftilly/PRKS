@@ -346,6 +346,28 @@ async function failuresAndReplays() {
         assert.equal(await cache.getEntity('person', 'P'), null, label + ': the Person is dropped, not misnamed');
         assert.equal(await cache.getList('people:index'), null, label + ': and so is the People index');
     }
+    /* No name revision held, but a newer catalogue or Group detail names the
+     * Group differently: the delayed ACK's name cannot be ordered against it,
+     * so the chip rows are dropped rather than given the old name. */
+    for (const where of ['catalogue', 'detail']) {
+        const { cache, offline } = setup();
+        const person = { id: 'P', name: 'Ada', groups: [] };
+        await cache.putList('people:index', [{ ...person }], '');
+        await cache.putEntity('person', 'P', { ...person });
+        await later();
+        const op = createdNow();
+        await later();
+        if (where === 'catalogue') {
+            await cache.putList('person-groups:index', [{ id: 'G', name: 'Renamed', parent_id: null, member_count: 1 }], '');
+        } else {
+            await cache.putEntity('person-group', 'G', { id: 'G', name: 'Renamed', members: [], member_count: 1 });
+        }
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1,
+            group_name: 'Old name', group_name_revision: 1 }, op), where);
+        assert.equal(await cache.getEntity('person', 'P'), null, where + ': the Person is dropped, not misnamed');
+        assert.equal(await cache.getList('people:index'), null, where + ': and so is the People index');
+    }
     /* The same ACK with a name at least as new as the held one names the chip. */
     {
         const { cache, offline } = setup();
