@@ -495,9 +495,19 @@
             /* The move's destination is itself waiting to be deleted, so the
              * editor shows the ancestor the deletion moves this group up to
              * (`effectivePersonGroupDetail`). That ancestor IS this device's
-             * pending parent; the move's revision is still what a new move
-             * replaces it against (#1454 review). */
-            pending.parent_id = Object.assign({}, move, { value: shownParent });
+             * pending parent, at the move's revision -- but only when the
+             * same hierarchy projection places the group there: a form still
+             * showing an older parent must not replace a move it never
+             * showed, so then the parent base stays unknown (#1454 review). */
+            let rows = null;
+            try {
+                rows = typeof root.prksEffectivePersonGroupCatalogue === 'function'
+                    ? await root.prksEffectivePersonGroupCatalogue(operations) : null;
+            } catch (_e) { rows = null; }
+            const own = Array.isArray(rows) ? rows.find(g => g && String(g.id) === String(groupId)) : null;
+            if (own && String(own.parent_id || '') === shownParent) {
+                pending.parent_id = Object.assign({}, move, { value: shownParent });
+            }
         }
         return reconcileCore.pinEditBase(shown, read, pending);
     }

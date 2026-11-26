@@ -377,7 +377,8 @@ async function prksFreshPersonGroupRecordFor(groupId) {
         if (typeof prksOfflineReadEntity === 'function') {
             const result = await prksOfflineReadEntity('person-group', groupId,
                 '/api/person-groups/' + encodeURIComponent(groupId),
-                { validate: value => typeof prksIsPersonGroupShape !== 'function' ||
+                { domain: typeof PRKS_PERSON_GROUPS_DOMAIN === 'string' ? PRKS_PERSON_GROUPS_DOMAIN : undefined,
+                    validate: value => typeof prksIsPersonGroupShape !== 'function' ||
                     prksIsPersonGroupShape(value, groupId) });
             fresh = result && result.source === 'server' ? result.value : null;
         }
