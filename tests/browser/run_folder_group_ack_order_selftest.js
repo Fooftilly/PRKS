@@ -268,15 +268,18 @@ async function failuresAndReplays() {
         assert.equal(await cache.getList('person-groups:index'), null,
             'a replayed create with no cached row drops the catalogue');
     }
-    {
+    /* A cached row was read from the server: neither a create of an
+     * existing Group nor a ledger replay (which keeps changed: true and the
+     * creation-time row) replaces it. */
+    for (const changed of [false, true]) {
         const { cache, offline } = setup();
         const rows = [{ id: 'G', name: 'G', parent_id: null, member_count: 0 },
-            { id: 'N', name: 'N', parent_id: null, member_count: 0 }];
+            { id: 'N', name: 'N', parent_id: null, member_count: 1 }];
         await cache.putList('person-groups:index', rows, '');
-        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: false,
-            group: { id: 'N', name: 'N', parent_id: null, member_count: 1 } }));
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed,
+            group: { id: 'N', name: 'N', parent_id: null, member_count: changed ? 0 : 2 } }));
         assert.deepEqual((await cache.getList('person-groups:index')).value, rows,
-            'a replayed create keeps the cached row as read');
+            'a replayed create keeps the cached row as read (changed: ' + changed + ')');
     }
     /* A newer pair published between the guard read and the write (#1452
      * review) is not regressed, and the count does not move. */
@@ -297,9 +300,14 @@ async function failuresAndReplays() {
             }
             return snapshot;
         };
+        await cache.putEntity('person-group-memberships', 'P', { person_id: 'P',
+            groups: [{ group_id: 'G', revision: 1, present: false }] });
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
             person_id: 'P', present: true, changed: true, server_revision: 2, group_name: 'G', group_name_revision: 0 }, op));
         cache.getEntity = getEntity;
+        assert.deepEqual((await cache.getEntity('person-group-memberships', 'P')).value.groups,
+            [{ group_id: 'G', revision: 2, present: true }],
+            'the Person side only moves forward from its own older pair');
         assert(reads >= 2, 'the write read the state again');
         assert.deepEqual((await cache.getEntity('person-group-state', 'G')).value.members,
             [{ person_id: 'P', revision: 3, present: false }], 'the newer pair is kept');
@@ -367,6 +375,43 @@ async function failuresAndReplays() {
             group_name: 'Old name', group_name_revision: 1 }, op), where);
         assert.equal(await cache.getEntity('person', 'P'), null, where + ': the Person is dropped, not misnamed');
         assert.equal(await cache.getList('people:index'), null, where + ': and so is the People index');
+    }
+    /* A held name revision no newer than the ACK does not order a catalogue
+     * read after the operation: its different name still drops the chips. */
+    {
+        const { cache, offline } = setup();
+        const person = { id: 'P', name: 'Ada', groups: [] };
+        await cache.putList('people:index', [{ ...person }], '');
+        await cache.putEntity('person', 'P', { ...person });
+        await cache.putEntity('person-group-state', 'G', { group_id: 'G', fields: { name: { revision: 1 },
+            description: { revision: 0 }, parent_id: { revision: 0 } }, members: [] });
+        await later();
+        const op = createdNow();
+        await later();
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'Renamed', parent_id: null, member_count: 1 }], '');
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1,
+            group_name: 'Old name', group_name_revision: 1 }, op));
+        assert.equal(await cache.getEntity('person', 'P'), null, 'held revision: the Person is dropped');
+        assert.equal(await cache.getList('people:index'), null, 'held revision: and so is the People index');
+    }
+    /* A catalogue and Group detail read before the operation are older than
+     * the ACK: their old name does not veto it, and the chip takes the new one. */
+    {
+        const { cache, offline } = setup();
+        const person = { id: 'P', name: 'Ada', groups: [] };
+        await cache.putList('people:index', [{ ...person }], '');
+        await cache.putEntity('person', 'P', { ...person });
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'Reading Club', parent_id: null, member_count: 0 }], '');
+        await cache.putEntity('person-group', 'G', { id: 'G', name: 'Reading Club', members: [], member_count: 0 });
+        await later();
+        const op = createdNow();
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 1,
+            group_name: 'Book Club', group_name_revision: 1 }, op));
+        assert.deepEqual((await cache.getEntity('person', 'P')).value.groups, [{ id: 'G', name: 'Book Club' }],
+            'older reads do not veto the newer name');
+        assert.deepEqual((await cache.getList('people:index')).value[0].groups, [{ id: 'G', name: 'Book Club' }]);
     }
     /* The same ACK with a name at least as new as the held one names the chip. */
     {
