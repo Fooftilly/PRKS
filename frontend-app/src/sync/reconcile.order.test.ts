@@ -1,8 +1,37 @@
 import { describe, expect, it } from 'vitest'
 import { applyOwnerAck, type FreshRead } from './reconcile'
 
+/*
+ * Bounded schedules for a live owner that receives two unproven ACKs for the
+ * same value while both authoritative re-reads are still in flight, and whose
+ * owner may be replaced at any point (#391, #1425, #1461).
+ *
+ * Every interleaving of these events is generated, subject to the order the
+ * protocol guarantees: ACKs for one target arrive in queue order, and a re-read
+ * can only finish after the ACK that started it.
+ */
+
 type Work = { id: string; value: string }
-type Event = 'old-read' | 'new-read' | 'replace-owner'
+type Event = 'ack1' | 'ack2' | 'read1' | 'read2' | 'replace'
+
+const MUST_FOLLOW: Partial<Record<Event, Event>> = { ack2: 'ack1', read1: 'ack1', read2: 'ack2' }
+
+function interleavings(events: readonly Event[]): Event[][] {
+  if (events.length === 0) return [[]]
+  const out: Event[][] = []
+  for (const event of events) {
+    const before = MUST_FOLLOW[event]
+    if (before && events.includes(before)) continue
+    const rest = events.filter((other) => other !== event)
+    for (const tail of interleavings(rest)) out.push([event, ...tail])
+  }
+  return out
+}
+
+const schedules = [
+  ...interleavings(['ack1', 'ack2', 'read1', 'read2']),
+  ...interleavings(['ack1', 'ack2', 'read1', 'read2', 'replace']),
+]
 
 function deferredRead() {
   let complete!: (value: FreshRead<Work>) => void
@@ -10,75 +39,85 @@ function deferredRead() {
   return { promise, complete }
 }
 
-const orders: Event[][] = [
-  ['old-read', 'new-read', 'replace-owner'],
-  ['old-read', 'replace-owner', 'new-read'],
-  ['new-read', 'old-read', 'replace-owner'],
-  ['new-read', 'replace-owner', 'old-read'],
-  ['replace-owner', 'old-read', 'new-read'],
-  ['replace-owner', 'new-read', 'old-read'],
-  ['old-read', 'new-read'],
-  ['new-read', 'old-read'],
-]
+/* Lets every pending continuation run, however many awaits it takes. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('live owner ACK re-read ordering', () => {
-  for (const order of orders) {
+  it('covers every bounded interleaving', () => {
+    expect(schedules).toHaveLength(18)
+    expect(new Set(schedules.map((order) => order.join())).size).toBe(schedules.length)
+  })
+
+  for (const order of schedules) {
     it(order.join(' -> '), async () => {
-      const oldRead = deferredRead()
-      const newRead = deferredRead()
-      const oldFresh = { id: 'W', value: 'old server response' }
-      const newFresh = { id: 'W', value: 'new server response' }
-      const replacement = { id: 'other-W', value: 'replacement owner' }
-      let held: Work = { id: 'W', value: 'initial' }
-      const adopted: Work[] = []
+      const initial: Work = { id: 'W', value: 'initial' }
+      const replacement: Work = { id: 'other-W', value: 'replacement owner' }
+      const fresh = [
+        { id: 'W', value: 'server read 1' },
+        { id: 'W', value: 'server read 2' },
+      ]
+      const reads = [deferredRead(), deferredRead()]
+      const labels = new Map<Work, string>([
+        [initial, 'initial'], [replacement, 'replacement'], [fresh[0], 'fresh1'], [fresh[1], 'fresh2'],
+      ])
+      const label = (work: Work) => labels.get(work) ?? 'unlabelled'
+
+      let held = initial
+      const adopted: string[] = []
       const started: number[] = []
 
-      function deliverAck(revision: number, value: string, read: ReturnType<typeof deferredRead>) {
-        return applyOwnerAck({ ackRevision: revision }, {
+      // The contract in observable terms: a re-read is adopted only while the
+      // owner still holds exactly what its own ACK wrote. A replacement owner
+      // and a later ACK both win over an earlier read.
+      let model = 'initial'
+      const modelAdopted: string[] = []
+      const wroteByAck: (string | null)[] = [null, null]
+
+      function deliverAck(index: 0 | 1) {
+        const ackValue = `ACK ${index + 1}`
+        const before = held
+        const plan = applyOwnerAck({ ackRevision: index + 1 }, {
           get: () => held,
           set: (next: Work) => { held = next },
-          agrees: (current: Work) => current.value === value,
-          patch: (current: Work) => ({ ...current, value }),
+          agrees: (current: Work) => current.value === ackValue,
+          patch: (current: Work) => ({ ...current, value: ackValue }),
           read: () => {
-            started.push(revision)
-            return read.promise
+            started.push(index + 1)
+            return reads[index].promise
           },
-          adopted: (next: Work) => { adopted.push(next) },
+          adopted: (next: Work) => { adopted.push(label(next)) },
         })
+        expect(plan).toBe('unproven')
+        // The user's change shows at once, on the entity the owner held.
+        expect(held).not.toBe(before)
+        expect(held).toEqual({ id: before.id, value: ackValue })
+        labels.set(held, `ack${index + 1}`)
+        model = `ack${index + 1}`
+        wroteByAck[index] = model
       }
 
-      expect(deliverAck(1, 'old ACK', oldRead)).toBe('unproven')
-      expect(held.value).toBe('old ACK')
-      expect(deliverAck(2, 'new ACK', newRead)).toBe('unproven')
-      expect(held.value).toBe('new ACK')
-      expect(started).toEqual([1, 2])
-      const patchedByNewAck = held
-
-      let expected = patchedByNewAck
-      const expectedAdoptions: Work[] = []
-      let replaced = false
       for (const event of order) {
         switch (event) {
-          case 'replace-owner':
+          case 'ack1': deliverAck(0); break
+          case 'ack2': deliverAck(1); break
+          case 'replace':
             held = replacement
-            expected = replacement
-            replaced = true
+            model = 'replacement'
             break
-          case 'old-read':
-            oldRead.complete({ source: 'server', value: oldFresh })
-            await oldRead.promise
-            break
-          case 'new-read':
-            newRead.complete({ source: 'server', value: newFresh })
-            await newRead.promise
-            if (!replaced) {
-              expected = newFresh
-              expectedAdoptions.push(newFresh)
+          case 'read1':
+          case 'read2': {
+            const index = event === 'read1' ? 0 : 1
+            reads[index].complete({ source: 'server', value: fresh[index] })
+            await settle()
+            if (model === wroteByAck[index]) {
+              model = `fresh${index + 1}`
+              modelAdopted.push(model)
             }
             break
+          }
         }
-        expect(held).toBe(expected)
-        expect(adopted).toEqual(expectedAdoptions)
+        expect(label(held), `after ${event}`).toBe(model)
+        expect(adopted, `after ${event}`).toEqual(modelAdopted)
       }
       expect(started).toEqual([1, 2])
     })
