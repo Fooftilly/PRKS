@@ -179,6 +179,13 @@ var prksSyncReconcile = (function(exports) {
 		return pinned;
 	}
 	/**
+	* The entry an edit-base snapshot keeps when a read finishes: a read that
+	* started before a newer acknowledgement must not roll the pair back.
+	*/
+	function newerEditBase(held, read) {
+		return isFieldBase(held) && isFieldBase(read) && held.revision > read.revision ? held : read;
+	}
+	/**
 	* An edit base, read as one value/revision pair, after this device's own
 	* write of that field is acknowledged. `undefined` keeps the entry: it is at
 	* or past the ACK. The write's value at the ACK revision replaces an entry the
@@ -225,6 +232,7 @@ var prksSyncReconcile = (function(exports) {
 	exports.decideAck = decideAck;
 	exports.entityKey = entityKey;
 	exports.isRevision = isRevision;
+	exports.newerEditBase = newerEditBase;
 	exports.observe = observe;
 	exports.observedAt = observedAt;
 	exports.overlay = overlay;

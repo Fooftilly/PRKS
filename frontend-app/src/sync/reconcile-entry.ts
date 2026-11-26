@@ -12,6 +12,7 @@ export {
   decideAck,
   entityKey,
   isRevision,
+  newerEditBase,
   observe,
   observedAt,
   overlay,
