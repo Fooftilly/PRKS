@@ -310,7 +310,8 @@ describe('edit-session bases', () => {
   it('moves a cached edit base only along this device\'s own acknowledged write', () => {
     const write = { value: 'mine', baseRevision: 2, ackRevision: 3 }
     expect(acknowledgeEditBase({ value: 'old', revision: 2 }, write)).toEqual({ value: 'mine', revision: 3 })
-    expect(acknowledgeEditBase({ value: 'mine', revision: 3 }, write)).toBeUndefined()
+    // A read at the ACK revision comes back for the caller to stamp, whatever its text.
+    expect(acknowledgeEditBase({ value: 'mine ', revision: 3 }, write)).toEqual({ value: 'mine ', revision: 3 })
     expect(acknowledgeEditBase({ value: 'later', revision: 5 }, write)).toBeUndefined()
     // Read at revision 1, written against 2: revision 2's value was never read here.
     expect(acknowledgeEditBase({ value: 'older', revision: 1 }, write)).toBeNull()
@@ -322,6 +323,9 @@ describe('edit-session bases', () => {
     expect(newerEditBase({ value: 'mine', revision: 3 }, read)).toEqual({ value: 'mine', revision: 3 })
     expect(newerEditBase({ value: 'old', revision: 1 }, read)).toBe(read)
     expect(newerEditBase({ value: 'same', revision: 2 }, read)).toBe(read)
+    // A read at the stamped revision keeps the stamp; a newer read drops it.
+    expect(newerEditBase({ value: 'raw ', revision: 2, ackOp: 'op-1' }, read)).toEqual({ value: 'read', revision: 2, ackOp: 'op-1' })
+    expect(newerEditBase({ value: 'mine', revision: 1, ackOp: 'op-1' }, read)).toBe(read)
     expect(newerEditBase(null, read)).toBe(read)
     expect(newerEditBase({ value: 'mine', revision: 3 }, null)).toBeNull()
   })
