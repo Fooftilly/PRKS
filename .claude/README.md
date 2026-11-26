@@ -1,14 +1,12 @@
 # Claude Code project config
 
-Shared, portable project skills and optional SonarQube CLI integration.
+Project skills and optional SonarQube CLI integration.
 Personal overrides stay out of git (see root `.gitignore`).
 
 ## Prerequisites (optional)
 
-Claude Code configuration is optional for building, testing, or running PRKS.
-The Sonar hooks and MCP integration require the
-[SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
-The project skills below do not require Sonar.
+Claude Code configuration is optional. Skills do not require Sonar.
+The hooks below require the [SonarQube CLI](https://docs.sonarsource.com/sonarqube-cli) (`sonar` on `PATH`).
 
 1. **Python 3.14+** (already required by PRKS). The shared hooks do **not**
    hard-code a bare `python3` command on Windows. Launchers follow the same
@@ -98,24 +96,8 @@ both. `run_hook.ps1` remains in the repo for this override.
 | `.codex/` | No (Codex integrate may write absolute machine paths) |
 | Root `.mcp.json` | Yes (token-free Sonar MCP for project `Fooftilly_PRKS`) |
 
-## Engineering skills
+## Skills
 
-Project skills in `skills/<name>/SKILL.md` are available in [Claude Code](https://code.claude.com/docs/en/skills) when the project configuration is loaded. They are opt-in commands; they do not modify permissions or replace `AGENTS.md`, `CLAUDE.md`, scoped rules or CI. Start Claude from the repository root (or restart the session if the commands are not discovered).
+Start Claude Code from the repository root. See `skills/*/SKILL.md` for opt-in commands. Existing AGENTS.md rules apply.
 
-| Command example | Purpose |
-| --- | --- |
-| `/no-comments report-only` | Review the branch diff without edits; omit `report-only` to remove proven redundant comments within scope. |
-| `/blast-radius backend/sync/` | Trace affected contracts and callers. |
-| `/root-cause <problem>` | Diagnose a defect; implementation requires an authorized task. |
-| `/architect <design question>` | Compare designs; stop at the sketch. |
-| `/prks-test <scope>` | Select and run checks under PRKS test policy. |
-| `/prks-review <PR or diff>` | Inspect a change without posting or merging. |
-| `/encode-constraint <correction>` | Convert a confirmed correction to an enforceable contract. |
-| `/verify-feature <feature>` | Gather runtime evidence against the current feature contract. |
-| `/statechart <lifecycle>` | Model transitions and propose bounded event-order tests. |
-
-The `prks-change-auditor` subagent uses only read/search tools. The parent agent supplies the scoped diff, verifies its findings and reports any missing access. No skill grants production-storage access, GitHub write authorization or automatic merge permission.
-
-### Smoke check
-
-In a disposable checkout, start a Claude Code session and check that the nine commands appear in the slash menu and `prks-change-auditor` appears in `/agents`. Use a small synthetic diff containing redundant narration, a meaningful invariant comment and a lint directive; run `/no-comments report-only` and check that no files change. Then run `/no-comments` and check that only proven redundant narration is removed. Try `/prks-review` on the same diff and confirm it does not edit or post. For both `/no-comments report-only` and `/prks-review`, inspect the session's tool activity for an actual `prks-change-auditor` invocation and its returned report. Discovery or a local fallback is not a delegation pass; record a missing invocation as a failed or blocked delegation check. Try `/encode-constraint` on a synthetic recurring finding and `/statechart` on a small lifecycle; confirm the outputs identify enforceable assertions without unauthorized edits. These are manual Claude behavior checks, not application CI or a guarantee that model instructions are followed.
+Smoke-test in a disposable checkout: confirm all nine skills and `prks-change-auditor` are discovered. On a synthetic diff, verify `/no-comments report-only` and `/prks-review` actually delegate to the auditor without editing or posting; fallback is not a delegation pass. Verify `/no-comments` removes only redundant comments. Use `/verify-feature` on an isolated test and confirm the reported result matches the actual run. These are manual checks, not CI evidence.
