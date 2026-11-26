@@ -249,25 +249,19 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         assert.equal(rows[0].base_revision, 3,
             "against the pinned revision: a server that moved on refuses it as a conflict");
     }
-    /* The retired edit's revision is read back before Save: the read holds
-     * the shown edit at the revision it produced, so the next write is
-     * measured from there. A read holding another value keeps the pin. */
+    /* The retired edit's revision is taken from the edit-base snapshot its
+     * own ACK moved. A snapshot holding any other value keeps the pin. */
     {
         const store = newStore();
         const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
         const pinned = await pinFor(store);
         await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
         await store.deleteAcknowledgedOperation(sent.op_id);
-        const previous = globalThis.prksOfflineReadEntity;
-        const serve = (title, revision) => {
-            const state = { playlist_id: id, order_revision: 0, fields: Object.fromEntries(
-                globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name, { revision: name === "title" ? revision : 0 }])) };
-            globalThis.prksOfflineReadEntity = async kind => (kind === "playlist-state"
-                ? { value: state, source: "server" }
-                : { value: { id, title, description: "", original_url: "" }, source: "server" });
-        };
+        const hold = (title, revision) => heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
+            fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
+                name === "title" ? { value: title, revision } : { value: "", revision: 0 }])) });
         try {
-            serve("Seminars", 4);
+            hold("Seminars", 4);
             const settled = await globalThis.prksSettlePinnedPlaylistBase(id, pinned, await store.listOperations());
             assert.deepEqual(settled.title, { value: "Seminars", revision: 4 },
                 "a retired own edit is measured from the revision it produced");
@@ -275,15 +269,21 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
             await store.savePlaylistFields(id, edits.changes, edits.base);
             const [row] = await rowsFor(store, "SET_PLAYLIST_FIELD");
             assert.equal(row.base_revision, 4, "so this device's next write does not conflict with itself");
-            serve("Seminars", 4);
             const padded = Object.assign({}, pinned, { title: Object.assign({}, pinned.title, { pending: "  Seminars " }) });
+            hold("  Seminars ", 4);
             assert.equal((await globalThis.prksSettlePinnedPlaylistBase(id, padded, [])).title.revision, 4,
-                "the edit is matched as the server stores it, trimmed");
-            serve("Elsewhere", 5);
+                "the ACK holds the queued value as it was sent");
+            hold("Seminars\uFEFF", 5);
             assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
-                "a read holding another device's value keeps the pinned revision");
+                "a value the server stores differently keeps the pinned revision");
+            hold("Elsewhere", 5);
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
+                "a snapshot holding another device's value keeps the pinned revision");
+            heldEntities.delete("playlist-edit-base:" + id);
+            assert.deepEqual((await globalThis.prksSettlePinnedPlaylistBase(id, pinned, [])).title, pinned.title,
+                "no snapshot keeps the pinned revision");
         } finally {
-            globalThis.prksOfflineReadEntity = previous;
+            heldEntities.delete("playlist-edit-base:" + id);
         }
     }
     /* Another pane replaced the synced edit (Seminars -> Talks) before this
@@ -700,6 +700,16 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
         }
         assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
             "a Save cancelled during its base read queues nothing");
+        live = true;
+        const write = globalThis.prksSavePlaylistFieldsDurably;
+        globalThis.prksSavePlaylistFieldsDurably = (...args) => { const saved = write(...args); live = false; return saved; };
+        try {
+            await globalThis.updatePlaylist(existing, { title: "Cancelled" }, { base, still: () => live });
+        } finally {
+            globalThis.prksSavePlaylistFieldsDurably = write;
+        }
+        assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
+            "a Save cancelled during its queue read queues nothing");
     }
 
     /* #894: another tab saves the title after this editor opened. This

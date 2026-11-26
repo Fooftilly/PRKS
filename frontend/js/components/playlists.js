@@ -349,7 +349,7 @@ async function updatePlaylist(playlistId, fields, options) {
     const still = options && options.still;
     if (typeof still === 'function' && !still()) return {};
     try {
-        await prksSavePlaylistFieldsDurably(playlistId, changes, settled);
+        await prksSavePlaylistFieldsDurably(playlistId, changes, settled, still);
     } catch (error) {
         throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
     }
