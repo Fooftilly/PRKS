@@ -169,7 +169,8 @@ var prksSyncReconcile = (function(exports) {
 				else pinned[field] = entry.revision === own.revision ? {
 					value: entry.value,
 					revision: own.revision,
-					pending: own.value
+					pending: own.value,
+					...typeof own.pendingOp === "string" ? { pendingOp: own.pendingOp } : {}
 				} : null;
 			} else pinned[field] = entry.value === value ? {
 				value: entry.value,

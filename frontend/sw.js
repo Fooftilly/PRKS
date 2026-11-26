@@ -28,7 +28,7 @@
     // frontend/js/route-model.js, or
     // frontend/js/sync-reconcile.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '35c7852431f2';
+    const DEPENDENCY_REVISION = 'e4a66f4b4272';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,

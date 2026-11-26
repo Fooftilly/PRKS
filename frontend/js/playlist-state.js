@@ -504,6 +504,7 @@
                 out[field] = {
                     value: String((op.payload && op.payload.value) || ''),
                     revision: op.base_revision,
+                    pendingOp: op.op_id,
                 };
             });
         return out;
@@ -550,7 +551,8 @@
         const open = pendingFieldBases(operations, playlistId);
         const settled = Object.keys(pinned).filter(function (field) {
             const entry = pinned[field];
-            return entry && typeof entry.pending === 'string' && !open[field];
+            return entry && typeof entry.pending === 'string' &&
+                (!open[field] || open[field].pendingOp !== entry.pendingOp);
         });
         if (!settled.length) return pinned;
         const read = await cachedEditBase(playlistId);
