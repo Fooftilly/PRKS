@@ -203,7 +203,7 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
     const shown = { title: "Seminars", description: "", original_url: "" };
     const read = baseAt({ title: 3 }, { title: "Lectures" });
     const pinFor = async store => core.pinEditBase(shown, read, Object.fromEntries((await rowsFor(store,
-        "SET_PLAYLIST_FIELD")).map(r => [r.payload.field, { value: r.payload.value, revision: r.base_revision }])));
+        "SET_PLAYLIST_FIELD")).map(r => [r.payload.field, { value: r.payload.value, revision: r.base_revision, pendingOp: r.op_id }])));
 
     {
         const store = newStore();
@@ -305,6 +305,42 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
             heldEntities.delete("playlist-edit-base:" + id);
         }
     }
+    /* The shown edit retired; a stale pane then queued the same value at the
+     * same base. That row is not the shown edit, so the revert is kept. */
+    {
+        const store = newStore();
+        const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinned = await pinFor(store);
+        await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
+        await store.deleteAcknowledgedOperation(sent.op_id);
+        const [stale] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
+        assert.notEqual(stale.op_id, sent.op_id);
+        const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
+        await store.savePlaylistFields(id, edits.changes, edits.base);
+        const rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        assert.deepEqual(rows.map(r => [r.payload.value, r.base_revision]), [["Lectures", 3]],
+            "with no snapshot, the revert is queued at the pin and a moved server refuses it");
+
+        const wrapper = newStore();
+        const [first] = await wrapper.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinnedFirst = await pinFor(wrapper);
+        await wrapper.updateOperationSyncState(first.op_id, { status: "acknowledged", server_revision: 4 });
+        await wrapper.deleteAcknowledgedOperation(first.op_id);
+        await wrapper.savePlaylistFields(id, { title: "Seminars" }, read);
+        heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
+            fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
+                name === "title" ? { value: "Seminars", revision: 4 } : { value: "", revision: 0 }])) });
+        const sync = globalThis.prksSync;
+        globalThis.prksSync = { store: wrapper };
+        try {
+            await globalThis.updatePlaylist(id, { title: "Lectures" }, { base: pinnedFirst });
+        } finally {
+            globalThis.prksSync = sync;
+            heldEntities.delete("playlist-edit-base:" + id);
+        }
+        assert.deepEqual((await rowsFor(wrapper, "SET_PLAYLIST_FIELD")).map(r => [r.payload.value, r.base_revision]),
+            [["Lectures", 4]], "updatePlaylist settles from the snapshot and writes the revert at its ACK");
+    }
     /* Another pane replaced the synced edit (Seminars -> Talks) before this
      * form, opened on the unsent edit, returned to Lectures: the revert is a
      * write measured from the ACK, not a silent cancellation. */
@@ -336,7 +372,7 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const cleared = { title: "Untitled playlist", description: "", original_url: "" };
         const pinned = await globalThis.prksPinPlaylistEditBase(id, cleared, ops);
         globalThis.prksOfflineReadEntity = previous;
-        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "" },
+        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "", pendingOp: ops[0].op_id },
             "the default name stands for the pending empty title");
         const edits = core.pinnedEdits(cleared, Object.assign({}, cleared, { title: "Talks" }), pinned);
         assert.deepEqual(edits.unknown || [], [], "a new title is not refused as changed elsewhere");
@@ -362,9 +398,10 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const trimmed = { title: "Seminars", description: "", original_url: "https://example.org/x" };
         const pinned = await globalThis.prksPinPlaylistEditBase(id, trimmed, ops);
         globalThis.prksOfflineReadEntity = previous;
-        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "  Seminars  " },
+        assert.deepEqual(pinned.title, { value: "Lectures", revision: 3, pending: "  Seminars  ", pendingOp: ops.find(r => r.payload.field === "title").op_id },
             "the trimmed title stands for the raw pending one");
-        assert.deepEqual(pinned.original_url, { value: "", revision: 0, pending: " https://example.org/x " },
+        assert.deepEqual(pinned.original_url, { value: "", revision: 0, pending: " https://example.org/x ",
+            pendingOp: ops.find(r => r.payload.field === "original_url").op_id },
             "and the trimmed URL for its raw pending value");
         const edits = core.pinnedEdits(trimmed, Object.assign({}, trimmed, { title: "Talks" }), pinned);
         assert.deepEqual(edits.unknown || [], [], "a new title is not refused as changed elsewhere");

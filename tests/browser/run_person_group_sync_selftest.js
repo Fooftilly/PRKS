@@ -1490,7 +1490,7 @@ async function aRevertAfterTheShownRenameSyncedIsSaved() {
     const read = baseAt({ name: 4 }, { name: "Analysts" });
     const [sent] = await store.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
     const shown = { name: "Engineers", description: "", parent_id: "" };
-    const pinned = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4 } });
+    const pinned = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4, pendingOp: sent.op_id } });
     await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 5 });
     const edits = core.pinnedEdits(shown, Object.assign({}, shown, { name: "Analysts" }), pinned);
     await store.savePersonGroupFields("PG-R", edits.changes, edits.base);
@@ -1498,6 +1498,19 @@ async function aRevertAfterTheShownRenameSyncedIsSaved() {
     assert.equal(rows.length, 1, "the revert is recorded");
     assert.equal(rows[0].payload.value, "Analysts");
     assert.equal(rows[0].base_revision, 5, "against the shown rename's ACK");
+
+    /* The shown rename retired; a stale pane queued the same name at the
+     * same base. That row is not the shown rename, so the revert is kept. */
+    const again = newStore();
+    const [first] = await again.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const pin = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4, pendingOp: first.op_id } });
+    await again.updateOperationSyncState(first.op_id, { status: "acknowledged", server_revision: 5 });
+    await again.deleteAcknowledgedOperation(first.op_id);
+    await again.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const revert = core.pinnedEdits(shown, Object.assign({}, shown, { name: "Analysts" }), pin);
+    await again.savePersonGroupFields("PG-R", revert.changes, revert.base);
+    assert.deepEqual((await rowsFor(again, "SET_PERSON_GROUP_FIELD")).map(r => [r.payload.value, r.base_revision]),
+        [["Analysts", 4]], "the revert is queued at the pin, where a moved server refuses it");
 }
 
 /* A pending move shows the new parent on the nested `parent` too, so Edit

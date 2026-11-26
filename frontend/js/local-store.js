@@ -3668,17 +3668,19 @@
              * further write is measured from it, not from the revision it
              * replaced (which would come back as a conflict with itself). */
             const shownPending = typeof observed.pending === 'string' && observed.pending !== observed.value;
+            /* By operation id: a replacement queued with the same base and value is not that edit. */
+            const isShownEdit = r => typeof observed.pendingOp === 'string' && r.op_id === observed.pendingOp;
             const acknowledged = shownPending ? rows.find(r => isFieldRow(r) &&
-                r.status === STATUS_ACKNOWLEDGED && r.base_revision === observed.revision &&
-                r.payload.value === observed.pending && Number.isSafeInteger(r.server_revision)) : null;
+                r.status === STATUS_ACKNOWLEDGED && isShownEdit(r) &&
+                Number.isSafeInteger(r.server_revision)) : null;
             if (desired !== observed.value) {
                 return acknowledged ? acknowledged.server_revision : observed.revision;
             }
             /* Only the edit the form was opened on is cancelled by returning
-             * to the pinned value. A replacement another pane queued after
-             * that edit synced is measured from its ACK and is not ours. */
-            const original = existing && existing.base_revision === observed.revision &&
-                (typeof observed.pending !== 'string' || existing.payload.value === observed.pending);
+             * to the pinned value. Once it has retired, a replacement is not
+             * ours: the revert is queued and a server that moved on refuses it. */
+            const original = existing && (typeof observed.pending !== 'string'
+                ? existing.base_revision === observed.revision : isShownEdit(existing));
             if (!acknowledged && (original || typeof observed.pending !== 'string' || observed.pending === observed.value)) {
                 return null;
             }

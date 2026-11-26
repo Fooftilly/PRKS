@@ -297,6 +297,8 @@ describe('edit-session bases', () => {
       name: { value: 'Group', revision: 3 },
       description: { value: 'old', revision: 2, pending: 'unsent' },
     })
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2, pendingOp: 'op-1' } })
+      ?.description).toEqual({ value: 'old', revision: 2, pending: 'unsent', pendingOp: 'op-1' })
     // A read at a later revision holds another device's value, not the base
     // the unsent edit replaced.
     const newer = { ...read, description: { value: 'theirs', revision: 4 } }

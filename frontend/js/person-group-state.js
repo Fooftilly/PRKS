@@ -526,6 +526,7 @@
                 out[field] = {
                     value: String((op.payload && op.payload.value) || ''),
                     revision: op.base_revision,
+                    pendingOp: op.op_id,
                 };
             });
         return out;
