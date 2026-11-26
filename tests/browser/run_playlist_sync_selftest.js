@@ -604,9 +604,22 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
         "values read from the server after the revisions are one base");
     assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
         "the record read never joins a flight older than the revisions");
-    sources.state = "cache"; sources.record = "cache";
+    /* The offline retry after that refusal: both reads now come from the
+     * cache, where the revisions the server just gave sit beside the older
+     * values. Read times tell the two apart. */
+    const at = { state: 2000, record: 1000 };
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "playlist-state") {
+            return { value: core.observe(globalThis.prksNewPlaylistState(id), at.state), source: "cache" };
+        }
+        return { value: core.observe({ id, title: "Old", description: "", original_url: "", items: [] },
+            at.record), source: "cache" };
+    };
+    assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
+        "cached values read before the cached revisions are not their base");
+    at.record = 3000;
     assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
-        "an offline cache still holds a base");
+        "an offline cache whose values were read after its revisions still holds a base");
 }
 
 
@@ -618,6 +631,7 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     const existing = "PL-" + "E".repeat(32);
     const other = "PL-" + "F".repeat(32);
     const work = "W-1";
+    const core = require("../../frontend/js/sync-reconcile.js");
     const state = globalThis.prksNewPlaylistState(existing);
     state.fields.title.revision = 3;
     state.order_revision = 2;
@@ -626,12 +640,12 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
             value: { work_id: work, playlist_id: existing, revision: 4 }, source: "cache"
         };
         if (id !== existing) return { value: null, source: "unavailable" };
-        if (kind === "playlist-state") return { value: state, source: "cache" };
+        if (kind === "playlist-state") return { value: core.observe(state, 1000), source: "cache" };
         if (kind === "playlist") return {
-            value: {
+            value: core.observe({
                 id: existing, title: "Lectures", description: "",
                 original_url: "", items: [item("W-1"), item("W-2")]
-            }, source: "cache"
+            }, 2000), source: "cache"
         };
         return { value: null, source: "unavailable" };
     };

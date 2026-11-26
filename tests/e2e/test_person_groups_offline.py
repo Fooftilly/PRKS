@@ -486,7 +486,8 @@ class PersonGroupsOfflineTests(unittest.TestCase):
         server, page, context = self.start()
         ids = server.ids
         self.cache(page, ids)
-        page.evaluate("id => prksReadPersonGroupState(id)", ids['person_group'])
+        self.assertTrue(page.evaluate("id => prksAcknowledgedPersonGroupBase(id, []).then(b => !!b)",
+                                      ids['person_group']))
         o._wait_entity_cached(page, 'person-group-state', ids['person_group'])
         self.offline(page, context)
 

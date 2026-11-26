@@ -839,9 +839,31 @@ async function serverRevisionsNeverPairWithCachedValues() {
             "values read from the server after the revisions are one base");
         assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
             "the record read never joins a flight older than the revisions");
-        sources.state = "cache"; sources.record = "cache";
+        /* #1454 review: the cache holds description A at revision 0, and
+         * another device wrote B at revision 1. Edit online stores the
+         * server's revision 1 while the record read falls back to cached A,
+         * and that pair is refused. The offline retry reads both from the
+         * cache, where revision 1 now sits beside A: read times keep that
+         * pair refused too. */
+        const core = require("../../frontend/js/sync-reconcile.js");
+        const at = { state: 2000, record: 1000 };
+        globalThis.prksOfflineReadEntity = async (kind, id) => {
+            if (kind === "person-group-state") {
+                const fields = {};
+                globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+                return { value: core.observe({ group_id: id, fields, members: [] }, at.state), source: "cache" };
+            }
+            return { value: core.observe({ id, name: "Old", description: "A", parent: null }, at.record),
+                source: "cache" };
+        };
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
+            "cached values read before the cached revisions are not their base");
+        const shown = { name: "Old", description: "A", parent_id: "" };
+        const pin = await globalThis.prksPinPersonGroupEditBase("PG-S", shown, []);
+        assert.equal(pin, null, "so the offline retry pins no base and a Save of C is refused");
+        at.record = 3000;
         assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
-            "an offline cache still holds a base");
+            "an offline cache whose values were read after its revisions still holds a base");
     } finally {
         globalThis.prksOfflineReadEntity = previous;
     }

@@ -432,6 +432,16 @@
              * unseen. Values read after the revisions are newer or equal,
              * which at worst makes a Save a revision conflict. */
             playlist = cached && (stateSource !== 'server' || cached.source === 'server') ? cached.value : null;
+            /* Two cached reads are the same pair only when the values were read
+             * at or after the revisions: a sync-state read that reached the
+             * server while the record read did not leaves newer revisions beside
+             * older values, and pairing them later would bring back the save
+             * that was just refused. */
+            if (playlist && cached.source !== 'server') {
+                const revisionsAt = reconcileCore.observedAt(state);
+                const valuesAt = reconcileCore.observedAt(playlist);
+                if (revisionsAt === null || valuesAt === null || valuesAt < revisionsAt) playlist = null;
+            }
         } catch (_e) { playlist = null; }
         return playlist ? observedPlaylistFields(playlist, state) : null;
     }
