@@ -984,8 +984,24 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         assert.equal(name.payload.field, "name");
         assert.equal(name.base_revision, 2);
 
+        /* The refusal asked for Cancel and Edit again: Cancel reloads the
+         * Group from the server, so the next Edit opens on the current
+         * version instead of the held one it refused (#1454 review). */
+        const reads = [];
+        const serverRead = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async (kind, id, ...rest) => {
+            reads.push(kind);
+            return serverRead(kind, id, ...rest);
+        };
+        const painted = [];
+        c.setEntity = (_name, value) => { painted.push(value); };
         globalThis.closePersonGroupEdit(c);
         assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
+        for (let i = 0; i < 5 && !painted.length; i += 1) await new Promise(r => setTimeout(r, 2));
+        globalThis.prksOfflineReadEntity = serverRead;
+        assert(reads.includes("person-group"), "Cancel after the refusal reads the Group from the server");
+        assert.equal(painted.length && painted[0].description, "from A", "and repaints the current version");
+        assert.equal(c.ui.personGroupStale, null, "the stale mark is spent");
 
         /* This device's own unsent edit is what the form shows: editing it
          * again keeps the revision that edit was measured against. */
