@@ -62,7 +62,7 @@ function fieldAck(op, revision) {
 function memberAck(op, revision) {
     return { code: "ACKNOWLEDGED", group_id: op.entity_id, person_id: op.payload.person_id,
         changed: true, present: op.operation === "ADD_PERSON_GROUP_MEMBER",
-        server_revision: revision, group_name: "Group" };
+        server_revision: revision, group_name: "Group", group_name_revision: 0 };
 }
 function personAck(op) {
     return { code: "ACKNOWLEDGED", person_id: op.entity_id, changed: true,
@@ -1417,6 +1417,21 @@ async function aPendingMoveShowsTheNewParent() {
     assert.equal(atRoot.parent, null, "a destination at the top level leaves the group at the top level");
 }
 
+/* A membership ACK names the Group with its name revision, or not at all
+ * (#1452 review): an answer that states neither still settles the operation,
+ * and half a pair is refused. */
+async function aMembershipAckNamesItsGroupAsAPairOrNotAtAll() {
+    const handler = globalThis.prksPersonGroupMemberSyncHandler;
+    const op = { entity_id: "PG-1", payload: { person_id: "P-1" } };
+    const ack = { code: "ACKNOWLEDGED", group_id: "PG-1", person_id: "P-1", changed: true,
+        present: true, server_revision: 1 };
+    assert.equal(handler.isResult(ack, op), true, "no stated name is still an answer");
+    assert.equal(handler.isResult({ ...ack, group_name: "G", group_name_revision: 3 }, op), true);
+    assert.equal(handler.isResult({ ...ack, group_name: "G" }, op), false, "a name needs its revision");
+    assert.equal(handler.isResult({ ...ack, group_name_revision: 3 }, op), false);
+    assert.equal(handler.isResult({ ...ack, group_name: "G", group_name_revision: -1 }, op), false);
+}
+
 async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
@@ -1454,6 +1469,7 @@ async function main() {
     await aSaveUsesTheRevisionsPinnedWhenEditOpened();
     await aFailedPinIsTakenAgainOnTheNextSave();
     await serverRevisionsNeverPairWithCachedValues();
+    await aMembershipAckNamesItsGroupAsAPairOrNotAtAll();
     console.log("All " + checks + " person group checks passed");
 }
 

@@ -2799,6 +2799,7 @@
             if (plan !== 'apply') return true;
             const next = mutate(value);
             if (next === null) return true;
+            if (next === UNSTATED_PATCH) return dropUnprovenEntity(kind, id);
             return cacheEntityIfCurrent(kind, id, next, token, observedAtOf(snapshot));
         }
 
@@ -2824,8 +2825,15 @@
             if (plan !== 'apply') return true;
             const next = mutate(cached.value);
             if (next === null) return true;
+            if (next === UNSTATED_PATCH) return dropUnprovenList(listKey);
             return cacheListForDomain(listKey, next, domain, token, observedAtOf(cached));
         }
+
+        /* Returned by a `mutate` above when the ACK proves the change but
+         * does not state every value the patch would write (a chip whose
+         * name it cannot prove current). The cached value is dropped, as an
+         * unproven one is, rather than written with a guess. */
+        const UNSTATED_PATCH = Object.freeze({});
 
         /* True when a revision projection proves the ACK older than it holds. */
         function superseded(ackRevision, heldRevision) {
@@ -3023,17 +3031,25 @@
                 }))) return false;
             const hasChip = row => Array.isArray(row.groups) && row.groups.some(g => g && g.id === groupId);
             /* The chip names the group as the server stored it when it
-             * applied this membership: the ACK states it, so a chip is never
-             * blank and a People list this device cannot refetch offline is
-             * patched rather than dropped. */
-            const groupName = String(result.group_name);
+             * applied this membership, at the name's own revision. The name
+             * is revisioned apart from the membership, so it is used only
+             * when no newer name is held: a delayed or replayed ACK after a
+             * rename must not bring the old name back. A name the ACK does
+             * not state or cannot prove current is never guessed: a row that
+             * would need the chip is dropped for the next read instead. */
+            const heldName = groupState && groupState.value && groupState.value.fields &&
+                groupState.value.fields.name;
+            const nameKnown = typeof result.group_name === 'string' &&
+                reconcileCore.isRevision(result.group_name_revision) &&
+                !(heldName && superseded(result.group_name_revision, heldName.revision));
+            const chip = nameKnown ? { id: groupId, name: result.group_name } : null;
             /* The People fence moves even with no row to patch: a People read
              * started before this ACK must not publish its older rows after it. */
             if (!person) advanceDomainGeneration(DOMAIN_PEOPLE);
             else if (!await patchProvenList(PEOPLE_LIST_KEY, DOMAIN_PEOPLE, ackRevision, op,
                 peopleList => peopleList.every(row => !row || row.id !== personId || hasChip(row) === present),
                 peopleList => {
-                    const chip = { id: groupId, name: groupName };
+                    if (present && !chip) return UNSTATED_PATCH;
                     return peopleList.map(function (row) {
                         if (!row || row.id !== personId) return row;
                         const chips = Array.isArray(row.groups) ? row.groups : [];
@@ -3073,9 +3089,8 @@
                 const without = chips.filter(g => !g || g.id !== groupId);
                 if (present) {
                     if (without.length !== chips.length) return null;
-                    return Object.assign({}, value, {
-                        groups: chips.concat([{ id: groupId, name: groupName }]),
-                    });
+                    if (!chip) return UNSTATED_PATCH;
+                    return Object.assign({}, value, { groups: chips.concat([chip]) });
                 }
                 if (without.length === chips.length) return null;
                 return Object.assign({}, value, { groups: without });
