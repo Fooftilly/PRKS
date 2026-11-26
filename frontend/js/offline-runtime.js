@@ -2369,6 +2369,20 @@
         }
 
         /** One Playlist field the server has applied. */
+        /* The pair an editor last read together moves only along this
+         * device's own acknowledged write (`prksSyncReconcile.acknowledgeEditBase`). */
+        function patchEditBase(kind, id, field, value, op, ackRevision) {
+            return patchEntity(kind, id, function (held) {
+                if (!held || !held.fields || typeof held.fields !== 'object') return null;
+                const entry = reconcileCore.acknowledgeEditBase(held.fields[field],
+                    { value: value, baseRevision: op && op.base_revision, ackRevision: ackRevision });
+                if (entry === undefined) return null;
+                const fields = Object.assign({}, held.fields);
+                fields[field] = entry;
+                return Object.assign({}, held, { fields: fields });
+            });
+        }
+
         async function reconcilePlaylistField(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.playlist_id;
@@ -2390,6 +2404,7 @@
                 return next;
             });
             if (!stateWritten) return false;
+            if (!await patchEditBase('playlist-edit-base', id, field, raw, op, result.server_revision)) return false;
             /* The held revisions are past this ACK, so its value is older than
              * them: written into the body, it would be paired with a revision
              * that vouches for newer text. */
@@ -2932,6 +2947,7 @@
                 next.fields[field] = { revision: ackRevision };
                 return next;
             });
+            if (!await patchEditBase('person-group-edit-base', id, field, raw, op, ackRevision)) return false;
             const sameValue = row => (field === 'parent_id' ? (row[field] || null) : row[field]) === value;
             if (!await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS, ackRevision, op,
                 rows => rows.every(row => !row || row.id !== id || sameValue(row)),

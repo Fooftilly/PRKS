@@ -94,6 +94,12 @@ async function seed() {
     await cache.putEntity("playlist", ID, detail, "");
     await cache.putEntity("playlist", control.id, {...control, items: []}, "");
     await cache.putEntity("playlist-state", ID, globalThis.prksNewPlaylistState(ID), "");
+    // The pair an online Edit read together, which an offline Edit pins.
+    await cache.putEntity("playlist-edit-base", ID, {playlist_id: ID, fields: {
+        title: {value: "Original title", revision: 0},
+        description: {value: "Old description", revision: 0},
+        original_url: {value: "", revision: 0},
+    }}, "");
     for (const id of [W1, W2, OTHER]) {
         await cache.putEntity("work", id, {id, playlist_id: id === OTHER ? null : ID}, "");
     }
@@ -121,7 +127,6 @@ async function scenario(name, write, expectedOperations = 1) {
     const originalOrder = globalThis.prksOfflineReconcilePlaylistOrder;
     globalThis.prksOfflineReadEntity = async (kind, id) => {
         const r = await cache.getEntity(kind, id);
-        if (r) require("../../frontend/js/sync-reconcile.js").observe(r.value, Number.isFinite(r.observedAt) ? r.observedAt : r.cachedAt);
         return {value: r ? r.value : null, source: r ? "cache" : "unavailable"};
     };
     globalThis.prksOfflineReconcilePlaylistField = async (...args) => {
@@ -198,6 +203,8 @@ async function main() {
         assert.deepEqual(envelope.payload, {field: "description", value: "New description"});
         assert.equal(detail.description, "New description");
         assert.equal(state.fields.description.revision, 1);
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", ID)).value.fields.description,
+            {value: "New description", revision: 1}, "the offline edit base moves along its own ACK");
         const list = (await cache.getList("playlists:index")).value;
         assert(validation.prksIsPlaylistsIndexShape(list));
         assert.equal(list[0].description, "New description");

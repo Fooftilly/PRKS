@@ -818,54 +818,63 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
 /* Revisions from the server with values from the cache are two snapshots:
  * a newer revision would vouch for older text, so no base is formed. */
 async function serverRevisionsNeverPairWithCachedValues() {
-    const previous = globalThis.prksOfflineReadEntity;
+    const previous = {
+        read: globalThis.prksOfflineReadEntity,
+        peek: globalThis.prksOfflinePeekEntity,
+        cache: globalThis.prksOfflineCacheEntity,
+    };
+    const held = new Map();
+    globalThis.prksOfflinePeekEntity = async (kind, id) => held.get(kind + ":" + id) || null;
+    globalThis.prksOfflineCacheEntity = async (kind, id, value) => { held.set(kind + ":" + id, value); return true; };
     const sources = { state: "server", record: "cache" };
+    const server = { revision: 1, description: "B" };
+    const cachedRecord = { description: "A" };
     const recordOptions = [];
     globalThis.prksOfflineReadEntity = async (kind, id, _path, options) => {
         if (kind !== "person-group-state") recordOptions.push(options || {});
         if (kind === "person-group-state") {
             const fields = {};
-            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: server.revision }; });
             return { value: { group_id: id, fields, members: [] }, source: sources.state };
         }
-        return { value: { id, name: "Old", description: "", parent: null }, source: sources.record };
+        const description = sources.record === "server" ? server.description : cachedRecord.description;
+        return { value: { id, name: "Old", description, parent: null }, source: sources.record };
     };
     try {
         assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
             "server revisions never pair with cached values");
-        sources.record = "server";
+        assert.equal(held.size, 0, "and that refused pair is not kept");
+        sources.state = "cache";
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
+            "offline, cached revisions beside a cached record form no base either");
+
+        sources.state = "server"; sources.record = "server";
         recordOptions.length = 0;
-        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
+        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description.value, "B",
             "values read from the server after the revisions are one base");
         assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
             "the record read never joins a flight older than the revisions");
-        /* #1454 review: the cache holds description A at revision 0, and
-         * another device wrote B at revision 1. Edit online stores the
-         * server's revision 1 while the record read falls back to cached A,
-         * and that pair is refused. The offline retry reads both from the
-         * cache, where revision 1 now sits beside A: read times keep that
-         * pair refused too. */
-        const core = require("../../frontend/js/sync-reconcile.js");
-        const at = { state: 2000, record: 1000 };
-        globalThis.prksOfflineReadEntity = async (kind, id) => {
-            if (kind === "person-group-state") {
-                const fields = {};
-                globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
-                return { value: core.observe({ group_id: id, fields, members: [] }, at.state), source: "cache" };
-            }
-            return { value: core.observe({ id, name: "Old", description: "A", parent: null }, at.record),
-                source: "cache" };
-        };
-        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
-            "cached values read before the cached revisions are not their base");
-        const shown = { name: "Old", description: "A", parent_id: "" };
-        const pin = await globalThis.prksPinPersonGroupEditBase("PG-S", shown, []);
-        assert.equal(pin, null, "so the offline retry pins no base and a Save of C is refused");
-        at.record = 3000;
-        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).name.value, "Old",
-            "an offline cache whose values were read after its revisions still holds a base");
+
+        /* #1454 review: another device writes C at revision 2. Edit online
+         * reaches the server for the revisions but not for the record, and is
+         * refused. The offline retry uses the pair last read together (B at
+         * revision 1), never revision 2 beside a cached record. */
+        server.revision = 2; server.description = "C";
+        sources.record = "cache"; cachedRecord.description = "B";
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null);
+        sources.state = "cache";
+        const offline = await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        assert.deepEqual(offline.description, { value: "B", revision: 1 },
+            "offline, the base is the pair read together, so a Save conflicts instead of replacing C");
+
+        /* A sync-state refresh for membership leaves that pair editable. */
+        cachedRecord.description = "stale";
+        assert.deepEqual((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description,
+            { value: "B", revision: 1 }, "a newer cached state or record does not change the pair");
     } finally {
-        globalThis.prksOfflineReadEntity = previous;
+        globalThis.prksOfflineReadEntity = previous.read;
+        globalThis.prksOfflinePeekEntity = previous.peek;
+        globalThis.prksOfflineCacheEntity = previous.cache;
     }
 }
 

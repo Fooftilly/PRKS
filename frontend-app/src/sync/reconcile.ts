@@ -350,6 +350,22 @@ export function pinEditBase(
   return pinned
 }
 
+/**
+ * An edit base, read as one value/revision pair, after this device's own
+ * write of that field is acknowledged. `undefined` keeps the entry: it is at
+ * or past the ACK. The write's value at the ACK revision replaces an entry the
+ * write was measured against. Any other entry is null: a revision between the
+ * two holds a value nobody here has read.
+ */
+export function acknowledgeEditBase(
+  entry: unknown,
+  write: { value: string; baseRevision: unknown; ackRevision: number },
+): FieldBase | null | undefined {
+  if (!isFieldBase(entry)) return null
+  if (entry.revision >= write.ackRevision) return undefined
+  return entry.revision === write.baseRevision ? { value: write.value, revision: write.ackRevision } : null
+}
+
 /** What a Save sends: the changed fields, their pinned bases, and any changed field whose base is unknown. */
 export interface PinnedEdits {
   changes: Record<string, string>

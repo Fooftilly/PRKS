@@ -440,35 +440,55 @@
             state = result && result.value;
             stateSource = result && result.source;
         } catch (_e) { state = null; }
-        if (!state) return null;
+        if (!state) return stateSource === 'server' ? null : cachedEditBase(groupId);
+        /* Offline, two cached reads are not one snapshot: a revisions read can
+         * reach the server while the record read does not, or refresh without
+         * it, and pair newer revisions with older values. The base offline is
+         * the pair this device last read together. */
+        if (stateSource !== 'server') return cachedEditBase(groupId);
         let group = null;
         try {
-            /* The group's own acknowledged record, not the catalogue: it is the
-             * page the user is editing, so it is the one this device is most
-             * likely to hold -- and it is one read rather than a whole list. */
             const cached = await root.prksOfflineReadEntity('person-group', groupId,
                 '/api/person-groups/' + encodeURIComponent(groupId),
                 /* A record read joined to an older flight would predate the
                  * revisions while still answering from the server. */
-                stateSource === 'server' ? { requestPolicy: { dedupe: false } } : {});
-            /* Revisions read from the server and values from an older cache
-             * are not one snapshot: a newer revision would vouch for older
-             * text, and a Save against it would replace the newer text
-             * unseen. Values read after the revisions are newer or equal,
-             * which at worst makes a Save a revision conflict. */
-            group = cached && (stateSource !== 'server' || cached.source === 'server') ? cached.value : null;
-            /* Two cached reads are the same pair only when the values were read
-             * at or after the revisions: a sync-state read that reached the
-             * server while the record read did not leaves newer revisions beside
-             * older values, and pairing them later would bring back the save
-             * that was just refused. */
-            if (group && cached.source !== 'server') {
-                const revisionsAt = reconcileCore.observedAt(state);
-                const valuesAt = reconcileCore.observedAt(group);
-                if (revisionsAt === null || valuesAt === null || valuesAt < revisionsAt) group = null;
-            }
+                { requestPolicy: { dedupe: false } });
+            /* Values read after the revisions are newer or equal, which at
+             * worst makes a Save a revision conflict. Values from the cache
+             * may be older than the revisions, so they form no base. */
+            group = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { group = null; }
-        return group ? observedGroupFields(group, state) : null;
+        if (!group) return null;
+        const base = observedGroupFields(group, state);
+        await cacheEditBase(groupId, base);
+        return base;
+    }
+
+    /* The kind under which an edit base read as one pair is kept for offline Edit. */
+    const PERSON_GROUP_EDIT_BASE = 'person-group-edit-base';
+
+    async function cachedEditBase(groupId) {
+        let held = null;
+        try {
+            held = typeof root.prksOfflinePeekEntity === 'function'
+                ? await root.prksOfflinePeekEntity(PERSON_GROUP_EDIT_BASE, groupId) : null;
+        } catch (_e) { held = null; }
+        if (!held || held.group_id !== groupId || !held.fields || typeof held.fields !== 'object') return null;
+        const base = {};
+        for (const name of FIELDS) {
+            const entry = held.fields[name];
+            if (entry === null) { base[name] = null; continue; }
+            if (!entry || typeof entry.value !== 'string' || !reconcileCore.isRevision(entry.revision)) return null;
+            base[name] = { value: entry.value, revision: entry.revision };
+        }
+        return base;
+    }
+
+    async function cacheEditBase(groupId, base) {
+        if (typeof root.prksOfflineCacheEntity !== 'function') return;
+        try {
+            await root.prksOfflineCacheEntity(PERSON_GROUP_EDIT_BASE, groupId, { group_id: groupId, fields: base });
+        } catch (_e) { /* the next online Edit writes it again */ }
     }
 
     /**

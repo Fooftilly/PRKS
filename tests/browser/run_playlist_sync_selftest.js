@@ -54,6 +54,11 @@ function loadTopLevelFunction(source, name) {
     }
 }
 
+/* The disposable cache behind prksOfflinePeekEntity / prksOfflineCacheEntity. */
+const heldEntities = new Map();
+globalThis.prksOfflinePeekEntity = async (kind, id) => heldEntities.get(kind + ":" + id) || null;
+globalThis.prksOfflineCacheEntity = async (kind, id, value) => { heldEntities.set(kind + ":" + id, value); return true; };
+
 let sequence = 0;
 const uuid = () => "00000000-0000-4000-8000-" + (++sequence).toString(16).padStart(12, "0");
 const tick = () => new Promise(resolve => setTimeout(resolve, 1));
@@ -608,22 +613,19 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
         "values read from the server after the revisions are one base");
     assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
         "the record read never joins a flight older than the revisions");
-    /* The offline retry after that refusal: both reads now come from the
-     * cache, where the revisions the server just gave sit beside the older
-     * values. Read times tell the two apart. */
-    const at = { state: 2000, record: 1000 };
-    globalThis.prksOfflineReadEntity = async (kind, id) => {
-        if (kind === "playlist-state") {
-            return { value: core.observe(globalThis.prksNewPlaylistState(id), at.state), source: "cache" };
-        }
-        return { value: core.observe({ id, title: "Old", description: "", original_url: "", items: [] },
-            at.record), source: "cache" };
-    };
+    /* Offline, the base is the pair last read together, never cached
+     * revisions beside a cached record: either may have been refreshed
+     * without the other (a refused mixed read, an order read). */
+    const offlineState = globalThis.prksNewPlaylistState(known);
+    offlineState.fields.title.revision = 7;
+    globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "playlist-state"
+        ? { value: offlineState, source: "cache" }
+        : { value: { id, title: "Older", description: "", original_url: "", items: [] }, source: "cache" });
+    assert.deepEqual((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title, { value: "Old", revision: 0 },
+        "the offline base is the pair read together, not revision 7 beside a cached record");
+    heldEntities.delete("playlist-edit-base:" + known);
     assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
-        "cached values read before the cached revisions are not their base");
-    at.record = 3000;
-    assert.equal((await globalThis.prksAcknowledgedPlaylistBase(known, [])).title.value, "Old",
-        "an offline cache whose values were read after its revisions still holds a base");
+        "with no pair read together, offline has no base");
 }
 
 
@@ -635,7 +637,6 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     const existing = "PL-" + "E".repeat(32);
     const other = "PL-" + "F".repeat(32);
     const work = "W-1";
-    const core = require("../../frontend/js/sync-reconcile.js");
     const state = globalThis.prksNewPlaylistState(existing);
     state.fields.title.revision = 3;
     state.order_revision = 2;
@@ -644,16 +645,22 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
             value: { work_id: work, playlist_id: existing, revision: 4 }, source: "cache"
         };
         if (id !== existing) return { value: null, source: "unavailable" };
-        if (kind === "playlist-state") return { value: core.observe(state, 1000), source: "cache" };
+        if (kind === "playlist-state") return { value: state, source: "cache" };
         if (kind === "playlist") return {
-            value: core.observe({
+            value: {
                 id: existing, title: "Lectures", description: "",
                 original_url: "", items: [item("W-1"), item("W-2")]
-            }, 2000), source: "cache"
+            }, source: "cache"
         };
         return { value: null, source: "unavailable" };
     };
     globalThis.prksOfflineInvalidateEntity = async () => true;
+    // Offline, the base is the pair an earlier online Edit read together.
+    heldEntities.set("playlist-edit-base:" + existing, { playlist_id: existing, fields: {
+        title: { value: "Lectures", revision: 3 },
+        description: { value: "", revision: 0 },
+        original_url: { value: "", revision: 0 },
+    } });
 
     const shown = { title: "Lectures", description: "", original_url: "" };
     const base = await globalThis.prksPinPlaylistEdit(existing, shown);

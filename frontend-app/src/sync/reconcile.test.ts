@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acknowledgeEditBase,
   adoptFresh,
   applyOwnerAck,
   carryObservation,
@@ -301,6 +302,16 @@ describe('edit-session bases', () => {
     expect(pinEditBase(showsPending, newer, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
     expect(pinEditBase(shown, read, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
     expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()
+  })
+
+  it('moves a cached edit base only along this device\'s own acknowledged write', () => {
+    const write = { value: 'mine', baseRevision: 2, ackRevision: 3 }
+    expect(acknowledgeEditBase({ value: 'old', revision: 2 }, write)).toEqual({ value: 'mine', revision: 3 })
+    expect(acknowledgeEditBase({ value: 'mine', revision: 3 }, write)).toBeUndefined()
+    expect(acknowledgeEditBase({ value: 'later', revision: 5 }, write)).toBeUndefined()
+    // Read at revision 1, written against 2: revision 2's value was never read here.
+    expect(acknowledgeEditBase({ value: 'older', revision: 1 }, write)).toBeNull()
+    expect(acknowledgeEditBase(null, write)).toBeNull()
   })
 
   it('pins an unsent edit the read already holds at the read revision', () => {
