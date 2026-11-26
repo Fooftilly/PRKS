@@ -362,6 +362,13 @@ async function main() {
                 created_at: new Date().toISOString()}));
         assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.description,
             {value: "Read", revision: 1, ackOp: "op-desc"}, "an ACK at the read revision stamps that entry");
+        /* A whitespace-only save is a no-op: the server keeps revision 1. */
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "description", server_revision: 1, changed: false},
+            {op_id: "op-noop", base_revision: 1, payload: {field: "description", value: "Read "},
+                created_at: new Date().toISOString()}));
+        assert.equal((await cache.getEntity("playlist-edit-base", NEW)).value.fields.description.ackOp, "op-desc",
+            "a no-op ACK at that revision keeps the stamp of the write that produced it");
         const remove = cache.deleteEntity;
         cache.deleteEntity = async (kind, id) => kind === "playlist-edit-base" ? false : remove(kind, id);
         try {
