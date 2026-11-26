@@ -299,6 +299,17 @@ describe('edit-session bases', () => {
     expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()
   })
 
+  it('pins an unsent edit the read already holds at the read revision', () => {
+    // The edit was acknowledged while the opening read was in flight: the
+    // read holds it at revision 4, the queued row still says base 3.
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'unsent', revision: 4 } }
+    const showsPending = { name: 'Group', description: 'unsent' }
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 3 } })?.description).toEqual({
+      value: 'unsent',
+      revision: 4,
+    })
+  })
+
   it('sends changed fields against the pinned revision, never a newer one', () => {
     const pinned = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } }
     expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned)).toEqual({
