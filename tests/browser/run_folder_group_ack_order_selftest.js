@@ -378,7 +378,7 @@ async function failuresAndReplays() {
     }
     /* A held name revision no newer than the ACK does not order a catalogue
      * read after the operation: its different name still drops the chips. */
-    {
+    for (const where of ['catalogue', 'detail']) {
         const { cache, offline } = setup();
         const person = { id: 'P', name: 'Ada', groups: [] };
         await cache.putList('people:index', [{ ...person }], '');
@@ -388,12 +388,16 @@ async function failuresAndReplays() {
         await later();
         const op = createdNow();
         await later();
-        await cache.putList('person-groups:index', [{ id: 'G', name: 'Renamed', parent_id: null, member_count: 1 }], '');
+        if (where === 'catalogue') {
+            await cache.putList('person-groups:index', [{ id: 'G', name: 'Renamed', parent_id: null, member_count: 1 }], '');
+        } else {
+            await cache.putEntity('person-group', 'G', { id: 'G', name: 'Renamed', members: [], member_count: 1 });
+        }
         assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
             person_id: 'P', present: true, changed: true, server_revision: 1,
             group_name: 'Old name', group_name_revision: 1 }, op));
-        assert.equal(await cache.getEntity('person', 'P'), null, 'held revision: the Person is dropped');
-        assert.equal(await cache.getList('people:index'), null, 'held revision: and so is the People index');
+        assert.equal(await cache.getEntity('person', 'P'), null, 'held revision, ' + where + ': the Person is dropped');
+        assert.equal(await cache.getList('people:index'), null, 'held revision, ' + where + ': and so is the People index');
     }
     /* A catalogue and Group detail read before the operation are older than
      * the ACK: their old name does not veto it, and the chip takes the new one. */
