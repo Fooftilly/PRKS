@@ -545,8 +545,9 @@
      * shows that edit, and the read now holds it at the revision it produced,
      * so a further write is measured from there. Other fields are kept.
      */
-    /* The server stores a field trimmed, and an empty title as the default name. */
-    /* Only the snapshot entry the pinned edit's own ACK stamped vouches for the revision beside it. */
+    /* Only the snapshot entry the pinned edit's own ACK stamped vouches for the
+     * revision beside it. The stamp stays only at that revision, and its text may
+     * be the server's canonical form of the pending value. */
     async function settlePinnedPlaylistBase(playlistId, pinned, operations) {
         if (!pinned) return pinned;
         const open = pendingFieldBases(operations, playlistId);
@@ -561,9 +562,8 @@
         settled.forEach(function (field) {
             const now = read && read[field];
             if (now && typeof now.ackOp === 'string' && now.ackOp === pinned[field].pendingOp &&
-                now.value === pinned[field].pending &&
                 now.revision > pinned[field].revision) {
-                out[field] = { value: now.value, revision: now.revision };
+                out[field] = { value: pinned[field].pending, revision: now.revision };
             }
         });
         return out;

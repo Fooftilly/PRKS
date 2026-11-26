@@ -352,6 +352,16 @@ async function main() {
                 created_at: new Date().toISOString()}));
         assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
             {value: "Seminars", revision: 1, ackOp: "op-seminars"}, "the first field ACK moves it");
+        /* An online read published the ACK revision before the ACK landed. */
+        await cache.putEntity("playlist-edit-base", NEW, {playlist_id: NEW, fields: Object.assign(
+            {}, (await cache.getEntity("playlist-edit-base", NEW)).value.fields,
+            {description: {value: "Read", revision: 1}})});
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "description", server_revision: 1, changed: true},
+            {op_id: "op-desc", base_revision: 0, payload: {field: "description", value: "Read"},
+                created_at: new Date().toISOString()}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.description,
+            {value: "Read", revision: 1, ackOp: "op-desc"}, "an ACK at the read revision stamps that entry");
         const remove = cache.deleteEntity;
         cache.deleteEntity = async (kind, id) => kind === "playlist-edit-base" ? false : remove(kind, id);
         try {

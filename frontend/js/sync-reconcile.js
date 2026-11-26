@@ -184,18 +184,29 @@ var prksSyncReconcile = (function(exports) {
 	* started before a newer acknowledgement must not roll the pair back.
 	*/
 	function newerEditBase(held, read) {
-		return isFieldBase(held) && isFieldBase(read) && held.revision > read.revision ? held : read;
+		if (!isFieldBase(held) || !isFieldBase(read)) return read;
+		if (held.revision > read.revision) return held;
+		if (held.revision === read.revision && typeof held.ackOp === "string") return {
+			...read,
+			ackOp: held.ackOp
+		};
+		return read;
 	}
 	/**
 	* An edit base, read as one value/revision pair, after this device's own
-	* write of that field is acknowledged. `undefined` keeps the entry: it is at
-	* or past the ACK. The write's value at the ACK revision replaces an entry the
+	* write of that field is acknowledged. `undefined` keeps the entry: it is
+	* past the ACK. An entry at the ACK revision comes back as it is, for the
+	* caller to stamp. The write's value at the ACK revision replaces an entry the
 	* write was measured against. Any other entry is null: a revision between the
 	* two holds a value nobody here has read.
 	*/
 	function acknowledgeEditBase(entry, write) {
 		if (!isFieldBase(entry)) return null;
-		if (entry.revision >= write.ackRevision) return void 0;
+		if (entry.revision > write.ackRevision) return void 0;
+		if (entry.revision === write.ackRevision) return {
+			value: entry.value,
+			revision: entry.revision
+		};
 		return entry.revision === write.baseRevision ? {
 			value: write.value,
 			revision: write.ackRevision
