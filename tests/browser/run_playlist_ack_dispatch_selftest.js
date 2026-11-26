@@ -281,6 +281,8 @@ async function main() {
             {base_revision: 0, payload: {field: "title", value: "Seminars"}, created_at: new Date().toISOString()}));
         assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
             {value: "Seminars", revision: 1}, "the first field ACK moves it");
+        assert(await globalThis.prksOfflineReconcileDeletedPlaylist({playlist_id: NEW}));
+        assert.equal(await cache.getEntity("playlist-edit-base", NEW), null, "a delete drops the pair");
     }
     console.log("All " + checks + " Playlist ACK-through-sync checks passed");
 }

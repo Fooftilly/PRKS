@@ -165,6 +165,8 @@ async function groupField() {
             group: { id: 'G', name: 'Before', description: null, parent_id: null, member_count: 0 } }));
         assert.equal((await cache.getEntity('person-group-edit-base', 'G')).value.fields.name.revision, 1,
             'a replayed create keeps the newer pair');
+        assert(await offline.reconcileDeletedPersonGroup({ group_id: 'G' }));
+        assert.equal(await cache.getEntity('person-group-edit-base', 'G'), null, 'a delete drops the pair');
     }
 }
 
