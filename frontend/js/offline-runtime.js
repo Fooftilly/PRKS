@@ -2829,9 +2829,18 @@
             const group = result && result.group;
             if (!group || group.id !== result.group_id) return false;
             const rows = await cachedGroupRows();
-            if (rows) {
+            if (rows && result.changed) {
                 const merged = rows.filter(row => row && row.id !== group.id).concat([group]);
                 if (!await writeGroupRows(merged, rows)) return false;
+            } else if (rows && !rows.some(row => row && row.id === group.id)) {
+                /* A replayed create answers with the row as it is NOW: its
+                 * member count may already include memberships committed
+                 * after this catalogue was read, which a later membership ACK
+                 * would then count again. A cached row is kept as read; with
+                 * none, the catalogue is dropped rather than stamped with the
+                 * older read time. */
+                advanceDomainGeneration(DOMAIN_PERSON_GROUPS);
+                if (!await dropUnprovenList(PERSON_GROUPS_LIST_KEY)) return false;
             }
             if (result.changed && typeof root.prksNewPersonGroupState === 'function') {
                 await patchEntity('person-group-state', group.id,
@@ -2956,9 +2965,19 @@
              * was counted: a retry after a later failure would count it again. */
             const remembered = !!(groupState && groupState.value) || !!(personState && personState.value);
             const countUncertain = !remembered || sameRevision(groupPair) || sameRevision(personPair);
+            /* The guard above read both projections before either write; a
+             * newer read published in between is checked again inside each
+             * write. A projection already past this ACK is not regressed, and
+             * then nothing further moves: that read already counts it. */
+            let overtaken = false;
+            const newer = pair => {
+                if (pair && superseded(ackRevision, pair.revision)) { overtaken = true; return true; }
+                return false;
+            };
             const recorded = await Promise.all([patchEntity('person-group-state', groupId, function (state) {
                 if (typeof root.prksIsPersonGroupStateShape === 'function' &&
                     !root.prksIsPersonGroupStateShape(state, groupId)) return null;
+                if (newer((state.members || []).find(m => m && m.person_id === personId))) return null;
                 const members = (state.members || [])
                     .filter(m => m.person_id !== personId)
                     .concat([{ person_id: personId, revision: result.server_revision,
@@ -2968,6 +2987,7 @@
             }), patchEntity('person-group-memberships', personId, function (state) {
                 if (typeof root.prksIsPersonGroupMembershipStateShape === 'function' &&
                     !root.prksIsPersonGroupMembershipStateShape(state, personId)) return null;
+                if (newer((state.groups || []).find(g => g && g.group_id === groupId))) return null;
                 const groups = (state.groups || [])
                     .filter(g => g.group_id !== groupId)
                     .concat([{ group_id: groupId, revision: result.server_revision,
@@ -2977,7 +2997,7 @@
             })]);
             /* The count is patched only once a projection records the ACK. */
             if (recorded.includes(false)) return false;
-            if (!result.changed) return true;
+            if (overtaken || !result.changed) return true;
             const people = await store.getList(PEOPLE_LIST_KEY)
                 .catch(function () { return null; });
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;

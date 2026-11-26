@@ -247,7 +247,7 @@ async function failuresAndReplays() {
         await later();
         const op = createdNow();
         await later();
-        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: false,
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: true,
             group: { id: 'N', name: 'N', parent_id: null, member_count: 0 } }));
         assert.equal((await cache.getList('person-groups:index')).observedAt, readAt,
             'a created Group does not make the catalogue newer');
@@ -255,6 +255,56 @@ async function failuresAndReplays() {
             person_id: 'P', present: true, changed: true, server_revision: 1, group_name: 'Group', group_name_revision: 0 }, op));
         assert.equal(await cache.getList('person-groups:index'), null,
             'with no membership projection to remember the ACK, the count is dropped, not patched');
+    }
+    /* A replayed create (#1452 review) answers with the row as it is now,
+     * whose count may already include later memberships: it never enters a
+     * catalogue read earlier. A cached row is kept as read; with none, the
+     * catalogue is dropped for the next read. */
+    {
+        const { cache, offline } = setup();
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'G', parent_id: null, member_count: 0 }], '');
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: false,
+            group: { id: 'N', name: 'N', parent_id: null, member_count: 1 } }));
+        assert.equal(await cache.getList('person-groups:index'), null,
+            'a replayed create with no cached row drops the catalogue');
+    }
+    {
+        const { cache, offline } = setup();
+        const rows = [{ id: 'G', name: 'G', parent_id: null, member_count: 0 },
+            { id: 'N', name: 'N', parent_id: null, member_count: 0 }];
+        await cache.putList('person-groups:index', rows, '');
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'N', changed: false,
+            group: { id: 'N', name: 'N', parent_id: null, member_count: 1 } }));
+        assert.deepEqual((await cache.getList('person-groups:index')).value, rows,
+            'a replayed create keeps the cached row as read');
+    }
+    /* A newer pair published between the guard read and the write (#1452
+     * review) is not regressed, and the count does not move. */
+    {
+        const { cache, offline } = setup();
+        await cache.putEntity('person-group-state', 'G', { group_id: 'G', fields: fields(GROUP_FIELDS, 0),
+            members: [{ person_id: 'P', revision: 1, present: false }] });
+        await cache.putList('person-groups:index', [{ id: 'G', name: 'G', parent_id: null, member_count: 0 }], '');
+        await later();
+        const op = createdNow();
+        const getEntity = cache.getEntity.bind(cache);
+        let reads = 0;
+        cache.getEntity = async (kind, id) => {
+            const snapshot = await getEntity(kind, id);
+            if (kind === 'person-group-state' && id === 'G' && ++reads === 1) {
+                await cache.putEntity('person-group-state', 'G', { group_id: 'G', fields: fields(GROUP_FIELDS, 0),
+                    members: [{ person_id: 'P', revision: 3, present: false }] });
+            }
+            return snapshot;
+        };
+        assert(await offline.reconcilePersonGroupMember({ code: 'ACKNOWLEDGED', group_id: 'G',
+            person_id: 'P', present: true, changed: true, server_revision: 2, group_name: 'G', group_name_revision: 0 }, op));
+        cache.getEntity = getEntity;
+        assert(reads >= 2, 'the write read the state again');
+        assert.deepEqual((await cache.getEntity('person-group-state', 'G')).value.members,
+            [{ person_id: 'P', revision: 3, present: false }], 'the newer pair is kept');
+        const catalogue = await cache.getList('person-groups:index');
+        assert(!catalogue || catalogue.value[0].member_count === 0, 'the overtaken ACK does not count');
     }
     /* The chip takes its name from the ACK: with no catalogue and no Group
      * detail cached, the People index and the Person are patched, not
