@@ -2573,6 +2573,7 @@
             }
             await invalidateEntity('playlist', id);
             await invalidateEntity('playlist-state', id);
+            await invalidateEntity('playlist-edit-base', id);
             return true;
         }
 
@@ -3213,6 +3214,7 @@
             }
             await invalidateEntity('person-group', id);
             await invalidateEntity('person-group-state', id);
+            await invalidateEntity('person-group-edit-base', id);
             const people = await store.getList(PEOPLE_LIST_KEY)
                 .catch(function () { return null; });
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;
