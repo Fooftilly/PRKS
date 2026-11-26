@@ -2472,19 +2472,24 @@
                  * there is nothing cached to be wrong. */
                 const items = held && held.value && Array.isArray(held.value.items)
                     ? held.value.items : [];
+                let worksDropped = true;
                 for (let i = 0; i < items.length; i += 1) {
                     const workId = items[i] && items[i].id;
-                    if (workId) await invalidateEntity('work', workId);
+                    if (workId && !await invalidateEntity('work', workId)) worksDropped = false;
                 }
                 if (items.length) {
                     prksOfflineMarkWorksBrowseChanged();
                     prksOfflineMarkRecentChanged();
                     prksOfflineMarkRecentlyAddedChanged();
                 }
+                /* The body is the only list of members, so it stays for the retry. */
+                if (!worksDropped) {
+                    if (!bodyWritten) fenceEntity('playlist', id);
+                    return false;
+                }
             }
             /* The revisions already moved: a body left at the older value
-             * would be paired with them, so it goes and the ACK is retried.
-             * The Works above were invalidated first: the retry has no body to name them. */
+             * would be paired with them, so it goes and the ACK is retried. */
             if (!bodyWritten) {
                 await dropUnprovenEntity('playlist', id);
                 return false;
@@ -3261,10 +3266,15 @@
          * whether the deletion COMMITTED. False keeps the operation, so a
          * replay deletes it again; retiring it instead would let a reload
          * serve the stale value with nothing left to overlay or retry. */
-        function dropUnprovenEntity(kind, id) {
+        /* Until the page ends, no read serves or rewrites this entity's cached value. */
+        function fenceEntity(kind, id) {
             const key = entityKey(kind, id);
             entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
             ineligibleEntities.add(key);
+        }
+
+        function dropUnprovenEntity(kind, id) {
+            fenceEntity(kind, id);
             return invalidateEntity(kind, id).then(function (ok) {
                 if (ok === true) refillDroppedWork(kind, id);
                 return ok === true;

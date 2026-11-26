@@ -462,8 +462,14 @@
         try {
             after = await readPersonGroupState(groupId, { requestPolicy: { dedupe: false } });
         } catch (_e) { after = null; }
-        if (!after || after.source !== 'server' || !sameFieldRevisions(state, after.value)) return null;
+        if (!after || after.source !== 'server' || !after.value || !after.value.fields) return null;
         const base = observedGroupFields(group, state);
+        /* A field whose revision moved during the record read has no known pair. */
+        for (const name of FIELDS) {
+            const a = state.fields[name];
+            const b = after.value.fields[name];
+            if (!a || !b || a.revision !== b.revision) base[name] = null;
+        }
         await cacheEditBase(groupId, base);
         return base;
     }
@@ -471,14 +477,6 @@
     /* The kind under which an edit base read as one pair is kept for offline Edit. */
     const PERSON_GROUP_EDIT_BASE = 'person-group-edit-base';
 
-    function sameFieldRevisions(before, after) {
-        if (!after || !after.fields) return false;
-        return FIELDS.every(function (name) {
-            const a = before.fields[name];
-            const b = after.fields[name];
-            return !!a && !!b && a.revision === b.revision;
-        });
-    }
 
     async function cachedEditBase(groupId) {
         let held = null;
@@ -505,7 +503,10 @@
             await root.prksOfflineMergeEntity(PERSON_GROUP_EDIT_BASE, groupId, function (held) {
                 const kept = held && held.group_id === groupId && held.fields && typeof held.fields === 'object' ? held.fields : {};
                 const fields = {};
-                for (const name of FIELDS) fields[name] = reconcileCore.newerEditBase(kept[name], base[name]);
+                for (const name of FIELDS) {
+                    fields[name] = base[name] ? reconcileCore.newerEditBase(kept[name], base[name])
+                        : (kept[name] === undefined ? null : kept[name]);
+                }
                 return { group_id: groupId, fields: fields };
             });
         } catch (_e) { /* the next online Edit writes it again */ }
