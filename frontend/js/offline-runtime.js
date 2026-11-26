@@ -560,6 +560,21 @@
             }
         }
 
+        /** Merge into a cached entity in one store transaction (`store.updateEntity`). */
+        function mergeEntityIfCurrent(kind, id, merge, coherenceToken) {
+            if (!store || typeof store.updateEntity !== 'function') return Promise.resolve(false);
+            if (coherenceToken !== currentEntityGeneration(kind, id)) return Promise.resolve(false);
+            return Promise.resolve(store.updateEntity(kind, id, merge)).then(function (ok) {
+                return !!ok && coherenceToken === currentEntityGeneration(kind, id);
+            }, function () {
+                return false;
+            });
+        }
+
+        function mergeEntity(kind, id, merge) {
+            return mergeEntityIfCurrent(kind, id, merge, currentEntityGeneration(kind, id));
+        }
+
         /* One acknowledged Tag link (Work or Folder), merged into the two
          * cached records that carry it: the owner's detail (its `tags` rows)
          * and its revisioned tag-options projection.
@@ -2372,26 +2387,28 @@
 
         /* A record this device created is known at revision 0, so its first
          * field ACK has a pair to move. */
-        async function seedEditBase(kind, idKey, record, names) {
-            if (!Array.isArray(names)) return true;
+        function seedEditBase(kind, idKey, record, names) {
+            if (!Array.isArray(names)) return Promise.resolve(true);
             const token = currentEntityGeneration(kind, record.id) + 1;
             entityCoherence.set(entityKey(kind, record.id), token);
-            const held = await store.getEntity(kind, record.id).catch(function () { return null; });
-            if (held && held.value) return true;
             const fields = {};
             names.forEach(function (name) {
                 fields[name] = { value: record[name] == null ? '' : String(record[name]), revision: 0 };
             });
             const seed = { fields: fields };
             seed[idKey] = record.id;
-            return cacheEntityIfCurrent(kind, record.id, seed, token);
+            return mergeEntityIfCurrent(kind, record.id, function (held) {
+                return held ? null : seed;
+            }, token);
         }
 
         /** One Playlist field the server has applied. */
         /* The pair an editor last read together moves only along this
          * device's own acknowledged write (`prksSyncReconcile.acknowledgeEditBase`). */
         function patchEditBase(kind, id, field, value, op, ackRevision) {
-            return patchEntity(kind, id, function (held) {
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            return mergeEntityIfCurrent(kind, id, function (held) {
                 if (!held || !held.fields || typeof held.fields !== 'object') return null;
                 const entry = reconcileCore.acknowledgeEditBase(held.fields[field],
                     { value: value, baseRevision: op && op.base_revision, ackRevision: ackRevision });
@@ -2399,7 +2416,7 @@
                 const fields = Object.assign({}, held.fields);
                 fields[field] = entry;
                 return Object.assign({}, held, { fields: fields });
-            });
+            }, token);
         }
 
         async function reconcilePlaylistField(result, op) {
@@ -3676,6 +3693,7 @@
             reconcileDeletedPersonGroup,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
+            mergeEntity: mergeEntity,
             peekEntity: peekEntity,
             invalidateEntity: invalidateEntity,
             invalidateList: invalidateList,
@@ -3733,6 +3751,9 @@
     }
     function prksOfflineCacheEntity(kind, id, value) {
         return production.cacheEntity(kind, id, value);
+    }
+    function prksOfflineMergeEntity(kind, id, merge) {
+        return production.mergeEntity(kind, id, merge);
     }
     function prksOfflinePeekEntity(kind, id) {
         return production.peekEntity(kind, id);
@@ -3886,6 +3907,7 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflineMergeEntity: prksOfflineMergeEntity,
         prksOfflinePeekEntity: prksOfflinePeekEntity,
         prksOfflineReconcileWorkTag: (result, op) => production.reconcileWorkTag(result, op),
         prksOfflineReconcileFolderTag: (result, op) => production.reconcileFolderTag(result, op),

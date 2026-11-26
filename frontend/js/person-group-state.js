@@ -484,15 +484,17 @@
         return base;
     }
 
+    /* Merged in one store transaction, so a newer pair another tab
+     * published or acknowledged meanwhile is kept. */
     async function cacheEditBase(groupId, base) {
-        if (typeof root.prksOfflineCacheEntity !== 'function') return;
+        if (typeof root.prksOfflineMergeEntity !== 'function') return;
         try {
-            const held = typeof root.prksOfflinePeekEntity === 'function'
-                ? await root.prksOfflinePeekEntity(PERSON_GROUP_EDIT_BASE, groupId) : null;
-            const kept = held && held.group_id === groupId && held.fields && typeof held.fields === 'object' ? held.fields : {};
-            const fields = {};
-            for (const name of FIELDS) fields[name] = reconcileCore.newerEditBase(kept[name], base[name]);
-            await root.prksOfflineCacheEntity(PERSON_GROUP_EDIT_BASE, groupId, { group_id: groupId, fields: fields });
+            await root.prksOfflineMergeEntity(PERSON_GROUP_EDIT_BASE, groupId, function (held) {
+                const kept = held && held.group_id === groupId && held.fields && typeof held.fields === 'object' ? held.fields : {};
+                const fields = {};
+                for (const name of FIELDS) fields[name] = reconcileCore.newerEditBase(kept[name], base[name]);
+                return { group_id: groupId, fields: fields };
+            });
         } catch (_e) { /* the next online Edit writes it again */ }
     }
 

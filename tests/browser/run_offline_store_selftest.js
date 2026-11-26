@@ -73,6 +73,28 @@ async function run() {
         assertEq('getEntity sourceRevision round-trips', got.sourceRevision, 'rev-1');
     }
 
+    /* ---- updateEntity merges in the transaction that reads ---- */
+    {
+        const idb = createFakeIndexedDBFactory();
+        const tabA = mod.createPrksOfflineStore(withIdb({ indexedDB: idb }));
+        const tabB = mod.createPrksOfflineStore(withIdb({ indexedDB: idb }));
+        await tabA.putEntity('playlist-edit-base', 'PL-1', { revision: 3 }, '');
+        const readByA = (await tabA.getEntity('playlist-edit-base', 'PL-1')).value;
+        await tabB.putEntity('playlist-edit-base', 'PL-1', { revision: 4 }, '');
+        let seen = null;
+        const ok = await tabA.updateEntity('playlist-edit-base', 'PL-1', function (held) {
+            seen = held;
+            return held && held.revision > readByA.revision ? held : readByA;
+        });
+        assert('updateEntity resolves true on commit', ok === true);
+        assertEq('merge sees the value another tab committed', seen, { revision: 4 });
+        assertEq('so a delayed write keeps it', (await tabA.getEntity('playlist-edit-base', 'PL-1')).value, { revision: 4 });
+        await tabA.updateEntity('playlist-edit-base', 'PL-1', function () { return null; });
+        assertEq('a null merge writes nothing', (await tabB.getEntity('playlist-edit-base', 'PL-1')).value, { revision: 4 });
+        await tabA.updateEntity('playlist-edit-base', 'PL-2', function (held) { return held ? null : { revision: 0 }; });
+        assertEq('merge sees null when nothing is held', (await tabB.getEntity('playlist-edit-base', 'PL-2')).value, { revision: 0 });
+    }
+
     /* ---- missing item ---- */
     {
         const idb = createFakeIndexedDBFactory();
