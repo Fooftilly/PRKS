@@ -368,12 +368,34 @@ window.prksOpenNewGroupModalFromGroupsPage = prksOpenNewGroupModalFromGroupsPage
 window.prksTakePersonGroupCreateNavigation = prksTakePersonGroupCreateNavigation;
 window.prksClearPersonGroupIndexCreateOrigin = prksClearPersonGroupIndexCreateOrigin;
 
-async function prksRerenderPersonGroupDetail(ctx, groupId) {
+/* A record read from the server first, for an Edit refused as changed
+ * elsewhere: the cache-first read would hand back the held version the
+ * refusal was about. Falls back to that read when the server is out of reach. */
+async function prksFreshPersonGroupRecordFor(groupId) {
+    let fresh = null;
+    try {
+        if (typeof prksOfflineReadEntity === 'function') {
+            const result = await prksOfflineReadEntity('person-group', groupId,
+                '/api/person-groups/' + encodeURIComponent(groupId),
+                { validate: value => typeof prksIsPersonGroupShape !== 'function' ||
+                    prksIsPersonGroupShape(value, groupId) });
+            fresh = result && result.source === 'server' ? result.value : null;
+        }
+    } catch (_e) { fresh = null; }
+    if (fresh) {
+        return typeof prksEffectivePersonGroupRecord === 'function'
+            ? await prksEffectivePersonGroupRecord(fresh) : fresh;
+    }
+    return typeof prksPersonGroupRecordFor === 'function' ? await prksPersonGroupRecordFor(groupId) : null;
+}
+
+async function prksRerenderPersonGroupDetail(ctx, groupId, options) {
     if (!ctx || ctx.destroyed) return;
     const live = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!live || String(live.id) !== String(groupId)) return;
-    const group = typeof prksPersonGroupRecordFor === 'function'
-        ? await prksPersonGroupRecordFor(groupId) : null;
+    const group = options && options.fresh
+        ? await prksFreshPersonGroupRecordFor(groupId)
+        : (typeof prksPersonGroupRecordFor === 'function' ? await prksPersonGroupRecordFor(groupId) : null);
     if (!group || ctx.destroyed) return;
     const stillLive = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!stillLive || String(stillLive.id) !== String(groupId)) return;
@@ -448,15 +470,19 @@ function openPersonGroupEdit(owner) {
 function closePersonGroupEdit(owner) {
     const ctx = prksPersonGroupActionContext(owner);
     const group = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    /* The refusal asked the user to cancel and edit again: the next Edit
+     * has to open on the current version, not the held one it refused. */
+    const stale = !!(group && ctx && ctx.ui && ctx.ui.personGroupStale === String(group.id));
     if (ctx && ctx.ui) {
         prksBumpPersonGroupEditSession(ctx);
         ctx.ui.personGroupEditing = false;
         ctx.ui.personGroupFieldBaseline = null;
         ctx.ui.personGroupEditPin = null;
+        ctx.ui.personGroupStale = null;
     }
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id);
+    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id, { fresh: stale });
 }
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
@@ -542,6 +568,7 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
     const base = edits.base;
     if (!Object.keys(changes).length && !createParent) return { ok: true };
     if (edits.unknown.length || (createParent && !base.parent_id)) {
+        if (ctx && ctx.ui) ctx.ui.personGroupStale = String(groupId);
         await prksAlertMessage(
             'This group changed in another tab or on another device after you started editing. '
             + 'Cancel and edit it again to see the current version.', 'Changed elsewhere');
