@@ -487,7 +487,12 @@
     async function cacheEditBase(groupId, base) {
         if (typeof root.prksOfflineCacheEntity !== 'function') return;
         try {
-            await root.prksOfflineCacheEntity(PERSON_GROUP_EDIT_BASE, groupId, { group_id: groupId, fields: base });
+            const held = typeof root.prksOfflinePeekEntity === 'function'
+                ? await root.prksOfflinePeekEntity(PERSON_GROUP_EDIT_BASE, groupId) : null;
+            const kept = held && held.group_id === groupId && held.fields && typeof held.fields === 'object' ? held.fields : {};
+            const fields = {};
+            for (const name of FIELDS) fields[name] = reconcileCore.newerEditBase(kept[name], base[name]);
+            await root.prksOfflineCacheEntity(PERSON_GROUP_EDIT_BASE, groupId, { group_id: groupId, fields: fields });
         } catch (_e) { /* the next online Edit writes it again */ }
     }
 

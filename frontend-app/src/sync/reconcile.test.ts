@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   acknowledgeEditBase,
+  newerEditBase,
   adoptFresh,
   applyOwnerAck,
   carryObservation,
@@ -312,6 +313,15 @@ describe('edit-session bases', () => {
     // Read at revision 1, written against 2: revision 2's value was never read here.
     expect(acknowledgeEditBase({ value: 'older', revision: 1 }, write)).toBeNull()
     expect(acknowledgeEditBase(null, write)).toBeNull()
+  })
+
+  it('keeps an acknowledged edit base newer than a late read', () => {
+    const read = { value: 'read', revision: 2 }
+    expect(newerEditBase({ value: 'mine', revision: 3 }, read)).toEqual({ value: 'mine', revision: 3 })
+    expect(newerEditBase({ value: 'old', revision: 1 }, read)).toBe(read)
+    expect(newerEditBase({ value: 'same', revision: 2 }, read)).toBe(read)
+    expect(newerEditBase(null, read)).toBe(read)
+    expect(newerEditBase({ value: 'mine', revision: 3 }, null)).toBeNull()
   })
 
   it('pins an unsent edit the read already holds at the read revision', () => {

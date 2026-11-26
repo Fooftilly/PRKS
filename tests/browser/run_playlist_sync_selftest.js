@@ -626,6 +626,17 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     heldEntities.delete("playlist-edit-base:" + known);
     assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
         "with no pair read together, offline has no base");
+    /* An ACK that lands while an online read is in flight is newer than it. */
+    globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "playlist-state"
+        ? { value: globalThis.prksNewPlaylistState(id), source: "server" }
+        : { value: { id, title: "Read", description: "Read", original_url: "", items: [] }, source: "server" });
+    heldEntities.set("playlist-edit-base:" + known, { playlist_id: known, fields: {
+        title: { value: "Mine", revision: 4 }, description: { value: "", revision: 0 }, original_url: { value: "", revision: 0 } } });
+    await globalThis.prksAcknowledgedPlaylistBase(known, []);
+    const kept = heldEntities.get("playlist-edit-base:" + known).fields;
+    assert.deepEqual(kept.title, { value: "Mine", revision: 4 }, "a late read never rolls the acknowledged pair back");
+    assert.deepEqual(kept.description, { value: "Read", revision: 0 }, "and still records the fields it read");
+    heldEntities.delete("playlist-edit-base:" + known);
 }
 
 
