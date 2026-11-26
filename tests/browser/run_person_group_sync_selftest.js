@@ -1438,6 +1438,8 @@ async function aPendingMoveShowsTheNewParent() {
         ? { value: { group_id: id, fields: { name: { revision: 0 }, description: { revision: 0 },
             parent_id: { revision: 2 } }, members: [] }, source: "server" }
         : { value: { id, name: "Child", description: "", parent_id: "PG-OLD" }, source: "server" });
+    const previousCatalogue = globalThis.prksEffectivePersonGroupCatalogue;
+    globalThis.prksEffectivePersonGroupCatalogue = async opsNow => globalThis.prksEffectivePersonGroups(rows, opsNow);
     try {
         const pinned = await globalThis.prksPinPersonGroupEditBase("PG-C",
             { name: "Child", description: "", parent_id: "PG-ANC" }, both);
@@ -1447,7 +1449,13 @@ async function aPendingMoveShowsTheNewParent() {
         const stale = await globalThis.prksPinPersonGroupEditBase("PG-C",
             { name: "Child", description: "", parent_id: "PG-OTHER" }, ops);
         assert.equal(stale.parent_id, null, "without the deletion a different parent is still unknown");
+        /* A form still showing the old parent never showed the move, so it
+         * cannot replace it: the parent base stays unknown. */
+        const unseen = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OLD" }, both);
+        assert.equal(unseen.parent_id, null, "a form that never showed the move cannot replace it");
     } finally {
+        globalThis.prksEffectivePersonGroupCatalogue = previousCatalogue;
         globalThis.prksOfflineReadEntity = previousRead;
     }
 }
