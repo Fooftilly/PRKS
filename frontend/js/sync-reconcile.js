@@ -162,7 +162,7 @@ var prksSyncReconcile = (function(exports) {
 			if (!isFieldBase(entry)) pinned[field] = null;
 			else if (own !== void 0) pinned[field] = isFieldBase(own) && own.value === value ? own.value === entry.value ? {
 				value: entry.value,
-				revision: own.revision
+				revision: Math.max(entry.revision, own.revision)
 			} : {
 				value: entry.value,
 				revision: own.revision,

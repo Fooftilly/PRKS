@@ -327,9 +327,13 @@ export function pinEditBase(
     if (!isFieldBase(entry)) {
       pinned[field] = null
     } else if (own !== undefined) {
+      // A read that already holds the unsent value has seen it applied (or
+      // the same value written): the server is at that read's revision, so
+      // the next write is measured from it, never from the older base the
+      // edit replaced, which would conflict with this device's own write.
       pinned[field] = isFieldBase(own) && own.value === value
         ? (own.value === entry.value
-            ? { value: entry.value, revision: own.revision }
+            ? { value: entry.value, revision: Math.max(entry.revision, own.revision) }
             : { value: entry.value, revision: own.revision, pending: own.value })
         : null
     } else {
