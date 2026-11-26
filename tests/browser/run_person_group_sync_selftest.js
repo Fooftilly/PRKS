@@ -896,7 +896,7 @@ async function serverRevisionsNeverPairWithCachedValues() {
         };
         const raced = await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
         globalThis.prksOfflineReadEntity = reader;
-        assert.equal(raced, null, "values read across a revision change form no base");
+        assert(Object.values(raced).every(entry => entry === null), "values read across a revision change form no base");
         assert.deepEqual(held.get("person-group-edit-base:PG-S").fields.description, { value: "B", revision: 1 },
             "and that pair is not kept");
         server.revision = 2; server.description = "C";
@@ -1067,9 +1067,14 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         const reads = [];
         const serverRead = globalThis.prksOfflineReadEntity;
         let reachable = false;
+        let refusedReads = 0;
         globalThis.prksOfflineReadEntity = async (kind, id, ...rest) => {
             reads.push(kind);
-            if (!reachable && kind === "person-group") return { value: null, source: "unavailable" };
+            if (!reachable && kind === "person-group") {
+                await new Promise(resolve => setImmediate(resolve));
+                refusedReads += 1;
+                return { value: null, source: "unavailable" };
+            }
             return serverRead(kind, id, ...rest);
         };
         let shownGroup = { id: "PG-B", name: "Group B", description: "original", parent: null };
@@ -1080,7 +1085,8 @@ async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
         globalThis.closePersonGroupEdit(c);
         assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
         assert.equal(c.ui.personGroupEditing, false, "Cancel closes the editor at once");
-        await until(() => reads.includes("person-group"));
+        await until(() => refusedReads === 1);
+        await new Promise(resolve => setImmediate(resolve));
         assert(reads.includes("person-group"), "Cancel after the refusal reads the Group from the server");
         assert.equal(c.ui.personGroupStale, "PG-B", "an unreachable server keeps the stale mark");
 

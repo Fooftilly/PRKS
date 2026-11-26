@@ -292,6 +292,28 @@ async function main() {
         assert.equal(await cache.getEntity("work", W1), null, "and the member Works are evicted first");
         assert.equal(await cache.getEntity("work", W2), null);
     }
+    /* A Work that could not be evicted keeps the body: the retry needs its member list. */
+    await seed();
+    {
+        const put = cache.putEntity, remove = cache.deleteEntity;
+        cache.putEntity = async (kind, ...rest) => kind === "playlist" ? false : put(kind, ...rest);
+        cache.deleteEntity = async (kind, id) => kind === "work" && id === W1 ? false : remove(kind, id);
+        const ack = () => globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+            {base_revision: 0, payload: {field: "title", value: "Renamed"}, created_at: new Date().toISOString()});
+        let first;
+        try {
+            first = await ack();
+        } finally {
+            cache.putEntity = put;
+            cache.deleteEntity = remove;
+        }
+        assert.equal(first, false, "the ACK is retried");
+        assert(await cache.getEntity("playlist", ID), "the body that names the members is kept");
+        assert(await cache.getEntity("work", W1), "the Work that could not be evicted is still cached");
+        assert.equal(await ack(), true, "the retry finishes");
+        assert.equal(await cache.getEntity("work", W1), null, "and evicts it");
+    }
     /* A Playlist created here is known at revision 0, so the open editor's
      * next Save is measured from its first field ACK. */
     {

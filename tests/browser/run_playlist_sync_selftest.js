@@ -704,9 +704,11 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
         state.fields.title.revision = racedRevision;
         return { value: state, source: "server" };
     };
-    assert.equal(await globalThis.prksAcknowledgedPlaylistBase(known, []), null,
-        "values read across a revision change form no base");
-    assert.equal(heldEntities.get("playlist-edit-base:" + known), undefined, "and that pair is not kept");
+    const raced = await globalThis.prksAcknowledgedPlaylistBase(known, []);
+    assert.equal(raced.title, null, "a value read across its revision change forms no base");
+    assert.deepEqual(raced.description, { value: "", revision: 0 }, "a field whose revision held keeps its pair");
+    assert.equal(heldEntities.get("playlist-edit-base:" + known).fields.title, null, "and the raced pair is not kept");
+    heldEntities.delete("playlist-edit-base:" + known);
     globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "playlist-state"
         ? { value: globalThis.prksNewPlaylistState(id), source: "server" }
         : { value: { id, title: "Read", description: "Read", original_url: "", items: [] }, source: "server" });
