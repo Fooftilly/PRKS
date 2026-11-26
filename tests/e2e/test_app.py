@@ -6405,6 +6405,8 @@ class TabContextHostRootTests(_BrowserE2E):
         page.route("**/api/person-groups/**", hold_then_fail_once)
         try:
             _warm_person_group_sync_state(page, group_id)
+            # Without the pair its create ACK seeded, this device has no base.
+            page.evaluate("id => window.prksOfflineInvalidateEntity('person-group-edit-base', id)", group_id)
             hold_active["on"] = True
             page.locator("#panel-content button", has_text="Edit group").click()
             page.wait_for_selector("#gd-save-btn")
