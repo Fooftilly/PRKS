@@ -42,6 +42,13 @@ from backend.web.routing import Route, RouteTable
 _ROOT = "urn:prks:openapi"
 
 
+def _header_value(schema: dict[str, Any], text: str) -> Any:
+    """A header is text: an integer schema is checked against the decimal it holds."""
+    if schema.get("type") == "integer" and text.strip().lstrip("-").isdigit():
+        return int(text)
+    return text
+
+
 class ContractCheck:
     def __init__(self) -> None:
         self.document = openapi_document()
@@ -121,7 +128,7 @@ class ContractCheck:
                 continue
             schema = documented.get("schema")
             if schema is not None:
-                for err in self._schema_errors(schema, value):
+                for err in self._schema_errors(schema, _header_value(schema, value)):
                     self.violations.append(f"{where}: header {name} {err}")
 
     def wrap(self, table: RouteTable) -> RouteTable:
