@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "implementation-order-plan",
-  "operation": "check",
+  "operation": "apply",
   "manifest": {
     "schema": "prks-project3-order-manifest/v1",
     "field": {
