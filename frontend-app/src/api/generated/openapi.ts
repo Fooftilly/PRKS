@@ -784,7 +784,7 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** A Work's source identity revision */
+        /** A Work's stored source and its revision */
         get: operations["getWorkSourceState"];
         put?: never;
         post?: never;
@@ -6209,7 +6209,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The revision only. */
+            /** @description The stored source and its revision, from one read. */
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
