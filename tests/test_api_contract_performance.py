@@ -37,6 +37,10 @@ def _ts_keys(name: str) -> set[str]:
     return set(re.findall(r"'([^']+)'", match.group(1)))
 
 
+# Every /api/ operation needs the session cookie (components.securitySchemes).
+SESSION = {"prks_session": "token"}
+
+
 class PerformanceDiagnosticsContractTests(unittest.TestCase):
     def setUp(self):
         reset()
@@ -108,7 +112,7 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         api = OpenAPI.from_dict(document)
         api.validate_request(
             MockRequest(
-                host_url="http://127.0.0.1",
+                host_url="http://127.0.0.1", cookies=SESSION,
                 method="post",
                 path="/api/diagnostics/performance/reset",
                 data=b"{}",
@@ -117,7 +121,7 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         with self.assertRaises(Exception):
             api.validate_request(
                 MockRequest(
-                    host_url="http://127.0.0.1",
+                    host_url="http://127.0.0.1", cookies=SESSION,
                     method="post",
                     path="/api/diagnostics/performance/reset",
                     data=b"{}",

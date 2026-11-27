@@ -236,7 +236,5 @@ ROUTES = (
                                                   {"type": "string",
                                                    "enum": ["private, max-age=86400", "private, max-age=3600"]},
                                                   required=True)}),
-         404: plain("No such Person, no image_url, or the image could not be fetched."),
-         503: error("The Library is unavailable, or in maintenance when an editor's miss caches the portrait "
-                    "(unavailable, MAINTENANCE).")})),
+         404: plain("No such Person, no image_url, or the image could not be fetched.")})),
 )

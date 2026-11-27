@@ -114,7 +114,7 @@ class SavedViewTests(ServerApiTestCase):
         res = self.get(path) if method == "GET" else self.send(method, path, payload)
         data = None if payload is None else json.dumps(payload).encode()
         api = OpenAPI.from_dict(openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
+        request = MockRequest(cookies={"prks_session": "token"}, host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
                               headers={"PRKS-Library-Epoch": "1"}, data=data)
         if schema_valid:
             api.validate_request(request)
@@ -201,7 +201,7 @@ class SavedViewTests(ServerApiTestCase):
                          (400, {"error": "Search definition is incomplete."}))
         api = OpenAPI.from_dict(openapi_document())
         with self.assertRaises(Exception):
-            api.validate_request(MockRequest(host_url="http://127.0.0.1", method="post", path="/api/saved-views",
+            api.validate_request(MockRequest(cookies={"prks_session": "token"}, host_url="http://127.0.0.1", method="post", path="/api/saved-views",
                                              headers={"PRKS-Library-Epoch": "1"}, data=json.dumps(short).encode()))
 
     def test_a_stale_edit_answers_409_revision_conflict(self) -> None:

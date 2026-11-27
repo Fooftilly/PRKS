@@ -110,7 +110,7 @@ _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
 # fill is a Library command, so it needs an acted-on epoch, and a browser
 # ``<img>`` sends none: admission gives the context the epoch it just read. A restore since then refuses the
 # fill (``LIBRARY_EPOCH_CHANGED``), and the route serves the image uncached.
-def _fills_derived_cache(method: str, path: str) -> bool:
+def fills_derived_cache(method: str, path: str) -> bool:
     if method == "GET" and path == "/api/remote-images":
         return True  # a saved copy of a remote image (#1351)
     parts = path.split("/")
@@ -481,7 +481,7 @@ def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
         if not fenced:
             ctx = RequestContext.for_session(session)
             current = library_query(auth.db, ctx, _current_epoch, capability=capability)
-            if _fills_derived_cache(method, path):
+            if fills_derived_cache(method, path):
                 ctx = RequestContext.for_session(session, epoch=current)
             return Admitted(current, ctx)
         if request.route_fences_epoch and path in _LEDGERED_MUTATIONS:

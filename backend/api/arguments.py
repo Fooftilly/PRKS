@@ -23,6 +23,19 @@ from __future__ import annotations
 
 from urllib.parse import unquote
 
+from backend.api_contract.operation import Operation, Param, body, error, ok, revalidated
+from backend.api_contract.organization import Done
+from backend.api_contract.research import (
+    ArgumentCard,
+    ArgumentCreateRequest,
+    ArgumentDetail,
+    ArgumentPatch,
+    ArgumentRead,
+    ArgumentSourcesRequest,
+    ArgumentState,
+    ArgumentTargetsRequest,
+    Verdict,
+)
 from backend.domain.research.rules import ResearchError
 from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
@@ -141,14 +154,53 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, {"status": "deleted"})
 
 
+_TAG = "arguments"
+_ID = "/api/arguments/{argument_id}"
+_INVALID = error("A refused value, with its code (invalid_name, invalid_kind, invalid_text, invalid_sources, "
+                 "invalid_targets, invalid_pages, invalid_verdict, nothing_to_update).")
+_MISSING = error("No Argument with that id (not_found), or a cited Work, Version or target that is not one "
+                 "(work_not_found, argument_source_version_not_found, position_not_found, argument_not_found).")
+_CONFLICT = error("A target would make a response cycle (argument_cycle), or a Work's citation must name "
+                  "its Version (argument_source_version_required) of that Work "
+                  "(argument_source_version_mismatch).")
+
+
+def _write(op_id: str, summary: str, request: object) -> Operation:
+    return Operation(op_id, summary, _TAG,
+                     {200: ok(ArgumentDetail, "The Argument as it now stands."), 400: _INVALID,
+                      404: _MISSING, 409: _CONFLICT},
+                     request=body(request))
+
+
 ROUTES = (
-    route("GET", "/api/argument-verdicts", verdicts),
-    route("GET", "/api/arguments", catalog),
-    route("POST", "/api/arguments", create),
-    route("GET", "/api/arguments/{argument_id}", detail),
-    route("PATCH", "/api/arguments/{argument_id}", update),
-    route("DELETE", "/api/arguments/{argument_id}", delete),
-    route("GET", "/api/arguments/{argument_id}/sync-state", sync_state),
-    route("PUT", "/api/arguments/{argument_id}/sources", replace_sources),
-    route("PUT", "/api/arguments/{argument_id}/targets", replace_targets),
+    route("GET", "/api/argument-verdicts", verdicts, contract=Operation(
+        "listArgumentVerdicts", "The enabled verdicts, in order", _TAG,
+        {200: ok(list[Verdict], "The verdicts.")})),
+    route("GET", "/api/arguments", catalog, contract=Operation(
+        "listArguments", "Every Argument (or every one of a kind) with its lists and counts", _TAG,
+        {200: ok(list[ArgumentCard], "By name."), 400: error("An unknown kind (invalid_kind).")},
+        params=(Param("kind", schema={"type": "string"},
+                      description="After trimming, argument or stance: only that kind; blank or left out: "
+                                  "every Argument."),))),
+    route("POST", "/api/arguments", create, contract=Operation(
+        "createArgument", "Create an Argument or Stance", _TAG,
+        {201: ok(ArgumentDetail, "The new Argument."), 400: _INVALID, 404: _MISSING, 409: _CONFLICT},
+        request=body(ArgumentCreateRequest))),
+    route("GET", _ID, detail, contract=Operation(
+        "getArgument", "An Argument with its lists, responses, mentions and the verdicts", _TAG,
+        {200: ok(ArgumentRead, "The Argument."), 404: error("No Argument with that id.")})),
+    route("PATCH", _ID, update, contract=_write("updateArgument", "Change an Argument's name, kind or text",
+                                                ArgumentPatch)),
+    route("DELETE", _ID, delete, contract=Operation(
+        "deleteArgument", "Delete an Argument", _TAG,
+        {200: ok(Done, "Deleted."), 404: error("No Argument with that id (not_found)."),
+         409: error("A Research Note references it (argument_in_use), or another Argument responds to it "
+                    "(argument_targeted).")})),
+    route("GET", _ID + "/sync-state", sync_state, contract=revalidated(
+        "getArgumentState", "An Argument's field and list revisions", _TAG, ArgumentState,
+        "Revisions only.", {404: error("No Argument with that id.")})),
+    route("PUT", _ID + "/sources", replace_sources, contract=_write(
+        "setArgumentSources", "Replace an Argument's citations", ArgumentSourcesRequest)),
+    route("PUT", _ID + "/targets", replace_targets, contract=_write(
+        "setArgumentTargets", "Replace what an Argument responds to", ArgumentTargetsRequest)),
 )

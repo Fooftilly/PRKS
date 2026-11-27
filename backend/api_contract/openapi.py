@@ -30,12 +30,14 @@ from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.operation import EPOCH_SCHEMA, JSON, Operation, Param, Reply, RequestBody, Schema
+from backend.domain.identity.secret_tokens import SESSION_COOKIE
 from backend.web.routing import compile_pattern
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
+SESSION_SCHEME = "session"
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
@@ -51,6 +53,10 @@ _SHARED: dict[str, str] = {
                    "malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED)."),
     "EpochChanged": "PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
 }
+
+
+# The body of every shared answer.
+_ENVELOPE = {"$ref": REF.format(model="ApiErrorEnvelope")}
 
 
 class SchemaConflict(ValueError):
@@ -130,16 +136,26 @@ def _request(components: _Components, request: RequestBody) -> dict[str, Any]:
     return out
 
 
-def _shared_for(route: Any) -> dict[str, str]:
-    """``status -> components.responses name`` this route can send besides its own."""
-    from backend.api.session import epoch_fenced
+def _is_api(route: Any) -> bool:
+    return route.pattern == "/api" or route.pattern.startswith("/api/")
+
+
+def _shared_for(route: Any, admission: bool) -> dict[str, str]:
+    """``status -> components.responses name`` this route can send besides its own.
+
+    ``admission``: a path admission answers itself (``backend.api.identity``),
+    which declares its own refusals; only the JSON body gate is shared.
+    """
+    from backend.api.session import epoch_fenced, fills_derived_cache
     from backend.web.routing import Body
 
     shared: dict[str, str] = {}
-    if route.pattern == "/api" or route.pattern.startswith("/api/"):
+    if _is_api(route) and not admission:
         shared.update({"401": "NotAuthenticated", "403": "Forbidden", "503": "Unavailable"})
         if epoch_fenced(route.method, route.pattern):  # library_command: the maintenance lock and epoch fence
             shared.update({"400": "EpochRequired", "409": "EpochChanged", "503": "UnavailableOrMaintenance"})
+        elif fills_derived_cache(route.method, route.pattern):  # a miss fills the cache through library_command
+            shared["503"] = "UnavailableOrMaintenance"
     if route.body_kind is Body.JSON:
         bad = "BadRequest" if shared.get("400") == "EpochRequired" else "InvalidRequest"
         shared.update({"400": bad, "413": "RequestTooLarge", "415": "UnsupportedMediaType"})
@@ -161,11 +177,20 @@ def _epoch_param(route: Any) -> tuple[Param, ...]:
                               "LIBRARY_EPOCH_CHANGED)."),)
 
 
-def _operation(components: _Components, route: Any, contract: Operation, shared: set[str]) -> dict[str, Any]:
+def _security(route: Any, contract: Operation) -> list[dict[str, list[str]]]:
+    if not _is_api(route) or contract.session == "none":  # the health probes, sign-in and setup
+        return []
+    if contract.session == "optional":
+        return [{SESSION_SCHEME: []}, {}]
+    return [{SESSION_SCHEME: []}]
+
+
+def _operation(components: _Components, route: Any, contract: Operation, shared: set[str],
+               admission: bool) -> dict[str, Any]:
     out: dict[str, Any] = {"operationId": contract.id, "summary": contract.summary, "tags": [contract.tag]}
     if contract.description:
         out["description"] = contract.description
-    params = [*contract.params, *_epoch_param(route)]
+    params = [*contract.params, *(() if admission else _epoch_param(route))]
     if params:
         out["parameters"] = [
             {"name": p.name, "in": p.where, "required": p.required, "schema": dict(p.schema),
@@ -175,11 +200,14 @@ def _operation(components: _Components, route: Any, contract: Operation, shared:
     if contract.request is not None:
         out["requestBody"] = _request(components, contract.request)
     responses = {str(status): _reply(components, reply) for status, reply in contract.responses.items()}
-    for status, name in _shared_for(route).items():
+    for status, name in _shared_for(route, admission).items():
         if status in responses:
             own = responses[status]
             if "$ref" not in own and route.method != "HEAD":  # the route's own answer, and the shared one
                 own["description"] = f"{own['description']} Also: {_SHARED[name]}"
+                media = (own.get("content") or {}).get("application/json")
+                if media is not None and media["schema"] != _ENVELOPE:
+                    media["schema"] = {"anyOf": [media["schema"], dict(_ENVELOPE)]}
             continue
         if route.method == "HEAD":
             responses[status] = {"description": _SHARED[name]}  # a HEAD answer has no body
@@ -187,16 +215,17 @@ def _operation(components: _Components, route: Any, contract: Operation, shared:
             responses[status] = {"$ref": f"#/components/responses/{name}"}
             shared.add(name)
     out["responses"] = dict(sorted(responses.items()))
+    out["security"] = _security(route, contract)
     return out
 
 
-def untyped(routes: Iterable[Any]) -> list[tuple[str, str]]:
-    """``(method, pattern)`` of each route that declares no contract yet."""
-    return [(r.method, r.pattern) for r in routes if r.contract is None]
+def build_document(routes: Iterable[Any], admission: Iterable[Any] = ()) -> dict[str, Any]:
+    """The OpenAPI document of ``routes`` and of the ``admission`` paths (answered before routing).
 
-
-def build_document(routes: Iterable[Any]) -> dict[str, Any]:
-    """The OpenAPI document of ``routes`` (routes without a contract are left out)."""
+    A route without a contract is refused (``ValueError``).
+    """
+    admission = tuple(admission)
+    answered_first = {id(one) for one in admission}
     components = _Components()
     components.ref(ApiErrorEnvelope)
     paths: dict[str, dict[str, Any]] = {}
@@ -204,11 +233,11 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
     tags: set[str] = set()
     shared: set[str] = set()
     templates: dict[str, str] = {}
-    for route in sorted(routes, key=lambda r: (openapi_path(r.pattern), r.method)):
+    for route in sorted((*routes, *admission), key=lambda r: (openapi_path(r.pattern), r.method)):
         contract: Optional[Operation] = route.contract
-        if contract is None:
-            continue
         where = f"{route.method} {route.pattern}"
+        if contract is None:
+            raise ValueError(f"{where} declares no contract")
         if contract.id in seen_ids:
             raise ValueError(f"operationId {contract.id!r} is used by {seen_ids[contract.id]} and {where}")
         seen_ids[contract.id] = where
@@ -224,7 +253,7 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
         if names and "parameters" not in item:
             item["parameters"] = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
                                   for n in names]
-        item[route.method.lower()] = _operation(components, route, contract, shared)
+        item[route.method.lower()] = _operation(components, route, contract, shared, id(route) in answered_first)
     return {
         "openapi": "3.1.0",
         "info": {
@@ -233,16 +262,22 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
             "description": (
                 "The PRKS HTTP API, generated from the route table (backend/api) and the "
                 "Pydantic boundary models (backend/api_contract). Every /api/ request needs "
-                "a live session; a mutation also sends the PRKS-Library-Epoch header."
+                "a live session (POST /api/login signs in), except sign-in, sign-out and setup; a "
+                "Library mutation also sends the PRKS-Library-Epoch header. Each operation's "
+                "security and parameters say what it needs."
             ),
         },
         "tags": [{"name": tag} for tag in sorted(tags)],
         "paths": paths,
         "components": {
             "schemas": dict(sorted(components.schemas.items())),
+            "securitySchemes": {SESSION_SCHEME: {
+                "type": "apiKey", "in": "cookie", "name": SESSION_COOKIE,
+                "description": "The session cookie POST /api/login sets.",
+            }},
             "responses": {
                 name: {"description": text,
-                       "content": {"application/json": {"schema": {"$ref": REF.format(model="ApiErrorEnvelope")}}}}
+                       "content": {"application/json": {"schema": dict(_ENVELOPE)}}}
                 for name, text in _SHARED.items() if name in shared
             },
         },
@@ -253,5 +288,6 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
 def openapi_document() -> dict[str, Any]:
     """The served document: ``backend.api.ROUTES``. Callers must not change it."""
     from backend.api import ROUTES
+    from backend.api.identity import IDENTITY_ROUTES
 
-    return build_document(ROUTES)
+    return build_document(ROUTES, IDENTITY_ROUTES)

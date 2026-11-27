@@ -6,6 +6,8 @@ and edge counts (``GraphTooLargeError``).
 
 from __future__ import annotations
 
+from backend.api_contract.operation import Operation, Param, ok
+from backend.api_contract.research import GraphTooLarge, ResearchGraph
 from backend.domain.research.research_graph import GraphTooLargeError
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
@@ -28,5 +30,10 @@ def research_graph(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", "/api/research-graph", research_graph),
+    route("GET", "/api/research-graph", research_graph, contract=Operation(
+        "getResearchGraph", "The Library's Research graph", "research-graph",
+        {200: ok(ResearchGraph, "Concepts, Positions, Arguments and the Works they cite or mention."),
+         413: ok(GraphTooLarge, "Past the node or edge bound (graph_too_large), with the counts.")},
+        params=(Param("people", schema={"type": "string"},
+                      description="``1``, ``true``, ``yes`` or ``on``: also the Works' Authors."),))),
 )

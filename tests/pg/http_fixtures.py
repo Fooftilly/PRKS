@@ -210,6 +210,8 @@ class HttpAuthTestCase(IdentityTestCase):
         finally:
             conn.close()
         if self._contract_check is not None:
+            # Sign-in, session and setup never reach a route.
+            self._contract_check.check_admission(method, path, response.status, response.headers, raw, body)
             self._contract_check.check_sent(method, path, response.status, response.headers)
         for name, value in response.headers:
             if name.lower() == "set-cookie":

@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
+from backend.api import annotations as annotations_api
 from backend.domain.annotations import annotation_commands
 from tests.acting_context import current_context
 from tests.narrowing import require
@@ -95,6 +96,14 @@ class RoleTests(AnnotationHttpTestCase):
 
 
 class LegacyReplaceTests(AnnotationHttpTestCase):
+    def test_the_snapshot_keeps_a_numeric_and_a_named_type(self) -> None:
+        work_id = self.pdf_work("Ann HTTP Types")
+        self.save(work_id, [row("numeric-type", "n"),
+                            {"id": "named-type", "type": "note", "contents": "t", "pageIndex": 0}])
+        snapshot = self.ok(self.get(f"/api/works/{work_id}/annotations-snapshot"))
+        self.assertEqual({item["id"]: item["type"] for item in snapshot["items"]},
+                         {"numeric-type": 9, "named-type": "note"})
+
     def test_a_malformed_or_conflicting_list_changes_nothing(self) -> None:
         work_id = self.pdf_work("Ann HTTP Valid")
         other = self.pdf_work("Ann HTTP Other")
@@ -166,6 +175,24 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
         self.assertEqual(again["canonical_annotation_set_revision"], tip2)
         self.refused(self.send("POST", f"/api/works/{work_id}/annotations",
                                {"annotations_json": json.dumps([row("stale-a", "x")])}), 400)
+
+    def test_a_base_that_is_not_an_integer_refuses_and_changes_nothing(self) -> None:
+        work_id = self.pdf_work("Ann Base Kind")
+        tip = self.save(work_id, [row("kept", "kept")])["canonical_annotation_set_revision"]
+        for base in (None, True, float(tip) + 0.5, str(tip)):
+            with self.subTest(base=base):
+                refused = self.refused(self.send("POST", f"/api/works/{work_id}/annotations", {
+                    "annotations_json": "[]", "canonical_annotation_set_revision": base}), 400)
+                self.assertEqual(refused.get("code"), "malformed_annotation_payload")
+                self.assertEqual([item["id"] for item in self.annotations(work_id)], ["kept"])
+
+    def test_a_whole_number_written_as_a_fraction_is_an_integer_base(self) -> None:
+        work_id = self.pdf_work("Ann Base Float")
+        tip = self.save(work_id, [row("kept", "kept")])["canonical_annotation_set_revision"]
+        response = self.send("POST", f"/api/works/{work_id}/annotations", {
+            "annotations_json": "[]", "canonical_annotation_set_revision": float(tip)})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.annotations(work_id), [])
 
     def test_a_refused_save_changes_nothing_and_save_confirm_is_gone(self) -> None:
         """A save's own 200 confirms it (#1331): there is no save-confirm route."""
@@ -258,6 +285,16 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         state = self.materialization(work_id)
         self.assertEqual((state["materialized_pdf_annotation_revision"], state["canonical_annotation_set_revision"]),
                          (gen_a, gen_b))
+
+    def test_a_whole_number_claim_written_as_a_fraction_materializes(self) -> None:
+        work_id = self.pdf_work("Claim Float")
+        tip = self.save(work_id, [row("r1", "A")])["canonical_annotation_set_revision"]
+        for claim in (True, float(tip) + 0.5, float(2 ** 60)):
+            with self.subTest(claim=claim):
+                self.refused(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=claim), 409)
+        self.ok(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=float(tip)))
+        self.assertFalse(self.materialization(work_id)["stale"])
+        self.assertEqual([annotations_api._whole(v) for v in (float(2 ** 53), float(2 ** 53 + 2))], [2 ** 53, None])
 
     def test_a_claim_overtaken_by_another_save_is_refused_and_the_current_one_wins(self) -> None:
         work_id = self.pdf_work("Legacy Race Claim")

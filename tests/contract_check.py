@@ -22,6 +22,10 @@ raises go to the dispatcher unchecked, and so do the answers the dispatcher
 gives before or around a route (admission refusals, the JSON body gate, the
 exception mapper): those are the shared ``components.responses``, whose
 presence ``tests/test_openapi_document.py`` checks per route.
+
+The paths admission answers itself (sign-in, session, setup) never reach a
+route; :meth:`ContractCheck.check_admission` holds the answers a test client
+received on them to their contracts.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
+from backend.api.identity import IDENTITY_ROUTES
 from backend.api_contract.openapi import openapi_document, openapi_path
 from backend.web.http import Request, Response
 from backend.web.routing import Match, Route, RouteTable
@@ -62,6 +67,7 @@ class ContractCheck:
         self._registry = Registry().with_resource(
             _ROOT, Resource.from_contents(self.document, default_specification=DRAFT202012))
         self._validators: dict[str, Draft202012Validator] = {}
+        self._admission = {(one.method, one.pattern): self._operation(one) for one in IDENTITY_ROUTES}
 
     def _schema_errors(self, schema: dict[str, Any], value: Any) -> list[str]:
         key = json.dumps(schema, sort_keys=True)
@@ -91,28 +97,10 @@ class ContractCheck:
 
     def _check(self, where: str, route: Route, request: Request, response: Response) -> None:
         operation = self._operation(route)
-        reply = operation["responses"].get(str(response.status))
-        if reply is None:
-            self.violations.append(f"{where}: status not documented")
+        payload = None if response.stream is not None or route.method == "HEAD" else _decoded(response)
+        streamed = response.stream is not None and route.method != "HEAD"
+        if not self._check_answer(where, operation, response.status, response.header, payload, streamed, "route"):
             return
-        self._check_headers(where, self._reply(reply), response.header, "route")
-        content = self._reply(reply).get("content") or {}
-        media = (response.header("Content-Type") or "").split(";", 1)[0].strip().lower()
-        if response.stream is not None and route.method != "HEAD" and media not in content:
-            # A streamed answer is not read here, but its media type is still the documented one.
-            self.violations.append(f"{where}: streamed {media or 'answer without Content-Type'} not documented")
-        if response.stream is None and route.method != "HEAD":
-            payload = _decoded(response)
-            if payload:
-                if media not in content:
-                    self.violations.append(f"{where}: {media or 'no Content-Type'} not documented")
-                elif media == "application/json":
-                    for err in self._schema_errors(content[media]["schema"], json.loads(payload)):
-                        self.violations.append(f"{where}: answer {err}")
-            elif "application/json" in content:  # an empty text answer (an empty BibTeX entry) is one
-                self.violations.append(f"{where}: no body, but the contract documents JSON")
-            elif content and media not in content:
-                self.violations.append(f"{where}: empty {media or 'answer without Content-Type'} not documented")
         body = operation.get("requestBody")
         if body and "application/json" not in body["content"]:
             body = None  # a byte stream (an upload) is not read as JSON
@@ -123,6 +111,56 @@ class ContractCheck:
             if schema is not None:
                 for err in self._schema_errors(schema, request.json):
                     self.violations.append(f"{where}: request {err}")
+
+    def _check_answer(self, where: str, operation: dict[str, Any], status: int,
+                      header: Callable[[str], Optional[str]], payload: Optional[bytes],
+                      streamed: bool = False, which: Literal["all", "route", "dispatcher"] = "all") -> bool:
+        """The answer's status, headers and body (``payload`` ``None``: not read); False: undocumented."""
+        reply = operation["responses"].get(str(status))
+        if reply is None:
+            self.violations.append(f"{where}: status not documented")
+            return False
+        self._check_headers(where, self._reply(reply), header, which)
+        content = self._reply(reply).get("content") or {}
+        media = (header("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if payload is None:
+            if streamed and media not in content:
+                # A streamed answer is not read here, but its media type is still the documented one.
+                self.violations.append(f"{where}: streamed {media or 'answer without Content-Type'} not documented")
+            return True
+        if payload:
+            if media not in content:
+                self.violations.append(f"{where}: {media or 'no Content-Type'} not documented")
+            elif media == "application/json":
+                for err in self._schema_errors(content[media]["schema"], json.loads(payload)):
+                    self.violations.append(f"{where}: answer {err}")
+        elif "application/json" in content:  # an empty text answer (an empty BibTeX entry) is one
+            self.violations.append(f"{where}: no body, but the contract documents JSON")
+        elif content and media not in content:
+            self.violations.append(f"{where}: empty {media or 'answer without Content-Type'} not documented")
+        return True
+
+    def check_admission(self, method: str, path: str, status: int, headers: list[tuple[str, str]],
+                        payload: bytes, request_json: Any = None) -> None:
+        """An answer to a path admission answers itself (``backend.api.identity``); others are skipped."""
+        operation = self._admission.get((method, path.split("?", 1)[0]))
+        if operation is None or status == 421:
+            # 421: the Host gate refuses before any path is read, as it does for a routed path.
+            return
+        where = f"{method} {path} -> {status}"
+
+        def header(name: str) -> Optional[str]:
+            return next((v for k, v in headers if k.lower() == name.lower()), None)
+
+        try:
+            if not self._check_answer(where, operation, status, header, payload):
+                return
+            body = (operation.get("requestBody") or {}).get("content", {}).get("application/json")
+            if 200 <= status < 300 and body is not None and request_json is not None:
+                for err in self._schema_errors(body["schema"], request_json):
+                    self.violations.append(f"{where}: request {err}")
+        except Exception as exc:
+            self.violations.append(f"{where}: could not be checked ({type(exc).__name__}: {exc})")
 
     def _check_headers(self, where: str, reply: dict[str, Any], header: Callable[[str], Optional[str]],
                        which: Literal["all", "route", "dispatcher"] = "all") -> None:
