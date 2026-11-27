@@ -145,11 +145,15 @@ class ContractCheckTests(unittest.TestCase):
         self.assertEqual(len(self.check.violations), 1, self.check.violations)
 
     def test_a_backup_stream_must_be_sent_no_store(self) -> None:
-        ndjson = [("Content-Type", "application/x-ndjson")]
-        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson + [("Cache-Control", "no-store")]))
+        def progress(cache: list[tuple[str, str]]) -> Response:
+            answer = Response(200, [("Content-Type", "application/x-ndjson"), *cache], b"")
+            answer.stream = cast(Any, object())
+            return answer
+
+        self.check.check(_PROGRESS, _request(), progress([("Cache-Control", "no-store")]))
         self.assertEqual(self.check.violations, [])
-        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson))
-        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson + [("Cache-Control", "public, max-age=3600")]))
+        self.check.check(_PROGRESS, _request(), progress([]))
+        self.check.check(_PROGRESS, _request(), progress([("Cache-Control", "public, max-age=3600")]))
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
 
     def test_the_restored_epoch_is_checked_on_the_answer_sent(self) -> None:
