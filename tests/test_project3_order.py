@@ -421,6 +421,19 @@ class OrderDispatchTests(unittest.TestCase):
         with self.assertRaises(dispatch.DispatchError):
             dispatch.GitHubOrderClaims("t", "")
 
+    def test_claim_lookup_reads_past_one_thousand_statuses(self):
+        claims = dispatch.GitHubOrderClaims("t", "77")
+        old, fresh = "b" * 64, "c" * 64
+        pages = {page: [{"context": f"{dispatch.ORDER_CLAIM_PREFIX}{page:064x}"}] * 100 for page in range(1, 13)}
+        pages[13] = [{"context": dispatch.ORDER_CLAIM_PREFIX + old}]
+
+        def fake_send(url, payload=None):
+            return pages.get(int(url.rsplit("=", 1)[1]), [])
+
+        with mock.patch.object(claims, "_send", side_effect=fake_send):
+            self.assertTrue(claims.used(old))
+            self.assertFalse(claims.used(fresh))
+
     def test_malformed_order_commands_refused(self):
         bad = [
             json.dumps({"version": 2, "kind": dispatch.ORDER_KIND, "operation": "check",
