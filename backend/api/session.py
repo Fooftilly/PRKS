@@ -130,6 +130,11 @@ def epoch_fenced(method: str, path: str) -> bool:
     return method in _MUTATING_METHODS and path not in _NON_LIBRARY_MUTATIONS
 
 
+def ledgered(path: str) -> bool:
+    """Whether a replay of this mutation answers from its ledger, whatever the epoch."""
+    return path in _LEDGERED_MUTATIONS
+
+
 @dataclass(frozen=True)
 class Reply:
     """A response :func:`handle` decided; the route does not run."""

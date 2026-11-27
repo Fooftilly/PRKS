@@ -115,7 +115,7 @@ class SavedViewTests(ServerApiTestCase):
         data = None if payload is None else json.dumps(payload).encode()
         api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
-                              data=data)
+                              headers={"PRKS-Library-Epoch": "1"}, data=data)
         if schema_valid:
             api.validate_request(request)
         api.validate_response(request, MockResponse(data=res.raw, status_code=res.status,
@@ -202,7 +202,7 @@ class SavedViewTests(ServerApiTestCase):
         api = OpenAPI.from_dict(openapi_document())
         with self.assertRaises(Exception):
             api.validate_request(MockRequest(host_url="http://127.0.0.1", method="post", path="/api/saved-views",
-                                             data=json.dumps(short).encode()))
+                                             headers={"PRKS-Library-Epoch": "1"}, data=json.dumps(short).encode()))
 
     def test_a_stale_edit_answers_409_revision_conflict(self) -> None:
         """#873: tab A changes the search, then tab B (still at revision 0) renames."""

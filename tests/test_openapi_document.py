@@ -35,16 +35,7 @@ UNTYPED = frozenset({
     ("PUT", "/api/arguments/{argument_id}/sources"),
     ("GET", "/api/arguments/{argument_id}/sync-state"),
     ("PUT", "/api/arguments/{argument_id}/targets"),
-    ("GET", "/api/backups/download"),
-    ("POST", "/api/backups/progress"),
-    ("POST", "/api/backups/restore"),
-    ("POST", "/api/backups/stage"),
     ("GET", "/api/bibtex/{work_id}"),
-    ("GET", "/api/citation-styles"),
-    ("POST", "/api/citation-styles"),
-    ("DELETE", "/api/citation-styles/{style_id}"),
-    ("GET", "/api/citation-styles/{style_id}"),
-    ("POST", "/api/client-errors"),
     ("GET", "/api/concepts"),
     ("POST", "/api/concepts"),
     ("DELETE", "/api/concepts/{concept_id}"),
@@ -92,13 +83,9 @@ UNTYPED = frozenset({
     ("GET", "/api/playlists/{playlist_id}/sync-state"),
     ("GET", "/api/recent"),
     ("GET", "/api/recently-added"),
-    ("GET", "/api/remote-images"),
     ("GET", "/api/research-graph"),
     ("POST", "/api/roles"),
     ("GET", "/api/search"),
-    ("GET", "/api/settings"),
-    ("PATCH", "/api/settings"),
-    ("POST", "/api/sync/operations"),
     ("GET", "/api/tags"),
     ("POST", "/api/tags"),
     ("POST", "/api/tags/merge"),
@@ -134,11 +121,11 @@ UNTYPED = frozenset({
     ("PATCH", "/api/works/{work_id}/roles"),
     ("GET", "/api/works/{work_id}/source-state"),
     ("GET", "/api/works/{work_id}/thumbnail"),
-    ("GET", "/healthz"),
-    ("HEAD", "/healthz"),
-    ("GET", "/readyz"),
-    ("HEAD", "/readyz"),
 })
+
+
+#: Unfenced reads that save what they serve on a miss, through a command.
+_FILLS_ON_READ = frozenset({("GET", "/api/remote-images")})
 
 
 def _operations(document: dict) -> dict[tuple[str, str], dict]:
@@ -194,12 +181,50 @@ class OpenApiDocumentTests(unittest.TestCase):
                         {"$ref": "#/components/responses/BadRequest"}))
                     self.assertNotEqual(op["responses"].get("409"),
                                         {"$ref": "#/components/responses/EpochChanged"})
-                    # Only library_command takes the maintenance lock (#1431).
+                    # Only library_command takes the maintenance lock (#1431): an
+                    # unfenced read may be refused for maintenance only when it runs
+                    # one to fill a cache on a miss.
                     unavailable = op["responses"]["503"]
                     if "$ref" in unavailable:
                         name = unavailable["$ref"].rsplit("/", 1)[-1]
                         unavailable = self.document["components"]["responses"][name]
-                    self.assertNotIn("MAINTENANCE", unavailable["description"])
+                    if (method.upper(), path) in _FILLS_ON_READ:
+                        self.assertIn("MAINTENANCE", unavailable["description"])
+                    else:
+                        self.assertNotIn("MAINTENANCE", unavailable["description"])
+
+    def test_an_epoch_fenced_mutation_declares_the_epoch_header(self) -> None:
+        for (method, path), op in _operations(self.document).items():
+            if not path.startswith("/api/"):
+                continue
+            headers = {p["name"]: p for p in op.get("parameters", []) if p["in"] == "header"}
+            with self.subTest(method=method, path=path):
+                if epoch_fenced(method.upper(), path):
+                    self.assertIn("PRKS-Library-Epoch", headers)
+                    self.assertEqual(headers["PRKS-Library-Epoch"]["required"], path != "/api/sync/operations")
+                else:
+                    self.assertNotIn("PRKS-Library-Epoch", headers)
+
+    def test_the_epoch_header_schema_is_parse_epochs_text_form(self) -> None:
+        from backend.domain.identity.request_context import EPOCH_MAX, parse_epoch
+
+        header = next(p for p in self.document["paths"]["/api/settings"]["patch"]["parameters"]
+                      if p["name"] == "PRKS-Library-Epoch")
+        pattern = re.compile(header["schema"]["pattern"])
+        for text in ("0", "01", "+1", " 1", "1.0", "1", "42", str(EPOCH_MAX)):
+            with self.subTest(text=text):
+                self.assertEqual(pattern.search(text) is not None, parse_epoch(text) is not None)
+
+    def test_a_body_the_route_does_not_need_is_optional(self) -> None:
+        for method, path in (("post", "/api/backups/progress"), ("patch", "/api/settings"),
+                             ("post", "/api/client-errors")):
+            with self.subTest(path=path):
+                self.assertFalse(self.document["paths"][path][method]["requestBody"]["required"])
+
+    def test_a_stream_publishes_its_line_schema(self) -> None:
+        media = self.document["paths"]["/api/backups/progress"]["post"]["responses"]["200"]["content"]
+        self.assertEqual(media["application/x-ndjson"]["x-line-schema"],
+                         {"$ref": "#/components/schemas/BackupProgressLine"})
 
     def test_a_read_sent_as_post_documents_no_epoch_refusal(self) -> None:
         for path in ("/api/citations", "/api/diagnostics/performance/reset"):
@@ -276,6 +301,8 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_a_rest_parameter_is_one_openapi_parameter(self) -> None:
         self.assertEqual(openapi_path("/api/pdfs/{filename:path}"), "/api/pdfs/{filename}")
         self.assertEqual(openapi_path("/api/things/{clé:path}"), "/api/things/{clé}")
+        self.assertEqual(openapi_path("/api/things/{e\u0301}"), "/api/things/{e\u0301}")
+        self.assertEqual(openapi_path("/api/things/{e\u0301:path}"), "/api/things/{e\u0301}")
 
     def test_a_head_route_sends_no_body(self) -> None:
         op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["head"]

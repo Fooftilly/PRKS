@@ -430,7 +430,7 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
 
         data = raw if raw is not None else (None if body is None else json.dumps(body).encode("utf-8"))
         request = MockRequest(host_url=self.origin, method=method.lower(), path=path, data=data,
-                              content_type="application/json")
+                              headers={"PRKS-Library-Epoch": "1"}, content_type="application/json")
         try:
             self.api.validate_request(request)
         except Exception:  # noqa: BLE001 - any validation failure means "refused"

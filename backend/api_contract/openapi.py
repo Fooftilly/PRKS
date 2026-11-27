@@ -24,18 +24,18 @@ declare only their own:
 from __future__ import annotations
 
 import functools
-import re
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
-from backend.api_contract.operation import JSON, Operation, Reply, RequestBody, Schema
+from backend.api_contract.operation import EPOCH_SCHEMA, JSON, Operation, Param, Reply, RequestBody, Schema
+from backend.web.routing import compile_pattern
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
-# The router takes any identifier as a parameter name.
-_PATH_PARAMETER = re.compile(r"\{([^\W\d]\w*)(?::path)?\}")
+
+EPOCH_HEADER = "PRKS-Library-Epoch"
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
@@ -87,7 +87,12 @@ class _Components:
 
 def openapi_path(pattern: str) -> str:
     """The OpenAPI path of a route pattern: ``{name:path}`` is ``{name}``."""
-    return _PATH_PARAMETER.sub(lambda m: "{" + m.group(1) + "}", pattern)
+    return _template(pattern, lambda name: "{" + name + "}")
+
+
+def _template(pattern: str, parameter: Callable[[str], str]) -> str:
+    return "/" + "/".join(one.literal if one.literal is not None else parameter(one.name)
+                          for one in compile_pattern(pattern))
 
 
 def _content(components: _Components, media_type: str | tuple[str, ...], spec: Schema) -> dict[str, Any]:
@@ -104,6 +109,9 @@ def _reply(components: _Components, reply: Reply) -> dict[str, Any]:
                           for name, h in reply.headers.items()}
     if reply.schema is not None:
         out["content"] = _content(components, reply.media_type, reply.schema)
+        if reply.line_schema is not None:
+            for media in out["content"].values():
+                media["x-line-schema"] = components.ref(reply.line_schema)
     return out
 
 
@@ -138,15 +146,31 @@ def _shared_for(route: Any) -> dict[str, str]:
     return shared
 
 
+def _epoch_param(route: Any) -> tuple[Param, ...]:
+    """``PRKS-Library-Epoch`` on each mutation admission holds to the Library epoch."""
+    from backend.api.session import epoch_fenced, ledgered
+
+    if not (route.pattern.startswith("/api/") and epoch_fenced(route.method, route.pattern)):
+        return ()
+    if ledgered(route.pattern):
+        return (Param(EPOCH_HEADER, "header", EPOCH_SCHEMA, required=False, description=(
+            "The Library epoch the client acted on. A new operation without it, or with another "
+            "epoch, is refused; a replay of a ledgered op_id answers its ledgered result.")),)
+    return (Param(EPOCH_HEADER, "header", EPOCH_SCHEMA, required=True,
+                  description="The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, "
+                              "LIBRARY_EPOCH_CHANGED)."),)
+
+
 def _operation(components: _Components, route: Any, contract: Operation, shared: set[str]) -> dict[str, Any]:
     out: dict[str, Any] = {"operationId": contract.id, "summary": contract.summary, "tags": [contract.tag]}
     if contract.description:
         out["description"] = contract.description
-    if contract.params:
+    params = [*contract.params, *_epoch_param(route)]
+    if params:
         out["parameters"] = [
             {"name": p.name, "in": p.where, "required": p.required, "schema": dict(p.schema),
              **({"description": p.description} if p.description else {})}
-            for p in contract.params
+            for p in params
         ]
     if contract.request is not None:
         out["requestBody"] = _request(components, contract.request)
@@ -190,13 +214,13 @@ def build_document(routes: Iterable[Any]) -> dict[str, Any]:
         seen_ids[contract.id] = where
         tags.add(contract.tag)
         path = openapi_path(route.pattern)
-        template = _PATH_PARAMETER.sub("{}", route.pattern)
+        template = _template(route.pattern, lambda _name: "{}")
         if templates.setdefault(template, path) != path:
             raise ValueError(f"{where} uses {path!r}, a template equivalent to {templates[template]!r}")
         item = paths.setdefault(path, {})
         if route.method.lower() in item:
             raise ValueError(f"{where} duplicates an operation at {path!r}")
-        names = _PATH_PARAMETER.findall(route.pattern)
+        names = [one.name for one in compile_pattern(route.pattern) if one.literal is None]
         if names and "parameters" not in item:
             item["parameters"] = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
                                   for n in names]

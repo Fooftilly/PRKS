@@ -19,6 +19,7 @@ from typing import Any
 from backend.api_contract.openapi import openapi_document
 from backend.api_contract.operation import Operation, Reply, body, error, ok, plain
 from backend.api_contract.boundary import dump_response, parse_request
+from backend.api_contract.client_errors import ClientErrorLogged, ClientErrorReport
 from backend.api_contract.jobs import JobDiagnostics
 from backend.api_contract.performance import (
     PerformanceDiagnosticsReset,
@@ -90,7 +91,12 @@ ROUTES: tuple[Route, ...] = (
                                  "queue's depth and oldest age by job kind and state."),
          404: plain("The server runs without a jobs runtime (test servers only)."),
          503: error("The database cannot be read (unavailable).")})),
-    route("POST", "/api/client-errors", client_error),
+    route("POST", "/api/client-errors", client_error, contract=Operation(
+        "reportClientError", "Log a browser error as metadata only", _TAG,
+        {200: ok(ClientErrorLogged, "Logged.")},
+        request=body(ClientErrorReport,
+                     "Every field is optional, and so is the body; a value the log does not take is "
+                     "replaced, never refused.", required=False))),
     route("GET", "/api/openapi.json", document, contract=Operation(
         "getOpenApiDocument", "This OpenAPI document", "meta",
         {200: ok({"type": "object"}, "The OpenAPI 3.1 document of every typed route.")})),

@@ -13,6 +13,8 @@ PostgreSQL module at import time (``tests/test_e2e_policy.py``).
 
 from __future__ import annotations
 
+from backend.api_contract.operation import Operation, body, error, ok
+from backend.api_contract.settings import AppSettings, AppSettingsPatch
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -36,6 +38,13 @@ def patch(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", PATH, read),
-    route("PATCH", PATH, patch),
+    route("GET", PATH, read, contract=Operation(
+        "getSettings", "The Library's settings", "settings",
+        {200: ok(AppSettings, "Every setting, its default when unset.")})),
+    route("PATCH", PATH, patch, contract=Operation(
+        "updateSettings", "Change some of the Library's settings", "settings",
+        {200: ok(AppSettings, "The settings as they now are."),
+         400: error("A refused value; nothing was written.")},
+        request=body(AppSettingsPatch, "Left out: nothing changes.", required=False),
+        description="Every key is checked before any is written. Needs the Library owner.")),
 )

@@ -23,6 +23,7 @@ from backend.api.common import objects
 from backend.api.persons import image_response
 from backend.runtime.log_safety import safe_log_id
 from backend.media.person_image import fetch_and_prepare
+from backend.api_contract.operation import BINARY, IF_NONE_MATCH, Header, Operation, Param, Reply, error, ok
 from backend.web.http import Request, Response, json_response, not_modified
 from backend.web.routing import route
 
@@ -92,5 +93,18 @@ def remote_image(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", PATH, remote_image),
+    route("GET", PATH, remote_image, contract=Operation(
+        "getRemoteImage", "The Library's saved copy of a remote image it names", "remote-images",
+        {200: ok(BINARY, "The image (saved copies revalidate by ETag; an uncached copy may be kept an hour).",
+                 media_type=("image/jpeg", "image/webp"),
+                 headers={"Cache-Control": Header("private, no-cache or private, max-age=3600."),
+                          "ETag": Header("The saved copy's SHA-256, when saved.")}),
+         304: Reply("The browser holds the saved copy's bytes.", headers={"ETag": Header("Its SHA-256.")}),
+         404: error("A URL the Library does not name, not public http(s), or a failed fetch "
+                    "(IMAGE_NOT_AVAILABLE)."),
+         503: error("The Library is unavailable, or in maintenance when an editor's miss saves the copy "
+                    "(unavailable, MAINTENANCE).")},
+        params=(Param("url", required=True, description="The image's http(s) URL as the Library names it."),
+                IF_NONE_MATCH),
+        description="On a miss an editor fetches and saves the copy; a reader is served it uncached.")),
 )
