@@ -3116,7 +3116,7 @@ export interface components {
              * Position
              * @description Where the Work goes; left out, null, blank or not a number: the end.
              */
-            position?: number | string | null;
+            position?: string | number | null;
             /** Work Id */
             work_id: string;
         };
@@ -3900,7 +3900,7 @@ export interface components {
              * Order Index
              * @description Checked to be an integer, else ignored.
              */
-            order_index?: string | number | null;
+            order_index?: number | string | null;
             /** Person Id */
             person_id: string;
             /** Role Type */

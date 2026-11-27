@@ -13064,10 +13064,10 @@
           "position": {
             "anyOf": [
               {
-                "type": "number"
+                "type": "string"
               },
               {
-                "type": "string"
+                "type": "number"
               },
               {
                 "type": "null"
@@ -15619,10 +15619,10 @@
           "order_index": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
