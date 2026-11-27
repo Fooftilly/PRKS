@@ -4767,6 +4767,11 @@ export interface components {
             publisher?: string | null;
             /** Source Mime */
             source_mime?: string | null;
+            /**
+             * Source Url
+             * @description Up to 64 KiB. Refused (400) on a video Work: its URL is its source identity, set through SET_WORK_SOURCE.
+             */
+            source_url?: string | null;
             /** Status */
             status?: string;
             /**
@@ -4782,8 +4787,11 @@ export interface components {
             urldate?: string | null;
             /** Volume */
             volume?: string | null;
-            /** Year */
-            year?: string | null;
+            /**
+             * Year
+             * @description A number is stored as its decimal text.
+             */
+            year?: string | number | null;
         };
         /** @description ``GET /api/works/{id}/people-state``: role revisions, tombstones included. */
         WorkPeopleState: {
@@ -5282,7 +5290,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Always no-store. */
-                    "Cache-Control"?: string;
+                    "Cache-Control": "no-store";
                     /** @description attachment; filename=... */
                     "Content-Disposition"?: string;
                     [name: string]: unknown;
@@ -5326,7 +5334,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Always no-store. */
-                    "Cache-Control"?: string;
+                    "Cache-Control": "no-store";
                     [name: string]: unknown;
                 };
                 content: {
@@ -5358,9 +5366,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Restored. The answer carries the new PRKS-Library-Epoch. */
+            /** @description Restored. */
             200: {
                 headers: {
+                    /** @description The Library's new epoch. */
+                    "PRKS-Library-Epoch": string;
                     [name: string]: unknown;
                 };
                 content: {
