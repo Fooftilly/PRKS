@@ -125,7 +125,8 @@ describe('SettingsExport BibTeX toggles', () => {
     bib.PRKS_BIBTEX_EXPORT_FIELD_DEFS = [['author', 'Author'], ['doi', 'DOI'], ['url', 'URL']]
     bib.__prksBibtexExportFields = { author: true, doi: true, url: true }
     bib.prksSetBibtexExportFieldsCache = (map) => { bib.__prksBibtexExportFields = { ...map } }
-    win.prksLoadAppSettings = vi.fn(async () => undefined)
+    /* A read PRKS answered. This tab's cache stays as stale as the test seeds it. */
+    win.prksLoadAppSettings = vi.fn(async () => ({ bibtex_export_fields: {} }))
     win.prksPatchAppSettings = vi.fn(async (partial: { bibtex_export_fields?: Record<string, boolean> }) => {
       const patch = partial.bibtex_export_fields ?? {}
       patches.push({ ...patch })
@@ -304,7 +305,10 @@ describe('SettingsExport BibTeX toggles', () => {
 
   it('shows what PRKS holds after the last toggle patch fails', async () => {
     /* The mount read brings this tab up to date: Author is off on PRKS. */
-    win.prksLoadAppSettings = vi.fn(async () => { bib.prksSetBibtexExportFieldsCache?.(server) })
+    win.prksLoadAppSettings = vi.fn(async () => {
+      bib.prksSetBibtexExportFieldsCache?.(server)
+      return { bibtex_export_fields: server }
+    })
     const wrapper = mount(SettingsExport)
     await flushPromises()
     win.prksPatchAppSettings = vi.fn(async () => { throw new Error('offline') }) as StyleWindow['prksPatchAppSettings']
@@ -354,6 +358,36 @@ describe('SettingsExport BibTeX toggles', () => {
     await exportCitations(['W-1'], 'bibtex') // Settings has rolled URL back; PRKS's profile is what it shows
     expect(seen.posts).toBe(1)
     warn.mockRestore()
+  })
+
+  it('keeps the toggles off until PRKS answers a settings read', async () => {
+    delete bib.__prksBibtexExportFields
+    const seen = serveCitations()
+    vi.stubGlobal('prksCopyTextToClipboard', async () => undefined)
+    win.prksLoadAppSettings = vi.fn(async () => ({})) // GET /api/settings failed
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    const doi = wrapper.get('[data-bibtex-field="doi"]')
+    expect(doi.attributes('disabled')).toBeDefined()
+    expect(wrapper.get('#prks-bibtex-export-reset').attributes('disabled')).toBeDefined()
+    await doi.trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(patches).toEqual([])
+    expect(isOn(wrapper, 'doi')).toBe(true)
+    expect(wrapper.get('#prks-bibtex-export-status').text()).toContain('could not be read')
+    wrapper.unmount()
+    await exportCitations(['W-1'], 'bibtex') // PRKS's saved profile, which nothing here changed
+    expect(seen.posts).toBe(1)
+    win.prksLoadAppSettings = vi.fn(async () => {
+      bib.prksSetBibtexExportFieldsCache?.(server)
+      return { bibtex_export_fields: server }
+    })
+    const reopened = mount(SettingsExport)
+    await flushPromises()
+    expect(reopened.get('[data-bibtex-field="doi"]').attributes('disabled')).toBeUndefined()
+    expect(reopened.get('#prks-bibtex-export-status').text()).toBe('')
+    reopened.unmount()
   })
 
   it('keeps the BibTeX alert region mounted while it is empty', async () => {

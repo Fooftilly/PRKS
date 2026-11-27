@@ -18,6 +18,8 @@ interface ExportField {
 
 const fields = ref<ExportField[]>([])
 const bibtexStatus = ref('')
+/* Toggles wait for a profile PRKS answered: without one a failed save has nothing to roll back to. */
+const profileKnown = ref(false)
 let dirty = false
 let timer = 0
 const style = ref(libraryCitationStyle())
@@ -145,10 +147,10 @@ function send(patch: Record<string, boolean>): Promise<unknown> {
     }
     if (failed) {
       failed = false
-      setBibtexProfileUnreconciled(false)
       if (confirmed) {
         window.prksSetBibtexExportFieldsCache?.(confirmed)
         applyMap(confirmed)
+        setBibtexProfileUnreconciled(false)
         return
       }
     }
@@ -176,6 +178,7 @@ function persist(id: string, on: boolean): void {
 }
 
 function toggle(id: string): void {
+  if (!profileKnown.value) return
   const field = fields.value.find((item) => item.id === id)
   if (!field) return
   field.on = !field.on
@@ -183,6 +186,7 @@ function toggle(id: string): void {
 }
 
 async function restoreDefaults(): Promise<void> {
+  if (!profileKnown.value) return
   const allTrue: Record<string, boolean> = {}
   for (const field of fields.value) allTrue[field.id] = true
   window.prksSetBibtexExportFieldsCache?.(allTrue)
@@ -205,16 +209,23 @@ function flushDebounced(): void {
 onMounted(async () => {
   setBibtexProfileFlush(flushDebounced)
   applyMap({})
+  let settings: unknown = null
   try {
-    await window.prksLoadAppSettings?.()
+    settings = await window.prksLoadAppSettings?.()
   } catch {
-    /* Toggles stay at the inclusive default. */
+    settings = null
+  }
+  const profile = settings && typeof settings === 'object'
+    ? (settings as { bibtex_export_fields?: unknown }).bibtex_export_fields : null
+  profileKnown.value = !!profile && typeof profile === 'object'
+  if (!profileKnown.value) {
+    bibtexStatus.value = 'The BibTeX export settings could not be read. Reopen Settings when PRKS is reachable.'
   }
   if (!styleDirty) {
     style.value = libraryCitationStyle()
     styleSave.reset(style.value)
   }
-  if (!confirmed && !inFlight) confirmed = storedMap()
+  if (profileKnown.value && !confirmed) confirmed = storedMap()
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
@@ -259,6 +270,7 @@ onBeforeUnmount(() => {
           :data-bibtex-field="field.id"
           :on="field.on"
           :labelled-by="`prks-lbl-bibtex-export-${field.id}`"
+          :disabled="!profileKnown"
           @click="toggle(field.id)"
         />
       </div>
@@ -267,7 +279,7 @@ onBeforeUnmount(() => {
     <div id="prks-bibtex-export-status" role="alert">
       <PrksInlineMessage v-if="bibtexStatus" tone="error">{{ bibtexStatus }}</PrksInlineMessage>
     </div>
-    <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" @click="restoreDefaults">
+    <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" :disabled="!profileKnown" @click="restoreDefaults">
       Restore export defaults
     </PrksButton>
   </section>
