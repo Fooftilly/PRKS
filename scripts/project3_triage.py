@@ -158,9 +158,9 @@ def _validate_issue_snapshot(number: int, row: dict) -> None:
         raise TriageError(f"#{number}: invalid issue snapshot")
 
 
-def _validate_review(row: Any, edit_key: str, *, plan: bool) -> int:
+def _validate_review(row: Any, edit_key: str, *, plan: bool, extra: frozenset[str] = frozenset()) -> int:
     common = {"number", edit_key, "reason", "roadmap_checked", "overlap_checked"}
-    keys = common | ({"approved", "expected_before", "expected_issue"} if plan else set())
+    keys = common | ({"approved", "expected_before", "expected_issue", *extra} if plan else set())
     if not isinstance(row, dict) or set(row) != keys:
         raise TriageError("invalid triage row keys")
     number = row["number"]
@@ -191,9 +191,11 @@ def order_value(value: Any, what: str, *, nullable: bool) -> int | None:
 
 
 def validate_order_row(row: Any, *, plan: bool) -> None:
-    number = _validate_review(row, "order", plan=plan)
+    number = _validate_review(row, "order", plan=plan, extra=frozenset({"expected_item"}))
     order_value(row["order"], f"#{number}: order", nullable=False)
     if plan:
+        if not isinstance(row["expected_item"], str) or not row["expected_item"]:
+            raise TriageError(f"#{number}: expected_item must be the reviewed Project item ID")
         order_value(row["expected_before"], f"#{number}: expected_before", nullable=True)
         _validate_issue_snapshot(number, row)
 
@@ -385,6 +387,8 @@ def order_guard(row: dict, current: dict | None, issue: dict) -> None:
     n = row["number"]
     if current is None or current["archived"] or current["state"] != "OPEN":
         raise TriageError(f"#{n}: missing, archived or closed Project item")
+    if current["id"] != row["expected_item"]:
+        raise TriageError(f"#{n}: Project item was replaced since review")
     if live_order(current, n) != row["expected_before"]:
         raise TriageError(f"#{n}: {ORDER_FIELD} changed since review")
     if issue != row["expected_issue"]:
@@ -398,6 +402,7 @@ def propose_order(rows: list[dict], project: pm.Project, read: Callable[[str], A
         current = project_live(project, r["number"])
         issue = inspect_issue(r["number"], read)
         row = {**r, "approved": False,
+               "expected_item": current["id"],
                "expected_before": live_order(current, r["number"]),
                "expected_issue": issue}
         order_guard(row, current, issue)

@@ -280,10 +280,12 @@ def main() -> int:
         create_status(actions_token, sha, "pending", run_id)
         claimed_sha, claim_token, claim_run_id = sha, actions_token, run_id
         issue_read = triage.rest_client(actions_token)
-        gql = pm.GraphQL(pm.http_transport(project_token),
-                         allow_mutations=dispatch.mutations_allowed(command, os.environ))
+        allow = dispatch.mutations_allowed(command, os.environ)
+        gql = pm.GraphQL(pm.http_transport(project_token), allow_mutations=allow)
+        claims = (dispatch.GitHubOrderClaims(actions_token, run_id)
+                  if allow and dispatch.command_kind(command)[0] == dispatch.ORDER_KIND else None)
         outcome, changed, issues = dispatch.run(
-            command, project=pm.Project(gql), read=issue_read, env=os.environ)
+            command, project=pm.Project(gql), read=issue_read, env=os.environ, claims=claims)
         create_status(actions_token, sha, "success", run_id)
         claimed_sha = None
         print("Validated assignment request commit " + sha[:12], flush=True)

@@ -42,6 +42,17 @@ def request_row(number: int = 815, order: Any = 3, before: Any = None, **overrid
     return {**rank(number, order), "expected_before": before, **overrides}
 
 
+class FakeClaims:
+    def __init__(self):
+        self.states: list[tuple[str, str]] = []
+
+    def used(self, digest):
+        return any(d == digest for d, _ in self.states)
+
+    def mark(self, digest, state):
+        self.states.append((digest, state))
+
+
 class OrderFixture(Fixture):
     def __init__(self):
         super().__init__()
@@ -153,6 +164,18 @@ class OrderApplyTests(unittest.TestCase):
         with self.assertRaisesRegex(t.TriageError, "not on Project #3"):
             self.fx.order_plan(rank())
 
+    def test_removed_and_re_added_item_is_refused(self):
+        plan = self.approved(rank())
+        self.assertEqual(plan["items"][0]["expected_item"], "I815")
+        self.fx.api.items["J815"] = self.fx.api.items.pop("I815")
+        with self.assertRaisesRegex(t.TriageError, "replaced since review"):
+            t.apply_order(plan, self.fx.project(apply=True), self.fx.read)
+        self.assertEqual(self.fx.api.mutations, [])
+        broken = copy.deepcopy(plan)
+        broken["items"][0]["expected_item"] = ""
+        with self.assertRaisesRegex(t.TriageError, "expected_item"):
+            t.load_plan(json.dumps(broken).encode())
+
     def test_unknown_dependency_state_fails_closed(self):
         self.fx.dependencies[815] = [{"number": 4, "state": "unknown"}]
         with self.assertRaisesRegex(t.TriageError, "unknown dependency state"):
@@ -254,10 +277,12 @@ class OrderApplyTests(unittest.TestCase):
 class OrderDispatchTests(unittest.TestCase):
     def setUp(self):
         self.fx = OrderFixture()
+        self.claims = FakeClaims()
 
     def run_command(self, raw, env):
         allow = dispatch.mutations_allowed(raw, env)
-        return dispatch.run(raw, project=self.fx.project(apply=allow), read=self.fx.read, env=env)
+        return dispatch.run(raw, project=self.fx.project(apply=allow), read=self.fx.read, env=env,
+                            claims=self.claims)
 
     def digest(self, raw):
         check = json.loads(raw)
@@ -322,6 +347,45 @@ class OrderDispatchTests(unittest.TestCase):
         self.assertEqual(changed, 1)
         self.assertEqual(self.fx.api.items["I815"]["values"][ORDER], 3)
 
+    def test_approval_is_consumed_even_after_rank_is_restored(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+        self.run_command(raw, env)
+        digest = env["PROJECT3_ORDER_APPROVED_SHA256"]
+        self.assertEqual(self.claims.states, [(digest, "pending"), (digest, "success")])
+        del self.fx.api.items["I815"]["values"][ORDER]
+        count = len(self.fx.api.mutations)
+        with self.assertRaisesRegex(dispatch.DispatchError, "already used"):
+            self.run_command(raw, env)
+        self.assertEqual(len(self.fx.api.mutations), count)
+
+    def test_failed_apply_keeps_claim_and_records_failure(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+
+        def fail(name, variables):
+            raise t.pm.MigrationError("GraphQL error: simulated outage")
+
+        self.fx.api.before_mutation = fail
+        with self.assertRaisesRegex(t.pm.MigrationError, "simulated outage"):
+            self.run_command(raw, env)
+        self.assertEqual([state for _, state in self.claims.states], ["pending", "failure"])
+
+    def test_apply_without_claim_store_is_refused(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+        with self.assertRaisesRegex(dispatch.DispatchError, "claim store"):
+            dispatch.run(raw, project=self.fx.project(apply=True), read=self.fx.read, env=env)
+        self.assertEqual(self.fx.api.mutations, [])
+
+    def test_replaced_item_after_check_invalidates_approval(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+        self.fx.api.items["J815"] = self.fx.api.items.pop("I815")
+        with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
+            self.run_command(raw, env)
+        self.assertEqual(self.fx.api.mutations, [])
+
     def test_replay_after_apply_and_stale_before_refused(self):
         raw = order_command(request_row(), operation="apply")
         self.run_command(raw, self.armed(raw))
@@ -329,6 +393,32 @@ class OrderDispatchTests(unittest.TestCase):
         with self.assertRaisesRegex(dispatch.DispatchError, "expected_before"):
             self.run_command(raw, self.armed(raw))
         self.assertEqual(len(self.fx.api.mutations), count)
+
+    def test_github_claims_use_fixed_master_commit_and_digest_context(self):
+        claims = dispatch.GitHubOrderClaims("t", "77")
+        digest = "a" * 64
+        sent = []
+
+        def fake_send(url, payload=None):
+            sent.append((url, payload))
+            if payload is None:
+                return [{"context": "other"}]
+            body = json.loads(payload)
+            return {"context": body["context"], "state": body["state"]}
+
+        with mock.patch.object(claims, "_send", side_effect=fake_send):
+            self.assertFalse(claims.used(digest))
+            claims.mark(digest, "pending")
+        self.assertIn(f"/commits/{dispatch.ORDER_CLAIM_SHA}/statuses?per_page=100&page=1", sent[0][0])
+        self.assertTrue(sent[1][0].endswith(f"/statuses/{dispatch.ORDER_CLAIM_SHA}"))
+        self.assertEqual(json.loads(sent[1][1])["context"], dispatch.ORDER_CLAIM_PREFIX + digest)
+        with mock.patch.object(claims, "_send", return_value=[{"context": dispatch.ORDER_CLAIM_PREFIX + digest}]):
+            self.assertTrue(claims.used(digest))
+        with mock.patch.object(claims, "_send", return_value={"context": "x", "state": "pending"}), \
+                self.assertRaisesRegex(dispatch.DispatchError, "not verified"):
+            claims.mark(digest, "pending")
+        with self.assertRaises(dispatch.DispatchError):
+            dispatch.GitHubOrderClaims("t", "")
 
     def test_malformed_order_commands_refused(self):
         bad = [
@@ -369,9 +459,13 @@ class OrderRelayTests(unittest.TestCase):
                   mock.patch.object(relay.triage, "rest_client", return_value=fx.read),
                   mock.patch.object(relay.pm, "http_transport", return_value=fx.api),
                   mock.patch.object(relay, "create_status") as claims,
+                  mock.patch.object(relay.dispatch, "GitHubOrderClaims", return_value=self.order_claims),
                   mock.patch.object(relay.dispatch, "report") as audit):
                 code = relay.main()
         return code, fx, [c.args[2] for c in claims.call_args_list], audit
+
+    def setUp(self):
+        self.order_claims = FakeClaims()
 
     def test_relay_claims_and_applies_only_approved_order(self):
         raw = order_command(request_row(), operation="apply")
@@ -382,7 +476,11 @@ class OrderRelayTests(unittest.TestCase):
             "PROJECT3_ORDER_WRITE_MODE": "apply", "PROJECT3_ORDER_APPROVED_SHA256": digest,
             "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"})
         self.assertEqual((code, claims), (0, ["pending", "success"]))
+        self.assertEqual([state for _, state in self.order_claims.states], ["pending", "success"])
         self.assertEqual(fx.api.items["I815"]["values"][ORDER], 3)
+        code, fx, claims, _ = self.main_with(raw, {
+            "PROJECT3_ORDER_WRITE_MODE": "apply", "PROJECT3_ORDER_APPROVED_SHA256": digest})
+        self.assertEqual((code, claims, fx.api.mutations), (1, ["pending", "failure"], []))
         self.assertIn("APPLIED", audit.call_args.args[0])
 
     def test_relay_unapproved_apply_consumes_claim_without_writes(self):

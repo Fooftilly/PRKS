@@ -64,8 +64,8 @@ The same tool ranks issues. An order plan changes **only** the NUMBER field `Imp
 
 - `order` MUST be an integer from 1 to 10000. Booleans, fractions, strings and `null` are refused. Two rows in one batch MUST NOT share an issue or a rank. The batch has 1–25 rows.
 - To unset a rank, edit the field in the Project UI. The tool cannot clear a value.
-- `propose` verifies that the live field is named `Implementation Order` and has type NUMBER. It writes its node ID into the plan, with `expected_before` (the live rank or `null`) and the issue snapshot. All rows start with `"approved": false`.
-- `check` and `apply` work as above. `apply` refuses when the field ID, the live rank, the item (missing, archived, closed) or the issue snapshot changed. A live rank that is not an integer from 1 to 10000 is refused; correct it in the UI first.
+- `propose` verifies that the live field is named `Implementation Order` and has type NUMBER. It writes the field's node ID into the plan. Each row gets `expected_item` (the live Project item ID), `expected_before` (the live rank or `null`) and the issue snapshot. All rows start with `"approved": false`.
+- `check` and `apply` work as above. `apply` refuses when the field ID, the item ID (for example after a remove and re-add), the live rank, the item state (missing, archived, closed) or the issue snapshot changed. A live rank that is not an integer from 1 to 10000 is refused; correct it in the UI first.
 - Each write re-reads the item and the issue first, and verifies afterwards that the rank is set and every other field is unchanged. A row whose rank already matches is a no-op.
 - Inbox, Backlog, Blocked and unaccepted candidate issues can be ranked. A rank never makes them actionable.
 
