@@ -380,6 +380,7 @@ describe('SettingsExport BibTeX toggles', () => {
     await exportCitations(['W-1'], 'bibtex') // PRKS's saved profile, which nothing here changed
     expect(seen.posts).toBe(1)
     win.prksLoadAppSettings = vi.fn(async () => {
+      setCache('ieee') // as api.js does with the Library style it read
       bib.prksSetBibtexExportFieldsCache?.({ ...server, doi: false })
       return { bibtex_export_fields: { ...server, doi: false } }
     })
@@ -397,6 +398,10 @@ describe('SettingsExport BibTeX toggles', () => {
     vi.advanceTimersByTime(450)
     await flushPromises()
     expect(patches).toEqual([{ doi: true }])
+    const select = wrapper.get('#prks-citation-style').element as HTMLSelectElement
+    expect(select.value).toBe('ieee')
+    await choose(wrapper, 'apa')
+    expect(win.prksPatchAppSettings).toHaveBeenLastCalledWith({ citation_style: 'apa' })
     wrapper.unmount()
   })
 

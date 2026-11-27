@@ -220,6 +220,10 @@ async function readProfile(): Promise<void> {
   } finally {
     reading = false
   }
+  if (!styleDirty) {
+    style.value = libraryCitationStyle()
+    styleSave.reset(style.value)
+  }
   const profile = settings && typeof settings === 'object'
     ? (settings as { bibtex_export_fields?: unknown }).bibtex_export_fields : null
   profileKnown.value = !!profile && typeof profile === 'object'
@@ -240,10 +244,6 @@ onMounted(async () => {
   setBibtexProfileFlush(flushDebounced)
   applyMap({})
   await readProfile()
-  if (!styleDirty) {
-    style.value = libraryCitationStyle()
-    styleSave.reset(style.value)
-  }
 })
 
 onBeforeUnmount(() => {
