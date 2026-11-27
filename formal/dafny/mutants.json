@@ -64,10 +64,10 @@
   },
   {
     "group": "model",
-    "name": "M1 without O1 (clock steps)",
+    "name": "stamps from the wall clock (#1473)",
     "file": "Sequence.dfy",
-    "from": "case ClockStep(_) => m == M0",
-    "to": "case ClockStep(_) => true"
+    "from": "function Clock(s: State): int { if s.now > s.lastStamp then s.now else s.lastStamp + 1 }",
+    "to": "function Clock(s: State): int { s.now }"
   },
   {
     "group": "model",

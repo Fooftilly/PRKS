@@ -80,10 +80,6 @@
       "file": "Sequence.dfy",
       "sha256": "3a01c1e6837e3b6e48321a2ed64ce2a00ce0844690ccfcceadf8a2a895d5e559"
     },
-    "ClockViolatesNoRegressionM0": {
-      "file": "Sequence.dfy",
-      "sha256": "279ae8177af7b77286987da5b1f1270305871914b680ca14f414e9f75d66bdbf"
-    },
     "SecondSenderViolatesNoRegressionM0": {
       "file": "Sequence.dfy",
       "sha256": "3781d27fa641ffebaa2f9cf046f8543239d49b7e6358d795604648c2c3ca1112"
@@ -91,6 +87,10 @@
     "ProvenanceM0Exact": {
       "file": "Sequence.dfy",
       "sha256": "f95d0ab889bffaa52f556462b321b8976e6d5195523e93ad652e4231d3a4f65e"
+    },
+    "ClockStepTraceIsSafeM1": {
+      "file": "Sequence.dfy",
+      "sha256": "d64309a703ae1473b84d95726156247d09f597e42dc16092821816f0a57c86b6"
     }
   },
   "witnesses": {

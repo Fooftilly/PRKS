@@ -1,10 +1,9 @@
 // Sequence model of one field on one device (#1472, section S).
 //
-// M0 is current behaviour: the wall clock can step back (#1473), a second
-// sender can reconcile a stored ACK late (#1072), and edit bases are stamped
-// with the client payload. M1 is the corrected model: no clock step (O1), one
-// sender per queue (O2) and canonical stamps. Claims about current behaviour
-// use M0 only.
+// Experiment 3: read and operation stamps come from Clock, which never goes
+// back, so both models allow wall-clock steps. M0: a second sender can
+// reconcile a stored ACK late (#1072), and edit bases are stamped with the
+// client payload. M1: one sender per queue (O2) and canonical stamps.
 //
 // The server is an oracle: it stores Canonical(value), applies a write only on
 // its current revision, and answers a write that changes nothing with a no-op
@@ -44,7 +43,8 @@ module Sequence {
     ops: map<nat, Op>,
     ledger: map<nat, nat>,
     nextId: nat,
-    kind: Kind)
+    kind: Kind,
+    lastStamp: int)
 
   datatype Event =
     | Read(r: nat, stored: bool)
@@ -60,10 +60,13 @@ module Sequence {
     | Reload
 
   function Init(k: Kind): State {
-    State([A], 0, None, None, Broken, None, map[], map[], 0, k)
+    State([A], 0, None, None, Broken, None, map[], map[], 0, k, -1)
   }
 
   predicate Wf(s: State) { |s.history| >= 1 }
+
+  // Candidate #1473 fix: read and operation stamps never go back, whatever the wall clock does.
+  function Clock(s: State): int { if s.now > s.lastStamp then s.now else s.lastStamp + 1 }
 
   function Cur(s: State): nat requires Wf(s) { |s.history| - 1 }
 
@@ -79,7 +82,7 @@ module Sequence {
     case OtherWrite(_) => true
     case Deliver => s.op.Some? && s.op.value.id in s.ledger && s.ledger[s.op.value.id] <= Cur(s)
     case Replay(id) => m == M0 && id in s.ledger && id in s.ops && s.ledger[id] <= Cur(s)
-    case ClockStep(_) => m == M0
+    case ClockStep(_) => true
     case Reload => true)
   }
 
@@ -111,8 +114,8 @@ module Sequence {
   }
 
   function Created(s: State, value: Val, base: nat, origin: Val): State requires Wf(s) {
-    var o := Op(s.nextId, value, base, s.now, Cur(s), origin);
-    s.(op := Some(o), ops := s.ops[s.nextId := o], nextId := s.nextId + 1)
+    var o := Op(s.nextId, value, base, Clock(s), Cur(s), origin);
+    s.(op := Some(o), ops := s.ops[s.nextId := o], nextId := s.nextId + 1, lastStamp := Clock(s))
   }
 
   function Received(s: State): State requires Wf(s) && s.op.Some? {
@@ -124,7 +127,7 @@ module Sequence {
 
   function Apply1(m: Model, s: State, e: Event): State requires Enabled(m, s, e) {
     match e
-    case Read(r, stored) => if stored then s.(cache := Some(Cached(s.history[r], s.now, r))) else s
+    case Read(r, stored) => if stored then s.(cache := Some(Cached(s.history[r], Clock(s), r)), lastStamp := Clock(s)) else s
     case ReadProjection(r) => s.(proj := Some(r))
     case ReadEditBase(r, stored) =>
       if stored then s.(editBase := NewerEditBase(s.editBase, Ok(s.history[r], r, None, None))) else s
@@ -160,7 +163,7 @@ module Sequence {
     o.base < |s.history| && Canonical(s.kind, o.origin) == s.history[o.base] &&
     o.curAtCreate < |s.history| &&
     (o.id in s.ledger ==> s.ledger[o.id] >= o.curAtCreate) &&
-    (m == M1 ==> o.created < s.now) &&
+    o.created <= s.lastStamp &&
     (m == M1 && s.cache.Some? && s.cache.value.observed < o.created ==> s.cache.value.rev <= o.curAtCreate)
   }
 
@@ -374,28 +377,29 @@ module Sequence {
     assert Last(ss).editBase == Ok(SpacedB, 1, None, Some("ack"));
   }
 
-  // M0, S3 by the clock (#1473): one sender, a backward clock step.
-  lemma ClockViolatesNoRegressionM0() returns (ss: seq<State>, es: seq<Event>)
-    ensures Trace(M0, ss, es) && NoReplay(es) && |es| >= 1
+  // The #1473 trace in M1, which now allows clock steps: monotonic stamps
+  // make the late ACK unproven, so the newer cached value is dropped, not replaced.
+  lemma ClockStepTraceIsSafeM1() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoReplay(es) && |es| >= 1
     ensures var s := ss[|es| - 1];
-      es[|es| - 1] == Deliver && s.op.Some? && s.op.value.id in s.ledger &&
-      !NoRegression(s, ss[|es|], s.ledger[s.op.value.id])
+      es[|es| - 1] == Deliver && s.op.Some? && s.op.value.id in s.ledger && s.cache.Some? &&
+      NoRegression(s, ss[|es|], s.ledger[s.op.value.id]) && ss[|es|].cache.None?
   {
-    ss, es := Start(M0, Trimmed);
-    ss, es := Push(M0, ss, es, ReadEditBase(0, true));
+    ss, es := Start(M1, Trimmed);
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
-    ss, es := Push(M0, ss, es, Save(B));
+    ss, es := Push(M1, ss, es, Save(B));
     assert Last(ss).op == Some(Op(0, B, 0, 1, 0, A));
-    ss, es := Push(M0, ss, es, Send);
+    ss, es := Push(M1, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
-    ss, es := Push(M0, ss, es, OtherWrite(C));
+    ss, es := Push(M1, ss, es, OtherWrite(C));
     assert Last(ss).history == [A, B, C];
-    ss, es := Push(M0, ss, es, ClockStep(-60));
-    assert Last(ss).now == -60;
-    ss, es := Push(M0, ss, es, Read(2, true));
-    assert Last(ss).cache == Some(Cached(C, -60, 2));
-    ss, es := Push(M0, ss, es, Deliver);
-    assert Last(ss).cache == Some(Cached(B, -60, 1));
+    ss, es := Push(M1, ss, es, ClockStep(-60));
+    assert Last(ss).now == -60 && Last(ss).lastStamp == 1;
+    ss, es := Push(M1, ss, es, Read(2, true));
+    assert Last(ss).cache == Some(Cached(C, 2, 2));
+    ss, es := Push(M1, ss, es, Deliver);
+    assert Last(ss).cache == None;
   }
 
   // M0, S3 by a second sender (#1072): no clock step. The late replay of the
