@@ -602,6 +602,10 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns, createParent);
     } catch (error) {
         if (!stillOwns()) return { ok: true, quiet: true };
+        /* The form does not show the unsent edit of the other session; the next Edit rereads it. */
+        if (error && error.prksLocalStoreCode === 'pending_elsewhere' && ctx && ctx.ui) {
+            ctx.ui.personGroupStale = String(groupId);
+        }
         await prksAlertMessage(prksPersonGroupSaveMessage(error, 'save this group'), 'Could not save');
         return { ok: false, message: 'Could not save' };
     }

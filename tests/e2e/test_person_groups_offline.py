@@ -502,8 +502,13 @@ class PersonGroupsOfflineTests(unittest.TestCase):
             const [moving] = await prksSavePersonGroupFieldsDurably(
                 child, {parent_id: parent}, baseline);
             const removing = await prksDeletePersonGroupDurably(parent);
+            // Edit reopened on the unsent move pins it as shown.
+            const move = (await prksSync.store.listOperations()).find(r =>
+                r.operation === 'SET_PERSON_GROUP_FIELD' && r.entity_id === child);
+            const shown = Object.assign({}, baseline, {parent_id: Object.assign({},
+                baseline.parent_id, {pending: move.payload.value, pendingOp: move.op_id})});
             const cancelled = await prksSavePersonGroupFieldsDurably(
-                child, {parent_id: ids.group_parent}, baseline);
+                child, {parent_id: ids.group_parent}, shown);
             return {
                 moveId: moving.op_id,
                 deleteId: removing.op_id,

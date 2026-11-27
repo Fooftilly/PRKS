@@ -566,6 +566,13 @@
             const own = Array.isArray(rows) ? rows.find(g => g && String(g.id) === String(groupId)) : null;
             if (own && String(own.parent_id || '') === shownParent) {
                 pending.parent_id = Object.assign({}, move, { value: shownParent });
+                const pinned = reconcileCore.pinEditBase(shown, read, pending);
+                /* The pin may equal the acknowledged parent and drop the op
+                 * id, yet this form showed the move: it may replace it. */
+                if (pinned && pinned.parent_id) {
+                    pinned.parent_id = Object.assign({}, pinned.parent_id, { pendingOp: move.pendingOp });
+                }
+                return pinned;
             }
         }
         return reconcileCore.pinEditBase(shown, read, pending);

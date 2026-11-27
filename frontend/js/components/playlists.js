@@ -353,7 +353,9 @@ async function updatePlaylist(playlistId, fields, options) {
     try {
         await prksSavePlaylistFieldsDurably(playlistId, changes, settled, still);
     } catch (error) {
-        throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
+        const refused = new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
+        refused.prksLocalStoreCode = error && error.prksLocalStoreCode;
+        throw refused;
     }
     return {};
 }

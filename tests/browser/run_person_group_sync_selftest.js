@@ -1637,6 +1637,23 @@ async function aPendingMoveShowsTheNewParent() {
         const unseen = await globalThis.prksPinPersonGroupEditBase("PG-C",
             { name: "Child", description: "", parent_id: "PG-OLD" }, both);
         assert.equal(unseen.parent_id, null, "a form that never showed the move cannot replace it");
+
+        /* #1471 review: the destination was a subgroup of the old parent, so
+         * the deletion shows the acknowledged parent again. That form showed
+         * the move, so a new move replaces it. */
+        const store = newStore();
+        const [move] = await store.savePersonGroupFields("PG-C", { parent_id: "PG-NEW" },
+            baseAt({ parent_id: 2 }, { parent_id: "PG-OLD" }));
+        await store.deletePersonGroup("PG-NEW");
+        const underOld = rows.map(r => (r.id === "PG-NEW" ? Object.assign({}, r, { parent_id: "PG-OLD" }) : r));
+        globalThis.prksEffectivePersonGroupCatalogue = async opsNow => globalThis.prksEffectivePersonGroups(underOld, opsNow);
+        const queued = await store.listOperations();
+        const back = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OLD" }, queued);
+        assert.equal(back.parent_id.pendingOp, move.op_id, "the pin names the move the form showed");
+        await store.savePersonGroupFields("PG-C", { parent_id: "PG-ANC" }, { parent_id: back.parent_id });
+        assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["PG-ANC"],
+            "the new move replaces the shown one");
     } finally {
         globalThis.prksEffectivePersonGroupCatalogue = previousCatalogue;
         globalThis.prksOfflineReadEntity = previousRead;

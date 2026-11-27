@@ -258,6 +258,10 @@ export function browserPlaylistIntents(
       try {
         await update(playlistId, edits.changes, { base: edits.base, still: sessionCurrent })
       } catch (err) {
+        // The form does not show the other session's unsent edit; Cancel rereads it.
+        if ((err as { prksLocalStoreCode?: unknown } | null)?.prksLocalStoreCode === 'pending_elsewhere' && owner.ui) {
+          owner.ui.playlistStale = playlistId
+        }
         return { ok: false, message: messageOf(err, 'Could not save this playlist.') }
       }
       if (!sessionCurrent()) return { ok: true, message: '' }
