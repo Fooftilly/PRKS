@@ -328,6 +328,7 @@ class OrderDispatchTests(unittest.TestCase):
         self.fx.issues[815]["labels"].append({"name": "accepted"})
         with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
             self.run_command(raw, env)
+        self.fx.issues[815]["labels"].pop()
         self.fx.dependencies[815] = [{"number": 4, "state": "open"}]
         with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
             self.run_command(raw, env)
