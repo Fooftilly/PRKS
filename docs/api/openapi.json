@@ -41,6 +41,9 @@
     },
     {
       "name": "sync"
+    },
+    {
+      "name": "works"
     }
   ],
   "paths": {
@@ -395,6 +398,46 @@
           },
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/bibtex/{work_id}": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkBibtex",
+        "summary": "A Work's BibTeX entry",
+        "tags": [
+          "citations"
+        ],
+        "responses": {
+          "200": {
+            "description": "The entry; empty for a Work not in this Library.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -919,6 +962,267 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/pdfs/{filename}": {
+      "parameters": [
+        {
+          "name": "filename",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getManagedPdf",
+        "summary": "A managed PDF of this Library, with Range support",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No managed PDF of this Library by that name.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "head": {
+        "operationId": "getManagedPdfHead",
+        "summary": "A managed PDF of this Library, with Range support (headers only)",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's role lacks the route's capability, or the Origin is not allowed."
+          },
+          "404": {
+            "description": "No managed PDF of this Library by that name."
+          },
+          "416": {
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "503": {
+            "description": "The Library is unavailable (unavailable)."
           }
         }
       }
@@ -1929,6 +2233,34 @@
         "responses": {
           "200": {
             "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            },
             "content": {
               "application/pdf": {
                 "schema": {
@@ -1941,6 +2273,32 @@
           "206": {
             "description": "The requested range.",
             "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
               "Content-Range": {
                 "description": "The range sent, as `bytes <first>-<last>/<size>`.",
                 "schema": {
@@ -2010,11 +2368,65 @@
         ],
         "responses": {
           "200": {
-            "description": "The whole file."
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            }
           },
           "206": {
             "description": "The requested range.",
             "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
               "Content-Range": {
                 "description": "The range sent, as `bytes <first>-<last>/<size>`.",
                 "schema": {
@@ -2375,6 +2787,136 @@
           },
           "503": {
             "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/recent": {
+      "get": {
+        "operationId": "listRecentWorks",
+        "summary": "The most recently opened Works",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest open first.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RecentWork"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/recently-added": {
+      "get": {
+        "operationId": "listRecentlyAddedWorks",
+        "summary": "The most recently created Works",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Newest first.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RecentlyAddedWork"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -2784,6 +3326,86 @@
         }
       }
     },
+    "/api/search": {
+      "get": {
+        "operationId": "searchWorks",
+        "summary": "Search the Works by keywords, Tag, author or publisher",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Keywords."
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A Tag name."
+          },
+          {
+            "name": "author",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "An author name."
+          },
+          {
+            "name": "publisher",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "A publisher name."
+          },
+          {
+            "name": "any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q`` and the author and publisher filters. Ignored with ``tag``: the Tag filter wins."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching Work summaries (no ETag).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkSummary"
+                  },
+                  "type": "array"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
     "/api/settings": {
       "get": {
         "operationId": "getSettings",
@@ -3023,6 +3645,1040 @@
         }
       }
     },
+    "/api/works": {
+      "get": {
+        "operationId": "listWorks",
+        "summary": "Every Work, as summaries or browse rows",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "browse"
+              ]
+            },
+            "description": "``browse``: the compact card rows, by title. Left out: every summary, newest first."
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Summaries newest first, or with ``projection=browse`` browse rows by title.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "$ref": "#/components/schemas/WorkSummary"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "items": {
+                        "$ref": "#/components/schemas/WorkBrowseRow"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWork",
+        "summary": "Create a Work from an upload, a managed PDF, a video URL or no file",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkCreateRequest"
+              }
+            }
+          },
+          "description": "Left out: an Untitled Work with no file. Left out, the request still sends Content-Type: application/json (else 415)."
+        },
+        "responses": {
+          "200": {
+            "description": "Created, filed and credited.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An invalid YouTube URL, file_b64, upload or field value. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "The named Folder does not exist (FOLDER_NOT_FOUND).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A credited Person is missing or not saved yet (PERSON_NOT_FOUND), or the file cannot be filed. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/bulk": {
+      "post": {
+        "operationId": "bulkUpdateWorks",
+        "summary": "One action on many Works, all or nothing",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "discriminator": {
+                  "mapping": {
+                    "add_tags": "#/components/schemas/BulkTags",
+                    "move_folder": "#/components/schemas/BulkMoveFolder",
+                    "remove_tags": "#/components/schemas/BulkTags",
+                    "set_status": "#/components/schemas/BulkSetStatus"
+                  },
+                  "propertyName": "action"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/BulkSetStatus"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BulkMoveFolder"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BulkTags"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkWorkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown action, a bad status or Folder, or an empty, malformed or too large selection. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "A selected Work, the Folder or a Tag does not exist; nothing changed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/linearize-existing-pdfs": {
+      "post": {
+        "operationId": "linearizeExistingPdfs",
+        "summary": "Rewrite the managed PDFs for fast web view (not ported)",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "A JSON object, ignored; may be left out. Left out, the request still sends Content-Type: application/json (else 415)."
+        },
+        "responses": {
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "501": {
+            "description": "Not ported to PostgreSQL yet (not_ported).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotPortedEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/reindex-pdf-text": {
+      "post": {
+        "operationId": "queuePdfTextRebuild",
+        "summary": "Queue the rebuild of the PDF text index",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TextRebuildRequest"
+              }
+            }
+          },
+          "description": "Left out, the request still sends Content-Type: application/json (else 415)."
+        },
+        "responses": {
+          "200": {
+            "description": "Queued, or one already was; the counters are zero.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TextRebuildQueued"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "operationId": "deleteWork",
+        "summary": "Delete a Work",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted, or there was no such Work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/EpochRequired"
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getWork",
+        "summary": "A Work with its notes, credits, Tags, annotations and Research refs",
+        "tags": [
+          "works"
+        ],
+        "responses": {
+          "200": {
+            "description": "The Work.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id in this Library.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateWork",
+        "summary": "Change a Work's metadata, notes or Folder",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkPatch"
+              }
+            }
+          },
+          "description": "Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415)."
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A refused value, length, Folder or note. The Folder move, the note and the metadata commit in that order, so a later refusal leaves the earlier steps applied: read the Work again. A changed file_path is refused (501) before any step. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id (not_found).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The Research Note was refused. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "501": {
+            "description": "Not ported to PostgreSQL yet (not_ported).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotPortedEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}/metadata-state": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkMetadataState",
+        "summary": "A Work's synchronized field revisions",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Each synchronized field's revision, with the value of the small ones.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkMetadataState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id in this Library.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}/notes-state": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkNotesState",
+        "summary": "A Work's note revisions",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The two revisions.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkNotesState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id in this Library.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}/opened": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "markWorkOpened",
+        "summary": "Record an open of a Work now",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "PRKS-Library-Epoch",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$",
+              "description": "1 to 9223372036854775807, in decimal."
+            },
+            "description": "The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED)."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "description": "A JSON object, ignored; may be left out. Left out, the request still sends Content-Type: application/json (else 415)."
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The id cannot name a Work. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id in this Library.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/EpochChanged"
+          },
+          "413": {
+            "$ref": "#/components/responses/RequestTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/UnsupportedMediaType"
+          },
+          "503": {
+            "$ref": "#/components/responses/UnavailableOrMaintenance"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}/source-state": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkSourceState",
+        "summary": "A Work's stored source and its revision",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored source and its revision, from one read.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkSourceState"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not modified: If-None-Match matched the current ETag. Bodyless.",
+            "headers": {
+              "ETag": {
+                "description": "Opaque representation token for conditional GETs.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No Work with that id in this Library.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The video source cannot be read: its link is not a supported video URL (INVALID_SOURCE_STATE).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/works/{work_id}/thumbnail": {
+      "parameters": [
+        {
+          "name": "work_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getWorkThumbnail",
+        "summary": "A card-sized render of a page of the Work's PDF",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-based page; else the Work's thumbnail page, else 1. Not a number: the default. Past the last page: page 1."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page as WebP (JPEG or PNG when WebP encoding is unavailable).",
+            "headers": {
+              "Cache-Control": {
+                "description": "public, max-age=86400",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "image/webp": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No such Work, no managed PDF, or the page cannot be rendered.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "operationId": "healthz",
@@ -3244,6 +4900,24 @@
             "type": "string"
           }
         },
+        "type": "object"
+      },
+      "ArgumentRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
         "type": "object"
       },
       "BackupFailed": {
@@ -3632,6 +5306,142 @@
         },
         "type": "object"
       },
+      "BulkMoveFolder": {
+        "properties": {
+          "work_ids": {
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "action": {
+            "const": "move_folder",
+            "title": "Action",
+            "type": "string"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Folder; null: Uncategorized. Required (null included); an empty string is refused.",
+            "title": "Folder Id"
+          }
+        },
+        "required": [
+          "work_ids",
+          "action",
+          "folder_id"
+        ],
+        "type": "object"
+      },
+      "BulkSetStatus": {
+        "properties": {
+          "work_ids": {
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "action": {
+            "const": "set_status",
+            "title": "Action",
+            "type": "string"
+          },
+          "status": {
+            "description": "The new status, one of the Work statuses.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "work_ids",
+          "action",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BulkTags": {
+        "properties": {
+          "work_ids": {
+            "description": "1 to 500 entries; the limit counts repeats, which then count once.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Work Ids",
+            "type": "array"
+          },
+          "action": {
+            "enum": [
+              "add_tags",
+              "remove_tags"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "tag_ids": {
+            "description": "The Tags to add or remove: 1 to 500 entries; the limit counts repeats.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Tag Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "work_ids",
+          "action",
+          "tag_ids"
+        ],
+        "type": "object"
+      },
+      "BulkWorkResult": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "const": "updated",
+            "title": "Status",
+            "type": "string"
+          },
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "requested": {
+            "description": "The distinct Works named.",
+            "title": "Requested",
+            "type": "integer"
+          },
+          "updated": {
+            "description": "Equal to ``requested``: every selected Work, changed or not.",
+            "title": "Updated",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "status",
+          "action",
+          "requested",
+          "updated"
+        ],
+        "type": "object"
+      },
       "CitationStyle": {
         "additionalProperties": false,
         "description": "``GET /api/citation-styles/:id``: the style's CSL text, for the browser's formatter.",
@@ -3869,6 +5679,32 @@
             "title": "Http Status"
           }
         },
+        "type": "object"
+      },
+      "ConceptRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Aliases",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "aliases"
+        ],
         "type": "object"
       },
       "CslDate": {
@@ -4150,6 +5986,34 @@
         ],
         "type": "object"
       },
+      "InitialRole": {
+        "description": "A credit the new Work is born with; one without a known role type is skipped.",
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "string"
+          },
+          "role_type": {
+            "title": "Role Type",
+            "type": "string"
+          },
+          "credit_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Name"
+          }
+        },
+        "required": [
+          "person_id"
+        ],
+        "type": "object"
+      },
       "JobDiagnostics": {
         "additionalProperties": false,
         "description": "GET /api/diagnostics/jobs body (owner only; ``PRKS_AUTH`` runtime only).",
@@ -4274,6 +6138,108 @@
           "released",
           "reaped",
           "errors"
+        ],
+        "type": "object"
+      },
+      "LinkedPerson": {
+        "additionalProperties": false,
+        "description": "One credit of the Work's primary Manifestation, in role order.",
+        "properties": {
+          "person_id": {
+            "title": "Person Id",
+            "type": "string"
+          },
+          "role_type": {
+            "title": "Role Type",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          },
+          "canonical_name": {
+            "description": "The Person's first and last name.",
+            "title": "Canonical Name",
+            "type": "string"
+          },
+          "credit_name": {
+            "description": "The name as credited on this Work; empty when none.",
+            "title": "Credit Name",
+            "type": "string"
+          },
+          "display_name": {
+            "description": "The credit name, else the canonical name.",
+            "title": "Display Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "person_id",
+          "role_type",
+          "order_index",
+          "canonical_name",
+          "credit_name",
+          "display_name"
+        ],
+        "type": "object"
+      },
+      "MetadataFieldRevision": {
+        "additionalProperties": false,
+        "description": "A field measured in bytes: its revision alone, never its value.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object"
+      },
+      "MetadataFieldValue": {
+        "additionalProperties": false,
+        "description": "A small field: its revision and its current value.",
+        "properties": {
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "value": {
+            "description": "The sync wire form: always text, empty when unset.",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "value"
+        ],
+        "type": "object"
+      },
+      "NotPortedEnvelope": {
+        "additionalProperties": false,
+        "description": "``501 not_ported`` (``backend.web.dispatch.not_ported``): a route PostgreSQL does not serve yet.",
+        "properties": {
+          "error": {
+            "minLength": 1,
+            "title": "Error",
+            "type": "string"
+          },
+          "code": {
+            "const": "not_ported",
+            "title": "Code",
+            "type": "string"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "request_id"
         ],
         "type": "object"
       },
@@ -6362,6 +8328,555 @@
         ],
         "type": "object"
       },
+      "RecentWork": {
+        "additionalProperties": false,
+        "description": "``GET /api/recent``: a card row with its last open.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pdf",
+                  "video"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "primary_manifestation_id": {
+            "title": "Primary Manifestation Id",
+            "type": "string"
+          },
+          "primary_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Asset Id"
+          },
+          "manifestation_count": {
+            "title": "Manifestation Count",
+            "type": "integer"
+          },
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "primary_author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Author"
+          },
+          "primary_editor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Editor"
+          },
+          "linked_authors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Authors' display names, comma separated.",
+            "title": "Linked Authors"
+          },
+          "linked_people": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedPerson"
+            },
+            "title": "Linked People",
+            "type": "array"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The managed PDF's size on disk; null without one.",
+            "title": "File Size Bytes"
+          },
+          "last_opened_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Opened At"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "doc_type",
+          "file_path",
+          "source_kind",
+          "source_url",
+          "thumb_url",
+          "thumb_page",
+          "author_text",
+          "year",
+          "published_date",
+          "provider",
+          "provider_id",
+          "primary_manifestation_id",
+          "primary_asset_id",
+          "manifestation_count",
+          "asset_count",
+          "primary_author",
+          "primary_editor",
+          "linked_authors",
+          "linked_people",
+          "file_size_bytes",
+          "last_opened_at"
+        ],
+        "type": "object"
+      },
+      "RecentlyAddedWork": {
+        "additionalProperties": false,
+        "description": "``GET /api/recently-added``: a card row with its creation, publisher and Folder.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pdf",
+                  "video"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "primary_manifestation_id": {
+            "title": "Primary Manifestation Id",
+            "type": "string"
+          },
+          "primary_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Asset Id"
+          },
+          "manifestation_count": {
+            "title": "Manifestation Count",
+            "type": "integer"
+          },
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "primary_author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Author"
+          },
+          "primary_editor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Editor"
+          },
+          "linked_authors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Authors' display names, comma separated.",
+            "title": "Linked Authors"
+          },
+          "linked_people": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedPerson"
+            },
+            "title": "Linked People",
+            "type": "array"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The managed PDF's size on disk; null without one.",
+            "title": "File Size Bytes"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "doc_type",
+          "file_path",
+          "source_kind",
+          "source_url",
+          "thumb_url",
+          "thumb_page",
+          "author_text",
+          "year",
+          "published_date",
+          "provider",
+          "provider_id",
+          "primary_manifestation_id",
+          "primary_asset_id",
+          "manifestation_count",
+          "asset_count",
+          "primary_author",
+          "primary_editor",
+          "linked_authors",
+          "linked_people",
+          "file_size_bytes",
+          "created_at",
+          "publisher",
+          "folder_id"
+        ],
+        "type": "object"
+      },
+      "ResearchRefs": {
+        "additionalProperties": false,
+        "description": "The Concepts and Arguments the Research Note links to.",
+        "properties": {
+          "concepts": {
+            "items": {
+              "$ref": "#/components/schemas/ConceptRef"
+            },
+            "title": "Concepts",
+            "type": "array"
+          },
+          "arguments": {
+            "items": {
+              "$ref": "#/components/schemas/ArgumentRef"
+            },
+            "title": "Arguments",
+            "type": "array"
+          },
+          "pending": {
+            "description": "True while the research index has not caught up with the note; left out when the index could not be read.",
+            "title": "Pending",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "concepts",
+          "arguments"
+        ],
+        "type": "object"
+      },
       "RestoreRequest": {
         "properties": {
           "token": {
@@ -7111,6 +9626,2177 @@
         },
         "required": [
           "code"
+        ],
+        "type": "object"
+      },
+      "TextRebuildQueued": {
+        "additionalProperties": false,
+        "description": "``POST /api/works/reindex-pdf-text``: the rebuild is queued; the counters are zero.",
+        "properties": {
+          "status": {
+            "const": "ok",
+            "title": "Status",
+            "type": "string"
+          },
+          "queued": {
+            "description": "False when a rebuild was already queued.",
+            "title": "Queued",
+            "type": "boolean"
+          },
+          "processed": {
+            "title": "Processed",
+            "type": "integer"
+          },
+          "indexed": {
+            "title": "Indexed",
+            "type": "integer"
+          },
+          "updated": {
+            "title": "Updated",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          },
+          "empty": {
+            "title": "Empty",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "integer"
+          },
+          "missing": {
+            "title": "Missing",
+            "type": "integer"
+          },
+          "failed": {
+            "title": "Failed",
+            "type": "integer"
+          },
+          "removed_orphans": {
+            "title": "Removed Orphans",
+            "type": "integer"
+          },
+          "skipped": {
+            "title": "Skipped",
+            "type": "integer"
+          },
+          "fts_rebuilt": {
+            "title": "Fts Rebuilt",
+            "type": "boolean"
+          },
+          "extractor_unavailable": {
+            "title": "Extractor Unavailable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "status",
+          "queued",
+          "processed",
+          "indexed",
+          "updated",
+          "unchanged",
+          "empty",
+          "truncated",
+          "missing",
+          "failed",
+          "removed_orphans",
+          "skipped",
+          "fts_rebuilt",
+          "extractor_unavailable"
+        ],
+        "type": "object"
+      },
+      "TextRebuildRequest": {
+        "properties": {
+          "force": {
+            "description": "Accepted; asks for nothing more (only what has no current row is re-extracted).",
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "WorkBrowseRow": {
+        "additionalProperties": false,
+        "description": "``GET /api/works?projection=browse``: the compact card row.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pdf",
+                  "video"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "primary_manifestation_id": {
+            "title": "Primary Manifestation Id",
+            "type": "string"
+          },
+          "primary_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Asset Id"
+          },
+          "manifestation_count": {
+            "title": "Manifestation Count",
+            "type": "integer"
+          },
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "primary_author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Author"
+          },
+          "primary_editor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Editor"
+          },
+          "linked_authors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Authors' display names, comma separated.",
+            "title": "Linked Authors"
+          },
+          "linked_people": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedPerson"
+            },
+            "title": "Linked People",
+            "type": "array"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The managed PDF's size on disk; null without one.",
+            "title": "File Size Bytes"
+          },
+          "abstract_excerpt": {
+            "description": "The abstract's first 100 code points.",
+            "title": "Abstract Excerpt",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "doc_type",
+          "file_path",
+          "source_kind",
+          "source_url",
+          "thumb_url",
+          "thumb_page",
+          "author_text",
+          "year",
+          "published_date",
+          "provider",
+          "provider_id",
+          "primary_manifestation_id",
+          "primary_asset_id",
+          "manifestation_count",
+          "asset_count",
+          "primary_author",
+          "primary_editor",
+          "linked_authors",
+          "linked_people",
+          "file_size_bytes",
+          "abstract_excerpt"
+        ],
+        "type": "object"
+      },
+      "WorkCreateRequest": {
+        "description": "``POST /api/works``: an upload, an existing managed PDF, a video URL or no file.\n\nEvery field may be left out; an empty title or author of a YouTube video is\nfilled from its oEmbed answer.",
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "text_content": {
+            "title": "Text Content",
+            "type": "string"
+          },
+          "private_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Private Notes"
+          },
+          "author_text": {
+            "title": "Author Text",
+            "type": "string"
+          },
+          "doc_type": {
+            "title": "Doc Type",
+            "type": "string"
+          },
+          "year": {
+            "title": "Year",
+            "type": "string"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null: none (the New File form sends null for no date).",
+            "title": "Published Date"
+          },
+          "publisher": {
+            "title": "Publisher",
+            "type": "string"
+          },
+          "location": {
+            "title": "Location",
+            "type": "string"
+          },
+          "edition": {
+            "title": "Edition",
+            "type": "string"
+          },
+          "journal": {
+            "title": "Journal",
+            "type": "string"
+          },
+          "volume": {
+            "title": "Volume",
+            "type": "string"
+          },
+          "issue": {
+            "title": "Issue",
+            "type": "string"
+          },
+          "pages": {
+            "title": "Pages",
+            "type": "string"
+          },
+          "isbn": {
+            "title": "Isbn",
+            "type": "string"
+          },
+          "doi": {
+            "title": "Doi",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "A managed PDF (``/api/pdfs/<name>``) the new Work adopts.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The uploaded file's name; sent with file_b64. Null: no upload.",
+            "title": "File Name"
+          },
+          "file_b64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The uploaded PDF, base64 encoded. Null: no upload.",
+            "title": "File B64"
+          },
+          "source_kind": {
+            "description": "``pdf`` or ``video``; inferred when left out.",
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "source_url": {
+            "description": "A YouTube URL for a video Work, else the citation URL.",
+            "title": "Source Url",
+            "type": "string"
+          },
+          "source_mime": {
+            "title": "Source Mime",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "thumb_url": {
+            "title": "Thumb Url",
+            "type": "string"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Not a positive integer: no preferred page.",
+            "title": "Thumb Page"
+          },
+          "urldate": {
+            "title": "Urldate",
+            "type": "string"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Left out or null: Uncategorized.",
+            "title": "Folder Id"
+          },
+          "playlist_id": {
+            "description": "A Playlist to add the Work to (best effort).",
+            "title": "Playlist Id",
+            "type": "string"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/InitialRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "WorkCreated": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "WorkDetail": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/:id``: the Work with its notes, credits, Tags and annotations.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          },
+          "text_content": {
+            "description": "The Research Note (Markdown); empty when none.",
+            "title": "Text Content",
+            "type": "string"
+          },
+          "html_content": {
+            "description": "The Research Note with its wiki links resolved; left out when empty.",
+            "title": "Html Content",
+            "type": "string"
+          },
+          "private_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Private Notes"
+          },
+          "file_path": {
+            "title": "File Path",
+            "type": "string"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Size Bytes"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pdf",
+                  "video"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "source_mime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Mime"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "urldate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urldate"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "edition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edition"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "isbn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isbn"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "hide_pdf_link_annotations": {
+            "enum": [
+              0,
+              1
+            ],
+            "title": "Hide Pdf Link Annotations",
+            "type": "integer"
+          },
+          "citation_style": {
+            "description": "The Work's citation style id; empty for the Library's.",
+            "title": "Citation Style",
+            "type": "string"
+          },
+          "canonical_annotation_set_revision": {
+            "title": "Canonical Annotation Set Revision",
+            "type": "integer"
+          },
+          "materialized_pdf_annotation_revision": {
+            "title": "Materialized Pdf Annotation Revision",
+            "type": "integer"
+          },
+          "last_opened_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Opened At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "primary_manifestation_id": {
+            "title": "Primary Manifestation Id",
+            "type": "string"
+          },
+          "primary_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Asset Id"
+          },
+          "manifestation_count": {
+            "title": "Manifestation Count",
+            "type": "integer"
+          },
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Id"
+          },
+          "folder_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Folder Title"
+          },
+          "playlist_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlist Id"
+          },
+          "playlist_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Playlist Title"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/WorkRole"
+            },
+            "title": "Roles",
+            "type": "array"
+          },
+          "tags": {
+            "items": {
+              "$ref": "#/components/schemas/WorkTag"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "annotations": {
+            "description": "The Work's annotations as a JSON array, in text.",
+            "title": "Annotations",
+            "type": "string"
+          },
+          "arguments": {
+            "description": "Always empty: the linked Arguments are in research_refs.",
+            "items": {},
+            "title": "Arguments",
+            "type": "array"
+          },
+          "research_refs": {
+            "$ref": "#/components/schemas/ResearchRefs"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "abstract",
+          "text_content",
+          "private_notes",
+          "file_path",
+          "file_size_bytes",
+          "source_kind",
+          "source_url",
+          "source_mime",
+          "thumb_url",
+          "thumb_page",
+          "provider",
+          "provider_id",
+          "urldate",
+          "author_text",
+          "doc_type",
+          "year",
+          "published_date",
+          "publisher",
+          "location",
+          "edition",
+          "journal",
+          "volume",
+          "issue",
+          "pages",
+          "isbn",
+          "doi",
+          "hide_pdf_link_annotations",
+          "citation_style",
+          "canonical_annotation_set_revision",
+          "materialized_pdf_annotation_revision",
+          "last_opened_at",
+          "created_at",
+          "updated_at",
+          "primary_manifestation_id",
+          "primary_asset_id",
+          "manifestation_count",
+          "asset_count",
+          "folder_id",
+          "folder_title",
+          "playlist_id",
+          "playlist_title",
+          "roles",
+          "tags",
+          "annotations",
+          "arguments",
+          "research_refs"
+        ],
+        "type": "object"
+      },
+      "WorkMetadataFields": {
+        "additionalProperties": false,
+        "description": "Every synchronized field (``metadata_rules.SYNCED_FIELDS``), each one present.",
+        "properties": {
+          "abstract": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "author_text": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "citation_style": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "doc_type": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "doi": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "edition": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "isbn": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "issue": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "journal": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "location": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "pages": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "published_date": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "publisher": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "source_url": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "thumb_page": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "title": {
+            "$ref": "#/components/schemas/MetadataFieldRevision"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "year": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          }
+        },
+        "required": [
+          "abstract",
+          "author_text",
+          "citation_style",
+          "doc_type",
+          "doi",
+          "edition",
+          "isbn",
+          "issue",
+          "journal",
+          "location",
+          "pages",
+          "published_date",
+          "publisher",
+          "source_url",
+          "status",
+          "thumb_page",
+          "title",
+          "volume",
+          "year"
+        ],
+        "type": "object"
+      },
+      "WorkMetadataState": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/:id/metadata-state``: each synchronized field's revision.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/WorkMetadataFields"
+          }
+        },
+        "required": [
+          "work_id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "WorkNotesState": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/:id/notes-state``: the two notes' revisions (the bodies are on the Work).",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "research_note_revision": {
+            "title": "Research Note Revision",
+            "type": "integer"
+          },
+          "private_note_revision": {
+            "title": "Private Note Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "work_id",
+          "research_note_revision",
+          "private_note_revision"
+        ],
+        "type": "object"
+      },
+      "WorkPatch": {
+        "description": "``PATCH /api/works/:id``: the fields sent change; the others are kept.\n\n``file_path`` may only echo the stored path (another one is ``501``); the\nsource identity fields are refused (``400``): they change through\n``SET_WORK_SOURCE``.",
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          },
+          "text_content": {
+            "description": "The Research Note (Markdown).",
+            "title": "Text Content",
+            "type": "string"
+          },
+          "private_notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Private Notes"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A number is stored as its text.",
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "edition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edition"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "isbn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isbn"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "urldate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urldate"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Up to 64 KiB. Refused (400) on a video Work: its URL is its source identity, set through SET_WORK_SOURCE.",
+            "title": "Source Url"
+          },
+          "source_mime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Mime"
+          },
+          "hide_pdf_link_annotations": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "true, 1 or \"1\"/\"true\"/\"yes\" hide them.",
+            "title": "Hide Pdf Link Annotations"
+          },
+          "citation_style": {
+            "description": "A style id, or empty for the Library's.",
+            "title": "Citation Style",
+            "type": "string"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Move to this Folder; null: Uncategorized.",
+            "title": "Folder Id"
+          },
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Only the stored path, echoed.",
+            "title": "File Path"
+          }
+        },
+        "type": "object"
+      },
+      "WorkRole": {
+        "additionalProperties": false,
+        "description": "A credit on the Work's primary Manifestation: the Person's row and the role.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "first_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Name"
+          },
+          "last_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Name"
+          },
+          "aliases": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Aliases"
+          },
+          "about": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "About"
+          },
+          "birth_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Birth Date"
+          },
+          "death_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Death Date"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url"
+          },
+          "link_wikipedia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Wikipedia"
+          },
+          "link_stanford_encyclopedia": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Stanford Encyclopedia"
+          },
+          "link_iep": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link Iep"
+          },
+          "links_other": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Links Other"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "role_type": {
+            "title": "Role Type",
+            "type": "string"
+          },
+          "order_index": {
+            "title": "Order Index",
+            "type": "integer"
+          },
+          "credit_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credit Name"
+          },
+          "manifestation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifestation Id"
+          }
+        },
+        "required": [
+          "id",
+          "first_name",
+          "last_name",
+          "aliases",
+          "about",
+          "birth_date",
+          "death_date",
+          "image_url",
+          "link_wikipedia",
+          "link_stanford_encyclopedia",
+          "link_iep",
+          "links_other",
+          "created_at",
+          "updated_at",
+          "role_type",
+          "order_index",
+          "credit_name",
+          "manifestation_id"
+        ],
+        "type": "object"
+      },
+      "WorkSourceState": {
+        "additionalProperties": false,
+        "description": "``GET /api/works/:id/source-state``: the stored source and its revision, from one read.",
+        "properties": {
+          "work_id": {
+            "title": "Work Id",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "integer"
+          },
+          "source_kind": {
+            "description": "Empty: the Work has no Asset.",
+            "enum": [
+              "pdf",
+              "video",
+              ""
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Empty unless a video.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_id": {
+            "description": "Empty unless a video.",
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "source_url": {
+            "description": "Empty when unset.",
+            "title": "Source Url",
+            "type": "string"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the Work has no Asset.",
+            "title": "Thumb Url"
+          },
+          "urldate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urldate"
+          }
+        },
+        "required": [
+          "work_id",
+          "revision",
+          "source_kind",
+          "provider",
+          "provider_id",
+          "source_url",
+          "thumb_url",
+          "urldate"
+        ],
+        "type": "object"
+      },
+      "WorkStatus": {
+        "additionalProperties": false,
+        "description": "``{\"status\": ...}``: what the request did.",
+        "properties": {
+          "status": {
+            "enum": [
+              "updated",
+              "deleted",
+              "opened"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "WorkSummary": {
+        "additionalProperties": false,
+        "description": "``GET /api/works`` and ``GET /api/search``: the whole summary row.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "doc_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Type"
+          },
+          "file_path": {
+            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "title": "File Path",
+            "type": "string"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pdf",
+                  "video"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Url"
+          },
+          "thumb_page": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thumb Page"
+          },
+          "author_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author Text"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "published_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published Date"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "primary_manifestation_id": {
+            "title": "Primary Manifestation Id",
+            "type": "string"
+          },
+          "primary_asset_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Asset Id"
+          },
+          "manifestation_count": {
+            "title": "Manifestation Count",
+            "type": "integer"
+          },
+          "asset_count": {
+            "title": "Asset Count",
+            "type": "integer"
+          },
+          "primary_author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Author"
+          },
+          "primary_editor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Editor"
+          },
+          "linked_authors": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Authors' display names, comma separated.",
+            "title": "Linked Authors"
+          },
+          "linked_people": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedPerson"
+            },
+            "title": "Linked People",
+            "type": "array"
+          },
+          "file_size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The managed PDF's size on disk; null without one.",
+            "title": "File Size Bytes"
+          },
+          "abstract": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstract"
+          },
+          "source_mime": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Mime"
+          },
+          "urldate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urldate"
+          },
+          "publisher": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Publisher"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "edition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edition"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Issue"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "isbn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isbn"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "last_opened_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Opened At"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "title": "Updated At",
+            "type": "string"
+          },
+          "folder_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Left out of a Tag filter's rows (``GET /api/search?tag=``).",
+            "title": "Folder Id"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "doc_type",
+          "file_path",
+          "source_kind",
+          "source_url",
+          "thumb_url",
+          "thumb_page",
+          "author_text",
+          "year",
+          "published_date",
+          "provider",
+          "provider_id",
+          "primary_manifestation_id",
+          "primary_asset_id",
+          "manifestation_count",
+          "asset_count",
+          "primary_author",
+          "primary_editor",
+          "linked_authors",
+          "linked_people",
+          "file_size_bytes",
+          "abstract",
+          "source_mime",
+          "urldate",
+          "publisher",
+          "location",
+          "edition",
+          "journal",
+          "volume",
+          "issue",
+          "pages",
+          "isbn",
+          "doi",
+          "last_opened_at",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object"
+      },
+      "WorkTag": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "created_at"
         ],
         "type": "object"
       }

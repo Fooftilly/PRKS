@@ -35,7 +35,6 @@ UNTYPED = frozenset({
     ("PUT", "/api/arguments/{argument_id}/sources"),
     ("GET", "/api/arguments/{argument_id}/sync-state"),
     ("PUT", "/api/arguments/{argument_id}/targets"),
-    ("GET", "/api/bibtex/{work_id}"),
     ("GET", "/api/concepts"),
     ("POST", "/api/concepts"),
     ("DELETE", "/api/concepts/{concept_id}"),
@@ -54,8 +53,6 @@ UNTYPED = frozenset({
     ("GET", "/api/folders/{owner_id}/tag-options"),
     ("POST", "/api/folders/{owner_id}/tags"),
     ("DELETE", "/api/folders/{owner_id}/tags/{tag_id}"),
-    ("GET", "/api/pdfs/{filename:path}"),
-    ("HEAD", "/api/pdfs/{filename:path}"),
     ("GET", "/api/person-groups"),
     ("POST", "/api/person-groups"),
     ("DELETE", "/api/person-groups/{group_id}"),
@@ -81,37 +78,23 @@ UNTYPED = frozenset({
     ("DELETE", "/api/playlists/{playlist_id}/items/{work_id}"),
     ("POST", "/api/playlists/{playlist_id}/reorder"),
     ("GET", "/api/playlists/{playlist_id}/sync-state"),
-    ("GET", "/api/recent"),
-    ("GET", "/api/recently-added"),
     ("GET", "/api/research-graph"),
     ("POST", "/api/roles"),
-    ("GET", "/api/search"),
     ("GET", "/api/tags"),
     ("POST", "/api/tags"),
     ("POST", "/api/tags/merge"),
     ("DELETE", "/api/tags/{tag_id}"),
     ("DELETE", "/api/tags/{tag_id}/aliases"),
     ("POST", "/api/tags/{tag_id}/aliases"),
-    ("GET", "/api/works"),
-    ("POST", "/api/works"),
-    ("POST", "/api/works/bulk"),
-    ("POST", "/api/works/linearize-existing-pdfs"),
-    ("POST", "/api/works/reindex-pdf-text"),
     ("GET", "/api/works/{owner_id}/tag-options"),
     ("POST", "/api/works/{owner_id}/tags"),
     ("DELETE", "/api/works/{owner_id}/tags/{tag_id}"),
-    ("DELETE", "/api/works/{work_id}"),
-    ("GET", "/api/works/{work_id}"),
-    ("PATCH", "/api/works/{work_id}"),
     ("GET", "/api/works/{work_id}/annotations"),
     ("POST", "/api/works/{work_id}/annotations"),
     ("GET", "/api/works/{work_id}/annotations-snapshot"),
     ("GET", "/api/works/{work_id}/annotations-state"),
     ("POST", "/api/works/{work_id}/annotations/adopt"),
     ("GET", "/api/works/{work_id}/folder-state"),
-    ("GET", "/api/works/{work_id}/metadata-state"),
-    ("GET", "/api/works/{work_id}/notes-state"),
-    ("POST", "/api/works/{work_id}/opened"),
     ("POST", "/api/works/{work_id}/pdf"),
     ("GET", "/api/works/{work_id}/pdf-materialization"),
     ("GET", "/api/works/{work_id}/people-state"),
@@ -119,10 +102,12 @@ UNTYPED = frozenset({
     ("GET", "/api/works/{work_id}/related_folders"),
     ("DELETE", "/api/works/{work_id}/roles"),
     ("PATCH", "/api/works/{work_id}/roles"),
-    ("GET", "/api/works/{work_id}/source-state"),
-    ("GET", "/api/works/{work_id}/thumbnail"),
 })
 
+
+#: Operations that answer only 501 until they are ported to PostgreSQL; a ported
+#: one leaves this set and documents its success.
+_NOT_PORTED = frozenset({"linearizeExistingPdfs"})
 
 #: Unfenced reads that save what they serve on a miss, through a command.
 _FILLS_ON_READ = frozenset({("GET", "/api/remote-images")})
@@ -154,7 +139,12 @@ class OpenApiDocumentTests(unittest.TestCase):
     def test_each_operation_names_a_success_and_its_path_parameters(self) -> None:
         for (method, path), op in _operations(self.document).items():
             with self.subTest(method=method, path=path):
-                self.assertTrue(any(status.startswith("2") for status in op["responses"]), op["responses"])
+                if op["operationId"] in _NOT_PORTED:
+                    # Not ported to PostgreSQL yet: it answers only 501 (pre-1.0 policy).
+                    self.assertIn("501", op["responses"])
+                    self.assertFalse([s for s in op["responses"] if s.startswith("2")], op["responses"])
+                else:
+                    self.assertTrue(any(status.startswith("2") for status in op["responses"]), op["responses"])
                 names = {p["name"] for p in self.document["paths"][path].get("parameters", [])}
                 self.assertEqual(names, set(re.findall(r"\{(\w+)\}", path)))
 
