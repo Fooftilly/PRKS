@@ -60,7 +60,9 @@ class _WorkCard(BaseModel):
     primary_editor: Optional[str]
     linked_authors: Optional[str] = Field(description="The Authors' display names, comma separated.")
     linked_people: list[LinkedPerson]
-    file_size_bytes: Optional[int] = Field(description="The managed PDF's size on disk; null without one.")
+    file_size_bytes: Optional[int] = Field(description=(
+        "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, "
+        "not the disk; null without one."))
 
 
 class WorkBrowseRow(_WorkCard):

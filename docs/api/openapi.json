@@ -17078,7 +17078,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {
@@ -17747,7 +17747,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {
@@ -20046,7 +20046,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "last_opened_at": {
@@ -20297,7 +20297,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "created_at": {
@@ -22370,7 +22370,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract_excerpt": {
@@ -24069,7 +24069,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {

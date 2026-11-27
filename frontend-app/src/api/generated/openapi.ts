@@ -3985,7 +3985,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
@@ -4155,7 +4155,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
@@ -4837,7 +4837,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Folder Id */
@@ -4899,7 +4899,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Id */
@@ -5738,7 +5738,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Id */
@@ -6261,7 +6261,7 @@ export interface components {
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
