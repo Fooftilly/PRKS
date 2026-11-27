@@ -1,0 +1,67 @@
+name: Advisory Dafny pilot
+
+# The #1472 research pilot: proofs of the reconcile model (formal/dafny),
+# the required-theorem manifest and the mutant set. Advisory: not a required
+# check. Runs on a push that touches the model, because a workflow_dispatch
+# file must exist on the default branch first.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/formal-dafny.yml"
+      - "formal/dafny/**"
+      - "scripts/formal/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-dafny-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DAFNY_VERSION: "4.11.0"
+  DAFNY_SHA256: a46a9ff7cdd720f7955854c78e95df13f4cfe6b80691b05f8654fe19e8267179
+  PRKS_DAFNY_RLIMIT: "20000"
+
+jobs:
+  verify:
+    name: Dafny proofs, manifest and mutants (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Dafny
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/dafny.zip" \
+            "https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip"
+          echo "${DAFNY_SHA256}  $RUNNER_TEMP/dafny.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/dafny.zip" -d "$RUNNER_TEMP"
+          echo "DAFNY=$RUNNER_TEMP/dafny/dafny" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/dafny/dafny" --version
+
+      - name: Required-theorem manifest
+        run: python3 scripts/formal/dafny_theorems.py
+
+      - name: Verify (under 60 s)
+        run: |
+          start=$(date +%s)
+          "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" formal/dafny/Sequence.dfy
+          elapsed=$(( $(date +%s) - start ))
+          echo "Verification took ${elapsed} s"
+          echo "Verification took ${elapsed} s" >> "$GITHUB_STEP_SUMMARY"
+          test "$elapsed" -lt 60
+
+      - name: Stable across 3 solver seeds
+        run: |
+          for seed in 1 2 3; do
+            "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
+              --boogie "-randomSeed:${seed}" formal/dafny/Sequence.dfy
+          done
+
+      - name: Mutants
+        run: python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"
