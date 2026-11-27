@@ -291,7 +291,7 @@ export interface FieldBase {
    * left the queue the server holds it, and returning is a real change.
    */
   pending?: string
-  /** The queued operation that carries `pending`; another with the same payload is not it. */
+  /** The queued operation the form showed (`pending`, or a read that already holds it); another with the same payload is not it. */
   pendingOp?: string
   /** The acknowledged operation that produced `revision`. */
   ackOp?: string
@@ -341,7 +341,10 @@ export function pinEditBase(
       if (!isFieldBase(own) || own.value !== value) {
         pinned[field] = null
       } else if (own.value === entry.value) {
-        pinned[field] = { value: entry.value, revision: Math.max(entry.revision, own.revision) }
+        pinned[field] = {
+          value: entry.value, revision: Math.max(entry.revision, own.revision),
+          ...(typeof own.pendingOp === 'string' ? { pendingOp: own.pendingOp } : {}),
+        }
       } else {
         pinned[field] = entry.revision === own.revision
           ? {

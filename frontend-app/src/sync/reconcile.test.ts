@@ -342,6 +342,14 @@ describe('edit-session bases', () => {
     })
   })
 
+  it('names the unsent edit a read already holds, so the form may replace it', () => {
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'unsent', revision: 4 } }
+    const showsPending = { name: 'Group', description: 'unsent' }
+    expect(
+      pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 3, pendingOp: 'op-1' } })?.description,
+    ).toEqual({ value: 'unsent', revision: 4, pendingOp: 'op-1' })
+  })
+
   it('sends changed fields against the pinned revision, never a newer one', () => {
     const pinned = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } }
     expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned)).toEqual({

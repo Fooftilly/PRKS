@@ -162,6 +162,16 @@ async function fieldEditsCoalesceAndCancel() {
     assert.equal((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).length, 2);
 }
 
+/* #1471 review: equal text at another base is another session's edit. */
+async function equalTextAtAnotherBaseIsNotTheShownEdit() {
+    const store = newStore();
+    const [queued] = await store.savePersonGroupFields("PG-E", { name: "A" }, baseAt({ name: 1 }, { name: "B" }));
+    await assert.rejects(() => store.savePersonGroupFields("PG-E", { name: "C" }, baseAt({ name: 0 }, { name: "A" })),
+        e => e.prksLocalStoreCode === "pending_elsewhere");
+    assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => [r.op_id, r.payload.value, r.base_revision]),
+        [[queued.op_id, "A", 1]], "the other session's unsent edit is kept");
+}
+
 async function movingIntoALocalGroupWaitsForIt() {
     const store = newStore();
     const parent = await store.createPersonGroup({ name: "Top" });
@@ -1681,6 +1691,7 @@ async function main() {
     await fieldEditsCoalesceAndCancel();
     await aRevertAfterTheShownRenameSyncedIsSaved();
     await aPendingMoveShowsTheNewParent();
+    await equalTextAtAnotherBaseIsNotTheShownEdit();
     await movingIntoALocalGroupWaitsForIt();
     await editsFollowTheGroupsOwnCreation();
     await aRefusedCreationTakesItsEditsDownVisibly();

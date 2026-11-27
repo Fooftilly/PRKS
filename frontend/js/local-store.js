@@ -3688,10 +3688,14 @@
         }
 
         /* An unsent edit the form never showed belongs to another edit
-         * session on this device; replacing it would drop that edit unseen. */
+         * session on this device; replacing it would drop that edit unseen.
+         * Equal text alone is no proof: the same text at another base is a
+         * different edit. */
         function assertShownUnsentEdit(existing, observed) {
             const shownValue = typeof observed.pending === 'string' ? observed.pending : observed.value;
-            if (existing.op_id !== observed.pendingOp && existing.payload.value !== shownValue) {
+            const sameEdit = existing.payload.value === shownValue &&
+                existing.base_revision === observed.revision;
+            if (existing.op_id !== observed.pendingOp && !sameEdit) {
                 throw localStoreError('pending_elsewhere',
                     'Another tab on this device has an unsent change to this field.');
             }

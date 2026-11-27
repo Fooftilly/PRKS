@@ -193,6 +193,19 @@ async function fieldEditsCoalesceAndCancel() {
         "the other session's unsent edit is kept");
 }
 
+/* #1471 review: tab A shows A at revision 0. Tab B read B at revision 1 and
+ * queued A offline at base 1. Tab A's Save of C must not take that row for
+ * its own because the text matches. */
+async function equalTextAtAnotherBaseIsNotTheShownEdit() {
+    const store = newStore();
+    const id = "PL-" + "E".repeat(32);
+    const [queued] = await store.savePlaylistFields(id, { title: "A" }, baseAt({ title: 1 }, { title: "B" }));
+    await assert.rejects(() => store.savePlaylistFields(id, { title: "C" }, baseAt({ title: 0 }, { title: "A" })),
+        error => error.prksLocalStoreCode === "pending_elsewhere");
+    assert.deepEqual((await rowsFor(store, "SET_PLAYLIST_FIELD")).map(r => [r.op_id, r.payload.value, r.base_revision]),
+        [[queued.op_id, "A", 1]], "tab B's unsent edit is kept");
+}
+
 async function oneSyncingFieldDoesNotBlockAnother() {
     const store = newStore();
     const id = "PL-" + "B".repeat(32);
@@ -368,7 +381,6 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const pinnedFirst = await pinFor(wrapper);
         await wrapper.updateOperationSyncState(first.op_id, { status: "acknowledged", server_revision: 4 });
         await wrapper.deleteAcknowledgedOperation(first.op_id);
-        await wrapper.savePlaylistFields(id, { title: "Seminars" }, read);
         heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
             fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
                 name === "title" ? { value: "Seminars", revision: 4, ackOp: first.op_id } : { value: "", revision: 0 }])) });
@@ -382,6 +394,29 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         }
         assert.deepEqual((await rowsFor(wrapper, "SET_PLAYLIST_FIELD")).map(r => [r.payload.value, r.base_revision]),
             [["Lectures", 4]], "updatePlaylist settles from the snapshot and writes the revert at its ACK");
+
+        /* #1471 review: a stale pane queued the same text at the older base.
+         * The settled form shows that text at revision 4, so equal text is
+         * not the shown edit: the revert is refused and that row is kept. */
+        const later = newStore();
+        const [shownEdit] = await later.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinnedLater = await pinFor(later);
+        await later.updateOperationSyncState(shownEdit.op_id, { status: "acknowledged", server_revision: 4 });
+        await later.deleteAcknowledgedOperation(shownEdit.op_id);
+        const [other] = await later.savePlaylistFields(id, { title: "Seminars" }, read);
+        heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
+            fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
+                name === "title" ? { value: "Seminars", revision: 4, ackOp: shownEdit.op_id } : { value: "", revision: 0 }])) });
+        globalThis.prksSync = { store: later };
+        try {
+            await assert.rejects(globalThis.updatePlaylist(id, { title: "Lectures" }, { base: pinnedLater }),
+                err => err.prksLocalStoreCode === "pending_elsewhere");
+        } finally {
+            globalThis.prksSync = sync;
+            heldEntities.delete("playlist-edit-base:" + id);
+        }
+        assert.deepEqual((await rowsFor(later, "SET_PLAYLIST_FIELD")).map(r => r.op_id), [other.op_id],
+            "the other pane's row is kept");
     }
     /* #894: another pane replaced the synced edit (Seminars -> Talks) before
      * this form, opened on the unsent edit, returned to Lectures. This form
@@ -930,6 +965,7 @@ async function main() {
     await anEmptyTitleBecomesThePlaceholder();
     await fieldEditsCoalesceAndCancel();
     await aRevertAfterTheShownEditSyncedIsSaved();
+    await equalTextAtAnotherBaseIsNotTheShownEdit();
     await oneSyncingFieldDoesNotBlockAnother();
     await aVideosPlaylistIsAScalarThatCancels();
     await aPendingMembershipShowsOnBothEnds();
