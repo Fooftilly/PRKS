@@ -980,7 +980,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -1001,7 +1002,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -1299,7 +1301,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -1317,7 +1320,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -1478,7 +1482,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -1496,7 +1501,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -1987,7 +1993,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2008,7 +2015,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -2454,7 +2462,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2472,7 +2481,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -2524,7 +2534,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2545,7 +2556,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -2860,7 +2872,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2878,7 +2891,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -2940,7 +2954,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2958,7 +2973,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -3083,7 +3099,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -3104,7 +3121,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -3638,7 +3656,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -3656,7 +3675,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -5268,7 +5288,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -5289,7 +5310,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -5331,7 +5353,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -5352,7 +5375,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -6204,7 +6228,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -6235,7 +6260,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -6662,7 +6688,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -6693,7 +6720,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7066,7 +7094,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7084,7 +7113,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7493,7 +7523,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7511,7 +7542,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7573,7 +7605,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7591,7 +7624,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7653,7 +7687,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7671,7 +7706,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7826,7 +7862,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7844,7 +7881,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -7906,7 +7944,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -7924,7 +7963,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -8210,7 +8250,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -8228,7 +8269,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },

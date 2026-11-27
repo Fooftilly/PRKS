@@ -5852,7 +5852,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -5863,7 +5863,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6051,7 +6051,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6062,7 +6062,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6160,7 +6160,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6171,7 +6171,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6455,7 +6455,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6466,7 +6466,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6728,7 +6728,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6739,7 +6739,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6774,7 +6774,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -6785,7 +6785,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -6990,7 +6990,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7001,7 +7001,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -7038,7 +7038,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7049,7 +7049,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -7129,7 +7129,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7140,7 +7140,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -7449,7 +7449,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -7460,7 +7460,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -8472,7 +8472,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -8483,7 +8483,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -8509,7 +8509,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -8520,7 +8520,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9050,7 +9050,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9061,7 +9061,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9315,7 +9315,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9326,7 +9326,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9414,7 +9414,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9425,7 +9425,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9673,7 +9673,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9684,7 +9684,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9721,7 +9721,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9732,7 +9732,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9769,7 +9769,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9780,7 +9780,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9871,7 +9871,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9882,7 +9882,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -9919,7 +9919,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -9930,7 +9930,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;
@@ -10097,7 +10097,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content: {
@@ -10108,7 +10108,7 @@ export interface operations {
             304: {
                 headers: {
                     /** @description Opaque representation token for conditional GETs. */
-                    ETag?: string;
+                    ETag: string;
                     [name: string]: unknown;
                 };
                 content?: never;

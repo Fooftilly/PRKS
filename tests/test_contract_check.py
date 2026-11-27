@@ -21,6 +21,7 @@ _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/op
 _PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/processing-items/{item_id}/pdf")
 _STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
 _PROGRESS = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/backups/progress")
+_FOLDERS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/folders")
 _STORAGE_BODY = {"field": "value"}  # not read: the header checks run before the schema
 
 
@@ -169,6 +170,15 @@ class ContractCheckTests(unittest.TestCase):
         self.check.check_sent("POST", "/api/backups/restore", 200, [])
         self.check.check_sent("POST", "/api/backups/restore", 200, [("PRKS-Library-Epoch", "07")])
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
+
+    def test_a_conditional_read_needs_its_etag(self) -> None:
+        self.check.check(_FOLDERS, _request(), Response(304, [("ETag", '"v1"')], b""))
+        self.assertEqual(self.check.violations, [])
+        for status in (200, 304):
+            answer = _json(200, []) if status == 200 else Response(304, [], b"")
+            self.check.check(_FOLDERS, _request(), answer)
+        found = [v for v in self.check.violations if "required header ETag missing" in v]
+        self.assertEqual(len(found), 2, self.check.violations)
 
 
 if __name__ == "__main__":

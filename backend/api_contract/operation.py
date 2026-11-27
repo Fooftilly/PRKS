@@ -123,7 +123,7 @@ def body(schema: Schema, description: str = "", **kwargs: Any) -> RequestBody:
     return RequestBody(schema, description, **kwargs)
 
 
-ETAG = Header("Opaque representation token for conditional GETs.")
+ETAG = Header("Opaque representation token for conditional GETs.", required=True)
 NOT_MODIFIED = Reply("Not modified: If-None-Match matched the current ETag. Bodyless.", headers={"ETag": ETAG})
 
 
