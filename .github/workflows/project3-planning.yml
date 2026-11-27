@@ -1,0 +1,48 @@
+name: Project 3 planning
+
+# Read-only planning snapshot of PRKS issue items on Project #3, including
+# Implementation Order (#1478). See docs/agent-workflows/project-3.md
+# section 14.1. scripts/project3_readiness.py sends GraphQL queries only and
+# refuses to publish unless Project #3 is public. It runs apart from the
+# readiness workflow, so a planning failure never hides a readiness snapshot.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 2 * * *"
+
+permissions: {}
+
+concurrency:
+  group: project3-planning
+  cancel-in-progress: false
+
+jobs:
+  planning:
+    name: Project #3 planning snapshot
+    if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: project-automation
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read Project #3 planning fields (queries only)
+        env:
+          PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+        run: >-
+          python3 scripts/project3_readiness.py planning
+          --out "$RUNNER_TEMP/project3-planning.json"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload planning snapshot
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/project3-planning.json
+          archive: false
+          retention-days: 2
+          if-no-files-found: error

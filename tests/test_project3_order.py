@@ -259,10 +259,15 @@ class OrderDispatchTests(unittest.TestCase):
         allow = dispatch.mutations_allowed(raw, env)
         return dispatch.run(raw, project=self.fx.project(apply=allow), read=self.fx.read, env=env)
 
+    def digest(self, raw):
+        check = json.loads(raw)
+        check["operation"] = "check"
+        outcome = dispatch.run(json.dumps(check), project=self.fx.project(), read=self.fx.read, env={})[0]
+        return outcome.rsplit(" ", 1)[1]
+
     def armed(self, raw):
-        _, rows = dispatch.parse_order(raw)
         return {"PROJECT3_ORDER_WRITE_MODE": "apply",
-                "PROJECT3_ORDER_APPROVED_SHA256": dispatch.order_digest(rows)}
+                "PROJECT3_ORDER_APPROVED_SHA256": self.digest(raw)}
 
     def test_assignment_commands_keep_v1_behavior(self):
         raw = json.dumps({"version": 1, "operation": "apply", "items": [
@@ -284,22 +289,29 @@ class OrderDispatchTests(unittest.TestCase):
         raw = order_command(request_row())
         outcome, changed, issues = self.run_command(raw, self.armed(raw))
         self.assertIn("CHECK ONLY", outcome)
-        _, rows = dispatch.parse_order(raw)
-        self.assertIn(dispatch.order_digest(rows), outcome)
+        self.assertRegex(outcome, r"order digest [0-9a-f]{64}$")
         self.assertEqual((changed, issues, self.fx.api.mutations), (0, 1, []))
 
     def test_check_and_apply_share_one_digest(self):
-        check = dispatch.parse_order(order_command(request_row()))[1]
-        apply = dispatch.parse_order(order_command(request_row(), operation="apply"))[1]
-        self.assertEqual(dispatch.order_digest(check), dispatch.order_digest(apply))
-        other = dispatch.parse_order(order_command(request_row(order=4)))[1]
-        self.assertNotEqual(dispatch.order_digest(check), dispatch.order_digest(other))
+        check = self.digest(order_command(request_row()))
+        self.assertEqual(check, self.digest(order_command(request_row(), operation="apply")))
+        self.assertNotEqual(check, self.digest(order_command(request_row(order=4))))
+
+    def test_issue_change_after_check_invalidates_approval(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+        self.fx.issues[815]["labels"].append({"name": "accepted"})
+        with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
+            self.run_command(raw, env)
+        self.fx.dependencies[815] = [{"number": 4, "state": "open"}]
+        with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
+            self.run_command(raw, env)
+        self.assertEqual(self.fx.api.mutations, [])
 
     def test_apply_needs_mode_and_exact_approved_digest(self):
         raw = order_command(request_row(), operation="apply")
         self.assertIn("DRY RUN", self.run_command(raw, {})[0])
-        for approved in ("", "0" * 64, dispatch.order_digest(
-                dispatch.parse_order(order_command(request_row(order=4)))[1])):
+        for approved in ("", "0" * 64, self.digest(order_command(request_row(order=4)))):
             with self.subTest(approved=approved), \
                     self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
                 self.run_command(raw, {"PROJECT3_ORDER_WRITE_MODE": "apply",
@@ -363,7 +375,9 @@ class OrderRelayTests(unittest.TestCase):
 
     def test_relay_claims_and_applies_only_approved_order(self):
         raw = order_command(request_row(), operation="apply")
-        digest = dispatch.order_digest(dispatch.parse_order(raw)[1])
+        fx = OrderFixture()
+        check = dispatch.run(order_command(request_row()), project=fx.project(), read=fx.read, env={})
+        digest = check[0].rsplit(" ", 1)[1]
         code, fx, claims, audit = self.main_with(raw, {
             "PROJECT3_ORDER_WRITE_MODE": "apply", "PROJECT3_ORDER_APPROVED_SHA256": digest,
             "PROJECT3_ASSIGN_DISPATCH_MODE": "apply"})
@@ -509,15 +523,31 @@ class PlanningSnapshotTests(unittest.TestCase):
 
 
 class WorkflowOrderTests(unittest.TestCase):
-    def test_writers_pass_order_gates_and_refresh_planning(self):
+    def test_writers_pass_order_gates_and_refresh_both_snapshots(self):
         for name in ("project3-assignment-dispatch.yml", "project3-assignment-request-processor.yml"):
             text = (ROOT / ".github/workflows" / name).read_text()
             with self.subTest(name=name):
                 self.assertIn("PROJECT3_ORDER_WRITE_MODE: ${{ vars.PROJECT3_ORDER_WRITE_MODE }}", text)
                 self.assertIn("PROJECT3_ORDER_APPROVED_SHA256: ${{ vars.PROJECT3_ORDER_APPROVED_SHA256 }}", text)
-                self.assertIn("gh workflow run project3-readiness.yml --repo Fooftilly/PRKS --ref master", text)
+                self.assertIn("gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master || status=1", text)
+                self.assertIn("gh workflow run project3-planning.yml --repo Fooftilly/PRKS --ref master || status=1", text)
+                self.assertIn('exit "$status"', text)
                 self.assertIn("group: project3-assignment-mutations", text)
                 self.assertEqual(text.count("secrets."), 1)
+
+    def test_planning_workflow_is_separate_read_only_and_master_only(self):
+        text = (ROOT / ".github/workflows/project3-planning.yml").read_text()
+        readiness = (ROOT / ".github/workflows/project3-readiness.yml").read_text()
+        self.assertNotIn("planning", readiness)
+        self.assertIn("\npermissions: {}\n", text)
+        self.assertIn("      contents: read", text)
+        self.assertNotIn(": write", text)
+        self.assertIn("if: github.repository == 'Fooftilly/PRKS' && github.ref == 'refs/heads/master'", text)
+        self.assertIn("environment: project-automation", text)
+        self.assertEqual(text.count("secrets."), 1)
+        self.assertIn("python3 scripts/project3_readiness.py planning", text)
+        self.assertIn("persist-credentials: false", text)
+        self.assertIn("archive: false", text)
 
 
 if __name__ == "__main__":

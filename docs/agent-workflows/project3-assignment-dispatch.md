@@ -103,7 +103,7 @@ Each row MUST have exactly these keys. `expected_before` is the live rank or `nu
 
 Approval is bound to the exact batch:
 
-1. Run the command with `"operation": "check"`. The run summary prints `order digest <sha256>`. The digest covers `kind` and `items`, including `expected_before`, so check and apply of one batch have the same digest.
+1. Run the command with `"operation": "check"`. The run summary prints `order digest <sha256>`. The digest covers `kind`, `items` (including `expected_before`) and each issue's live labels, update time and open blockers. Check and apply of one batch have the same digest only while those issues are unchanged.
 2. The maintainer reviews the batch and sets the digest in the protected environment:
 
    ```bash
@@ -115,7 +115,7 @@ Approval is bound to the exact batch:
 
 `PROJECT3_ORDER_WRITE_MODE` is off by default and separate from `PROJECT3_ASSIGN_DISPATCH_MODE`. Neither mode enables the other. Agents MUST NOT set either variable or the digest: a successful check, an agent proposal or an owner-attributed commit is not human review. To turn order writes off, delete `PROJECT3_ORDER_WRITE_MODE`. Delete the digest after the apply.
 
-A replayed apply fails because `expected_before` no longer matches the live rank. A run that fails after a write reports **POSSIBLY PARTIAL** and refreshes both the agent queue and the readiness/planning snapshots.
+A replayed apply fails because `expected_before` no longer matches the live rank. A run that fails after a write reports **POSSIBLY PARTIAL** and refreshes the agent queue and the planning snapshot.
 
 ## Safety and audit
 

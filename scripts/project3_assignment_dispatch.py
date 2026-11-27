@@ -144,10 +144,10 @@ def parse_order(command: str) -> tuple[str, list[dict]]:
     return payload["operation"], rows
 
 
-def order_digest(rows: list[dict]) -> str:
-    """Identical for the check and apply of one reviewed batch."""
-    canonical = json.dumps({"kind": ORDER_KIND, "items": rows}, sort_keys=True,
-                           separators=(",", ":"), ensure_ascii=False)
+def order_digest(rows: list[dict], issues: list[dict]) -> str:
+    """Identical for the check and apply of one batch while its issues are unchanged."""
+    canonical = json.dumps({"kind": ORDER_KIND, "items": rows, "issues": issues},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -185,8 +185,8 @@ def execute_order(command: str, *, project: pm.Project,
                   read: triage.Callable[[str], Any],
                   env: Mapping[str, str]) -> tuple[str, int, int]:
     operation, rows = parse_order(command)
-    digest = order_digest(rows)
     plan = prepare_order(rows, project, read)
+    digest = order_digest(rows, [row["expected_issue"] for row in plan["items"]])
     if operation == "check":
         return f"CHECK ONLY — no Project fields changed; order digest {digest}", 0, len(rows)
     if not order_apply_allowed(digest, env):

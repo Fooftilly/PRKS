@@ -10,7 +10,7 @@ Commands:
                   Implementation Order and other planning fields
   check-planning  validate a downloaded planning snapshot and its freshness
 
-Runs from ``.github/workflows/project3-readiness.yml``. The snapshot lets a
+Runs from ``.github/workflows/project3-readiness.yml`` and ``project3-planning.yml``. The snapshot lets a
 triage that cannot query Project V2 custom fields (the ChatGPT PRKS Daily
 Triage reads GitHub through REST) tell Inbox, Backlog, Ready and In Progress
 apart. See ``docs/agent-workflows/project-3.md`` section 14.

@@ -624,14 +624,9 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(re.findall(r"(?m)^    environment: (.+)$", job), ["project-automation"])
         self.assertEqual(self.text.count("environment:"), 1)
 
-    def test_token_only_in_read_only_steps_and_actions_pinned(self) -> None:
-        steps = self.text.split("\n      - ")[1:]
-        with_token = [step for step in steps if "secrets." in step]
-        self.assertEqual(len(with_token), 2)
-        for step, command in zip(with_token, ("snapshot", "planning"), strict=True):
-            self.assertEqual(step.count("secrets."), 1)
-            self.assertIn("PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}", step)
-            self.assertIn(f"python3 scripts/project3_readiness.py {command}\n", step)
+    def test_token_only_in_snapshot_step_and_actions_pinned(self) -> None:
+        self.assertEqual(self.text.count("secrets."), 1)
+        self.assertIn("PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}", self.text)
         for ref in re.findall(r"uses:\s*(\S+)", self.text):
             self.assertRegex(ref, r"@[0-9a-f]{40}$")
         self.assertIn("persist-credentials: false", self.text)
