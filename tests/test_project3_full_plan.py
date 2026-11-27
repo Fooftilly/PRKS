@@ -341,6 +341,22 @@ class FullPlanTests(unittest.TestCase):
                          env=armed_for(approval), claims=self.claims)
         self.assertIsNone(self.order_of(509))
 
+    def test_failed_success_mark_also_fails_the_claimed_next_step(self):
+        _, manifest, _ = self.check()
+        approval = dispatch.manifest_digest(manifest)
+        mark = self.claims.mark
+
+        def flaky(context, state):
+            if state == "success" and context == dispatch.plan_claim(approval, 1):
+                raise dispatch.DispatchError("order approval claim request failed: HTTPError")
+            mark(context, state)
+
+        self.claims.mark = flaky
+        with self.assertRaisesRegex(dispatch.DispatchError, "HTTPError"):
+            self.apply(manifest)
+        self.assertIn((dispatch.plan_claim(approval, 2), "failure"), self.claims.log)
+        self.assertIn((dispatch.plan_claim(approval, 1), "failure"), self.claims.log)
+
     def test_writer_steps_exec_python_so_cancellation_signals_reach_it(self):
         for name, script in (("project3-assignment-dispatch.yml", "project3_assignment_dispatch.py"),
                              ("project3-assignment-request-processor.yml", "project3_assignment_request.py")):

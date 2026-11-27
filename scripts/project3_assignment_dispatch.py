@@ -695,6 +695,7 @@ def execute_full(command: str, *, project: pm.Project,
     budget.wait(ORDER_CLAIM_PAGES + 1)
     steps = _plan_sequence(claims, given, approval, 1)
     held: list[str] = []
+    following: list[str] = []
     done, changed, index, wrote = 0, 0, 1, False
     with _cancellable():
         try:
@@ -720,11 +721,11 @@ def execute_full(command: str, *, project: pm.Project,
                     claims.mark(context, "pending")
                 for context in held:
                     claims.mark(context, "success")
-                held, wrote, done = following, False, index
+                held, following, wrote, done = following, [], False, index
                 publish([f"batch {index}/{total} verified: "
                          + ", ".join(f"#{row['number']}={row['order']}" for row in rows)])
         except BaseException:
-            _fail(claims, held)
+            _fail(claims, held + following)
             state = "FAILED / POSSIBLY PARTIAL" if wrote else "REFUSED before any write in this batch"
             rest = f"; {_later(index, total)} not applied" if index < total else ""
             publish([f"order full plan; manifest digest {approval}: {done} of {total} batches "
