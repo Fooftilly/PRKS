@@ -33,7 +33,8 @@ from __future__ import annotations
 import dataclasses
 import gzip
 import json
-from typing import Any, Callable, Optional
+import re
+from typing import Any, Callable, Literal, Optional
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -42,14 +43,18 @@ from referencing.jsonschema import DRAFT202012
 from backend.api.identity import IDENTITY_ROUTES
 from backend.api_contract.openapi import openapi_document, openapi_path
 from backend.web.http import Request, Response
-from backend.web.routing import Route, RouteTable
+from backend.web.routing import Match, Route, RouteTable
 
 _ROOT = "urn:prks:openapi"
 
 
+# Headers the dispatcher adds after the route answers: checked on the answer sent.
+_DISPATCHER_HEADERS = frozenset({"prks-library-epoch"})
+
+
 def _header_value(schema: dict[str, Any], text: str) -> Any:
     """A header is text: an integer schema is checked against the decimal it holds."""
-    if schema.get("type") == "integer" and text.strip().lstrip("-").isdigit():
+    if schema.get("type") == "integer" and re.fullmatch(r"\s*-?[0-9]+\s*", text):
         return int(text)
     return text
 
@@ -58,6 +63,7 @@ class ContractCheck:
     def __init__(self) -> None:
         self.document = openapi_document()
         self.violations: list[str] = []
+        self._table: Optional[RouteTable] = None
         self._registry = Registry().with_resource(
             _ROOT, Resource.from_contents(self.document, default_specification=DRAFT202012))
         self._validators: dict[str, Draft202012Validator] = {}
@@ -93,7 +99,7 @@ class ContractCheck:
         operation = self._operation(route)
         payload = None if response.stream is not None or route.method == "HEAD" else _decoded(response)
         streamed = response.stream is not None and route.method != "HEAD"
-        if not self._check_answer(where, operation, response.status, response.header, payload, streamed):
+        if not self._check_answer(where, operation, response.status, response.header, payload, streamed, "route"):
             return
         body = operation.get("requestBody")
         if body and "application/json" not in body["content"]:
@@ -108,13 +114,13 @@ class ContractCheck:
 
     def _check_answer(self, where: str, operation: dict[str, Any], status: int,
                       header: Callable[[str], Optional[str]], payload: Optional[bytes],
-                      streamed: bool = False) -> bool:
+                      streamed: bool = False, which: Literal["all", "route", "dispatcher"] = "all") -> bool:
         """The answer's status, headers and body (``payload`` ``None``: not read); False: undocumented."""
         reply = operation["responses"].get(str(status))
         if reply is None:
             self.violations.append(f"{where}: status not documented")
             return False
-        self._check_headers(where, self._reply(reply), header)
+        self._check_headers(where, self._reply(reply), header, which)
         content = self._reply(reply).get("content") or {}
         media = (header("Content-Type") or "").split(";", 1)[0].strip().lower()
         if payload is None:
@@ -156,9 +162,16 @@ class ContractCheck:
         except Exception as exc:
             self.violations.append(f"{where}: could not be checked ({type(exc).__name__}: {exc})")
 
-    def _check_headers(self, where: str, reply: dict[str, Any], header: Callable[[str], Optional[str]]) -> None:
-        """Each documented header: present when required, and its value valid against its schema."""
+    def _check_headers(self, where: str, reply: dict[str, Any], header: Callable[[str], Optional[str]],
+                       which: Literal["all", "route", "dispatcher"] = "all") -> None:
+        """Each documented header: present when required, and its value valid against its schema.
+
+        ``which`` "route": the route's own answer, before the dispatcher adds its headers.
+        """
         for name, documented in (reply.get("headers") or {}).items():
+            added = name.lower() in _DISPATCHER_HEADERS
+            if (which == "route" and added) or (which == "dispatcher" and not added):
+                continue
             value = header(name)
             if value is None:
                 if documented.get("required"):
@@ -169,7 +182,24 @@ class ContractCheck:
                 for err in self._schema_errors(schema, _header_value(schema, value)):
                     self.violations.append(f"{where}: header {name} {err}")
 
+    def check_sent(self, method: str, path: str, status: int, headers: list[tuple[str, str]]) -> None:
+        """The headers the dispatcher adds, on the answer a client got from a routed path."""
+        if self._table is None:
+            return
+        match = self._table.resolve(method, path.split("?", 1)[0])
+        if not isinstance(match, Match) or match.route.contract is None:
+            return
+        reply = self._operation(match.route)["responses"].get(str(status))
+        if reply is None:
+            return  # reported by the route's own check
+
+        def header(name: str) -> Optional[str]:
+            return next((v for k, v in headers if k.lower() == name.lower()), None)
+
+        self._check_headers(f"{method} {match.route.pattern} -> {status}", self._reply(reply), header, "dispatcher")
+
     def wrap(self, table: RouteTable) -> RouteTable:
+        self._table = table
         return RouteTable(self._wrap(one) for one in table.routes)
 
     def _wrap(self, route: Route) -> Route:

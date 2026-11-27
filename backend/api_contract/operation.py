@@ -28,6 +28,9 @@ Schema = Any
 JSON = "application/json"
 PDF = "application/pdf"
 BINARY: dict[str, Any] = {"type": "string", "format": "binary"}
+# parse_epoch's canonical form: a positive bigint, no sign, no leading zero.
+EPOCH_SCHEMA: dict[str, Any] = {"type": "string", "pattern": "^[1-9][0-9]{0,18}$",
+                                "description": "1 to 9223372036854775807, in decimal."}
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,9 @@ class Header:
     description: str
     schema: Mapping[str, Any] = field(default_factory=lambda: {"type": "string"})
     required: bool = False
+
+
+NO_STORE = Header("Always no-store.", {"type": "string", "const": "no-store"}, required=True)
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,7 @@ def body(schema: Schema, description: str = "", **kwargs: Any) -> RequestBody:
     return RequestBody(schema, description, **kwargs)
 
 
-ETAG = Header("Opaque representation token for conditional GETs.")
+ETAG = Header("Opaque representation token for conditional GETs.", required=True)
 NOT_MODIFIED = Reply("Not modified: If-None-Match matched the current ETag. Bodyless.", headers={"ETag": ETAG})
 
 

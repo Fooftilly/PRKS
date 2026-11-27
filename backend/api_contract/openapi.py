@@ -29,7 +29,7 @@ from typing import Any, Callable, Iterable, Optional
 from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
-from backend.api_contract.operation import JSON, Operation, Param, Reply, RequestBody, Schema
+from backend.api_contract.operation import EPOCH_SCHEMA, JSON, Operation, Param, Reply, RequestBody, Schema
 from backend.domain.identity.secret_tokens import SESSION_COOKIE
 from backend.web.routing import compile_pattern
 
@@ -38,9 +38,6 @@ REF = "#/components/schemas/{model}"
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
 SESSION_SCHEME = "session"
-# parse_epoch's canonical form: a positive bigint, no sign, no leading zero.
-_EPOCH_SCHEMA = {"type": "string", "pattern": "^[1-9][0-9]{0,18}$",
-                 "description": "1 to 9223372036854775807, in decimal."}
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
@@ -172,10 +169,10 @@ def _epoch_param(route: Any) -> tuple[Param, ...]:
     if not (route.pattern.startswith("/api/") and epoch_fenced(route.method, route.pattern)):
         return ()
     if ledgered(route.pattern):
-        return (Param(EPOCH_HEADER, "header", _EPOCH_SCHEMA, required=False, description=(
+        return (Param(EPOCH_HEADER, "header", EPOCH_SCHEMA, required=False, description=(
             "The Library epoch the client acted on. A new operation without it, or with another "
             "epoch, is refused; a replay of a ledgered op_id answers its ledgered result.")),)
-    return (Param(EPOCH_HEADER, "header", _EPOCH_SCHEMA, required=True,
+    return (Param(EPOCH_HEADER, "header", EPOCH_SCHEMA, required=True,
                   description="The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, "
                               "LIBRARY_EPOCH_CHANGED)."),)
 

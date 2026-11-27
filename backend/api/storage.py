@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from backend.api_contract.operation import Header, Operation, error, ok
+from backend.api_contract.operation import NO_STORE, Operation, error, ok
 from backend.api_contract.storage import StorageStatus
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
@@ -183,6 +183,6 @@ ROUTES = (
                  "Where the Library's files are, the source that chose that place, the root marker's "
                  "identity, filesystem facts, object counts and the paired database. Carries host "
                  "paths, so it is sent Cache-Control: no-store.",
-                 headers={"Cache-Control": Header("Always no-store.", {"type": "string", "const": "no-store"}, required=True)}),
+                 headers={"Cache-Control": NO_STORE}),
          503: error("Storage is not bound (unavailable).")})),
 )

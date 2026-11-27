@@ -372,7 +372,7 @@ class WorkPatch(BaseModel):
     private_notes: Optional[str] = omittable()
     author_text: Optional[str] = omittable()
     doc_type: Optional[str] = omittable()
-    year: Optional[str] = omittable()
+    year: Optional[Union[str, int]] = omittable("A number is stored as its decimal text.")
     published_date: Optional[str] = omittable()
     publisher: Optional[str] = omittable()
     location: Optional[str] = omittable()
@@ -385,6 +385,8 @@ class WorkPatch(BaseModel):
     doi: Optional[str] = omittable()
     urldate: Optional[str] = omittable()
     thumb_page: Optional[Union[int, str]] = omittable()
+    source_url: Optional[str] = omittable("Up to 64 KiB. Refused (400) on a video Work: its URL is its "
+                                          "source identity, set through SET_WORK_SOURCE.")
     source_mime: Optional[str] = omittable()
     hide_pdf_link_annotations: Union[bool, int, str] = omittable("true, 1 or \"1\"/\"true\"/\"yes\" hide them.")
     citation_style: str = omittable("A style id, or empty for the Library's.")
