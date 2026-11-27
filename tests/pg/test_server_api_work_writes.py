@@ -221,6 +221,20 @@ class VideoSourceTests(ServerApiTestCase):
                 row = self.work(created["id"])
                 self.assertEqual((row.get("provider"), row.get("provider_id")), ("youtube", "dQw4w9WgXcQ"))
 
+    def test_a_numeric_year_is_stored_as_its_text(self) -> None:
+        work_id = self.create_work("Dated")["id"]
+        self.ok(self.send("PATCH", f"/api/works/{work_id}", {"year": 2024}))
+        self.assertEqual(self.work(work_id)["year"], "2024")
+
+    def test_the_source_url_of_a_pdf_work_is_writable_and_of_a_video_refused(self) -> None:
+        paper = self.create_work("Paper", file_b64=PDF, file_name="paper.pdf")["id"]
+        self.ok(self.send("PATCH", f"/api/works/{paper}", {"source_url": "https://example.org/paper"}))
+        self.assertEqual(self.work(paper)["source_url"], "https://example.org/paper")
+        with mock.patch.object(works_api, "fetch_youtube_oembed", lambda _url: None):
+            video = self.create_work("Clip", source_kind="video", source_url=VIDEO)["id"]
+            self.refused(self.send("PATCH", f"/api/works/{video}", {"source_url": "https://example.org/x"}), 400)
+        self.assertEqual(self.work(video)["source_url"], VIDEO)
+
     def test_no_folder_files_the_work_in_uncategorized(self) -> None:
         work = self.work(self.create_work("Default Folder Work", folder_id=None)["id"])
         folder = next(f for f in self.ok(self.get("/api/folders")) if f.get("id") == work.get("folder_id"))

@@ -3122,6 +3122,11 @@ export interface components {
             publisher?: string | null;
             /** Source Mime */
             source_mime?: string | null;
+            /**
+             * Source Url
+             * @description Up to 64 KiB. Refused (400) on a video Work: its URL is its source identity, set through SET_WORK_SOURCE.
+             */
+            source_url?: string | null;
             /** Status */
             status?: string;
             /**
@@ -3137,8 +3142,11 @@ export interface components {
             urldate?: string | null;
             /** Volume */
             volume?: string | null;
-            /** Year */
-            year?: string | null;
+            /**
+             * Year
+             * @description A number is stored as its decimal text.
+             */
+            year?: string | number | null;
         };
         /** @description A credit on the Work's primary Manifestation: the Person's row and the role. */
         WorkRole: {

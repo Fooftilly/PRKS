@@ -10835,9 +10835,13 @@
                 "type": "string"
               },
               {
+                "type": "integer"
+              },
+              {
                 "type": "null"
               }
             ],
+            "description": "A number is stored as its decimal text.",
             "title": "Year"
           },
           "published_date": {
@@ -10974,6 +10978,18 @@
               }
             ],
             "title": "Thumb Page"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Up to 64 KiB. Refused (400) on a video Work: its URL is its source identity, set through SET_WORK_SOURCE.",
+            "title": "Source Url"
           },
           "source_mime": {
             "anyOf": [
