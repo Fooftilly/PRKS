@@ -1,45 +1,105 @@
 {
   "version": 1,
-  "kind": "implementation-order",
+  "kind": "implementation-order-plan",
   "operation": "check",
+  "manifest": {
+    "schema": "prks-project3-order-manifest/v1",
+    "field": {
+      "name": "Implementation Order",
+      "id": "PVTF_lAHOAsc2_s4BkAo3zhrqP3o"
+    },
+    "batches": [
+      {
+        "digest": "3239b111d51eef4086f82130ae8bac83a41a6b3d966e355376f68e66281d644a",
+        "items": [
+          [
+            689,
+            220
+          ],
+          [
+            403,
+            240
+          ],
+          [
+            601,
+            260
+          ],
+          [
+            558,
+            280
+          ],
+          [
+            559,
+            300
+          ]
+        ]
+      },
+      {
+        "digest": "0d85a0cf54e0d2b86ccd97964f2671797f17630a08032e435740707eef68dc1a",
+        "items": [
+          [
+            1089,
+            320
+          ],
+          [
+            1072,
+            340
+          ],
+          [
+            1475,
+            360
+          ],
+          [
+            66,
+            380
+          ],
+          [
+            721,
+            400
+          ]
+        ]
+      }
+    ]
+  },
+  "batch": 1,
   "items": [
     {
-      "number": 1089,
-      "order": 320,
+      "number": 689,
+      "order": 220,
       "expected_before": null,
-      "reason": "Candidate pending acceptance: current sync-runtime.js can leave a claimed row syncing after pending-state update failure; coordinate generated queue tests #1465.",
+      "reason": "Candidate pending acceptance: current people.js reads profile revision at save time instead of pinning it at edit entry; coordinate #58 and #1425.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1072,
-      "order": 340,
+      "number": 403,
+      "order": 240,
       "expected_before": null,
-      "reason": "Candidate pending acceptance: current sync-runtime.js startup recovery resets syncing rows without a cross-tab lock when deps.lock is absent; coordinate #1465 and #1089.",
+      "reason": "Review the Person profile dirty-editor close path with #689; current closePersonProfileEdit clears the draft. Explicit v1.0 acceptance example in #616.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1475,
-      "order": 360,
+      "number": 601,
+      "order": 260,
       "expected_before": null,
-      "reason": "Proposed release compatibility design under #616; specify supported disconnected-client upgrades before ledger retention decisions; not implementation approval.",
+      "reason": "Candidate pending acceptance: current argument-state.js warms at edit entry but reads acknowledged base again on commit; coordinate #58 and #1425.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 66,
-      "order": 380,
+      "number": 558,
+      "order": 280,
       "expected_before": null,
-      "reason": "Candidate research/design: canonical sync contract still defers ledger compaction; sequence after #1475 establishes compatibility and replay limits, preserve exact replay.",
+      "reason": "Candidate pending acceptance: current local-store.js rejects blocked deleteDatabase without cancelling the native deletion; durable reset safety under #57 and #58.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 721,
-      "order": 400,
+      "number": 559,
+      "order": 300,
       "expected_before": null,
-      "reason": "Storage relocation implementation under #57 and #310; native prerequisite issues #635 and #720 closed; coordinate merged Asset storage and #1463.",
+      "reason": "Candidate pending acceptance: current sync-runtime.js clears the timeout before consuming response.json; preserve durable queue progress under #58 and #1465.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
