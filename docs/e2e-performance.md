@@ -46,8 +46,6 @@ python tests/e2e/run.py --feature sync --jobs 1 --no-pointer-capture --profile
 
 Profiled runs (and `PRKS_E2E_ROUTE_FASTPATH=1`) never write timing or last-failed history (`policy.benchmark_modes()`), because instrumented durations would poison normal sharding. On GitHub, run **PRKS Full E2E Gate** manually with the `profile` input.
 
-Manual-only benchmark and profile workflows (`.github/workflows/e2e-*.yml`) run on one runner and never train timing history. The A/B benchmarks (routing, classic script deferral) run warm-up plus ABBA trials; the profiles (offline Graph navigation, offline Person profile, Argument overlay, PDF annotation rollback) run serial repeats; the Person click trace runs once; flake stress repeats a selection. Summaries are aggregate-only, but a failing run may upload privacy-safe diagnostics.
-
 ## Diagnostics
 
 - `PRKS_E2E_DIAGNOSTIC=1` prints privacy-safe lifecycle heartbeats (`START`, `SERVER_READY`, `CONTEXT_READY`, `APP_READY`, `BODY_DONE`, `CONTEXT_CLOSED`, `SERVER_STOPPED`).

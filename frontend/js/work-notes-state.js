@@ -9,6 +9,10 @@
 (function (root) {
     'use strict';
 
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
+
     const RESEARCH_KIND = 'work-research-note';
     const PRIVATE_KIND = 'work-private-note';
     const RESEARCH_OP = 'SET_WORK_RESEARCH_NOTE';
@@ -239,6 +243,23 @@
         const rev = event.acknowledged.server_revision;
         if (!Number.isSafeInteger(rev) || rev < 0) return;
         const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+        const observed = ctx.getResource && ctx.getResource('workNotesObserved');
+        const held = observed ? (op.operation === RESEARCH_OP ? observed.research : observed.private) : null;
+        const field = op.operation === RESEARCH_OP ? 'text_content' : 'private_notes';
+        /* Shared ordering rule (#1425, #1105). The observed base's revision
+         * proves an older ACK superseded: the Work body, canonical body and
+         * base all stay on the newer text. Without a base, the Work body is
+         * proven by its read time; an unproven body is patched and re-read. */
+        const plan = reconcileCore.planAck({
+            ackRevision: rev,
+            heldRevision: held && reconcileCore.isRevision(held.revision) ? held.revision : null,
+            agrees: (work[field] == null ? '' : String(work[field])) === text,
+            observedAt: reconcileCore.observedAt(work),
+            operationCreatedAt: op.created_at,
+        });
+        if (plan === 'superseded') return;
+        const fence = advanceNoteFence(ctx, work.id, field);
+        if (plan === 'unproven') rereadNoteBody(ctx, work.id, field, fence);
         if (op.operation === RESEARCH_OP) {
             work.text_content = text;
             const refs = event.acknowledged.research_refs;
@@ -265,6 +286,112 @@
                 slot.source = 'server';
             }
         }
+    }
+
+    /* Each accepted note ACK advances its field's fence for this owner and
+     * Work. The fence is keyed by the owner, not by the Work object: a source
+     * re-read replaces the Work object without touching its notes, and must
+     * not cancel a note re-read, while a later note ACK must. */
+    const noteFences = new WeakMap();
+
+    function noteFence(ctx, workId, field) {
+        const fences = noteFences.get(ctx);
+        return fences ? fences.get(String(workId) + '\u0000' + field) || null : null;
+    }
+
+    function advanceNoteFence(ctx, workId, field) {
+        let fences = noteFences.get(ctx);
+        if (!fences) {
+            fences = new Map();
+            noteFences.set(ctx, fences);
+        }
+        const fence = {};
+        fences.set(String(workId) + '\u0000' + field, fence);
+        return fence;
+    }
+
+    /* The open editor for this note decides whether a corrective body may
+     * become its save base. A clean editor takes the body and its revision
+     * together; an editor with typing, a save in flight, or text other than
+     * what the ACK left keeps its old base, so its next save conflicts with
+     * the newer note instead of overwriting it unseen. Returns the editor to
+     * write the body into, `true` when there is none, or null to keep. */
+    function editorFor(ctx, workId, field, shown) {
+        if (field === 'text_content') {
+            const notes = ctx.getResource && ctx.getResource('workNotes');
+            const mounted = !!(notes && notes.editor && String(notes.workId) === String(workId));
+            if (mounted && (notes.drafting || notes.pendingSave ||
+                typeof notes.editor.value !== 'function' || notes.editor.value() !== shown ||
+                typeof root.prksResearchNotesApplyText !== 'function')) return null;
+            /* Last, because it retires the tab's clean session for the old
+             * text: a remount must not bring that text back over the body. */
+            if (typeof root.prksResearchNotesAdoptBody === 'function' &&
+                !root.prksResearchNotesAdoptBody(ctx, workId, shown)) return null;
+            return mounted ? notes : true;
+        }
+        /* Reminders keep a live session while their editor is open. */
+        const session = ctx.ui ? ctx.ui.workPrivateNoteSession : null;
+        return session && String(session.entityId) === String(workId) && !session.retired ? null : true;
+    }
+
+    /* An unproven ACK was written into this owner's Work: take the body the
+     * server holds now, with the revision it belongs to, unless the owner
+     * moved to another Work or a later ACK for this note landed meanwhile.
+     *
+     * notes-state is read before the Work, so the body is never older than the
+     * revision paired with it. A save in between can only pair a newer body
+     * with an older revision, which conflicts; the reverse order could pair an
+     * older body with a newer revision and overwrite a save never shown. */
+    function rereadNoteBody(ctx, workId, field, fence) {
+        if (typeof root.prksOfflineReadEntity !== 'function') return;
+        /* A refresh or reopen of the same Work starts a new route generation
+         * with its own note and base; this read belongs to the old one. */
+        const generation = ctx.generation;
+        const revisionKey = field === 'private_notes' ? 'private_note_revision' : 'research_note_revision';
+        const fresh = { dedupe: false };
+        void reconcileCore.adoptFresh(
+            async () => {
+                const state = await readState(workId, { requestPolicy: fresh });
+                if (!state || state.source !== 'server' || !state.value) return null;
+                const read = await root.prksOfflineReadEntity('work', workId,
+                    '/api/works/' + encodeURIComponent(workId),
+                    { validate: value => !!value && value.id === workId, requestPolicy: fresh });
+                if (!read || read.source !== 'server' || !read.value) return null;
+                return { source: 'server', value: { work: read.value, revision: state.value[revisionKey] } };
+            },
+            () => {
+                if (ctx.destroyed || ctx.generation !== generation) return null;
+                const current = ctx.getEntity && ctx.getEntity('work');
+                return current && current.id === workId ? noteFence(ctx, workId, field) : null;
+            },
+            fence,
+            ({ work: read, revision }) => {
+                const work = ctx.getEntity('work');
+                const body = read[field] == null ? '' : String(read[field]);
+                const shown = work[field] == null ? '' : String(work[field]);
+                const editor = editorFor(ctx, workId, field, shown);
+                if (!editor) return;
+                work[field] = field === 'private_notes' ? (read[field] == null ? null : body) : body;
+                /* The references are resolved against the body: B's text
+                 * never renders with the links resolved for A. */
+                if (field === 'text_content') {
+                    const refs = read.research_refs;
+                    if (refs && typeof refs === 'object' && !Array.isArray(refs)) work.research_refs = refs;
+                    else delete work.research_refs;
+                }
+                const canonical = ctx.getResource && ctx.getResource('workNotesCanonical');
+                if (canonical && canonical.id === workId) canonical[field] = body;
+                /* The next save is measured against the body now shown. */
+                const base = ctx.getResource && ctx.getResource('workNotesObserved');
+                const slot = base ? (field === 'private_notes' ? base.private : base.research) : null;
+                if (slot) {
+                    slot.value = body;
+                    slot.revision = revision;
+                    slot.source = 'server';
+                }
+                /* Last, so its preview renders with the references above. */
+                if (editor !== true) root.prksResearchNotesApplyText(editor, body);
+            });
     }
 
     /**

@@ -4379,6 +4379,24 @@ function updatePanelContent(tabId) {
     }
 }
 
+async function prksReopenStalePlaylistEdit(ctx, playlistId) {
+    let fresh = null;
+    try {
+        fresh = typeof prksReloadPlaylistDetail === 'function'
+            ? await prksReloadPlaylistDetail(ctx, playlistId) : null;
+    } catch (_e) { fresh = null; }
+    if (!ctx.ui || ctx.ui.playlistStale !== playlistId) return;
+    if (!fresh) {
+        await prksAlertMessage('PRKS could not load the current version of this playlist. '
+            + 'Try again when the server is reachable.', 'Changed elsewhere');
+        return;
+    }
+    ctx.ui.playlistStale = null;
+    ctx.ui.playlistEditing = true;
+    updatePanelContent('details');
+    if (typeof prksRefreshPlaylistDetailMain === 'function') prksRefreshPlaylistDetailMain(ctx);
+}
+
 function prksBindPlaylistSummaryEditBtn() {
     const btn = document.getElementById('prks-playlist-edit-btn');
     if (!btn || btn.dataset.bound === '1') return;
@@ -4386,9 +4404,15 @@ function prksBindPlaylistSummaryEditBtn() {
     btn.onclick = () => {
         const ctx = typeof prksGetFocusedTabContext === 'function' ? prksGetFocusedTabContext() : null;
         if (ctx && ctx.ui) {
+            const pl = ctx.getEntity ? ctx.getEntity('playlist') : null;
+            const staleId = pl && pl.id != null ? String(pl.id) : '';
             if (ctx.ui.playlistEditing) {
                 ctx.ui.playlistEditing = false;
                 if (typeof prksClearPlaylistRenameState === 'function') prksClearPlaylistRenameState(ctx);
+            } else if (staleId && ctx.ui.playlistStale === staleId) {
+                /* A refused Save showed a held version; Edit opens only on the current one. */
+                void prksReopenStalePlaylistEdit(ctx, staleId);
+                return;
             } else {
                 ctx.ui.playlistEditing = true;
             }

@@ -1222,6 +1222,53 @@ on the server is the durable idempotency history, so the browser keeps no
 growing record of completed work. Retirement is strictly last, so a crash
 anywhere earlier leaves a replayable row rather than a lost edit.
 
+### ACK ordering: one shared core
+
+An ACK can arrive late (a slow response, a retry the ledger replays) after
+this page already holds something newer: another device changed the same
+target and this page read the result. The rule that keeps an older ACK from
+overwriting it lives in one typed module, `frontend-app/src/sync/reconcile.ts`,
+which classic code reaches as `prksSyncReconcile` (#1425):
+
+- A held value that carries the target's own revision (a revision projection
+  such as `work-tag-options`) is compared by revision. An older ACK is
+  superseded and nothing is written; an equal or newer one applies.
+- A held value without that revision (a Work or Folder detail, a browse row)
+  is proven by **when it was read**. A read that finished before the operation
+  was created cannot contain any later commit, and every revision that could
+  supersede the ACK was committed after it. Cache envelopes record the read as
+  `observedAt` (kept when an ACK patches the value); live owners' values are
+  stamped by the offline read path and carry the stamp through patches.
+- A value that already shows the ACK needs no proof.
+- Anything else is **unproven**: the disposable cache drops the value so the
+  next read refetches it, and a live owner applies the ACK (the user's own
+  change must not vanish) and re-reads, adopting the server's answer only if
+  nothing else replaced the value meanwhile.
+
+A sibling projection's revision can prove an ACK superseded for a detail, but
+never proves the detail current: the detail may have been read later. The
+pending overlay stays separate: caches hold acknowledged state only, and
+`overlay` folds the durable queue over it at read time. No protocol or ledger
+change is involved.
+
+The same module pins **edit-session bases**. A field editor's Save is measured
+against the revisions read when Edit opened (`pinEditBase`, `pinnedEdits`),
+never against what PRKS holds when Save is pressed: re-reading at Save hands
+the server the newest revision, and a stale draft then silently replaces a
+change saved elsewhere. A field whose open-time read already held a value the
+form did not show has no known base; changing it is refused with a "changed
+elsewhere" message and the draft is kept. This device's own unsent edit counts
+as shown, at the revision it was measured against. An unsent edit the form
+did not show belongs to another edit session on this device (another tab), and
+the store refuses to replace it (`pending_elsewhere`) instead of dropping it.
+Person Groups (#783) and Playlists (#894) save this way; Concept Definitions
+already did (#568).
+Online-only editors follow the same rule on the server: a Saved View carries
+a `revision`, and an update names the one its dialog opened on (`base_revision`)
+or is refused with `409 revision_conflict` (#873). BibTeX export toggles send
+only the fields a page changed, so a stale Settings tab cannot undo another
+tab's toggles (#889).
+
 ### An acknowledgement states the stored row; the client never rebuilds it
 
 A field acknowledgement can omit a byte-limited value because the client
@@ -1258,6 +1305,14 @@ editor that is still open. Leave either behind and the *second* change is
 created against a revision the server has already passed — so the user
 conflicts with their own previous edit, on a Work nobody else has touched. Both
 are updated on ACK, and the cached one never moves backwards.
+
+The base is a revision **with** the source it belongs to, and both come from
+one answer: `GET /api/works/:id/source-state` returns the revision and the
+stored source from one snapshot, and an ACK writes both into the cached
+projection together. A revision paired with a separately read Work cannot be
+proven safe: a read's time is when it finished, not when its snapshot was
+taken, so an older identity beside a newer revision would let a Save overwrite
+a source the user never saw. The editor shows the source its base belongs to.
 
 ### One unsynchronized intent per aggregate
 

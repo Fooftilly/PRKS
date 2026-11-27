@@ -177,7 +177,7 @@ class PlaylistSyncFrontendTests(unittest.TestCase):
     def test_the_base_is_acknowledged_and_unknown_is_not_empty(self):
         at = self.state.index('async function acknowledgedPlaylistBase(')
         body = self.state[at: self.state.index('\n    }', at)]
-        self.assertIn('if (!state) return null', body)
+        self.assertIn("if (!state) return stateSource === 'server' ? null : cachedEditBase(playlistId)", body)
         self.assertIn('catalogRowFromOp(creating)', body)
         self.assertIn('newPlaylistState(playlistId)', body)
         at = self.state.index('async function acknowledgedPlaylistOrder(')

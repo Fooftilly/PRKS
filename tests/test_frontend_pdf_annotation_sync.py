@@ -249,7 +249,7 @@ class PdfAnnotationSyncFrontendTests(unittest.TestCase):
         # Incremental ACK must not relabel snapshot gen without continuity + changed.
         offline = (ROOT / "frontend" / "js" / "offline-runtime.js").read_text(encoding="utf-8")
         rec_at = offline.index("async function reconcilePdfAnnotation")
-        rec_body = offline[rec_at:rec_at + 3500]
+        rec_body = offline[rec_at:offline.index("\n        }\n", rec_at)]
         self.assertIn("result.changed === true && nextGen === prevGen + 1", rec_body)
         state_js = (ROOT / "frontend" / "js" / "pdf-annotation-state.js").read_text(encoding="utf-8")
         self.assertIn("data.changed === true && nextGen === prevGen + 1", state_js)
