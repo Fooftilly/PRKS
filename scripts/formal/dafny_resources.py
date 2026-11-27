@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
-import sys
+from pathlib import Path
 
 
-def main(path: str) -> int:
-    with open(path, encoding="utf-8", newline="") as handle:
-        rows = list(csv.DictReader(handle))
+def report(rows: list[dict[str, str]]) -> None:
     if not rows:
-        return 0
+        return
     columns = list(rows[0])
     resource = next(c for c in columns if "resource" in c.lower())
     name = next(
@@ -23,8 +22,15 @@ def main(path: str) -> int:
         print(
             f"{int(row[resource] or 0):>12}  {row[outcome] if outcome else ''}  {row[name]}"
         )
-    return 0
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("log", type=Path, help="CSV log from dafny verify --log-format")
+    args = parser.parse_args()
+    with args.log.open(encoding="utf-8", newline="") as handle:
+        report(list(csv.DictReader(handle)))
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1]))
+    main()

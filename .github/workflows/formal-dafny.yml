@@ -37,7 +37,7 @@ jobs:
 
       - name: Install pinned Dafny
         run: |
-          curl -fsSL -o "$RUNNER_TEMP/dafny.zip" \
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/dafny.zip" \
             "https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip"
           echo "${DAFNY_SHA256}  $RUNNER_TEMP/dafny.zip" | sha256sum -c -
           unzip -q "$RUNNER_TEMP/dafny.zip" -d "$RUNNER_TEMP"

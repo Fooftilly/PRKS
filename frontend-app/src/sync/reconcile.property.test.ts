@@ -378,12 +378,12 @@ describe('reconcile properties (#1472)', () => {
   const cores: Array<[string, Core]> = [['reconcile.ts', source], ['sync-reconcile.js', classic]]
   for (const [label, core] of cores) {
     describe(label, () => {
-      for (const p of PROPERTIES) it(p.name, () => fc.assert(p.build(core), PARAMS))
+      for (const p of PROPERTIES) it(p.name, () => expect(() => fc.assert(p.build(core), PARAMS)).not.toThrow())
     })
   }
 
   it('the transpiled source agrees with the module, so mutants start from production', () => {
-    for (const p of PROPERTIES) fc.assert(p.build(mutate([])), MUTANT_PARAMS)
+    for (const p of PROPERTIES) expect(() => fc.assert(p.build(mutate([])), MUTANT_PARAMS)).not.toThrow()
   })
 
   it('every spec branch is reached', () => {

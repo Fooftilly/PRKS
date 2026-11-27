@@ -9,24 +9,28 @@
  * are dropped from the model output; nothing is read back from production
  * except its plain return value. */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { createRequire } = require('module');
 
 const [generatedPath, prefix] = process.argv.slice(2);
-const requireFrom = createRequire(path.join(path.resolve(prefix), 'noop.js'));
-const fc = requireFrom('fast-check');
-const BigNumber = requireFrom('bignumber.js');
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-difftest-'));
+process.on('exit', () => fs.rmSync(work, { recursive: true, force: true }));
+fs.symlinkSync(path.resolve(prefix), path.join(work, 'node_modules'), 'dir');
+function load(name, source) {
+    const file = path.join(work, name);
+    fs.writeFileSync(file, source);
+    return require(file);
+}
+const fc = load('fc.cjs', "module.exports = require('fast-check');\n");
+const BigNumber = load('bignumber.cjs', "module.exports = require('bignumber.js');\n");
 
-const generated = fs.readFileSync(generatedPath, 'utf8') + '\nmodule.exports = { _dafny, Reconcile };\n';
-const loaded = { exports: {} };
-new Function('require', 'module', 'exports', generated)(requireFrom, loaded, loaded.exports);
-const { _dafny, Reconcile: D } = loaded.exports;
+const { _dafny, Reconcile: D } = load('model.cjs',
+    fs.readFileSync(generatedPath, 'utf8') + '\nmodule.exports = { _dafny, Reconcile };\n');
 const M = D.__default;
 
 const root = path.resolve(__dirname, '..', '..');
 const classicSource = fs.readFileSync(path.join(root, 'frontend/js/sync-reconcile.js'), 'utf8');
-const load = source => new Function(source + '\nreturn prksSyncReconcile;')();
-let classic = load(classicSource);
+let classic = load('classic.cjs', classicSource);
 
 const RUNS = Number.parseInt(process.env.PRKS_FC_RUNS || '', 10) || 5000;
 const SEED = Number.parseInt(process.env.PRKS_FC_SEED || '', 10);
@@ -133,12 +137,12 @@ const checks = [
 /* Control: the same check MUST fail against a known-wrong build. */
 const strictTime = 'read !== null && created !== null && read < created';
 if (classicSource.split(strictTime).length !== 2) throw new Error('control mutation does not match exactly once');
-classic = load(classicSource.replace(strictTime, 'read !== null && created !== null && read <= created'));
+classic = load('mutant.cjs', classicSource.replace(strictTime, 'read !== null && created !== null && read <= created'));
 if (!fc.check(checks[0][1], PARAMS).failed) {
     console.log('FAIL control: a <= mutant of sync-reconcile.js passed the planAck check');
     process.exit(1);
 }
-classic = load(classicSource);
+classic = require(path.join(work, 'classic.cjs'));
 
 let failed = 0;
 for (const [name, property] of checks) {
