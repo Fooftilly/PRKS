@@ -1258,8 +1258,11 @@ the server the newest revision, and a stale draft then silently replaces a
 change saved elsewhere. A field whose open-time read already held a value the
 form did not show has no known base; changing it is refused with a "changed
 elsewhere" message and the draft is kept. This device's own unsent edit counts
-as shown, at the revision it was measured against. Person Groups (#783) and
-Playlists (#894) save this way; Concept Definitions already did (#568).
+as shown, at the revision it was measured against. An unsent edit the form
+did not show belongs to another edit session on this device (another tab), and
+the store refuses to replace it (`pending_elsewhere`) instead of dropping it.
+Person Groups (#783) and Playlists (#894) save this way; Concept Definitions
+already did (#568).
 Online-only editors follow the same rule on the server: a Saved View carries
 a `revision`, and an update names the one its dialog opened on (`base_revision`)
 or is refused with `409 revision_conflict` (#873). BibTeX export toggles send

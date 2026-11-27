@@ -3687,6 +3687,16 @@
             return acknowledged ? acknowledged.server_revision : observed.revision;
         }
 
+        /* An unsent edit the form never showed belongs to another edit
+         * session on this device; replacing it would drop that edit unseen. */
+        function assertShownUnsentEdit(existing, observed) {
+            const shownValue = typeof observed.pending === 'string' ? observed.pending : observed.value;
+            if (existing.op_id !== observed.pendingOp && existing.payload.value !== shownValue) {
+                throw localStoreError('pending_elsewhere',
+                    'Another tab on this device has an unsent change to this field.');
+            }
+        }
+
         function savePlaylistFields(playlistId, changes, base, stillOwns) {
             if (!isNonBlankString(playlistId) || !isPlainObject(changes) || !isPlainObject(base)) {
                 return Promise.reject(localStoreError('invalid_envelope',
@@ -3729,6 +3739,7 @@
                                 written.push(existing);
                                 continue;
                             }
+                            assertShownUnsentEdit(existing, observed);
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                             abandonUnownedWrite(stillOwns, true);
                         }
@@ -4027,6 +4038,7 @@
                                 written.push(existing);
                                 continue;
                             }
+                            assertShownUnsentEdit(existing, observed);
                             if (abandonUnownedWrite(stillOwns, mutated)) { setResult(written); return; }
                             await request(STORE_OPERATIONS, s => s.delete(existing.op_id));
                             mutated = true;

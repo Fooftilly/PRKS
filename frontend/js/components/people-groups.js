@@ -112,6 +112,8 @@ function prksPersonGroupSaveMessage(error, action) {
             return String(error.message || 'A change this one depends on could not be saved.');
         case 'entity_deleted':
             return 'This group is being deleted, so it cannot be changed.';
+        case 'pending_elsewhere':
+            return 'Another tab on this device has an unsent change here. Finish or cancel that edit first, then edit again.';
         case 'invalid_envelope':
             return String(error.message || 'That is not a valid group.');
         default:
@@ -545,6 +547,11 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         ctx.ui.personGroupEditPin = { groupId: String(groupId), session: session, base: base };
         pinned = await base;
         if (!stillOwns()) return { ok: true, quiet: true };
+    }
+    if (pinned && pinned.prksDeleted) {
+        await prksAlertMessage('This group was deleted in another tab or on another device. '
+            + 'Your changes were not saved.', 'Group deleted');
+        return { ok: false, message: 'Group deleted' };
     }
     if (!pinned) {
         await prksAlertMessage(

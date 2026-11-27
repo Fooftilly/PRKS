@@ -177,7 +177,8 @@ class PersonGroupSyncFrontendTests(unittest.TestCase):
     def test_the_base_is_acknowledged_and_unknown_is_not_empty(self):
         at = self.state.index('async function acknowledgedGroupBase(')
         body = self.state[at: self.state.index('\n    }', at)]
-        self.assertIn("if (!state) return stateSource === 'server' ? null : cachedEditBase(groupId)", body)
+        self.assertIn("if (!state) return stateSource === 'server' ? DELETED_GROUP : cachedEditBase(groupId)", body,
+                      'PRKS answering that the group is gone is not an unknown base')
         self.assertIn('catalogRowFromOp(creating)', body,
                       'a group created here is its own construction base')
         self.assertIn('newGroupState(groupId)', body)
