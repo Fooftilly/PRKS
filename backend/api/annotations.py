@@ -159,12 +159,14 @@ def replace_all(req: Request) -> Response:
     # materialized_annotation_set_revision (the same claim path as durable).
     # The client must send its acknowledged tip so a stale viewer cannot
     # overwrite newer annotations or delete siblings omitted locally.
-    if "canonical_annotation_set_revision" not in data:
-        return json_response(req, 400, {"error": "canonical_annotation_set_revision is required",
+    base = data.get("canonical_annotation_set_revision")
+    # bool is an int in Python; null would skip the stale check and replace the list.
+    if type(base) is not int:
+        return json_response(req, 400, {"error": "canonical_annotation_set_revision must be an integer",
                                         "code": "malformed_annotation_payload"})
     try:
         replace_gen = annotation_commands.save(*req.actor, req.params["work_id"], annotations_json,
-                                               base_set_revision=data.get("canonical_annotation_set_revision"))
+                                               base_set_revision=base)
     except WorkAnnotationError as e:
         return json_response(req, e.http_status, {"error": str(e), "code": e.code})
     return json_response(req, 200, {
