@@ -85,6 +85,7 @@ API_DOCS_PAGE = b"""<!DOCTYPE html>
 <title>PRKS API reference</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/vendor/swagger-ui/swagger-ui.css">
+<link rel="stylesheet" href="/css/api-docs.css">
 </head>
 <body>
 <main id="prks-api-docs"></main>

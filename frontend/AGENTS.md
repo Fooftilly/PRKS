@@ -182,7 +182,7 @@ Performance diagnostics loads on first activation of the Diagnostics category an
 
 ## Client request coordinator
 
-- First-party `/api` traffic from `frontend/js` uses `prksRequest()`. Raw `fetch()` is a reviewed bypass only for `POST /api/client-errors` keepalive, backup progress/stage/restore and YouTube oEmbed. The coordinator never replaces `window.fetch`.
+- First-party `/api` traffic from `frontend/js` uses `prksRequest()`. Raw `fetch()` is a reviewed bypass only for `POST /api/client-errors` keepalive, backup progress/stage/restore and YouTube oEmbed. The owner-only API reference page (`/api/docs`, `frontend/js/api-docs.js`) is not part of the app: it loads no classic runtime, and Swagger UI fetches `/api/openapi.json` and runs Try it out reads itself. The coordinator never replaces `window.fetch`.
 - Reads are bounded (foreground 4, background 1). Mutations are serialized, never retried, never merged: every accepted write is sent in order. Coalescing belongs to the durable store owners. Safe GET retry covers network errors and 502/503/504, at most two retries.
 - `window.__prksRouteAbortController` aborts route reads only; writes survive navigation. Route generation still guards paint.
 - Diagnostics are aggregate counts only, never URLs, queries, bodies, ids or search text.

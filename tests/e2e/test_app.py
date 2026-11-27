@@ -14181,7 +14181,12 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         page.locator("#prks-settings-tab-deployment").click()
         link = page.locator("#prks-api-docs-link")
         link.wait_for()
-        self.assertEqual(link.get_attribute("target"), "_blank")
+        with page.context.expect_page() as opened:
+            link.click()
+        tab = opened.value
+        tab.wait_for_load_state()
+        self.assertEqual(urlparse(tab.url).path, "/api/docs")
+        tab.close()
         # The same page, so the collector fails the test on a CSP refusal or an off-site request.
         with page.expect_response(lambda r: urlparse(r.url).path == "/api/openapi.json") as info:
             response = page.goto(server.origin + link.get_attribute("href"))
@@ -14198,6 +14203,12 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         write.locator(".opblock-summary").click()
         write.locator(".opblock-section-header").first.wait_for()
         self.assertEqual(write.locator(".try-out__btn").count(), 0)
+        toggle = page.locator("#prks-api-docs .json-schema-2020-12-accordion").first
+        toggle.scroll_into_view_if_needed()
+        toggle.focus()
+        page.keyboard.press("Shift+Tab")
+        page.keyboard.press("Tab")
+        self.assertNotEqual(toggle.evaluate("e => getComputedStyle(e).outlineStyle"), "none")
 
     def test_storage_status_is_shown_read_only(self):
         server, page, _collector = self._start_app()

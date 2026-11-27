@@ -1,0 +1,5 @@
+/* Swagger UI removes the outline from several controls; the focus contract needs one. */
+#prks-api-docs :focus-visible {
+    outline: 2px solid #6d6cf7;
+    outline-offset: 2px;
+}
