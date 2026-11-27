@@ -81,6 +81,7 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     """
     from tests import works_fixtures
     from backend.domain.research import note_commands
+    from backend.domain.works import work_commands
     from backend.domain.people import role_commands
     from tests import people_fixtures
     if not MINIMAL_PDF.is_file():
@@ -105,11 +106,19 @@ def seed_library(storage_root: str, *, prepare_related_pdf=None) -> dict:
     _sync_research(cfg, work_a, seed_notes, db)
     # Each managed PDF's create queued its text.extract job, which the
     # server's embedded worker runs (backend/domain/search/text.py).
+    def content_url(work_id: str) -> str:
+        detail = work_commands.detail(db.database, current_context(), work_id)
+        assert detail is not None
+        return str(detail["file_path"])
+
     return {
         "work_a": work_a,
         "work_b": work_b,
         "person": person_id,
         "pdf_name": PDF_NAME,
+        # Each Work's PDF URL: its Asset content route and version (#1427).
+        "pdf_path": content_url(work_a),
+        "pdf_b_path": content_url(work_b),
         "work_a_title": WORK_A_TITLE,
         "work_b_title": WORK_B_TITLE,
         "person_display": PERSON_DISPLAY,

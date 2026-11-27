@@ -30,7 +30,6 @@ from backend.domain.identity.library_scope import LibraryScope, library_command,
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.objects import portraits
 from backend.domain.people import persons, queries
-from backend.domain.works.rules import finish_work_summary_rows
 from backend.domain.entity_ids import generate, is_distributed
 from backend.media.person_image import PortraitImage, identify_cached_portrait_subtype
 from backend.storage.objects import StorageBackend, StorageObjectError
@@ -55,21 +54,9 @@ def catalog(db: Database, ctx: RequestContext) -> list[dict[str, Any]]:
     return library_query(db, ctx, queries.person_catalog)
 
 
-def detail(db: Database, ctx: RequestContext, person_id: str,
-           pdfs_dir: Optional[str]) -> Optional[dict[str, Any]]:
-    """The Person with its Works and groups; ``None`` when absent.
-
-    A Person with Works needs the data root (``pdfs_dir``) for their file
-    sizes; ``RuntimeError`` when it has none.
-    """
-    person = library_query(db, ctx, lambda scope: queries.person_detail(scope, person_id))
-    if person is None:
-        return None
-    if person["works"]:
-        if pdfs_dir is None:
-            raise RuntimeError("this PostgreSQL library has no data root")
-        finish_work_summary_rows(person["works"], pdfs_dir)
-    return person
+def detail(db: Database, ctx: RequestContext, person_id: str) -> Optional[dict[str, Any]]:
+    """The Person with its Works and groups; ``None`` when absent."""
+    return library_query(db, ctx, lambda scope: queries.person_detail(scope, person_id))
 
 
 def metadata_state(db: Database, ctx: RequestContext, person_id: str) -> Optional[dict[str, Any]]:

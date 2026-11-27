@@ -103,7 +103,7 @@
             );
             assertEq(
                 'relative non-thumb path rejected',
-                root.prksSafeWorkThumbSrc('/api/pdfs/x.pdf'),
+                root.prksSafeWorkThumbSrc('/api/assets/AS-x-pdf/content'),
                 ''
             );
         }

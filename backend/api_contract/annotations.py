@@ -127,7 +127,7 @@ class _PdfWritten(BaseModel):
 
     status: Literal["success"]
     work_id: str
-    file_path: str = Field(description="``/api/pdfs/<name>``.")
+    file_path: str = Field(description="``/api/assets/<id>/content?v=<version>``.")
     content_sha256: str = Field(description="The stored working file (linearization may rewrite it).")
     byte_size: int
     canonical_annotation_set_revision: int

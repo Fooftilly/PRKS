@@ -852,7 +852,7 @@ function provenanceSourceUrl() {
     /* A PDF stays a PDF: an explicit `source_kind` outranks the URL, so
      * editing provenance cannot turn the card or the viewer into a video. */
     const pdf = globalThis.prksEffectiveWorkSync(
-        { id: 'W-P', source_kind: 'pdf', file_path: '/api/pdfs/x.pdf', source_url: 'https://old' });
+        { id: 'W-P', source_kind: 'pdf', file_path: '/api/assets/AS-x-pdf/content', source_url: 'https://old' });
     assert.equal(globalThis.prksInferWorkSourceKind(pdf), 'pdf',
         'provenance never changes what kind of Work this is');
     globalThis.prksSetPendingWorkMetadata([]);
@@ -1047,7 +1047,7 @@ function thumbPageKeepsRowsValid() {
 
     const row = () => ({
         id: 'W-T', title: 'Paper', status: 'Planned', doc_type: 'book',
-        file_path: '/api/pdfs/x.pdf', source_kind: 'pdf', source_url: null,
+        file_path: '/api/assets/AS-x-pdf/content', source_kind: 'pdf', source_url: null,
         thumb_url: null, thumb_page: 9, author_text: 'A', year: '1999',
         published_date: '1999-01-01', abstract_excerpt: '', publisher: 'P',
         last_opened_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z',
@@ -1195,7 +1195,7 @@ function thumbnailResourceIdentity() {
     const pending = value => globalThis.prksSetPendingWorkMetadata([{
         operation: 'SET_WORK_METADATA_FIELD', entity_type: 'work', entity_id: 'W-P',
         status: 'pending', payload: { field: 'thumb_page', value } }]);
-    const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 };
+    const pdf = { id: 'W-P', title: 'Paper', file_path: '/api/assets/AS-x-pdf/content', thumb_page: 5 };
     const effective = work => globalThis.prksEffectiveWorkSync(work);
     const urlOf = work => {
         const w = effective(work);
@@ -1209,7 +1209,7 @@ function thumbnailResourceIdentity() {
     assert.equal(effective(pdf).thumb_page, 5);
     assert.equal(urlOf(pdf), '/api/works/W-P/thumbnail?page=5');
     // Acknowledged null is page 1 EXPLICITLY, not an absent page.
-    const nullPage = { id: 'W-P', file_path: '/api/pdfs/x.pdf', thumb_page: null };
+    const nullPage = { id: 'W-P', file_path: '/api/assets/AS-x-pdf/content', thumb_page: null };
     assert.equal(effective(nullPage).thumb_page, null);
     assert.equal(urlOf(nullPage), '/api/works/W-P/thumbnail?page=1');
 

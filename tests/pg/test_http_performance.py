@@ -184,12 +184,12 @@ class PerformanceHttpTests(HttpAuthTestCase):
 
     def test_a_search_query_and_a_pdf_name_never_reach_the_snapshot(self) -> None:
         self.get("/api/search?q=" + SECRET_QUERY)
-        self.get("/api/pdfs/" + SECRET_PDF)
+        self.get("/api/assets/AS-" + SECRET_PDF + "/content?v=0123abcd")
         snap = self.snapshot()
         self.assertNotIn(SECRET_QUERY, _dump(snap))
         self.assertNotIn("PRIVATE_BOOK_X9Q7", _dump(snap))
         self.assertIn("/api/search", self.routes(snap))
-        self.assertIn("/api/pdfs/:pdf", self.routes(snap))
+        self.assertIn("/api/assets/:id/content", self.routes(snap))
 
     def test_a_post_body_is_not_kept(self) -> None:
         res = self.post("/api/works", {"title": SECRET_NOTE, "status": "Planned"})

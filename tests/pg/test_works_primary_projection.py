@@ -79,7 +79,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.refresh(work_id)
 
     def origin(self, work_id: str) -> str:
-        return str(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["primary_manifestation_id"])
+        return str(require(work_commands.detail(self.db, self.ctx, work_id))["primary_manifestation_id"])
 
     @staticmethod
     def identity(row: dict[str, Any]) -> dict[str, Any]:
@@ -87,7 +87,7 @@ class PrimaryProjectionTests(SearchTestCase):
                 ("primary_manifestation_id", "primary_asset_id", "manifestation_count", "asset_count")}
 
     def browse_row(self, work_id: str) -> dict[str, Any]:
-        return next(row for row in work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir) if row["id"] == work_id)
+        return next(row for row in work_commands.browse_catalog(self.db, self.ctx) if row["id"] == work_id)
 
     def ids(self, rows: list[dict[str, Any]]) -> list[str]:
         return [row["id"] for row in rows]
@@ -95,14 +95,14 @@ class PrimaryProjectionTests(SearchTestCase):
     def test_the_projection_follows_the_primary_manifestation_and_its_asset(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Canonical Work", abstract="Canonical abstract", file_path=self.store_pdf("original.pdf", b"original"), publisher="Old Press")
         origin = self.origin(work_id)
-        self.assertNotIn("citation_manifestation_id", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)))
+        self.assertNotIn("citation_manifestation_id", require(work_commands.detail(self.db, self.ctx, work_id)))
         mf = self.manifestation(work_id, title="Translated Version", publisher="New Press",
                                 abstract="Translated abstract", primary=False)
         asset = self.stream(work_id, mf)
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Canonical Work")  # not primary yet
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["title"], "Canonical Work")  # not primary yet
         self.make_primary(work_id, mf)
 
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+        work = work_commands.detail(self.db, self.ctx, work_id)
         assert work is not None
         self.assertEqual({key: work[key] for key in ("title", "abstract", "publisher", "year", "source_url",
                                                      "source_kind", "provider", "provider_id", "file_path",
@@ -127,16 +127,16 @@ class PrimaryProjectionTests(SearchTestCase):
         playlist_commands.add_item(self.db, self.ctx, playlist_id, work_id)
         work_commands.mark_opened(self.db, self.ctx, work_id)
 
-        expected = self.identity(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)))
+        expected = self.identity(require(work_commands.detail(self.db, self.ctx, work_id)))
         self.assertEqual((expected["manifestation_count"], expected["asset_count"]), (2, 2))
-        folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id, self.pdfs_dir), person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir),
-                                    playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
+        folder, person, playlist = (folder_commands.detail(self.db, self.ctx, folder_id), person_commands.detail(self.db, self.ctx, person_id),
+                                    playlist_commands.detail(self.db, self.ctx, playlist_id))
         assert folder is not None and person is not None and playlist is not None
         families = {
-            "all": work_commands.catalog(self.db, self.ctx, self.pdfs_dir),
-            "browse": work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir),
-            "recent": work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir),
-            "added": work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir),
+            "all": work_commands.catalog(self.db, self.ctx),
+            "browse": work_commands.browse_catalog(self.db, self.ctx),
+            "recent": work_commands.recent_browse(self.db, self.ctx),
+            "added": work_commands.recently_added_browse(self.db, self.ctx),
             "folder": folder["works"],
             "person": person["works"],
             "playlist": playlist["items"],
@@ -155,18 +155,19 @@ class PrimaryProjectionTests(SearchTestCase):
         self.make_primary(work_id, mf)
         fields = work_commands.thumbnail_fields(self.db, self.ctx, work_id)
         assert fields is not None
-        self.assertEqual((fields["file_path"], fields["thumb_page"], fields["primary_asset_id"]),
-                         ("/api/pdfs/secondary.pdf", 7, asset))
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+        self.assertEqual((fields["file_path"].split("?")[0], fields["storage_locator"], fields["thumb_page"],
+                          fields["primary_asset_id"]),
+                         (f"/api/assets/{asset}/content", "secondary.pdf", 7, asset))
+        work = work_commands.detail(self.db, self.ctx, work_id)
         assert work is not None
-        self.assertEqual((work["file_path"], work["thumb_page"]), ("/api/pdfs/secondary.pdf", 7))
+        self.assertEqual((work["file_path"], work["thumb_page"]), (fields["file_path"], 7))
 
     def test_the_browse_catalog_orders_by_the_displayed_title(self) -> None:
         early = works_fixtures.add_work(self.db, self.ctx, self.storage, "AAA Legacy")
         late = works_fixtures.add_work(self.db, self.ctx, self.storage, "ZZZ Legacy")
         self.manifestation(early, title="ZZZ Displayed")
         self.manifestation(late, title="AAA Displayed")
-        rows = [row for row in work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir) if row["id"] in (early, late)]
+        rows = [row for row in work_commands.browse_catalog(self.db, self.ctx) if row["id"] in (early, late)]
         self.assertEqual([(row["id"], row["title"]) for row in rows],
                          [(late, "AAA Displayed"), (early, "ZZZ Displayed")])
 
@@ -181,14 +182,14 @@ class PrimaryProjectionTests(SearchTestCase):
         self.credit(work_id, charles, "Author", origin, 2)
 
         def credits() -> set[tuple[str, str]]:
-            return {(role["role_type"], role["last_name"]) for role in require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["roles"]}
+            return {(role["role_type"], role["last_name"]) for role in require(work_commands.detail(self.db, self.ctx, work_id))["roles"]}
 
         self.assertEqual(credits(), {("Author", "Lovelace")})
         row = self.browse_row(work_id)
         self.assertEqual((row["primary_author"], row.get("primary_editor")), ("Ada Lovelace", None))
         self.assertEqual([person["display_name"] for person in row["linked_people"]], ["Ada Lovelace"])
         self.assertNotIn("Babbage", row.get("linked_authors") or "")
-        charles_page, ada_page = person_commands.detail(self.db, self.ctx, charles, self.pdfs_dir), person_commands.detail(self.db, self.ctx, ada, self.pdfs_dir)
+        charles_page, ada_page = person_commands.detail(self.db, self.ctx, charles), person_commands.detail(self.db, self.ctx, ada)
         assert charles_page is not None and ada_page is not None
         self.assertNotIn(work_id, self.ids(charles_page["works"]))
         self.assertIn(work_id, self.ids(ada_page["works"]))
@@ -205,7 +206,7 @@ class PrimaryProjectionTests(SearchTestCase):
         self.assertEqual(credits(), {("Author", "Lovelace"), ("Translator", "Babbage")})
         self.assertEqual([person["role_type"] for person in self.browse_row(work_id)["linked_people"]],
                          ["Author", "Translator"])
-        charles_page = person_commands.detail(self.db, self.ctx, charles, self.pdfs_dir)
+        charles_page = person_commands.detail(self.db, self.ctx, charles)
         assert charles_page is not None
         self.assertEqual([(w["id"], w["role_type"]) for w in charles_page["works"]], [(work_id, "Translator")])
 
@@ -213,7 +214,7 @@ class PrimaryProjectionTests(SearchTestCase):
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Legacy Pub Work", publisher="Legacy Press")
         self.assertIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.publisher_work_ids(scope, "Legacy Press")))
         self.manifestation(work_id, title="Null Publisher Edition", publisher=None)
-        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["publisher"])
+        self.assertIsNone(require(work_commands.detail(self.db, self.ctx, work_id))["publisher"])
         self.assertNotIn(work_id, library_query(self.db, self.ctx, lambda scope: queries.publisher_work_ids(scope, "Legacy Press")))
         self.assertNotIn(work_id, self.ids(works_fixtures.summaries(self.db, self.ctx, self.storage, lambda scope: search_commands.keyword_rows(scope, "", '', "Legacy Press"))))
 

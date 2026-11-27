@@ -64,10 +64,6 @@ class WorksFacadeTestCase(unittest.TestCase):
         """The request context the test is bound to (:meth:`bind`): the actor a domain call runs as."""
         return facade_context.current_context()
 
-    @property
-    def pdfs_dir(self) -> str:
-        """Where this test's Library keeps its PDFs (a Folder or Playlist detail lists them)."""
-        return self.storage.pdfs_dir
     def bind(self, ctx: RequestContext) -> None:
         self.addCleanup(facade_context.unbind, facade_context.bind(ctx))
 
@@ -112,7 +108,7 @@ class ActorTests(WorksFacadeTestCase):
     def test_a_call_without_a_bound_actor_is_refused(self) -> None:
         # A fresh context has no binding, like a request nothing admitted.
         unbound = contextvars.Context()
-        for call in (lambda: work_commands.catalog(self.db, self.ctx, self.pdfs_dir),
+        for call in (lambda: work_commands.catalog(self.db, self.ctx),
                      lambda: works_fixtures.add_work(self.db, self.ctx, self.storage, "Unbound"),
                      lambda: works_fixtures.etag_recent(self.db, self.ctx)):
             with self.assertRaises(facade_context.NoRequestContext):
@@ -120,14 +116,14 @@ class ActorTests(WorksFacadeTestCase):
         self.assertEqual(self.count("works"), 0)
         with facade_context.acting_as(self.actor.context):
             works_fixtures.add_work(self.db, self.ctx, self.storage, "Bound")
-        self.assertEqual([w["title"] for w in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)], ["Bound"])
+        self.assertEqual([w["title"] for w in work_commands.catalog(self.db, self.ctx)], ["Bound"])
 
     def test_the_binding_is_per_thread(self) -> None:
         seen: list[BaseException] = []
 
         def run() -> None:
             try:
-                work_commands.catalog(self.db, self.ctx, self.pdfs_dir)
+                work_commands.catalog(self.db, self.ctx)
             except BaseException as exc:  # noqa: BLE001 - recorded for the assertion
                 seen.append(exc)
 
@@ -140,7 +136,7 @@ class ActorTests(WorksFacadeTestCase):
     def test_a_reader_reads_but_cannot_create(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Shared")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["title"], "Shared")
+            self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["title"], "Shared")
             with self.assertRaises(AccessRefused) as caught:
                 works_fixtures.add_work(self.db, self.ctx, self.storage, "Refused")
         self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
@@ -175,7 +171,7 @@ class ActorTests(WorksFacadeTestCase):
             works_fixtures.add_work(self.db, self.ctx, self.storage, "Stale")
         self.assertIs(caught.exception.refusal, Refusal.LIBRARY_EPOCH_CHANGED)
         self.assertEqual(self.count("works"), 0)
-        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])  # reads are not fenced by epoch
+        self.assertEqual(work_commands.catalog(self.db, self.ctx), [])  # reads are not fenced by epoch
 
 
 class LibraryIsolationTests(WorksFacadeTestCase):
@@ -185,19 +181,19 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         with facade_context.acting_as(other.context):
             theirs = works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", source_url=_VIDEO)
             works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs too")
-        self.assertEqual([w["id"] for w in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)], [mine])
-        self.assertEqual([w["id"] for w in work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir)], [mine])
-        self.assertEqual([w["id"] for w in work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir)], [mine])
-        self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, theirs))
+        self.assertEqual([w["id"] for w in work_commands.catalog(self.db, self.ctx)], [mine])
+        self.assertEqual([w["id"] for w in work_commands.browse_catalog(self.db, self.ctx)], [mine])
+        self.assertEqual([w["id"] for w in work_commands.recently_added_browse(self.db, self.ctx)], [mine])
+        self.assertIsNone(work_commands.detail(self.db, self.ctx, theirs))
         self.assertIsNone(work_commands.thumbnail_fields(self.db, self.ctx, theirs))
         self.assertEqual([w["id"] for w in works_fixtures.summaries_by_ids(self.db, self.ctx, self.storage, [theirs, mine])],
                          [mine])
         self.assertRegex(works_fixtures.etag_recently_added(self.db, self.ctx), r'^W/"prks-recently-added-1-')
         self.sql("UPDATE prks.works SET last_opened_at = now()")
-        self.assertEqual([w["id"] for w in work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir)], [mine])
+        self.assertEqual([w["id"] for w in work_commands.recent_browse(self.db, self.ctx)], [mine])
         self.assertRegex(works_fixtures.etag_recent(self.db, self.ctx), r'^W/"prks-recent-1-')
         with facade_context.acting_as(other.context):
-            self.assertEqual(len(work_commands.catalog(self.db, self.ctx, self.pdfs_dir)), 2)
+            self.assertEqual(len(work_commands.catalog(self.db, self.ctx)), 2)
 
     def test_a_managed_pdf_of_another_library_cannot_be_adopted(self) -> None:
         path = self.store_pdf("p.pdf", b"%PDF-1.4\nmine\n%%EOF\n")
@@ -207,7 +203,7 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         with facade_context.acting_as(other.context):
             with self.assertRaisesRegex(ValueError, "does not exist"):
                 works_fixtures.add_work(self.db, self.ctx, self.storage, "Theirs", file_path=path)
-            self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])
+            self.assertEqual(work_commands.catalog(self.db, self.ctx), [])
         self.assertEqual(self.count("works"), works_before)
         self.assertEqual(self.sql("SELECT work_id FROM prks.assets WHERE storage_locator = 'p.pdf'"),
                          [{"work_id": mine}])
@@ -215,14 +211,17 @@ class LibraryIsolationTests(WorksFacadeTestCase):
         works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine again", file_path=path)
 
     def test_a_managed_pdf_is_served_only_to_its_library(self) -> None:
-        # /api/pdfs/<name> on the shared root asks this before reading bytes.
+        # The content route asks this before reading bytes: the data root is shared.
         path = self.store_pdf("served.pdf", b"%PDF-1.4\nserved\n%%EOF\n")
-        self.store_pdf("loose.pdf", b"%PDF-1.4\nloose\n%%EOF\n")
-        works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", file_path=path)
-        self.assertTrue(work_commands.holds_managed_pdf(self.db, self.ctx, "served.pdf"))
-        self.assertFalse(work_commands.holds_managed_pdf(self.db, self.ctx, "loose.pdf"))
+        mine = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine", file_path=path)
+        stream = works_fixtures.add_work(self.db, self.ctx, self.storage, "Stream", source_url=_VIDEO)
+        asset = require(work_commands.detail(self.db, self.ctx, mine))["primary_asset_id"]
+        streamed = require(work_commands.detail(self.db, self.ctx, stream))["primary_asset_id"]
+        self.assertEqual(work_commands.asset_object(self.db, self.ctx, asset), "served.pdf")
+        self.assertIsNone(work_commands.asset_object(self.db, self.ctx, streamed))
+        self.assertIsNone(work_commands.asset_object(self.db, self.ctx, "AS-" + "0" * 32))
         with facade_context.acting_as(self.other_actor().context):
-            self.assertFalse(work_commands.holds_managed_pdf(self.db, self.ctx, "served.pdf"))
+            self.assertIsNone(work_commands.asset_object(self.db, self.ctx, asset))
 
     def test_two_libraries_racing_for_one_pdf_leave_it_with_one(self) -> None:
         # Whatever the interleaving (one after the other, or both checks before
@@ -311,11 +310,11 @@ class CreateTests(WorksFacadeTestCase):
     def test_the_catalog_leaves_out_the_notes_the_detail_has(self) -> None:
         text = "x" * 5000
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Notes", text_content=text, private_notes="secret")
-        summary = next(row for row in work_commands.catalog(self.db, self.ctx, self.pdfs_dir) if row["id"] == work_id)
+        summary = next(row for row in work_commands.catalog(self.db, self.ctx) if row["id"] == work_id)
         self.assertNotIn("text_content", summary)
         self.assertNotIn("private_notes", summary)
         self.assertNotIn("secret", repr(summary))
-        detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+        detail = work_commands.detail(self.db, self.ctx, work_id)
         assert detail is not None
         self.assertEqual((detail["text_content"], detail["private_notes"]), (text, "secret"))
 
@@ -323,7 +322,7 @@ class CreateTests(WorksFacadeTestCase):
         # A video Work has an Asset, so the page has somewhere to land.
         def create(page: Any) -> Any:
             work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Clip", source_kind="video", source_url=_VIDEO, provider="youtube", provider_id="dQw4w9WgXcQ", thumb_page=page, private_notes="")
-            work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+            work = work_commands.detail(self.db, self.ctx, work_id)
             assert work is not None
             return work["thumb_page"]
 
@@ -334,9 +333,9 @@ class CreateTests(WorksFacadeTestCase):
 
     def test_a_research_note_renders_its_wiki_links(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Linked", text_content="See [[Other]]")
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["html_content"],
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["html_content"],
                          'See <span class="wiki-link-unresolved" style="color:#ef4444;">[[Other]]</span>')
-        self.assertNotIn("html_content", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain"))))
+        self.assertNotIn("html_content", require(work_commands.detail(self.db, self.ctx, works_fixtures.add_work(self.db, self.ctx, self.storage, "Plain"))))
 
     def test_concurrent_creates_all_commit(self) -> None:
         errors: list[BaseException] = []
@@ -360,7 +359,7 @@ class CreateTests(WorksFacadeTestCase):
         for thread in threads:
             thread.join()
         self.assertEqual(errors, [])
-        self.assertEqual(sorted(w["id"] for w in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)), sorted(created))
+        self.assertEqual(sorted(w["id"] for w in work_commands.catalog(self.db, self.ctx)), sorted(created))
         self.assertEqual(self.count("assets"), 6)
 
 
@@ -374,7 +373,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         self.sql("UPDATE prks.works SET last_opened_at = '2026-01-02 03:04:05.123456+00' WHERE id = %s", (third,))
         self.sql("UPDATE prks.works SET last_opened_at = '2026-01-02 03:04:05.123999+00' WHERE id = %s", (first,))
         self.sql("UPDATE prks.works SET last_opened_at = '2026-01-02 03:04:05.124+00' WHERE id = %s", (second,))
-        rows = work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir)
+        rows = work_commands.recent_browse(self.db, self.ctx)
         self.assertEqual([(r["id"], r["last_opened_at"]) for r in rows], [
             (second, "2026-01-02 03:04:05.124"),
             (first, "2026-01-02 03:04:05.123"),   # same rendered millisecond: by id
@@ -388,7 +387,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
         self.sql("UPDATE prks.works SET created_at = '2026-01-02 03:04:05.9+00' WHERE id = %s", (third,))
         self.sql("UPDATE prks.works SET created_at = '2026-01-02 03:04:05.1+00' WHERE id = %s", (first,))
         self.sql("UPDATE prks.works SET created_at = '2026-01-02 03:04:06+00' WHERE id = %s", (second,))
-        for rows in (work_commands.catalog(self.db, self.ctx, self.pdfs_dir), work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir)):
+        for rows in (work_commands.catalog(self.db, self.ctx), work_commands.recently_added_browse(self.db, self.ctx)):
             self.assertEqual([(r["id"], r["created_at"]) for r in rows], [
                 (second, "2026-01-02 03:04:06"),
                 (first, "2026-01-02 03:04:05"),
@@ -406,7 +405,7 @@ class OrderAndPrecisionTests(WorksFacadeTestCase):
                                           pool_max=2))
         self.addCleanup(self.db.close)
         self.library = PostgresLibrary(self.db, storage=self.storage)
-        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir)[0]["created_at"], "2026-06-01 10:00:00")
+        self.assertEqual(work_commands.catalog(self.db, self.ctx)[0]["created_at"], "2026-06-01 10:00:00")
 
     def harness_db_name(self) -> str:
         return str(self.sql("SELECT current_database() AS n")[0]["n"])
@@ -421,7 +420,7 @@ class WorksAnswerTestCase(AnswerAssertions, WorksFacadeTestCase):
 
     def add(self, label: str, **fields: Any) -> str:
         work_id = self.labels.name(works_fixtures.add_work(self.db, self.ctx, self.storage, **fields), f"<W {label}>")
-        work = require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
+        work = require(work_commands.detail(self.db, self.ctx, work_id))
         self.labels.name(work["primary_manifestation_id"], f"<MF {label}>")
         if work["primary_asset_id"]:
             self.labels.name(work["primary_asset_id"], f"<AS {label}>")
@@ -440,7 +439,7 @@ class AnswerTests(WorksAnswerTestCase):
                            issue="2", pages="1-9", isbn="978", doi="10.1/X", doc_type="book",
                            published_date="2020-01-02", location="Paris", edition="2",
                            urldate="2024-05-06", private_notes="  remember this  ")
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), {
             "abstract": "An abstract", "annotations": "[]", "arguments": [], "asset_count": 0,
             "author_text": "Ann Lee", "canonical_annotation_set_revision": 0, "citation_style": "",
             "created_at": "<s>", "doc_type": "book", "doi": "10.1/X", "edition": "2", "file_path": "",
@@ -458,18 +457,19 @@ class AnswerTests(WorksAnswerTestCase):
     def test_a_managed_pdf_records_its_file(self) -> None:
         work_id = self.add_pdf("pdf", "paper.pdf", title="Paper", source_url="https://example.org/p",
                                thumb_page=3, source_mime="application/pdf", thumb_url="https://t")
-        self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {
-            "file_path": "/api/pdfs/paper.pdf", "file_size_bytes": len(_PDF_BYTES), "asset_count": 1,
+        self.answer(work_commands.detail(self.db, self.ctx, work_id), {
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "file_size_bytes": len(_PDF_BYTES), "asset_count": 1,
             "source_kind": "pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
         self.answer(work_commands.thumbnail_fields(self.db, self.ctx, work_id), {
-            "file_path": "/api/pdfs/paper.pdf", "primary_asset_id": "<AS pdf>", "thumb_page": 3})
+            "file_path": works_fixtures.content_url("<AS pdf>", _PDF_BYTES), "primary_asset_id": "<AS pdf>",
+            "storage_locator": "paper.pdf", "thumb_page": 3})
 
     def test_a_video_is_a_stream(self) -> None:
         video = self.add("video", title="Video", source_kind="video", source_url=_VIDEO,
                          thumb_url="https://i.ytimg.com/x.jpg", urldate="2024-01-01")
         inferred = self.add("inferred", title="Inferred", source_url=_VIDEO)
         for work_id in (video, inferred):
-            self.answer(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id), {
+            self.answer(work_commands.detail(self.db, self.ctx, work_id), {
                 "source_kind": "video", "provider": "youtube", "provider_id": "dQw4w9WgXcQ",
                 "asset_count": 1, "file_size_bytes": None, "file_path": ""})
 
@@ -483,10 +483,10 @@ class AnswerTests(WorksAnswerTestCase):
             with self.subTest(fields=fields):
                 with self.assertRaises(ValueError):
                     works_fixtures.add_work(self.db, self.ctx, self.storage, "Refused", **fields)
-        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [])
+        self.assertEqual(work_commands.catalog(self.db, self.ctx), [])
 
     def test_an_unknown_work_reads_as_none(self) -> None:
-        self.assertIsNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, _MISSING))
+        self.assertIsNone(work_commands.detail(self.db, self.ctx, _MISSING))
         self.assertIsNone(work_commands.thumbnail_fields(self.db, self.ctx, _MISSING))
 
     def catalog(self) -> None:
@@ -501,7 +501,7 @@ class AnswerTests(WorksAnswerTestCase):
                   "primary_author": None, "primary_editor": None, "status": "Not Started",
                   "doc_type": "article", "author_text": "", "year": "", "published_date": "",
                   "thumb_page": None, "thumb_url": None}
-        file_row = {**common, "id": "<W file>", "title": "file", "file_path": "/api/pdfs/f.pdf",
+        file_row = {**common, "id": "<W file>", "title": "file", "file_path": works_fixtures.content_url("<AS file>", _PDF_BYTES),
                     "file_size_bytes": 32, "primary_asset_id": "<AS file>", "primary_manifestation_id": "<MF file>",
                     "provider": None, "provider_id": None, "source_kind": "pdf", "source_url": None}
         stream_row = {**common, "id": "<W stream>", "title": "stream", "file_path": "",
@@ -511,10 +511,9 @@ class AnswerTests(WorksAnswerTestCase):
         detail = {"abstract": "", "created_at": "<s>", "updated_at": "<s>", "folder_id": None,
                   "last_opened_at": None, "source_mime": None, "urldate": None}
         calls = {
-            "catalog": lambda: work_commands.catalog(self.db, self.ctx, self.pdfs_dir),
+            "catalog": lambda: work_commands.catalog(self.db, self.ctx),
             "recently_added": lambda: works_fixtures.recently_added_works(self.db, self.ctx, self.storage),
-            "recently_added_browse": lambda: work_commands.recently_added_browse(self.db, self.ctx,
-                                                                                 self.pdfs_dir, 50),
+            "recently_added_browse": lambda: work_commands.recently_added_browse(self.db, self.ctx, 50),
         }
         for call, read in calls.items():
             with self.subTest(call=call):
@@ -522,21 +521,59 @@ class AnswerTests(WorksAnswerTestCase):
                 self.assertEqual(len(rows), 8)
                 extra = detail if call != "recently_added_browse" else {"created_at": "<s>"}
                 self.answer([rows["file"], rows["stream"]], [{**file_row, **extra}, {**stream_row, **extra}])
-        browse = work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir)
+        browse = work_commands.browse_catalog(self.db, self.ctx)
         self.assertEqual([row["title"] for row in browse],
                          ["_under", "Alpha", "beta", "file", "stream", "Zed", "Ä umlaut", "ä umlaut"])
         self.answer(browse[3:5], [{**file_row, "abstract_excerpt": ""}, {**stream_row, "abstract_excerpt": ""}])
         self.assertEqual(browse[5]["abstract_excerpt"], "x" * 100)
 
+    def test_the_catalogue_reads_no_file(self) -> None:
+        # A file size is the Asset's byte_size (#1427): no catalogue read touches the data root,
+        # and a file gone from the disk still reports the size the database holds.
+        self.catalog()
+        opened_id = next(row["id"] for row in work_commands.catalog(self.db, self.ctx) if row["title"] == "file")
+        self.assertTrue(work_commands.mark_opened(self.db, self.ctx, opened_id))
+        os.remove(os.path.join(self.storage.pdfs_dir, "f.pdf"))
+        root = os.path.realpath(self.storage.root)
+        touched: list[str] = []
+        real_stat, real_open = os.stat, open
+
+        def under_root(path: Any) -> bool:
+            return isinstance(path, (str, bytes, os.PathLike)) and \
+                os.path.realpath(os.fsdecode(path)).startswith(root)
+
+        def stat(path: Any, *args: Any, **kwargs: Any) -> Any:
+            if under_root(path):
+                touched.append(os.fsdecode(path))
+            return real_stat(path, *args, **kwargs)
+
+        def opened(path: Any, *args: Any, **kwargs: Any) -> Any:
+            if under_root(path):
+                touched.append(os.fsdecode(path))
+            return real_open(path, *args, **kwargs)
+
+        reads = {
+            "catalog": lambda: work_commands.catalog(self.db, self.ctx),
+            "browse_catalog": lambda: work_commands.browse_catalog(self.db, self.ctx),
+            "recently_added_browse": lambda: work_commands.recently_added_browse(self.db, self.ctx, 50),
+            "recent_browse": lambda: work_commands.recent_browse(self.db, self.ctx),
+        }
+        with mock.patch("os.stat", stat), mock.patch("builtins.open", opened):
+            answers = {name: read() for name, read in reads.items()}
+        self.assertEqual(touched, [])
+        for name in reads:
+            with self.subTest(read=name):
+                self.assertEqual([row["file_size_bytes"] for row in answers[name] if row["title"] == "file"], [32])
+
     def test_limits(self) -> None:
         self.catalog()
-        self.assertEqual(len(work_commands.recently_added_browse(self.db, self.ctx, self.pdfs_dir, 3)), 3)
+        self.assertEqual(len(work_commands.recently_added_browse(self.db, self.ctx, 3)), 3)
         self.assertEqual(len(works_fixtures.recently_added_works(self.db, self.ctx, self.storage, 2)), 2)
         self.assertEqual(len(works_fixtures.recently_added_works(self.db, self.ctx, self.storage, -1)), 8)
 
     def test_nothing_opened_yet(self) -> None:
         self.catalog()
-        self.assertEqual(work_commands.recent_browse(self.db, self.ctx, self.pdfs_dir), [])
+        self.assertEqual(work_commands.recent_browse(self.db, self.ctx), [])
         self.assertEqual(works_fixtures.recent_works(self.db, self.ctx, self.storage, 5), [])
         self.assertEqual(works_fixtures.etag_recent(self.db, self.ctx), 'W/"prks-recent-0-"')
 
@@ -550,12 +587,12 @@ class AnswerTests(WorksAnswerTestCase):
 
     def test_etags_follow_the_representation(self) -> None:
         self.catalog()
-        rows = work_commands.catalog(self.db, self.ctx, self.pdfs_dir)
+        rows = work_commands.catalog(self.db, self.ctx)
         tag = etags.etag_for_representation("works", rows)
         self.assertRegex(tag, r'^W/"prks-works-8-[0-9a-f]{32}"$')
         self.answer(works_fixtures.etag_recently_added(self.db, self.ctx), 'W/"prks-recently-added-8-<s>"')
         self.add("later", title="Later")
-        self.assertNotEqual(etags.etag_for_representation("works", work_commands.catalog(self.db, self.ctx, self.pdfs_dir)), tag)
+        self.assertNotEqual(etags.etag_for_representation("works", work_commands.catalog(self.db, self.ctx)), tag)
 
 
 if __name__ == "__main__":

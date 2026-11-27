@@ -246,7 +246,7 @@ class EnvelopeAndBoundTests(PeopleSyncTestCase):
         status, result = self.send(self.person_field(person_id, "about", "x" * 20000, 0))
         self.assertEqual((status, result["value_omitted"], "value" in result), (200, True, False))
         self.assertLessEqual(results.serialized_result_bytes(result), results.MAX_DURABLE_RESULT_BYTES)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "x" * 20000)
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id))["about"], "x" * 20000)
         self.send(self.person_field(person_id, "about", "A" * 40000, 1))
         status, result = self.send(self.person_field(person_id, "about", "B" * 40000, 0))
         self.assertEqual((status, "current_preview" in result, "current_value" in result), (409, True, False))
@@ -261,7 +261,7 @@ class EnvelopeAndBoundTests(PeopleSyncTestCase):
         create = self.envelope("CREATE_PERSON", person_id, person_payload())
         role = self.role("ADD_WORK_PERSON_ROLE", work_id, person_id, 0, credit="") | {"depends_on": [create["op_id"]]}
         self.assertEqual(self.send(role), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
-        self.assertEqual((person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir), library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))), (None, []))
+        self.assertEqual((person_commands.detail(self.db, self.ctx, person_id), library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))), (None, []))
         self.assertEqual(self.send(create)[1]["code"], "ACKNOWLEDGED")
         status, result = self.send(role)
         self.assertEqual((status, result["code"], result["present"]), (200, "ACKNOWLEDGED", True))
@@ -322,7 +322,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertTrue(holder)
         self.assertEqual(contender, (409, {"code": "PERSON_HAS_LINKS", "person_id": self.person_id,
                                            "current_revision": 1}))
-        self.assertIsNotNone(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))
+        self.assertIsNotNone(person_commands.detail(self.db, self.ctx, self.person_id))
         self.assertEqual(self.ledger()[-1]["status"], "PERSON_HAS_LINKS")
 
     def test_a_link_waiting_for_a_delete_finds_no_person(self) -> None:
@@ -368,7 +368,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual(holder, (True, 1))
         self.assertEqual((contender[0], contender[1]["server_revision"], contender[1]["last_name"]),
                          (200, 2, "Leigh"))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))["aliases"], "A. Lee")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id))["aliases"], "A. Lee")
 
     def test_a_repeated_create_waiting_for_a_delete_creates_the_person_again(self) -> None:
         holder, contender = self.race(
@@ -377,7 +377,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual(holder, (True, 0))
         self.assertEqual((contender[0], contender[1]["changed"], contender[1]["person"]["last_name"]),
                          (200, True, "Again"))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))["last_name"], "Again")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.person_id))["last_name"], "Again")
 
     def test_a_delete_waiting_for_a_repeated_create_follows_its_acknowledgement(self) -> None:
         holder, contender = self.race(
@@ -387,7 +387,7 @@ class PersonRaceTests(PeopleSyncTestCase):
         self.assertEqual((holder[0], holder[1]["changed"], holder[1]["person"]["last_name"]), (200, False, "Lee"))
         self.assertEqual(contender, (200, {"code": "ACKNOWLEDGED", "person_id": self.person_id,
                                            "changed": True}))
-        self.assertIsNone(person_commands.detail(self.db, self.ctx, self.person_id, self.pdfs_dir))
+        self.assertIsNone(person_commands.detail(self.db, self.ctx, self.person_id))
 
     def test_creates_of_one_id_queue_and_the_second_converges(self) -> None:
         person_id = "P-" + uuid.uuid4().hex.upper()
@@ -502,7 +502,7 @@ class RecreationTests(PeopleSyncTestCase):
         for name, (status, result) in stale.items():
             with self.subTest(base=name):
                 self.assertEqual((status, result["code"]), (409, "REVISION_CONFLICT"), result)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id))["about"], "")
         self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id)), [])
 
     def test_a_recreated_group_refuses_every_base_from_before_its_delete(self) -> None:
@@ -540,7 +540,7 @@ class IsolationTests(PeopleSyncTestCase):
                 with self.assertRaises(AccessRefused) as caught:
                     self.send(dict(data, device_id=device), other.context)
                 self.assertIs(caught.exception.refusal, Refusal.FORBIDDEN)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id))["about"], "")
         self.assertEqual(require(group_commands.detail(self.db, self.ctx, group_id))["members"], [])
         self.assertEqual(self.revisions("person-field"), {})
         self.assertEqual({row["library_id"] for row in self.ledger()} - {self.actor.library_id},
@@ -571,7 +571,7 @@ class CreateWorkRoleFilingTests(PeopleSyncTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.filing = ComposedFiling()
-        self.env = Environment(pdfs_dir=self.storage.pdfs_dir, filing=self.filing)
+        self.env = Environment(filing=self.filing)
 
     def test_a_new_work_is_born_with_its_roles(self) -> None:
         ann = self.create_person(first_name="Ann", last_name="Lee")
@@ -601,7 +601,7 @@ class CreateWorkRoleFilingTests(PeopleSyncTestCase):
         status, result = self.send(self.envelope("CREATE_WORK", work_id, create_payload(
             roles=[{"person_id": smith, "role_type": "Author", "credit_name": "Smith, John"}])))
         self.assertEqual((status, result["role_count"], "aliases_revisions" in result), (200, 1, False))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, smith, self.pdfs_dir))["aliases"] or "", "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, smith))["aliases"] or "", "")
         self.assertEqual([row["credit_name"] for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))], ["Smith, John"])
 
     def test_a_missing_person_refuses_the_create_after_the_folder(self) -> None:
@@ -661,7 +661,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         return {(row["id"], row["role_type"]) for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work))}
 
     def row(self) -> dict[str, Any]:
-        return next(work for work in work_commands.catalog(self.db, self.ctx, self.pdfs_dir) if work["id"] == self.work)
+        return next(work for work in work_commands.catalog(self.db, self.ctx) if work["id"] == self.work)
 
     def aliases_revision(self, person: Optional[str] = None) -> int:
         return require(person_commands.metadata_state(self.db, self.ctx, person or self.jane))["fields"]["aliases"]["revision"]
@@ -732,7 +732,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.ed, "Author", "E. Smith"))
         self.assertEqual((self.revision(self.ed), self.revision()), (2, 1))
         self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Author", "Jane D."))
-        self.assertIn("Jane D.", require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"])
+        self.assertIn("Jane D.", require(person_commands.detail(self.db, self.ctx, self.jane))["aliases"])
         self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.jane, "Author", ""))
         self.assertTrue(role_commands.remove(self.db, self.ctx, self.work, self.jane, "Author"))
         self.assertEqual((self.revision(), self.linked()), (4, {(self.ed, "Author")}))
@@ -745,7 +745,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         status, result = self.link(True, credit="Mark Twain")
         self.assertEqual((status, result["credit_name"], result["aliases_revision"], result["server_revision"]),
                          (200, "Mark Twain", 1, 1))
-        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"], self.row()["linked_authors"]),
+        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.jane))["aliases"], self.row()["linked_authors"]),
                          ("Mark Twain", "Mark Twain"))
         link = self.row()["linked_people"][0]
         self.assertEqual((link["person_id"], link["role_type"], link["credit_name"], link["display_name"],
@@ -772,7 +772,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertNotIn("aliases_revision", self.link(True, credit="Mark Twain")[1])  # already known
         self.assertEqual(self.aliases_revision(), 1)
         self.assertEqual(self.credit("S. L. Clemens", 1)[1]["aliases_revision"], 2)
-        self.assertEqual(role_rules.parse_person_aliases(require(person_commands.detail(self.db, self.ctx, self.jane, self.pdfs_dir))["aliases"]),
+        self.assertEqual(role_rules.parse_person_aliases(require(person_commands.detail(self.db, self.ctx, self.jane))["aliases"]),
                          ["Samuel Clemens", "Mark Twain", "S. L. Clemens"])
         # A comma-bearing credit stays on the role on every path.
         status, result = self.link(True, person=self.ed, credit="Smith, John")
@@ -781,7 +781,7 @@ class WorkRoleSyncTests(PeopleSyncTestCase):
         self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.ed, "Editor", "Smith, John"))
         born = works_fixtures.add_work(self.db, self.ctx, self.storage, "Born inverted")
         people_fixtures.insert_initial_role(self.db, self.ctx, born, self.ed, "Author", order_index=0, credit_name="Smith, John")
-        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.ed, self.pdfs_dir))["aliases"] or "", self.aliases_revision(self.ed)), ("", 0))
+        self.assertEqual((require(person_commands.detail(self.db, self.ctx, self.ed))["aliases"] or "", self.aliases_revision(self.ed)), ("", 0))
         self.assertIn("Smith, John", self.row()["linked_authors"])
         # Construction is no role revision, but a promoted credit is a Person change.
         other = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
@@ -856,7 +856,7 @@ class AnswerTests(PeopleSyncTestCase):
         missing = generate("P")
         self.assertEqual(self.send(self.person_field(missing, "about", "x", 0)),
                          (404, {"code": "ENTITY_NOT_FOUND", "person_id": missing, "field": "about"}))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir))["image_url"], "https://example.org/a.png")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person_id))["image_url"], "https://example.org/a.png")
 
     def test_delete_person(self) -> None:
         person_id, group_id = self.create_person(last_name="Lee"), self.create_group("Readers")
@@ -979,7 +979,7 @@ class AnswerTests(PeopleSyncTestCase):
         self.assertEqual(self.send(self.envelope("DELETE_PERSON_GROUP", group_id, {}, 0)),
                          (400, {"code": "INVALID_BASE_REVISION"}))
         self.assertEqual(require(group_commands.detail(self.db, self.ctx, child))["parent_id"], parent)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, ann, self.pdfs_dir))["groups"], [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, ann))["groups"], [])
 
     def test_role_decision_table(self) -> None:
         ann = self.create_person(first_name="Ann", last_name="Lee")

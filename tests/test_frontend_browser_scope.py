@@ -115,7 +115,7 @@ class BrowserScopeStructure(unittest.TestCase):
 
     def test_worker_serves_each_page_its_own_binding(self) -> None:
         sw = _code(_read(_FRONTEND, "sw.js"))
-        self.assertIn("handlers.handlePdfRequest(request, pathname, event.clientId || '')", sw)
+        self.assertIn("handlers.handlePdfRequest(request, pdfKey, event.clientId || '')", sw)
         self.assertIn("handlePdfCacheMessage(data, scope.caches, pdfCacheName, sourceId, confirmScope)", sw)
 
     def test_page_cache_fallback_checks_the_session_before_storing(self) -> None:

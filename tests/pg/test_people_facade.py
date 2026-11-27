@@ -110,7 +110,7 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
         group = group_commands.create(self.db, self.ctx, "Readers")
         with facade_context.acting_as(self.reader_context()):
-            self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["last_name"], "Lee")
+            self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["last_name"], "Lee")
             self.assertEqual(len(group_commands.catalog(self.db, self.ctx)), 1)
             for call in (lambda: people_fixtures.add_person(self.db, self.ctx, "No", "One"),
                          lambda: group_commands.add_member(self.db, self.ctx, group, person),
@@ -135,7 +135,7 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
             self.assertEqual(person_commands.catalog(self.db, self.ctx), [])
             self.assertEqual(group_commands.catalog(self.db, self.ctx), [])
             self.assertEqual(publisher_commands.in_use(self.db, self.ctx), [])
-            self.assertIsNone(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))
+            self.assertIsNone(person_commands.detail(self.db, self.ctx, person))
             self.assertIsNone(group_commands.detail(self.db, self.ctx, group))
             self.assertIsNone(person_commands.metadata_state(self.db, self.ctx, person))
             self.assertIsNone(group_commands.sync_state(self.db, self.ctx, group))
@@ -164,7 +164,7 @@ class ActorAndIsolationTests(PeopleFacadeTestCase):
                 group_commands.create(self.db, self.ctx, "Child", group)
             with self.assertRaisesRegex(ValueError, "Parent group not found"):
                 group_commands.update(self.db, self.ctx, theirs, {"parent_id": group})
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["about"], "")
         self.assertEqual(require(group_commands.detail(self.db, self.ctx, group))["name"], "Shared name")
         self.assertEqual([(p["id"], p["aliases"]) for p in publisher_commands.in_use(self.db, self.ctx)],
                          [(publisher, ["Shared alias"])])
@@ -219,7 +219,7 @@ class IdentityTests(PeopleFacadeTestCase):
 
     def test_aliases_are_rows_with_one_spelling_per_key(self) -> None:
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee", aliases=" A. Lee ,a. lee, ,Anna  Lee,ANNA LEE")
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["aliases"], "A. Lee, Anna  Lee")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["aliases"], "A. Lee, Anna  Lee")
         rows = self.sql("SELECT position, alias FROM prks.person_aliases ORDER BY position")
         self.assertEqual([(r["position"], r["alias"]) for r in rows], [(0, "A. Lee"), (1, "Anna  Lee")])
         # Re-spacing the same aliases, or repeating one, is no change.
@@ -250,14 +250,14 @@ class InvalidInputTests(PeopleFacadeTestCase):
             with self.assertRaises(ValueError):
                 call()
         self.assertEqual(self.count("persons"), 1)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["about"], "")
         self.assertEqual(self.count("person_groups"), 1)
         self.assertEqual(self.count("publisher_aliases"), 0)
         self.assertEqual(self.sql("SELECT count(*) AS n FROM prks.entity_revisions")[0]["n"], 0)
 
     def test_a_portrait_url_is_normalized_on_create(self) -> None:
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee", image_url="  https://example.org/a.png  ")
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["image_url"], "https://example.org/a.png")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["image_url"], "https://example.org/a.png")
 
 
 class RevisionDecisionTests(PeopleFacadeTestCase):
@@ -283,7 +283,7 @@ class RevisionDecisionTests(PeopleFacadeTestCase):
         status, result = self.run_command(lambda scope: persons.apply_field_operation(
             scope, "P-" + "0" * 32, "about", "x", 0))
         self.assertEqual((status, result["code"]), (404, "ENTITY_NOT_FOUND"))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["about"], "two")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["about"], "two")
 
     def test_aliases_converge_on_their_stored_spelling(self) -> None:
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee", aliases="A, B")
@@ -349,16 +349,16 @@ class DeletionTests(PeopleFacadeTestCase):
         self.assertEqual(self.count("persons"), 1)
         self.assertEqual(self.count("person_group_members"), 1)
         self.assertEqual(person_commands.catalog(self.db, self.ctx)[0]["assigned_roles"], ["Author"])
-        self.assertEqual([(w["id"], w["role_type"]) for w in require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["works"]],
+        self.assertEqual([(w["id"], w["role_type"]) for w in require(person_commands.detail(self.db, self.ctx, person))["works"]],
                          [(work, "Author")])
 
-    def test_a_person_without_works_reads_without_a_data_root(self) -> None:
+    def test_a_person_reads_from_the_database_alone(self) -> None:
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, None))["works"], [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["works"], [])
         self.link_role(person)
-        # Finishing a Work summary needs the PDF directory.
-        with self.assertRaisesRegex(RuntimeError, "no data root"):
-            person_commands.detail(self.db, self.ctx, person, None)
+        # A Work summary's file size comes from its Asset row, not the disk (#1427).
+        self.assertEqual([w["file_size_bytes"] for w in require(person_commands.detail(self.db, self.ctx, person))["works"]],
+                         [None])
 
     def test_a_deleted_person_leaves_tombstones(self) -> None:
         person = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee", aliases="A")
@@ -460,7 +460,7 @@ class DeletionTests(PeopleFacadeTestCase):
                 scope, person, field, persons.canonical_field(field, value), 0))
             self.assertEqual((status, result["code"], result["current_revision"]),
                              (409, "REVISION_CONFLICT", 1), field)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["about"], "")
         status, result = self.run_command(lambda scope: persons.apply_field_operation(
             scope, person, "about", "seen the delete", 1))
         self.assertEqual((status, result["code"], result["server_revision"]), (200, "ACKNOWLEDGED", 2))
@@ -561,7 +561,7 @@ class ConcurrencyTests(PeopleFacadeTestCase):
         holder, contender = self.race(edit, lambda: person_commands.update_profile(self.db, self.ctx, person, {"about": "second"}))
         self.assertEqual(holder, (True, 1))
         self.assertIsNone(contender)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person, self.pdfs_dir))["about"], "second")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, person))["about"], "second")
         self.assertEqual(require(person_commands.metadata_state(self.db, self.ctx, person))["fields"]["about"]["revision"], 2)
 
     def test_a_member_added_while_the_person_is_deleted(self) -> None:
@@ -796,18 +796,18 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
 
     def test_a_person_and_its_states(self) -> None:
         arendt = self.person("Arendt", **_PROFILE)
-        self.answer(person_commands.detail(self.db, self.ctx, arendt, self.pdfs_dir), {
+        self.answer(person_commands.detail(self.db, self.ctx, arendt), {
             **_PROFILE, "created_at": "<s>", "groups": [], "id": "<P Arendt>", "last_name": "Arendt",
             "updated_at": "<s>", "works": []})
         self.answer(person_commands.metadata_state(self.db, self.ctx, arendt), {
             "fields": {field: {"revision": 0} for field in sorted([*_PROFILE, "last_name"])},
             "person_id": "<P Arendt>"})
-        for read in (lambda person_id: person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir), partial(person_commands.metadata_state, self.db, self.ctx),
+        for read in (lambda person_id: person_commands.detail(self.db, self.ctx, person_id), partial(person_commands.metadata_state, self.db, self.ctx),
                      partial(group_commands.person_state, self.db, self.ctx)):
             self.assertIsNone(read(_MISSING_PERSON))
         self.refused_with("javascript:alert(1) is not a valid value for image_url", partial(person_commands.update_profile, self.db, self.ctx), arendt,
                           {"image_url": "javascript:alert(1)"})
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, arendt, self.pdfs_dir))["image_url"], _PROFILE["image_url"])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, arendt))["image_url"], _PROFILE["image_url"])
 
     def test_the_person_catalog(self) -> None:
         for name in ("beta", "Alpha", "_under", "Zed", "Ärzt"):
@@ -838,12 +838,12 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
         self.assertEqual(sorted(state["groups"], key=lambda group: group["group_id"]), [
             {"group_id": "<PG Critical theory>", "present": True, "revision": 1},
             {"group_id": "<PG Frankfurt>", "present": False, "revision": 2}])
-        self.answer(require(person_commands.detail(self.db, self.ctx, adorno, self.pdfs_dir)), {
+        self.answer(require(person_commands.detail(self.db, self.ctx, adorno)), {
             "about": "T", "groups": [{"id": "<PG Critical theory>", "name": "Critical theory", "parent_id": None}]})
         benjamin = self.person("Benjamin")
         self.refused_with(f"Unknown group id: {_MISSING_GROUP}", partial(person_commands.update_profile, self.db, self.ctx), benjamin,
                           {"about": "Critic"}, [_MISSING_GROUP])
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, benjamin, self.pdfs_dir))["about"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, benjamin))["about"], "")
         self.refused_with("group_ids must be a JSON array", partial(person_commands.update_profile, self.db, self.ctx), benjamin, {},
                           "not-a-list")
         # An unknown Person is refused with groups and ignored without.
@@ -854,7 +854,7 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
         leaving, club = self.person("Leaving"), self.group("Club")
         group_commands.add_member(self.db, self.ctx, club, leaving)
         self.assertIsNone(person_commands.delete_if_unlinked(self.db, self.ctx, leaving))
-        self.assertIsNone(person_commands.detail(self.db, self.ctx, leaving, self.pdfs_dir))
+        self.assertIsNone(person_commands.detail(self.db, self.ctx, leaving))
         self.answer(group_commands.detail(self.db, self.ctx, club), {"member_count": 0, "members": []})
         self.answer(group_commands.sync_state(self.db, self.ctx, club), {
             "fields": {"description": {"revision": 0}, "name": {"revision": 0}, "parent_id": {"revision": 0}},
@@ -920,7 +920,7 @@ class AnswerTests(AnswerAssertions, PeopleFacadeTestCase):
                                                            "parent_id": "<PG Top>"})
         self.assertEqual(require(group_commands.sync_state(self.db, self.ctx, bottom))["fields"]["parent_id"],
                          {"revision": 1})
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, member, self.pdfs_dir))["groups"], [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, member))["groups"], [])
         self.refused_with("Group not found.", partial(group_commands.delete, self.db, self.ctx), middle)
 
     def test_membership_from_both_ends(self) -> None:

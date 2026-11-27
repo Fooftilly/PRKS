@@ -355,7 +355,7 @@ class DurablePlaylistTests(unittest.TestCase):
             timeout=60000,
             message='a playlist holding videos is deleted, not refused')
         self.assertNotIn('Durable Playlist', self.playlists_in_db(server))
-        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, server.ids['video_a']))
+        self.assertIsNotNone(self.db_for(server).run(work_commands.detail, server.ids['video_a']))
 
 
 if __name__ == '__main__':

@@ -75,7 +75,7 @@ The model must keep each one or say explicitly why it changes.
    identity resynchronizes it or relies on reconciliation.
 5. **I5: Managed bytes are never lost to a crash.** A basename is minted
    unique, published durably, never trusted as a path
-   (`safe_pdf_path_under_dir`), copy-on-written when shared, and claimed in
+   (a `StorageKey` read through the `StorageBackend`), copy-on-written when shared, and claimed in
    `pending_pdf_cleanup` inside the delete transaction.
 6. **I6: Annotation metadata is canonical.** The bytes are a materialization.
    Semantic ACK never waits on bytes. Canonical > materialized means "rebuild",
@@ -534,7 +534,7 @@ describes where today's value goes; §12 covers how.
 | Source / provenance | **A** for bytes (`origin`, `origin_url`, `imported_from_processing_file_id`). **M** field provenance for metadata. | `origin = 'legacy'` | Bytes and metadata have different provenance. |
 | File path (`file_path`) | **A** (`storage_locator`, the working/served bytes) | copied | The Work projection keeps `file_path` (§13). `source_locator` (pristine bytes) stays NULL for legacy files (§9.4). |
 | MIME / media type (`source_mime`) | **A** (`media_type`) | Copy `source_mime` when it is non-empty. Otherwise infer `application/pdf` for managed PDFs, and leave it NULL for everything else. | `POST /api/works` accepts and stores a caller-supplied `source_mime`, so a user database may hold values even though the audited library had none. The backfill must never overwrite them. |
-| Byte size | **A** (`byte_size`) | filled by the fingerprint pass (§12.4) | It replaces the per-row `stat()` in `finish_work_summary_rows` once trusted. |
+| Byte size | **A** (`byte_size`) | filled by the fingerprint pass (§12.4) | Work summaries report it as `file_size_bytes`; no read stats the file (#1427). |
 | Content hash | **A** (`ingest_sha256` for the source bytes, `content_sha256` for the working bytes) | `content_sha256` from the fingerprint pass. `ingest_sha256` stays NULL for legacy files. | §9.4 and §10.2. |
 | Derived text / OCR / thumbnails | **A**, derived | the rebuilt index is keyed by `asset_id` | They stay derived and are never backed up (I4). |
 | Annotation materialization revisions | **A** | copied from `works` | They describe one file's bytes. |
@@ -917,7 +917,7 @@ the Asset side of that seam.
 | `origin_work_id` | The legacy Work whose row this Asset was backfilled or mirrored from. It is immutable, and it maps legacy Work-keyed operations (§11.2, §14.2). NULL for Assets created by new commands. |
 | `kind` | `managed_file` \| `external_stream` (D8: no `external_link`). |
 | `role` | `document` \| `snapshot` \| `readable_text` \| `attachment` \| `other`. It describes what the content is for the user. PRKS's own materialized export is **not** a role (D3, §9.4). |
-| `storage_locator` | For `managed_file`: the managed **basename** of the **working bytes**, the bytes PRKS serves and may rewrite (linearization, annotation materialization). **Never an absolute path**, the same reasoning as `pending_pdf_cleanup`. The legacy `/api/pdfs/<basename>` form stays in the Work projection. |
+| `storage_locator` | For `managed_file`: the managed **basename** of the **working bytes**, the bytes PRKS serves and may rewrite (linearization, annotation materialization). **Never an absolute path**, the same reasoning as `pending_pdf_cleanup`. The Work projection serves it as `/api/assets/<AS-id>/content?v=<hash>` (#1427); the basename never leaves the backend. |
 | `source_locator` | Optional managed basename of the **pristine source bytes**, exactly as ingested and never rewritten. NULL when no original is preserved, which is true of every legacy Asset. |
 | `provider`, `provider_id`, `url` | For `external_stream`. The `SET_WORK_SOURCE` aggregate moves here unchanged (I3). |
 | `media_type` | `application/pdf`, `text/html`, `video/*` hint, … |
@@ -1549,7 +1549,7 @@ PATCH/DELETE /api/manifestations/:id
 POST /api/manifestations/:id/assets           add a File (online; binary)
 PATCH/DELETE /api/assets/:id
 POST /api/works/:id/primary-manifestation     set primary
-GET  /api/assets/:id/content                  serves bytes (the /api/pdfs route stays)
+GET  /api/assets/:id/content                  serves bytes (the /api/pdfs route is gone, #1427)
 ```
 
 Nothing here is implemented in this PR.

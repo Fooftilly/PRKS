@@ -393,7 +393,7 @@ describe('People route surface', () => {
             title: 'Notes',
             role_type: 'Author',
             order_index: '0',
-            file_path: '/api/pdfs/notes.pdf',
+            file_path: '/api/assets/AS-notes-pdf/content',
             status: 'read',
             year: '1843',
             file_size_bytes: 1200,

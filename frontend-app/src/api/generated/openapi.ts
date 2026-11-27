@@ -123,6 +123,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assets/{asset_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        /** A managed Asset's bytes in this Library, with Range support */
+        get: operations["getAssetContent"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** A managed Asset's bytes in this Library, with Range support (headers only) */
+        head: operations["getAssetContentHead"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/backups/download": {
         parameters: {
             query?: never;
@@ -641,26 +661,6 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/pdfs/{filename}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                filename: string;
-            };
-            cookie?: never;
-        };
-        /** A managed PDF of this Library, with Range support */
-        get: operations["getManagedPdf"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        /** A managed PDF of this Library, with Range support (headers only) */
-        head: operations["getManagedPdfHead"];
         patch?: never;
         trace?: never;
     };
@@ -3508,7 +3508,7 @@ export interface components {
             export_sha256: string;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>``.
+             * @description ``/api/assets/<id>/content?v=<version>``.
              */
             file_path: string;
             /** Materialized Pdf Annotation Revision */
@@ -3536,7 +3536,7 @@ export interface components {
             content_sha256: string;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>``.
+             * @description ``/api/assets/<id>/content?v=<version>``.
              */
             file_path: string;
             /**
@@ -3574,10 +3574,6 @@ export interface components {
             db_read: number;
             /** Db Write */
             db_write: number;
-            /** Pdf File Stat Files */
-            pdf_file_stat_files: number;
-            /** Pdf File Stat Rows */
-            pdf_file_stat_rows: number;
             /** Thumbnail Cache Hits */
             thumbnail_cache_hits: number;
             /** Thumbnail Cache Misses */
@@ -3984,12 +3980,12 @@ export interface components {
             edition: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
@@ -4154,12 +4150,12 @@ export interface components {
             edition: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
@@ -4836,12 +4832,12 @@ export interface components {
             doc_type: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Folder Id */
@@ -4898,12 +4894,12 @@ export interface components {
             doc_type: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Id */
@@ -5737,12 +5733,12 @@ export interface components {
             doc_type: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /** Id */
@@ -5818,7 +5814,7 @@ export interface components {
             file_name?: string | null;
             /**
              * File Path
-             * @description A managed PDF (``/api/pdfs/<name>``) the new Work adopts.
+             * @description A managed PDF (its ``/api/assets/<id>/content?v=<version>`` URL) the new Work adopts.
              */
             file_path?: string;
             /**
@@ -6260,12 +6256,12 @@ export interface components {
             edition: string | null;
             /**
              * File Path
-             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             * @description ``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.
              */
             file_path: string;
             /**
              * File Size Bytes
-             * @description The managed PDF's size on disk; null without one.
+             * @description The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.
              */
             file_size_bytes: number | null;
             /**
@@ -7138,6 +7134,162 @@ export interface operations {
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
             503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getAssetContent: {
+        parameters: {
+            query?: {
+                /** @description The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. A version that no longer names the Asset's bytes is 404. */
+                v?: string;
+            };
+            header?: {
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
+                Range?: string;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/pdf": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No managed Asset of this Library by that id, or `v` no longer names its bytes. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The range is outside the file. */
+            416: {
+                headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getAssetContentHead: {
+        parameters: {
+            query?: {
+                /** @description The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. A version that no longer names the Asset's bytes is 404. */
+                v?: string;
+            };
+            header?: {
+                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
+                Range?: string;
+            };
+            path: {
+                asset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    /** @description Always `bytes`. */
+                    "Accept-Ranges": "bytes";
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
+                    /** @description The bytes in this answer. */
+                    "Content-Length": number;
+                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
+                    "Content-Range": string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No live session (not_authenticated). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The session's role lacks the route's capability, or the Origin is not allowed. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No managed Asset of this Library by that id, or `v` no longer names its bytes. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The range is outside the file. */
+            416: {
+                headers: {
+                    /** @description The file size, as `bytes *\/<size>`. */
+                    "Content-Range": string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The Library is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     downloadBackup: {
@@ -8673,156 +8825,6 @@ export interface operations {
             401: components["responses"]["NotAuthenticated"];
             403: components["responses"]["Forbidden"];
             503: components["responses"]["Unavailable"];
-        };
-    };
-    getManagedPdf: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
-                Range?: string;
-            };
-            path: {
-                filename: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The whole file. */
-            200: {
-                headers: {
-                    /** @description Always `bytes`. */
-                    "Accept-Ranges": "bytes";
-                    /** @description Always no-store. */
-                    "Cache-Control": "no-store, max-age=0, must-revalidate";
-                    /** @description The bytes in this answer. */
-                    "Content-Length": number;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/pdf": string;
-                };
-            };
-            /** @description The requested range. */
-            206: {
-                headers: {
-                    /** @description Always `bytes`. */
-                    "Accept-Ranges": "bytes";
-                    /** @description Always no-store. */
-                    "Cache-Control": "no-store, max-age=0, must-revalidate";
-                    /** @description The bytes in this answer. */
-                    "Content-Length": number;
-                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
-                    "Content-Range": string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/pdf": string;
-                };
-            };
-            401: components["responses"]["NotAuthenticated"];
-            403: components["responses"]["Forbidden"];
-            /** @description No managed PDF of this Library by that name. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-            /** @description The range is outside the file. */
-            416: {
-                headers: {
-                    /** @description The file size, as `bytes *\/<size>`. */
-                    "Content-Range": string;
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            503: components["responses"]["Unavailable"];
-        };
-    };
-    getManagedPdfHead: {
-        parameters: {
-            query?: never;
-            header?: {
-                /** @description One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes. */
-                Range?: string;
-            };
-            path: {
-                filename: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The whole file. */
-            200: {
-                headers: {
-                    /** @description Always `bytes`. */
-                    "Accept-Ranges": "bytes";
-                    /** @description Always no-store. */
-                    "Cache-Control": "no-store, max-age=0, must-revalidate";
-                    /** @description The bytes in this answer. */
-                    "Content-Length": number;
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The requested range. */
-            206: {
-                headers: {
-                    /** @description Always `bytes`. */
-                    "Accept-Ranges": "bytes";
-                    /** @description Always no-store. */
-                    "Cache-Control": "no-store, max-age=0, must-revalidate";
-                    /** @description The bytes in this answer. */
-                    "Content-Length": number;
-                    /** @description The range sent, as `bytes <first>-<last>/<size>`. */
-                    "Content-Range": string;
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No live session (not_authenticated). */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The session's role lacks the route's capability, or the Origin is not allowed. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No managed PDF of this Library by that name. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The range is outside the file. */
-            416: {
-                headers: {
-                    /** @description The file size, as `bytes *\/<size>`. */
-                    "Content-Range": string;
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The Library is unavailable (unavailable). */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
         };
     };
     listPersonGroups: {

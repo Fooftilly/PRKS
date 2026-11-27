@@ -696,12 +696,12 @@ async function testWorker() {
     }
     const storage = cacheStorage();
     const wrong = await sw.handlePdfCacheMessage({
-        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: 'prks-pdf-v3:other',
+        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/assets/AS-a-pdf/content', cacheName: 'prks-pdf-v3:other',
         buffer: Buffer.from('X'),
     }, storage, async () => name);
     record('the worker refuses an install naming another scope', wrong === false && storage.caches.size === 0);
     const none = await sw.handlePdfCacheMessage({
-        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: name, buffer: Buffer.from('X'),
+        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/assets/AS-a-pdf/content', cacheName: name, buffer: Buffer.from('X'),
     }, storage, async () => null);
     record('the worker refuses an install without a signed-in scope', none === false && storage.caches.size === 0);
 
@@ -711,8 +711,8 @@ async function testWorker() {
         fetchImpl: async () => { fetched += 1; throw new TypeError('offline'); },
         pdfCacheName: async () => null,
     });
-    const request = { url: 'https://prks.example/api/pdfs/a.pdf', method: 'GET', headers: { get: () => null } };
-    const res = await handlers.handlePdfRequest(request, '/api/pdfs/a.pdf');
+    const request = { url: 'https://prks.example/api/assets/AS-a-pdf/content', method: 'GET', headers: { get: () => null } };
+    const res = await handlers.handlePdfRequest(request, '/api/assets/AS-a-pdf/content');
     record('without a scope the worker opens no pdf cache', storage.caches.size === 0 && fetched === 1 && res.status === 503);
 
     // Per-client selection.
@@ -752,7 +752,7 @@ async function testWorker() {
     const storage2 = cacheStorage();
     const byClient = (clientId, strict) => Promise.resolve(sw.selectPdfCacheName(state, clientId, live, strict));
     const foreign = await sw.handlePdfCacheMessage({
-        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/pdfs/a.pdf', cacheName: nameB, buffer: Buffer.from('X'),
+        type: sw.PDF_CACHE_INSTALL_MESSAGE, pathname: '/api/assets/AS-a-pdf/content', cacheName: nameB, buffer: Buffer.from('X'),
     }, storage2, byClient, 'tab-a');
     record("a page cannot install into another scope's cache", foreign === false && storage2.caches.size === 0);
 
@@ -760,7 +760,7 @@ async function testWorker() {
     // cache's own scope: the save ran under whichever session the browser
     // holds, so another account's bytes never enter this page's cache.
     {
-        const path = '/api/pdfs/post-save-switch.pdf';
+        const path = '/api/assets/AS-post-save-switch-pdf/content';
         const storage4 = cacheStorage();
         const seed = await storage4.open(name);
         await seed.put(path, new Response('%PDF-A-OLD'));
@@ -795,10 +795,10 @@ async function testWorker() {
             pdfCacheName: async () => name,
             confirmScope: async (cacheName) => cacheName === name && answers.shift(),
         });
-        const got = await h.handlePdfRequest(request, '/api/pdfs/a.pdf', 'tab-a');
+        const got = await h.handlePdfRequest(request, '/api/assets/AS-a-pdf/content', 'tab-a');
         await new Promise((r) => setTimeout(r, 20));
         const cache = storage3.caches.get(name);
-        const has = !!(cache && cache.entries.get('/api/pdfs/a.pdf'));
+        const has = !!(cache && cache.entries.get('/api/assets/AS-a-pdf/content'));
         record('a network PDF, session ' + label + ': ' + (stored ? 'cached' : 'never cached') + ', still served',
             got.status === 200 && has === stored, String(has));
     }

@@ -78,7 +78,7 @@ class ReplaceTestCase(MaterializeTestCase):
         return replace.commit(scope, self.objects, work_id, written)
 
     def full_asset(self, work_id: str) -> dict[str, Any]:
-        (row,) = self.sql("SELECT storage_locator, source_locator, content_sha256, ingest_sha256, byte_size,"
+        (row,) = self.sql("SELECT id, storage_locator, source_locator, content_sha256, ingest_sha256, byte_size,"
                           " canonical_annotation_set_revision AS canonical,"
                           " materialized_pdf_annotation_revision AS materialized"
                           " FROM prks.assets WHERE work_id = %s", (work_id,))
@@ -126,11 +126,11 @@ class SuccessTests(ReplaceTestCase):
                          (sha(NEW), sha(NEW), len(NEW), None))
         self.assertEqual(self.read(after["storage_locator"]), NEW)
         self.assertEqual(done, {"status": "success", "work_id": work_id,
-                                "file_path": "/api/pdfs/" + after["storage_locator"],
+                                "file_path": works_fixtures.content_url(after["id"], NEW),
                                 "content_sha256": sha(NEW), "ingest_sha256": sha(NEW), "byte_size": len(NEW),
                                 "canonical_annotation_set_revision": 1,
                                 "materialized_pdf_annotation_revision": 1, "stale": False})
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["file_path"], done["file_path"])
         # Nothing was modified in place; the old object is claimed and kept until settled.
         self.assertEqual(self.read(before["storage_locator"]), old_bytes)
         self.assertEqual(self.claims(), {before["storage_locator"]})
@@ -288,6 +288,7 @@ class SharedReferenceTests(LinearizingTestCase):
     def test_a_shared_pristine_source_is_not_claimed(self) -> None:
         work_id = self.uploaded_work(b"%PDF-1.4 pristine", b"%PDF-1.4 linearized")
         before = self.full_asset(work_id)
+        # The pristine source is a stored object no Asset serves: test notation adopts it by key.
         sibling = works_fixtures.add_work(self.db, self.ctx, self.storage, "Sibling", file_path="/api/pdfs/" + before["source_locator"])
         self.replace(work_id)
         self.assertEqual(self.claims(), {before["storage_locator"]})
@@ -351,8 +352,9 @@ class ConcurrencyTests(ReplaceTestCase):
         results = self.concurrently([(lambda n=n: self.replace(work_id, NEW + bytes([65 + n]) * (n + 1)))
                                      for n in range(4)])
         named = self.full_asset(work_id)["storage_locator"]
-        written = {result["file_path"][len("/api/pdfs/"):] for result in results}
+        written = self.names() - {old}
         self.assertEqual((len(written), named in written), (4, True))
+        self.assertIn(self.full_asset(work_id)["content_sha256"], {result["content_sha256"] for result in results})
         self.assertEqual(self.claims(), (written - {named}) | {old})
         self.assertEqual(self.full_asset(work_id)["canonical"], 4)
 
@@ -499,11 +501,11 @@ class RestartTests(ReplaceTestCase):
         self.db = Database(DatabaseConfig(conninfo=self.db_conninfo, role="test", pool_min=0, pool_max=2))
         self.addCleanup(self.db.close)
         library = PostgresLibrary(self.db, storage=self.storage)
-        self.assertEqual(require(work_commands.detail(library.database, current_context(), works_fixtures.pdfs_dir(library.storage), work_id))["file_path"], done["file_path"])
+        self.assertEqual(require(work_commands.detail(library.database, current_context(), work_id))["file_path"], done["file_path"])
         status = require(annotation_commands.materialization(library.database, current_context(), work_id))
         self.assertEqual((status["canonical_annotation_set_revision"], status["stale"]), (2, True))
         self.assertEqual(self.claims(), {"p.pdf"})
         # Settling is idempotent: a second pass finds nothing owed.
         self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {Settled.REMOVED: 1})
         self.assertEqual(lifecycle.retry_claims(self.db, self.objects), {})
-        self.assertEqual(self.read(done["file_path"][len("/api/pdfs/"):]), NEW)
+        self.assertEqual(self.read(self.full_asset(work_id)["storage_locator"]), NEW)

@@ -1,24 +1,19 @@
 """Work rules shared by every Library backend (PG-C2 #641).
 
 Bulk Work requests, wiki-link rendering, new-Work source kinds, document
-types, Work summary rows and the deleted-Work record. These are pure: no
+types and the deleted-Work record. These are pure: no
 store, no transaction. They moved here from ``backend/db_manager.py`` so the
 PostgreSQL Library uses them without importing the SQLite one.
 """
 
 from __future__ import annotations
 
-import contextlib
 import html
-import json
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from backend.domain.works import metadata_rules
 from backend.domain.works import source_rules
-from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
-from backend.runtime.performance import clock_ns, record_counter, record_span
 
 PRKS_BULK_WORK_ACTIONS = frozenset({"set_status", "move_folder", "add_tags", "remove_tags"})
 
@@ -297,63 +292,6 @@ def _canonical_new_source(source_kind, source_url, provider, provider_id, file_p
 def normalize_doc_type(value: Any) -> str:
     """Map user/API input to a whitelisted BibLaTeX entry type; unknown → misc."""
     return metadata_rules.normalize_doc_type(value)
-
-
-def _decode_linked_people(rows: Optional[List[dict]]) -> None:
-    for row in rows or ():
-        raw = row.get("linked_people")
-        if isinstance(raw, str):
-            try:
-                row["linked_people"] = json.loads(raw)
-            except (ValueError, TypeError):
-                row["linked_people"] = []
-        elif raw is None and "linked_people" in row:
-            row["linked_people"] = []
-
-
-def finish_work_summary_rows(rows: Optional[List[dict]], pdfs_dir: str) -> None:
-    """Complete a work-summary row: on-disk PDF size, and structured links.
-
-    `linked_people` arrives from SQLite as JSON TEXT. Decoded here rather than
-    left for the client: a nested JSON string would make every consumer parse
-    it again per row per render, and a row validator would have to accept a
-    string where the shape is actually a list.
-    """
-    _decode_linked_people(rows)
-    if not rows:
-        return
-    t0 = clock_ns()
-    examined = 0
-    stated = 0
-    try:
-        for row in rows:
-            if not row or not isinstance(row, dict):
-                continue
-            examined += 1
-            # Ownership identity, not the last '/'-separated piece: reporting
-            # the size of some other managed PDF for a malformed stored path is
-            # the same silent redirect the serving route now refuses.
-            filename = managed_pdf_filename(str(row.get("file_path") or ""))
-            if not filename:
-                row["file_size_bytes"] = None
-                continue
-            path = safe_pdf_path_under_dir(pdfs_dir, filename)
-            if not path or not os.path.isfile(path):
-                row["file_size_bytes"] = None
-                continue
-            try:
-                row["file_size_bytes"] = os.path.getsize(path)
-                stated += 1
-            except OSError:
-                row["file_size_bytes"] = None
-    finally:
-        # Telemetry never fails the read it measures.
-        with contextlib.suppress(Exception):
-            record_span("pdf_file_stats", clock_ns() - t0)
-            if examined:
-                record_counter("pdf_file_stat_rows", examined)
-            if stated:
-                record_counter("pdf_file_stat_files", stated)
 
 
 @dataclass(frozen=True)

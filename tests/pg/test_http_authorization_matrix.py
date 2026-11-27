@@ -44,6 +44,7 @@ from backend.domain.organization import tag_commands
 from tests.acting_context import current_context
 from tests import people_fixtures
 from backend.domain.people import person_commands
+from backend.domain.works import work_commands
 from backend.storage.objects import LocalFilesystemStorage
 from tests.narrowing import require
 from tests import works_fixtures
@@ -82,7 +83,7 @@ _CSL = ('<style xmlns="http://purl.org/net/xbiblio/csl" class="in-text" version=
 ROWS: tuple[Row, ...] = (
     Row("works", READ, "GET", "/api/works/{work}"),
     Row("works", EDIT, "PATCH", "/api/works/{work}", {"title": "Renamed by the matrix"}),
-    Row("pdfs", READ, "GET", "/api/pdfs/{pdf}"),  # streams a managed file
+    Row("pdfs", READ, "GET", "/api/assets/{asset}/content"),  # streams a managed file
     Row("thumbnails", READ, "GET", "/api/works/{work}/thumbnail", allowed=(404,)),  # no PDF page to render
     Row("research_graph", READ, "GET", "/api/research-graph"),
     Row("research_notes", EDIT, "PATCH", "/api/works/{work}", {"text_content": "A note from the matrix {unique}"},
@@ -180,10 +181,11 @@ class AuthorizationMatrixTests(HttpAuthTestCase):
         with self.acting(cookie):
             self.ids = {
                 "work": works_fixtures.add_work(self.facade.database, current_context(), self.facade.storage, "Matrix Work", file_path=f"/api/pdfs/{name}"),
-                "pdf": name,
                 "tag": tag_commands.create(self.facade.database, current_context(), "Seeded tag")["id"],
                 "person": people_fixtures.add_person(self.facade.database, current_context(), "Ada", "Lovelace", image_url="https://portrait.invalid/ada.jpg"),
             }
+            self.ids["asset"] = require(work_commands.detail(self.facade.database, current_context(),
+                                                             self.ids["work"]))["primary_asset_id"]
             cached = person_commands.cache_portrait(self.facade.database, current_context(), LocalFilesystemStorage.for_config(require(self.facade.storage)), 
                 self.ids["person"], lambda _url: PortraitImage(portrait.getvalue(), "jpeg"))
             assert cached is not None, "the portrait was not cached"

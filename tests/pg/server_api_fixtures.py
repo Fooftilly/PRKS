@@ -104,6 +104,16 @@ class ServerApiTestCase(HttpAuthTestCase):
     def upload_fields(self, text: str, name: str) -> dict[str, str]:
         return {"file_b64": base64.b64encode(pdf_bytes(text)).decode("ascii"), "file_name": name}
 
+    def stored_name(self, file_path: str) -> str:
+        """The storage key a Work's content URL reads (#1427); fails for any other spelling."""
+        from backend.domain.objects.content_url import asset_id_from_url
+
+        asset_id = asset_id_from_url(file_path)
+        self.assertIsNotNone(asset_id, file_path)
+        rows = self.sql("SELECT storage_locator FROM prks.assets WHERE id = %s", (asset_id,))
+        self.assertEqual(len(rows), 1, file_path)
+        return str(rows[0]["storage_locator"])
+
     def titles(self) -> list[str]:
         return sorted(row["title"] for row in self.ok(self.get("/api/works")))
 

@@ -18,16 +18,12 @@ from backend.domain.works import commands, projection, queries
 from backend.sync.families import Environment, FamilyHandler, Result
 
 
-def recent_item(scope: LibraryScope, work_id: str, env: Environment) -> Optional[dict[str, Any]]:
+def recent_item(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any]]:
     """The Work in the ``/api/recent`` row projection (``get_recent_browse``'s)."""
-    from backend.domain.works.rules import finish_work_summary_rows
-
     core = queries.works_by_ids(scope, [work_id]).get(work_id)
     if core is None:
         return None
-    row = projection.work_browse(core, excerpt=False, extra=("last_opened_at",))
-    finish_work_summary_rows([row], env.pdfs_dir)
-    return row
+    return projection.work_browse(core, excerpt=False, extra=("last_opened_at",))
 
 
 def apply(scope: LibraryScope, op: dict[str, Any], received_at: datetime, env: Environment) -> Result:
@@ -38,7 +34,7 @@ def apply(scope: LibraryScope, op: dict[str, Any], received_at: datetime, env: E
     if not existed:
         return 404, {"code": "ENTITY_NOT_FOUND", "work_id": work_id}
     return 200, {"code": "ACKNOWLEDGED", "work_id": work_id, "changed": changed,
-                 "effective_opened_at": value, "recent_item": recent_item(scope, work_id, env)}
+                 "effective_opened_at": value, "recent_item": recent_item(scope, work_id)}
 
 
 HANDLER = FamilyHandler(rules.validate, apply)

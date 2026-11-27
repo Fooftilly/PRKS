@@ -170,13 +170,13 @@ class SnapshotTests(WikiLinkTestCase):
             return found
 
         with mock.patch.object(queries, "work", side_effect=work_then_a_concurrent_edit):
-            detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted)
+            detail = work_commands.detail(self.db, self.ctx, noted)
         self.assertEqual(changed, [True])
         assert detail is not None
         self.assertEqual(detail["html_content"],
                          f"See {link('works', target, 'Target')} and {_UNRESOLVED.format(raw='Later')}.")
         later = self.sql("SELECT id FROM prks.works WHERE title = 'Later'")[0]["id"]
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted))["html_content"],
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, noted))["html_content"],
                          f"See {_UNRESOLVED.format(raw='Target')} and {link('works', later, 'Later')}.")
 
 
@@ -360,8 +360,8 @@ class AnswerTests(AnswerAssertions, WikiLinkTestCase):
         noted = self.work("noted", "Noted")
         text = "Notes on [[Alpha]], [[Kant]], [[Shared]], [[nobody]] and [[{noted}]]. [[Alpha]] again."
         work_commands.update_metadata(self.db, self.ctx, noted, {"text_content": text.format(**self.ids)})
-        self.assertEqual(self.labels.show(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, noted))["html_content"]), (
+        self.assertEqual(self.labels.show(require(work_commands.detail(self.db, self.ctx, noted))["html_content"]), (
             f"Notes on {self.link('works', 'alpha1', 'Alpha')}, {self.link('people', 'kant1', 'Immanuel Kant')}, "
             f"{self.link('works', 'shared_w', 'Shared')}, {_UNRESOLVED.format(raw='nobody')} and "
             f"{self.link('works', 'noted', 'Noted')}. {self.link('works', 'alpha1', 'Alpha')} again."))
-        self.assertNotIn("html_content", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work("plain", "Plain"))))
+        self.assertNotIn("html_content", require(work_commands.detail(self.db, self.ctx, self.work("plain", "Plain"))))

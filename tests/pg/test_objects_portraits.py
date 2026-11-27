@@ -167,7 +167,7 @@ class SuccessTests(PortraitTestCase):
         self.assertIs(self.objects.verify(StorageKey(NAMESPACE_PORTRAITS, row["portrait_locator"]), digest), True)
         self.assertEqual(person_commands.portrait(self.db, self.ctx, self.objects, person_id), done)
         # The profile is unchanged: the locator is not a profile field.
-        person = person_commands.detail(self.db, self.ctx, person_id, self.pdfs_dir)
+        person = person_commands.detail(self.db, self.ctx, person_id)
         assert person is not None
         self.assertEqual(person["image_url"], URL)
         self.assertNotIn("portrait_locator", person)

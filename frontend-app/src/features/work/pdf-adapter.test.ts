@@ -161,17 +161,17 @@ describe('work PDF adapter', () => {
     const seen: string[] = []
     ctx.setEntity('work', { id: 'work-a' })
     const captured = { generation: ctx.generation, workId: 'work-a' }
-    expect(intentMountWorkPdf(ctx, { id: 'work-a', file_path: '/api/pdfs/a' }, {
+    expect(intentMountWorkPdf(ctx, { id: 'work-a', file_path: '/api/assets/AS-a/content' }, {
       initPdfViewerForWork: (_owner, work) => {
         seen.push(String(work.file_path))
       },
     }, captured)).toBe(true)
-    expect(seen).toEqual(['/api/pdfs/a'])
+    expect(seen).toEqual(['/api/assets/AS-a/content'])
     expect(resourceWrites).toBe(0)
     expect(intentMountWorkPdf(ctx, { id: 'work-a' }, {
       initPdfViewerForWork: () => { seen.push('no-file') },
     }, captured)).toBe(false)
-    expect(seen).toEqual(['/api/pdfs/a'])
+    expect(seen).toEqual(['/api/assets/AS-a/content'])
   })
 
   it('requires a Work id from a typed caller and still rejects a missing id at runtime', () => {
@@ -188,7 +188,7 @@ describe('work PDF adapter', () => {
     intentMountWorkPdf(
       ctx,
       // @ts-expect-error a typed mount must include the Work id
-      { file_path: '/api/pdfs/a' },
+      { file_path: '/api/assets/AS-a/content' },
       orchestration,
       captured,
     )
@@ -203,12 +203,12 @@ describe('work PDF adapter', () => {
       next: typeof recording,
       ownerCapture: typeof captured,
     ) => boolean
-    expect(untypedMount(ctx, { file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
-    expect(untypedMount(ctx, { id: '', file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
-    expect(untypedMount(ctx, { id: null, file_path: '/api/pdfs/a' }, recording, captured)).toBe(false)
+    expect(untypedMount(ctx, { file_path: '/api/assets/AS-a/content' }, recording, captured)).toBe(false)
+    expect(untypedMount(ctx, { id: '', file_path: '/api/assets/AS-a/content' }, recording, captured)).toBe(false)
+    expect(untypedMount(ctx, { id: null, file_path: '/api/assets/AS-a/content' }, recording, captured)).toBe(false)
     expect(intentMountWorkPdf(
       ctx,
-      { id: 'work-b', file_path: '/api/pdfs/b' },
+      { id: 'work-b', file_path: '/api/assets/AS-b/content' },
       recording,
       captured,
     )).toBe(false)
@@ -229,14 +229,14 @@ describe('work PDF adapter', () => {
     }
     expect(intentMountWorkPdf(
       ctx,
-      { id: 'work-a', file_path: '/api/pdfs/a' },
+      { id: 'work-a', file_path: '/api/assets/AS-a/content' },
       orchestration,
       capturedA,
     )).toBe(false)
     expect(calls).toEqual([])
     expect(intentMountWorkPdf(
       ctx,
-      { id: 'work-b', file_path: '/api/pdfs/b' },
+      { id: 'work-b', file_path: '/api/assets/AS-b/content' },
       orchestration,
       { generation: ctx.generation, workId: 'work-b' },
     )).toBe(true)
@@ -257,14 +257,14 @@ describe('work PDF adapter', () => {
     }
     expect(intentMountWorkPdf(
       ctx,
-      { id: 'work-a', file_path: '/api/pdfs/a' },
+      { id: 'work-a', file_path: '/api/assets/AS-a/content' },
       orchestration,
       { generation: oldGeneration, workId: 'work-a' },
     )).toBe(false)
     expect(calls).toBe(0)
     expect(intentMountWorkPdf(
       ctx,
-      { id: 'work-a', file_path: '/api/pdfs/a' },
+      { id: 'work-a', file_path: '/api/assets/AS-a/content' },
       orchestration,
       { generation: ctx.generation, workId: 'work-a' },
     )).toBe(true)

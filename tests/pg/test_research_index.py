@@ -190,7 +190,7 @@ class MentionTests(ResearchIndexTestCase):
         self.assertEqual(status, 200)
         self.run_jobs()
         self.assertEqual((self.concept_ids(), self.mentions(work)["concepts"]), ({}, []))
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["private_notes"], "Remind me: [[concept:Should Not Exist]].")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work))["private_notes"], "Remind me: [[concept:Should Not Exist]].")
 
     def test_a_failed_note_write_rolls_back_its_concepts_and_job(self) -> None:
         work = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
@@ -524,7 +524,7 @@ class ResearchNetworkTests(ResearchIndexTestCase):
         self.assertEqual((concept["name"], concept["description"]), ("Culture Industry", ""))
         self.research_note(work, "Same idea as [[concept:culture industry]] and [[concept:  Culture   Industry  ]].")
         self.assertEqual([item["id"] for item in concept_commands.catalog(self.db, self.ctx)], [concept["id"]])
-        self.assertIn("[[concept:culture industry]]", require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["text_content"])
+        self.assertIn("[[concept:culture industry]]", require(work_commands.detail(self.db, self.ctx, work))["text_content"])
 
     def test_the_last_reference_going_keeps_the_concept(self) -> None:
         a, b = works_fixtures.add_work(self.db, self.ctx, self.storage, "A"), works_fixtures.add_work(self.db, self.ctx, self.storage, "B")

@@ -167,7 +167,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/assets/AS-w1-pdf/content' }], children: [] },
       generation: 1,
     })
     const thumb = el.querySelector('.work-card__thumb')
@@ -209,7 +209,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      folder: { id: 'f1', title: 'First', works: [{ id: 'w1', file_path: '/api/assets/AS-w1-pdf/content' }], children: [] },
       generation: 1,
     })
     const thumb = el.querySelector('.work-card__thumb')
@@ -218,7 +218,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/assets/AS-w2-pdf/content' }], children: [] },
       preserveWorkspace: true,
       generation: 2,
     })
@@ -234,7 +234,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/pdfs/w2.pdf' }], children: [] },
+      folder: { id: 'f2', title: 'Second', works: [{ id: 'w2', file_path: '/api/assets/AS-w2-pdf/content' }], children: [] },
       preserveWorkspace: true,
       generation: 3,
     })
@@ -257,7 +257,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f-b', title: 'Folder B', works: [{ id: 'w-b', file_path: '/api/pdfs/wb.pdf' }], children: [] },
+      folder: { id: 'f-b', title: 'Folder B', works: [{ id: 'w-b', file_path: '/api/assets/AS-wb-pdf/content' }], children: [] },
       generation: 6,
     })
     const thumb = el.querySelector('.work-card__thumb')
@@ -266,7 +266,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: pane,
       host: el,
-      folder: { id: 'f-a', title: 'Folder A', works: [{ id: 'w-a', file_path: '/api/pdfs/wa.pdf' }], children: [] },
+      folder: { id: 'f-a', title: 'Folder A', works: [{ id: 'w-a', file_path: '/api/assets/AS-wa-pdf/content' }], children: [] },
       preserveWorkspace: true,
       generation: 5,
     })
@@ -298,7 +298,7 @@ describe('Folder detail route bridge', () => {
     presentFolderDetail({
       owner: main,
       host: mainHost,
-      folder: { id: 'f1', title: 'Main', works: [{ id: 'w1', file_path: '/api/pdfs/w1.pdf' }], children: [] },
+      folder: { id: 'f1', title: 'Main', works: [{ id: 'w1', file_path: '/api/assets/AS-w1-pdf/content' }], children: [] },
       generation: 1,
     })
     const thumb = mainHost.querySelector('.work-card__thumb')

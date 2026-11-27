@@ -109,9 +109,9 @@ class TestSafeRoute(unittest.TestCase):
         )
         self.assertNotIn(SECRET_QUERY, safe_route(f"/api/search?q={SECRET_QUERY}"))
 
-    def test_pdf_filename_is_templated(self):
-        route = safe_route(f"/api/pdfs/{SECRET_TITLE}.pdf")
-        self.assertEqual(route, "/api/pdfs/:pdf")
+    def test_pdf_asset_is_templated(self):
+        route = safe_route(f"/api/assets/AS-{SECRET_TITLE}/content?v=0123abcd")
+        self.assertEqual(route, "/api/assets/:id/content")
         self.assertNotIn(SECRET_TITLE, route)
 
     def test_work_nested_drops_id_and_query(self):
@@ -272,12 +272,12 @@ class TestAccessLogging(unittest.TestCase):
         for secret in ALL_SECRETS:
             self.assertNotIn(secret, text)
 
-    def test_pdf_access_omits_filename(self):
-        request = _request(f"/api/pdfs/{SECRET_TITLE}.pdf")
+    def test_pdf_access_omits_the_asset(self):
+        request = _request(f"/api/assets/AS-{SECRET_TITLE}/content?v=0123abcd")
         with _capture_formatted("prks.server") as records:
             finalize(request, Response(200))
         text = _formatted_text(records)
-        self.assertIn("route=/api/pdfs/:pdf", text)
+        self.assertIn("route=/api/assets/:id/content", text)
         self.assertNotIn(SECRET_TITLE, text)
         self.assertNotIn(".pdf", text)
 

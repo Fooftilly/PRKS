@@ -2,7 +2,6 @@ import type { PerformanceSnapshot, PerformanceSpanStat } from '../../api/perform
 import { clientRequestMaxReads, type ClientRequestSnapshot } from './client-snapshot'
 
 const SPAN_LABELS: ReadonlyArray<readonly [string, string]> = [
-  ['pdf_file_stats', 'PDF file stats'],
   ['processing_scan', 'Processing scan'],
   ['pdf_text_search', 'PDF text search'],
   ['thumbnail_render', 'Thumbnail render'],

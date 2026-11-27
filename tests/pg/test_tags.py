@@ -159,7 +159,7 @@ class LinkTests(OrganizationTestCase):
         self.assertEqual(tag_commands.folder_options(self.db, self.ctx, folder),
                          {"folder_id": folder, "assigned": [], "known_absent": {tag: 2}})
         self.assertEqual([row["id"] for row in library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work))], [tag])
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["tags"], library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)))
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, work))["tags"], library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)))
         self.assertIsNone(tag_commands.work_options(self.db, self.ctx, generate("W")))
         self.assertIsNone(tag_commands.folder_options(self.db, self.ctx, generate("F")))
 
@@ -580,7 +580,7 @@ class AnswerTests(AnswerAssertions, OrganizationTestCase):
         row = {"color": "#6d6cf7", "created_at": "<s>", "id": "<T Ethics>", "name": "Ethics"}
         self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.WORK, work)), [row])
         self.answer(library_query(self.db, self.ctx, lambda scope: links.tags_of(scope, links.FOLDER, folder)), [row])
-        self.answer(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work))["tags"], [row])
+        self.answer(require(work_commands.detail(self.db, self.ctx, work))["tags"], [row])
         self.answer(tag_commands.in_use(db, ctx), [{**row, "aliases": [], "folder_count": 1, "work_count": 1}])
         self.assertIsNone(tag_commands.work_options(db, ctx, "W-" + "0" * 32))
 

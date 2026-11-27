@@ -57,7 +57,7 @@ class AnnotationTestCase(SyncTestCase):
         return works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf(name, b"%PDF-1.4\n" + name.encode()))
 
     def asset_of(self, work_id: str) -> str:
-        return str(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["primary_asset_id"])
+        return str(require(work_commands.detail(self.db, self.ctx, work_id))["primary_asset_id"])
 
     def op(self, operation: str, work_id: str, item: dict[str, Any], base: Optional[int] = None,
            **changes: Any) -> dict[str, Any]:
@@ -89,7 +89,7 @@ class PersistenceTests(AnnotationTestCase):
         self.assertEqual(listed, HIGHLIGHT)
         self.assertEqual(result["annotation"], HIGHLIGHT)
         # The Work detail reads the same rows in its snapshot.
-        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))["annotations"]), self.listed(work_id))
+        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, work_id))["annotations"]), self.listed(work_id))
         (row,) = self.sql("SELECT library_id, asset_id, work_id, type, content, page_index, color,"
                           " jsonb_typeof(geometry) AS kind, geometry FROM prks.annotations")
         self.assertEqual({k: row[k] for k in ("library_id", "asset_id", "work_id", "type", "content",
@@ -542,7 +542,7 @@ class ReplaceTests(AnnotationTestCase):
         got.pop("updated_at")
         self.assertEqual(got, HIGHLIGHT)
         self.assertNotIn("page", got)
-        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["annotations"])[0]["custom"]["prksComment"],
+        self.assertEqual(json.loads(require(work_commands.detail(self.db, self.ctx, self.work))["annotations"])[0]["custom"]["prksComment"],
                          "A comment")
 
     def test_a_replace_updates_deletes_inserts_and_orders_by_page_then_id(self) -> None:
@@ -716,7 +716,7 @@ class AnswerTests(AnnotationTestCase, WorksAnswerTestCase):
             {"canonical_annotation_set_revision": 6, "code": "ANNOTATION_MATERIALIZATION_STALE",
              "materialized_pdf_annotation_revision": 0, "stale": True, "work_id": "<W pdf>"}))
         self.answer(self.labels.show(self.listed(self.work)), [_NOTE_STORED, ink])
-        work = require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))
+        work = require(work_commands.detail(self.db, self.ctx, self.work))
         self.answer(self.labels.show(json.loads(work["annotations"])), [_NOTE_STORED, ink])
         self.assertEqual(work["canonical_annotation_set_revision"], 6)
 

@@ -59,8 +59,6 @@ export const PERFORMANCE_SPAN_KEYS = ['count', 'avg_ms', 'p50_ms', 'p95_ms', 'ma
 export const PERFORMANCE_COUNTER_KEYS = [
   'thumbnail_cache_hits',
   'thumbnail_cache_misses',
-  'pdf_file_stat_rows',
-  'pdf_file_stat_files',
   'db_read',
   'db_write',
 ] as const
@@ -150,8 +148,6 @@ function parseCounters(value: unknown): PerformanceCounters {
   return {
     thumbnail_cache_hits: requireNumber(record.thumbnail_cache_hits, LOAD_ERROR),
     thumbnail_cache_misses: requireNumber(record.thumbnail_cache_misses, LOAD_ERROR),
-    pdf_file_stat_rows: requireNumber(record.pdf_file_stat_rows, LOAD_ERROR),
-    pdf_file_stat_files: requireNumber(record.pdf_file_stat_files, LOAD_ERROR),
     db_read: requireNumber(record.db_read, LOAD_ERROR),
     db_write: requireNumber(record.db_write, LOAD_ERROR),
   }

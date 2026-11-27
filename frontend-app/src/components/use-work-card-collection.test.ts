@@ -44,7 +44,7 @@ describe('useWorkCardCollection', () => {
 
     const wrapper = mount(Host, {
       props: {
-        works: [{ id: 'W-1', file_path: '/api/pdfs/w1.pdf', thumb_page: 1 }],
+        works: [{ id: 'W-1', file_path: '/api/assets/AS-w1-pdf/content', thumb_page: 1 }],
         noise: 'Ada',
       },
     })
@@ -69,7 +69,7 @@ describe('useWorkCardCollection', () => {
 
     const wrapper = mount(Host, {
       props: {
-        works: [{ id: 'W-1', file_path: '/api/pdfs/w1.pdf', thumb_page: 1 }],
+        works: [{ id: 'W-1', file_path: '/api/assets/AS-w1-pdf/content', thumb_page: 1 }],
       },
     })
     await nextTick()
@@ -77,7 +77,7 @@ describe('useWorkCardCollection', () => {
     init.mockClear()
 
     await wrapper.setProps({
-      works: [{ id: 'W-1', file_path: '/api/pdfs/w1.pdf', thumb_page: 2 }],
+      works: [{ id: 'W-1', file_path: '/api/assets/AS-w1-pdf/content', thumb_page: 2 }],
     })
     await nextTick()
     expect(release).toHaveBeenCalled()

@@ -224,7 +224,7 @@ function assertPdfSourceContract() {
 async function scenarioCurrentMount() {
     resetWorld();
     const current = openTab('current');
-    initPdfViewerForWork(current.ctx, { id: 'work-current', file_path: '/api/pdfs/current' });
+    initPdfViewerForWork(current.ctx, { id: 'work-current', file_path: '/api/assets/AS-current/content' });
     assertEq('current setup arms one timer', flushLiveTimers(), 1);
     await settle();
     const currentRuntime = current.ctx.getResource('pdf');
@@ -237,7 +237,7 @@ async function scenarioCurrentMount() {
     assertEq('current viewer count', viewers.length, 1);
     assert('current viewer is mounted in this pane', viewers[0] && viewers[0].target === current.node);
     assertEq('current file prime', requests.length, 1);
-    assertEq('current file prime url', requests[0] && requests[0].url, '/api/pdfs/current');
+    assertEq('current file prime url', requests[0] && requests[0].url, '/api/assets/AS-current/content');
     assertEq('current file prime priority', requests[0] && requests[0].priority, 'background');
     assertEq('current mount does not post annotations', annotationPosts().length, 0);
     const currentViewer = currentRuntime && currentRuntime.viewer;
@@ -248,7 +248,7 @@ async function scenarioCancelledDeferredSetup() {
     resetWorld();
     const stale = openTab('stale');
     const generation = stale.ctx.generation;
-    initPdfViewerForWork(stale.ctx, { id: 'work-a', file_path: '/api/pdfs/a' });
+    initPdfViewerForWork(stale.ctx, { id: 'work-a', file_path: '/api/assets/AS-a/content' });
     assertEq('stale setup queued', timers.length, 1);
     stale.ctx.beginRoute({ name: 'work', hash: '#/works/b' });
     assert('stale generation moved', stale.ctx.generation !== generation);
@@ -262,7 +262,7 @@ async function scenarioCancelledDeferredSetup() {
 async function scenarioStaleCallback() {
     resetWorld();
     const late = openTab('late');
-    initPdfViewerForWork(late.ctx, { id: 'work-a', file_path: '/api/pdfs/a' });
+    initPdfViewerForWork(late.ctx, { id: 'work-a', file_path: '/api/assets/AS-a/content' });
     const lateTimer = timers[timers.length - 1];
     global.clearTimeout = function () {};
     late.ctx.beginRoute({ name: 'work', hash: '#/works/b' });
@@ -281,7 +281,7 @@ async function scenarioStaleCallback() {
 async function scenarioRemount() {
     resetWorld();
     const remount = openTab('remount');
-    initPdfViewerForWork(remount.ctx, { id: 'work-first', file_path: '/api/pdfs/first' });
+    initPdfViewerForWork(remount.ctx, { id: 'work-first', file_path: '/api/assets/AS-first/content' });
     const firstTimer = timers[timers.length - 1];
     const firstGeneration = remount.ctx.generation;
     assertEq('first mount runs its deferred setup', flushLiveTimers(), 1);
@@ -299,7 +299,7 @@ async function scenarioRemount() {
     assert('first generation deferred timer is cancelled', pendingTimer.dead === true && pendingTimer.id === pendingId);
     assertEq('cancelled first timer does not mount', flushLiveTimers(), 0);
     assertEq('cancelled first timer did not fire', pendingFired, 0);
-    initPdfViewerForWork(remount.ctx, { id: 'work-second', file_path: '/api/pdfs/second' });
+    initPdfViewerForWork(remount.ctx, { id: 'work-second', file_path: '/api/assets/AS-second/content' });
     const secondTimer = timers[timers.length - 1];
     assert('second setup is a different timer', secondTimer !== firstTimer);
     assertEq('second mount runs its own setup', flushLiveTimers(), 1);
@@ -337,8 +337,8 @@ async function scenarioMainAndSecondary() {
     };
     const main = openTab('main');
     const side = openTab('side');
-    initPdfViewerForWork(main.ctx, { id: 'work-main', file_path: '/api/pdfs/main' });
-    initPdfViewerForWork(side.ctx, { id: 'work-side', file_path: '/api/pdfs/side' });
+    initPdfViewerForWork(main.ctx, { id: 'work-main', file_path: '/api/assets/AS-main/content' });
+    initPdfViewerForWork(side.ctx, { id: 'work-side', file_path: '/api/assets/AS-side/content' });
     flushLiveTimers();
     await settle();
     assert('main is the main context', prksIsMainTabContext(main.ctx));
@@ -361,7 +361,7 @@ async function scenarioMainAndSecondary() {
 async function scenarioRouteReplacementFlush(app) {
     resetWorld();
     const routed = openTab('routed');
-    initPdfViewerForWork(routed.ctx, { id: 'work-routed', file_path: '/api/pdfs/routed' });
+    initPdfViewerForWork(routed.ctx, { id: 'work-routed', file_path: '/api/assets/AS-routed/content' });
     flushLiveTimers();
     await settle();
     const routedRuntime = routed.ctx.getResource('pdf');
@@ -389,7 +389,7 @@ async function scenarioRouteReplacementFlush(app) {
 async function scenarioTabClose() {
     resetWorld();
     const closing = openTab('closing');
-    initPdfViewerForWork(closing.ctx, { id: 'work-close', file_path: '/api/pdfs/close' });
+    initPdfViewerForWork(closing.ctx, { id: 'work-close', file_path: '/api/assets/AS-close/content' });
     flushLiveTimers();
     await settle();
     const closingRuntime = closing.ctx.getResource('pdf');
@@ -410,7 +410,7 @@ async function scenarioTabClose() {
 async function scenarioColdPark() {
     resetWorld();
     const cold = openTab('cold');
-    initPdfViewerForWork(cold.ctx, { id: 'work-cold', file_path: '/api/pdfs/cold' });
+    initPdfViewerForWork(cold.ctx, { id: 'work-cold', file_path: '/api/assets/AS-cold/content' });
     flushLiveTimers();
     await settle();
     const coldViewer = cold.ctx.getResource('pdf').viewer;
@@ -426,7 +426,7 @@ async function scenarioColdPark() {
 async function scenarioWarmParkResume() {
     resetWorld();
     const warm = openTab('warm');
-    initPdfViewerForWork(warm.ctx, { id: 'work-warm', file_path: '/api/pdfs/warm' });
+    initPdfViewerForWork(warm.ctx, { id: 'work-warm', file_path: '/api/assets/AS-warm/content' });
     flushLiveTimers();
     await settle();
     const warmRuntime = warm.ctx.getResource('pdf');
@@ -460,7 +460,7 @@ async function scenarioWarmEviction() {
     const parked = [];
     for (let i = 1; i <= 4; i++) {
         const opened = openTab('warm-' + i);
-        initPdfViewerForWork(opened.ctx, { id: 'work-' + i, file_path: '/api/pdfs/' + i });
+        initPdfViewerForWork(opened.ctx, { id: 'work-' + i, file_path: '/api/assets/AS-' + i + '/content' });
         parked.push(opened);
     }
     flushLiveTimers();
@@ -482,25 +482,25 @@ async function scenarioWarmEviction() {
 async function scenarioOfflineReopen() {
     resetWorld();
     const first = openTab('offline');
-    initPdfViewerForWork(first.ctx, { id: 'work-offline', file_path: '/api/pdfs/offline' });
+    initPdfViewerForWork(first.ctx, { id: 'work-offline', file_path: '/api/assets/AS-offline/content' });
     flushLiveTimers();
     await settle();
-    assertEq('first open primes the file', requests[0] && requests[0].url, '/api/pdfs/offline');
+    assertEq('first open primes the file', requests[0] && requests[0].url, '/api/assets/AS-offline/content');
     prksDestroyTabContext('offline');
     requests.length = 0;
     const viewerCount = viewers.length;
     global.prksOfflineRuntimeState = function () { return 'offline'; };
     const again = openTab('offline-again');
-    initPdfViewerForWork(again.ctx, { id: 'work-offline', file_path: '/api/pdfs/offline' });
+    initPdfViewerForWork(again.ctx, { id: 'work-offline', file_path: '/api/assets/AS-offline/content' });
     flushLiveTimers();
     await settle();
     delete global.prksOfflineRuntimeState;
     assertEq('offline reopen primes the same file', requests.length, 1);
-    assertEq('offline reopen url', requests[0] && requests[0].url, '/api/pdfs/offline');
+    assertEq('offline reopen url', requests[0] && requests[0].url, '/api/assets/AS-offline/content');
     assertEq('offline reopen method', requests[0] && requests[0].method, 'GET');
     assertEq('offline reopen is not an annotation post', annotationPosts().length, 0);
     assert('offline reopen creates a viewer', viewers.length === viewerCount + 1);
-    assert('offline reopen viewer loads that file', String(viewers[viewers.length - 1].src).indexOf('/api/pdfs/offline') === 0);
+    assert('offline reopen viewer loads that file', String(viewers[viewers.length - 1].src).indexOf('/api/assets/AS-offline/content') === 0);
 }
 
 function runPdfLeave(ctx, destination, commit) {
@@ -627,7 +627,7 @@ async function scenarioColdParkTicket() {
         seen.push(ticket);
         return ticket;
     };
-    initPdfViewerForWork(parked.ctx, { id: 'work-cold-ticket', file_path: '/api/pdfs/cold-ticket' });
+    initPdfViewerForWork(parked.ctx, { id: 'work-cold-ticket', file_path: '/api/assets/AS-cold-ticket/content' });
     assertEq('setup captures one ticket before the timer runs', seen.length, 1);
     assert('captured ticket is current before the timer', parked.ctx.resourceRegistry.accepts(seen[0]));
     assertEq('timer has not run yet', viewers.length, 0);
@@ -661,7 +661,7 @@ async function scenarioColdParkTicket() {
     };
     lateTimer.dead = true;
     const beforeFresh = seen.length;
-    initPdfViewerForWork(parked.ctx, { id: 'work-fresh', file_path: '/api/pdfs/fresh' });
+    initPdfViewerForWork(parked.ctx, { id: 'work-fresh', file_path: '/api/assets/AS-fresh/content' });
     assert('a fresh lifetime captures a new ticket', seen.length === beforeFresh + 1);
     assert('the fresh ticket is current', parked.ctx.resourceRegistry.accepts(seen[seen.length - 1]));
     assert('the pre-park ticket stays rejected', !parked.ctx.resourceRegistry.accepts(seen[0]));
@@ -676,13 +676,13 @@ async function scenarioColdParkTicket() {
 async function scenarioReplaceDisposesOnce() {
     resetWorld();
     const replaced = openTab('replace');
-    initPdfViewerForWork(replaced.ctx, { id: 'work-first', file_path: '/api/pdfs/first' });
+    initPdfViewerForWork(replaced.ctx, { id: 'work-first', file_path: '/api/assets/AS-first/content' });
     flushLiveTimers();
     await settle();
     const first = replaced.ctx.getResource('pdf');
     const firstViewer = first.viewer;
     const destroys = watchDestroy(first);
-    initPdfViewerForWork(replaced.ctx, { id: 'work-second', file_path: '/api/pdfs/second' });
+    initPdfViewerForWork(replaced.ctx, { id: 'work-second', file_path: '/api/assets/AS-second/content' });
     flushLiveTimers();
     await settle();
     const second = replaced.ctx.getResource('pdf');
@@ -701,8 +701,8 @@ async function scenarioPaneIsolation() {
     };
     const main = openTab('iso-main');
     const side = openTab('iso-side');
-    initPdfViewerForWork(main.ctx, { id: 'work-main', file_path: '/api/pdfs/main' });
-    initPdfViewerForWork(side.ctx, { id: 'work-side', file_path: '/api/pdfs/side' });
+    initPdfViewerForWork(main.ctx, { id: 'work-main', file_path: '/api/assets/AS-main/content' });
+    initPdfViewerForWork(side.ctx, { id: 'work-side', file_path: '/api/assets/AS-side/content' });
     flushLiveTimers();
     await settle();
     const mainRuntime = main.ctx.getResource('pdf');
@@ -716,7 +716,7 @@ async function scenarioPaneIsolation() {
     assertEq('cold-parking secondary does not dispose main', mainDestroys(), 0);
 
     const sideAgain = openTab('iso-side-2');
-    initPdfViewerForWork(sideAgain.ctx, { id: 'work-side-2', file_path: '/api/pdfs/side-2' });
+    initPdfViewerForWork(sideAgain.ctx, { id: 'work-side-2', file_path: '/api/assets/AS-side-2/content' });
     flushLiveTimers();
     await settle();
     const sideAgainRuntime = sideAgain.ctx.getResource('pdf');
@@ -729,8 +729,8 @@ async function scenarioPaneIsolation() {
 
     const mainB = openTab('iso-main-b');
     const sideB = openTab('iso-side-b');
-    initPdfViewerForWork(mainB.ctx, { id: 'work-main-b', file_path: '/api/pdfs/main-b' });
-    initPdfViewerForWork(sideB.ctx, { id: 'work-side-b', file_path: '/api/pdfs/side-b' });
+    initPdfViewerForWork(mainB.ctx, { id: 'work-main-b', file_path: '/api/assets/AS-main-b/content' });
+    initPdfViewerForWork(sideB.ctx, { id: 'work-side-b', file_path: '/api/assets/AS-side-b/content' });
     flushLiveTimers();
     await settle();
     const mainBRuntime = mainB.ctx.getResource('pdf');
@@ -756,8 +756,8 @@ async function scenarioRoleSwap() {
     };
     const main = openTab('role-main');
     const side = openTab('role-side');
-    initPdfViewerForWork(main.ctx, { id: 'work-role-main', file_path: '/api/pdfs/role-main' });
-    initPdfViewerForWork(side.ctx, { id: 'work-role-side', file_path: '/api/pdfs/role-side' });
+    initPdfViewerForWork(main.ctx, { id: 'work-role-main', file_path: '/api/assets/AS-role-main/content' });
+    initPdfViewerForWork(side.ctx, { id: 'work-role-side', file_path: '/api/assets/AS-role-side/content' });
     flushLiveTimers();
     await settle();
     const mainRuntime = main.ctx.getResource('pdf');
@@ -791,7 +791,7 @@ async function scenarioStaleCompletion() {
         });
     };
     const generationA = owner.ctx.generation;
-    initPdfViewerForWork(owner.ctx, { id: 'work-a', file_path: '/api/pdfs/a' });
+    initPdfViewerForWork(owner.ctx, { id: 'work-a', file_path: '/api/assets/AS-a/content' });
     flushLiveTimers();
     await settle();
     const runtimeA = owner.ctx.getResource('pdf');
@@ -803,7 +803,7 @@ async function scenarioStaleCompletion() {
         if (String(selector).indexOf('pdf-viewer') !== -1) return node;
         return null;
     };
-    initPdfViewerForWork(owner.ctx, { id: 'work-b', file_path: '/api/pdfs/b' });
+    initPdfViewerForWork(owner.ctx, { id: 'work-b', file_path: '/api/assets/AS-b/content' });
     flushLiveTimers();
     await settle();
     const runtimeB = owner.ctx.getResource('pdf');

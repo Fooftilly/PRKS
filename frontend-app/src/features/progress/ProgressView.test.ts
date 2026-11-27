@@ -37,8 +37,8 @@ describe('ProgressView', () => {
     const el = host()
     const pane = owner()
     const rows = [
-      { id: 'b', title: 'b', status: 'Paused', abstract_excerpt: 'second', file_path: '/api/pdfs/b.pdf' },
-      { id: 'a', title: 'A', status: 'Paused', abstract_excerpt: 'first', file_path: '/api/pdfs/a.pdf' },
+      { id: 'b', title: 'b', status: 'Paused', abstract_excerpt: 'second', file_path: '/api/assets/AS-b-pdf/content' },
+      { id: 'a', title: 'A', status: 'Paused', abstract_excerpt: 'first', file_path: '/api/assets/AS-a-pdf/content' },
       { id: 'other', title: 'Other', status: 'Planned', abstract_excerpt: 'no' },
     ]
     presentProgress({ owner: pane, host: el, status: 'Paused', rows, offlineCached: false, generation: 1 })
@@ -87,8 +87,8 @@ describe('ProgressView', () => {
       host: el,
       status: 'Planned',
       rows: [
-        { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/pdfs/stay.pdf' },
-        { id: 'move', title: 'Move', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/pdfs/move.pdf' },
+        { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/assets/AS-stay-pdf/content' },
+        { id: 'move', title: 'Move', status: 'Planned', abstract_excerpt: 'p', file_path: '/api/assets/AS-move-pdf/content' },
       ],
       offlineCached: true,
       generation: 1,
@@ -101,7 +101,7 @@ describe('ProgressView', () => {
       status: 'Completed',
       rows: [
         { id: 'stay', title: 'Stay', status: 'Planned', abstract_excerpt: 'p' },
-        { id: 'move', title: 'Move', status: 'Completed', abstract_excerpt: 'c', file_path: '/api/pdfs/move.pdf' },
+        { id: 'move', title: 'Move', status: 'Completed', abstract_excerpt: 'c', file_path: '/api/assets/AS-move-pdf/content' },
       ],
       offlineCached: true,
       generation: 2,

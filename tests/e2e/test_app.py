@@ -150,7 +150,7 @@ def _server_work_title(server, work_id):
     two can legitimately disagree until an operation is acknowledged."""
     from backend.domain.works import work_commands
     from tests.e2e.library_store import library_for
-    return require(library_for(server).run(work_commands.detail, library_for(server).pdfs_dir, work_id))["title"]
+    return require(library_for(server).run(work_commands.detail, work_id))["title"]
 
 
 def _wait_queue_drained(page):
@@ -3286,7 +3286,7 @@ _SAME_MOUNTED_VIEWER_JS = """() => {
         node: !!was && node === was.node && node.isConnected,
         docId: !!was && (pdf.viewer.getDocumentId ? pdf.viewer.getDocumentId() : null) === was.docId,
         page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
-        filePath: String(pdf.filePath || '').split('?')[0],
+        filePath: String(pdf.filePath || ''),
     };
 }"""
 
@@ -5535,7 +5535,7 @@ class WorkspaceTabsTests(_BrowserE2E):
             path = urlparse(req.url).path
             if req.method == "GET" and path in (
                 "/api/works/" + work_id,
-                "/api/pdfs/" + server.ids["pdf_name"],
+                server.ids["pdf_path"].split("?")[0],
             ):
                 requests.append(path)
 
@@ -10985,7 +10985,7 @@ class MainSecondaryDividerTests(_BrowserE2E):
         def relevant(req):
             path = urlparse(req.url).path
             return req.method == "GET" and (
-                path.startswith("/api/works/") or path.startswith("/api/pdfs/")
+                path.startswith("/api/works/") or path.startswith("/api/assets/")
             )
 
         def on_request(req):
@@ -11972,7 +11972,7 @@ class WorkspaceDragDropTests(_BrowserE2E):
         def _on_get(req):
             if req.method != "GET":
                 return
-            # Byte-range PDF streaming reuses `/api/pdfs/<file>` and is not a
+            # Byte-range PDF streaming reuses `/api/assets/<id>/content` and is not a
             # remount; only non-Range GETs count toward the network assert.
             headers = req.headers or {}
             if any(k.lower() == "range" for k in headers):
@@ -12037,10 +12037,10 @@ class WorkspaceDragDropTests(_BrowserE2E):
         self.assertTrue(identity["dNotesSame"], "moving a pane must not remount its notes editor")
         self.assertEqual(identity["mounted"], 4, "moving a visible pane must not mount/unmount anything")
         # Entity / PDF detail GETs only — not `/annotations-snapshot`, `/opened`,
-        # or Range PDF streaming. Broad `/api/works/` / `/api/pdfs/` substring
+        # or Range PDF streaming. Broad `/api/works/` / `/api/assets/` substring
         # matches race late catch-up from tree build.
-        pdf_a = "/api/pdfs/" + server.ids["pdf_name"]
-        pdf_b = "/api/pdfs/e2e-related.pdf"
+        pdf_a = server.ids["pdf_path"].split("?")[0]
+        pdf_b = server.ids["pdf_b_path"].split("?")[0]
         for path in (
             "/api/works/" + tree["work_a"],
             "/api/works/" + tree["work_b"],

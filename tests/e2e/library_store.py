@@ -49,13 +49,6 @@ class LibraryStore:
         """``call(database, owner context, *args, **kwargs)``: one domain command or query as the owner."""
         return call(self._library.database, self._ctx, *args, **kwargs)
 
-    @property
-    def pdfs_dir(self) -> str:
-        """The server's PDF directory (a Folder or Playlist detail lists its Works' files)."""
-        storage = self._library.storage
-        assert storage is not None
-        return storage.pdfs_dir
-
     def query(self, postgres: LiteralString, *, params: tuple = ()) -> list[dict]:
         """Rows of one read against the ``prks`` schema, with ``%s`` placeholders."""
         import psycopg

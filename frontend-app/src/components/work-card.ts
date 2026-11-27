@@ -94,7 +94,7 @@ export function workCardFileSizeLabel(work: PrksWorkCardWork | null | undefined)
 
 export function workCardHasPdf(work: PrksWorkCardWork | null | undefined): boolean {
   const filePath = work && work.file_path ? String(work.file_path).trim() : ''
-  return !!filePath && filePath.startsWith('/api/pdfs/')
+  return !!filePath && filePath.startsWith('/api/assets/')
 }
 
 /**

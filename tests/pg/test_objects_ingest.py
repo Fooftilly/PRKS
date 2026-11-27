@@ -266,11 +266,11 @@ class FacadeTests(IngestTestCase):
     def test_an_upload_creates_the_work_in_one_command(self) -> None:
         work_id = works_fixtures.add_work_with_pdf(self.db, self.ctx, self.storage, "Paper One.pdf", writer(RAW), title="Uploaded",
                                                   year="2024")
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+        work = work_commands.detail(self.db, self.ctx, work_id)
         assert work is not None
         self.assertEqual((work["title"], work["year"]), ("Uploaded", "2024"))
         asset = self.asset(work_id)
-        self.assertEqual(work["file_path"], "/api/pdfs/" + asset["storage_locator"])
+        self.assertEqual(work["file_path"], works_fixtures.content_url(work["primary_asset_id"], LINEARIZED))
         self.assertEqual((self.read(asset["storage_locator"]), self.read(asset["source_locator"])),
                          (LINEARIZED, RAW))
 
