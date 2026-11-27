@@ -78,3 +78,12 @@ jobs:
         run: |
           set -o pipefail
           python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Differential test against sync-reconcile.js
+        if: always()
+        run: |
+          "$DAFNY" translate js --no-verify --output "$RUNNER_TEMP/model/reconcile" formal/dafny/Reconcile.dfy
+          generated=$(find "$RUNNER_TEMP/model" -name '*.js' | head -n 1)
+          npm install --no-save --no-package-lock --ignore-scripts --prefix "$RUNNER_TEMP/difftest" \
+            fast-check@4.10.3 bignumber.js@9.1.2
+          node scripts/formal/dafny_differential.cjs "$generated" "$RUNNER_TEMP/difftest/node_modules"
