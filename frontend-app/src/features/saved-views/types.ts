@@ -19,4 +19,6 @@ export interface SavedViewRecord {
   readonly id: string
   readonly name: string
   readonly search: SavedViewDefinition
+  /** Advanced by every update; an edit names the one it opened on (#873). */
+  readonly revision: number
 }

@@ -23,7 +23,10 @@ What moves:
   create that counted before it committed is ordered before it.
 - **An update** holds the row ``FOR UPDATE`` and rewrites only the part
   given (the name, the definition or both) in one statement, so a
-  concurrent delete either waits for it or makes it ``404``.
+  concurrent delete either waits for it or makes it ``404``. It names the
+  ``revision`` its editor opened on: any other current revision is a
+  ``409 revision_conflict``, so a stale form never silently replaces a save
+  made elsewhere (#873). Every update advances the revision by one.
 """
 
 from __future__ import annotations
@@ -45,6 +48,10 @@ from backend.domain.identity.library_scope import LibraryScope
 NAME_KEY = "saved_views_library_id_name_key_key"
 
 NOT_FOUND = "Saved View not found."
+CHANGED_ELSEWHERE = (
+    "This Saved View changed in another tab or on another device after you started editing."
+)
+REVISION_CONFLICT = "revision_conflict"
 NAME_TAKEN = "A Saved View with that name already exists."
 LIMIT_REACHED = "The library already has the maximum number of Saved Views."
 
@@ -52,7 +59,7 @@ _LOCK_SQL: LiteralString = (
     "SELECT pg_advisory_xact_lock(hashtextextended('prks.saved_views:' || %(library_id)s, 0))"
 )
 _COLUMNS: LiteralString = """
-v.id, v.name, v.mode, v.search_q, v.search_tag, v.search_author, v.search_publisher,
+v.id, v.name, v.mode, v.search_q, v.search_tag, v.search_author, v.search_publisher, v.revision,
 to_char(v.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS created_at,
 to_char(v.updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS') AS updated_at
 """
@@ -67,7 +74,7 @@ _ONE_SQL: LiteralString = (
     "SELECT " + _COLUMNS + " FROM prks.saved_views v WHERE v.library_id = %(library_id)s AND v.id = %(view_id)s"
 )
 _LOCK_ROW_SQL: LiteralString = """
-SELECT id FROM prks.saved_views WHERE library_id = %(library_id)s AND id = %(view_id)s FOR UPDATE
+SELECT id, revision FROM prks.saved_views WHERE library_id = %(library_id)s AND id = %(view_id)s FOR UPDATE
 """
 _COUNT_SQL: LiteralString = "SELECT count(*) AS n FROM prks.saved_views WHERE library_id = %(library_id)s"
 _HOLDER_SQL: LiteralString = """
@@ -80,17 +87,19 @@ INSERT INTO prks.saved_views (library_id, id, name, mode, search_q, search_tag, 
 VALUES (%(library_id)s, %(view_id)s, %(name)s, %(mode)s, %(q)s, %(tag)s, %(author)s, %(publisher)s)
 """
 _SET_NAME_SQL: LiteralString = """
-UPDATE prks.saved_views SET name = %(name)s, updated_at = now()
+UPDATE prks.saved_views SET name = %(name)s, revision = revision + 1, updated_at = now()
 WHERE library_id = %(library_id)s AND id = %(view_id)s
 """
 _SET_SEARCH_SQL: LiteralString = """
 UPDATE prks.saved_views SET mode = %(mode)s, search_q = %(q)s, search_tag = %(tag)s,
-       search_author = %(author)s, search_publisher = %(publisher)s, updated_at = now()
+       search_author = %(author)s, search_publisher = %(publisher)s, revision = revision + 1,
+       updated_at = now()
 WHERE library_id = %(library_id)s AND id = %(view_id)s
 """
 _SET_BOTH_SQL: LiteralString = """
 UPDATE prks.saved_views SET name = %(name)s, mode = %(mode)s, search_q = %(q)s, search_tag = %(tag)s,
-       search_author = %(author)s, search_publisher = %(publisher)s, updated_at = now()
+       search_author = %(author)s, search_publisher = %(publisher)s, revision = revision + 1,
+       updated_at = now()
 WHERE library_id = %(library_id)s AND id = %(view_id)s
 """
 _DELETE_SQL: LiteralString = """
@@ -142,18 +151,33 @@ def create(scope: LibraryScope, view_id: str, name: Any, search: Any) -> dict[st
     return created
 
 
-def update(scope: LibraryScope, view_id: str, name: Any = None, search: Any = None) -> dict[str, Any]:
-    """``update_saved_view``: the name, the definition or both, in one statement."""
+def _base_revision(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise SavedViewError("base_revision must be a non-negative integer.")
+    return value
+
+
+def update(scope: LibraryScope, view_id: str, base_revision: Any, name: Any = None,
+           search: Any = None) -> dict[str, Any]:
+    """``update_saved_view``: the name, the definition or both, in one statement.
+
+    ``base_revision`` is the revision the editor opened on; a different
+    current revision refuses the update with ``409 revision_conflict``.
+    """
     if name is None and search is None:
         raise SavedViewError("Nothing to update.")
+    base = _base_revision(base_revision)
     new_name = normalize_saved_view_name(name) if name is not None else None
     new_search = normalize_saved_view_search(search) if search is not None else None
     if not _storable(view_id):
         raise SavedViewError(NOT_FOUND, 404)
     if new_name is not None:
         _lock_names(scope)  # before the row (the lock order of a create)
-    if scope.execute(_LOCK_ROW_SQL, {"view_id": view_id}).fetchone() is None:
+    held = scope.execute(_LOCK_ROW_SQL, {"view_id": view_id}).fetchone()
+    if held is None:
         raise SavedViewError(NOT_FOUND, 404)
+    if int(held["revision"]) != base:
+        raise SavedViewError(CHANGED_ELSEWHERE, 409, REVISION_CONFLICT)
     params: dict[str, Any] = {"view_id": view_id}
     if new_name is not None:
         _assert_name_free(scope, new_name, view_id)

@@ -6,7 +6,7 @@ import SavedViewForm from './SavedViewForm.vue'
 import { savedViewActionMessage, type SavedViewRecords } from './records'
 
 interface Harness {
-  records: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> }
+  records: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn>; get: ReturnType<typeof vi.fn> }
   opened: string[]
   navigations: Array<{ hash: string; options?: unknown }>
   closes: number
@@ -53,7 +53,11 @@ beforeEach(() => {
     '<div id="saved-view-modal" class="modal hidden">' +
     '<div id="saved-view-modal-vue" class="modal-body"></div></div><div id="app"></div>'
   h = {
-    records: { create: vi.fn(async () => ({ id: 'SV-NEW' })), update: vi.fn(async () => ({})) },
+    records: {
+      create: vi.fn(async () => ({ id: 'SV-NEW' })),
+      update: vi.fn(async () => ({})),
+      get: vi.fn(async () => null),
+    },
     opened: [],
     navigations: [],
     closes: 0,
@@ -163,6 +167,15 @@ describe('Saved View form', () => {
     expect(h.records.create).toHaveBeenCalledTimes(1)
   })
 
+  it('ignores a held Enter key: its repeats are not another save', async () => {
+    window.prksOpenSavedViewModal?.({ definition: { mode: 'all', q: 'x' } })
+    await flush()
+    await type('saved-view-name', 'Held view')
+    input('saved-view-name').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, repeat: true }))
+    await flush()
+    expect(h.records.create).not.toHaveBeenCalled()
+  })
+
   it('shows and hides fields by mode', async () => {
     window.prksOpenSavedViewModal?.({ definition: { mode: 'all', q: 'x' } })
     await flush()
@@ -180,11 +193,35 @@ describe('Saved View form', () => {
     expect(visible('saved-view-field-publisher-wrap')).toBe(true)
   })
 
+  it('keeps a stale edit open as a decision and saves it knowingly against the current view (#873)', async () => {
+    ;(window as unknown as { prksGetMainTabContext: () => unknown }).prksGetMainTabContext = () => ({
+      getEntity: (type: string) =>
+        type === 'savedView'
+          ? { id: 'SV-MAIN', name: 'Reading', search: { mode: 'all', q: 'history', tag: '', author: '', publisher: '' }, revision: 1 }
+          : null,
+    })
+    h.records.update.mockImplementationOnce(async () => {
+      throw new PrksApiError('This Saved View changed in another tab.', 409, 'revision_conflict')
+    })
+    h.records.get.mockImplementationOnce(async () => ({ id: 'SV-MAIN', revision: 2 }))
+    window.prksOpenSavedViewModalForCurrentView?.()
+    await flush()
+    await type('saved-view-name', 'Reading list')
+    await clickSave()
+    expect(h.records.update).toHaveBeenLastCalledWith('SV-MAIN', expect.objectContaining({ name: 'Reading list' }), 1)
+    expect(h.closes).toBe(0)
+    expect(document.getElementById('saved-view-modal-error')?.textContent).toContain('changed in another tab')
+    expect(input('saved-view-name').value).toBe('Reading list')
+    await clickSave()
+    expect(h.records.update).toHaveBeenLastCalledWith('SV-MAIN', expect.objectContaining({ name: 'Reading list' }), 2)
+    expect(h.closes).toBe(1)
+  })
+
   it('edits the current Main view and refreshes in place', async () => {
     ;(window as unknown as { prksGetMainTabContext: () => unknown }).prksGetMainTabContext = () => ({
       getEntity: (type: string) =>
         type === 'savedView'
-          ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }
+          ? { id: 'SV-MAIN', name: 'Main View', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' }, revision: 4 }
           : null,
     })
     window.location.hash = '#/views/SV-MAIN'
@@ -198,7 +235,7 @@ describe('Saved View form', () => {
     expect(h.records.update).toHaveBeenCalledWith('SV-MAIN', {
       name: 'Main View',
       search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' },
-    })
+    }, 4)
     expect(h.closes).toBe(1)
     expect(h.navigations).toEqual([{ hash: '#/views/SV-MAIN', options: { replace: true } }])
   })

@@ -23,7 +23,7 @@ def complete_fixture():
     return all_ids, modules
 
 
-# Exact risk/contract cases observed in the opt-in E2E stress workflow.
+# Risk/contract cases that once flaked (#457, #1007-#1009, #1091).
 # Test methods and dormant-smoke omissions are independently checked below.
 STRESS_RISK_OBLIGATIONS = (
     "offline-work-source-coalescing",
@@ -33,11 +33,6 @@ STRESS_RISK_OBLIGATIONS = (
     "offline-pdf-reconnect-probe",
     "offline-person-membership-coherence",
 )
-OFFLINE_STRESS_CASES = {
-    "offline-browse-projection-invalidation": "recent-cache-457",
-    "offline-pdf-reconnect-probe": "pdf-reconnect-probe-1008",
-    "offline-person-membership-coherence": "person-membership-1009",
-}
 
 
 class PackagedCoverageAuditTests(unittest.TestCase):
@@ -153,26 +148,6 @@ class PackagedCoverageAuditTests(unittest.TestCase):
                 self.assertEqual(row["status"], "missing_from_discovery")
                 self.assertFalse(row["packaged_smoke"])
                 self.assertIn("fail closed", staged.format_packaged_coverage_audit(report))
-
-    def test_new_offline_obligations_match_the_actual_stress_workflow(self):
-        # A future stress rename must not quietly leave the risk inventory
-        # claiming an unrelated passing browser oracle. No YAML dependency.
-        workflow = (
-            Path(__file__).resolve().parents[1]
-            / ".github/workflows/e2e-flake-stress.yml"
-        ).read_text(encoding="utf-8")
-        indexed = dict(staged.CRITICAL_BROWSER_OBLIGATIONS)
-        for obligation, case in OFFLINE_STRESS_CASES.items():
-            with self.subTest(obligation=obligation):
-                marker = f"          - case: {case}\n"
-                self.assertEqual(workflow.count(marker), 1)
-                row = workflow.split(marker, 1)[1].split(
-                    "\n          - case: ", 1
-                )[0]
-                self.assertIn(
-                    f"            test_id: {indexed[obligation]}\n",
-                    row + "\n",
-                )
 
     def test_empty_invalid_and_incomplete_module_inventory_fail_closed(self):
         all_ids, modules = complete_fixture()

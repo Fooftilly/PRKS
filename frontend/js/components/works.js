@@ -98,6 +98,25 @@ function prksResearchNotesTextForWork(workId, serverText, ctx) {
     return entry.text;
 }
 
+/**
+ * A corrective body is about to replace the text this tab shows. A clean
+ * committed session for that text gives way, so a remount reads the new
+ * body instead of the retained old one. A session with typing, a save in
+ * flight, or other text keeps the editor's base: returns false.
+ */
+function prksResearchNotesAdoptBody(ctx, workId, shown) {
+    const id = String(workId || '');
+    const entry = ctx && id ? prksWorkResearchDrafts.get(prksResearchDraftKey(ctx, id)) : null;
+    if (!entry || String(entry.ownerTabId) !== String(ctx.tabId != null ? ctx.tabId : '')) return true;
+    if (entry.state !== 'committed' || entry.promise || entry.text !== String(shown == null ? '' : shown)) {
+        return false;
+    }
+    prksWorkResearchDrafts.delete(entry.key);
+    prksResearchRecoveryRelease(entry);
+    if (ctx.ui && ctx.ui.workResearchNoteSession === entry) ctx.ui.workResearchNoteSession = null;
+    return true;
+}
+
 function prksResearchNotesMayPaint(owner, workId, generation) {
     if (!owner || owner.destroyed) return false;
     if (typeof owner.isCurrent === 'function' && !owner.isCurrent(generation)) return false;
@@ -386,6 +405,10 @@ window.prksRefreshResearchNotesRecovery = function (ctx, workId) {
 };
 window.prksRestoreResearchNotesRecovery = prksRestoreResearchNotesRecovery;
 window.prksResearchNotesTextForWork = prksResearchNotesTextForWork;
+window.prksResearchNotesAdoptBody = prksResearchNotesAdoptBody;
+/* work-notes-state.js writes a corrective body through it; named here, not
+ * left to classic-script globals. */
+window.prksResearchNotesApplyText = prksResearchNotesApplyText;
 window.prksResearchNotesMayPaint = prksResearchNotesMayPaint;
 window.prksResearchNotesSyncEventStatus = prksResearchNotesSyncEventStatus;
 window.prksScheduleResearchNotesBusyRetryForTest = prksScheduleResearchNotesBusyRetry;
@@ -2363,6 +2386,12 @@ async function copyBibTeX(workId, btn) {
         restore();
     }
     try {
+        /* PRKS builds BibTeX from the saved export profile, so toggles still being saved are sent first. */
+        const citations = window.prksCitations;
+        if (citations && typeof citations.settleBibtexProfile === 'function' &&
+            !await citations.settleBibtexProfile()) {
+            throw Object.assign(new Error('bibtex profile unsaved'), { code: 'bibtex_profile_unsaved' });
+        }
         const res = await prksRequest('/api/bibtex/' + encodeURIComponent(workId));
         if (!res.ok) throw new Error('bibtex fetch failed');
         const text = await res.text();
@@ -2382,7 +2411,8 @@ async function copyBibTeX(workId, btn) {
         snapshotIfNeeded();
         btn.innerHTML =
             (typeof prksIcon === 'function' ? prksIcon('x', { size: 'sm' }) : '') +
-            (e && e.code === 'bibtex_empty' ? ' No BibTeX available — refresh' : ' Copy failed');
+            (e && e.code === 'bibtex_empty' ? ' No BibTeX available — refresh'
+                : e && e.code === 'bibtex_profile_unsaved' ? ' Export settings not saved' : ' Copy failed');
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#ef4444';
         btn.style.borderColor = '#ef4444';

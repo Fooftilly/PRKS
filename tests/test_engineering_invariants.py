@@ -1,22 +1,15 @@
 """Regression tests for scripts/check_invariants.py."""
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from scripts import check_invariants as checker
+from scripts.invariants import pyright_slice
 
 _ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT = _ROOT / "scripts" / "check_invariants.py"
-_SPEC = importlib.util.spec_from_file_location("prks_check_invariants", _SCRIPT)
-assert _SPEC and _SPEC.loader
-checker = importlib.util.module_from_spec(_SPEC)
-# Dataclass processing looks the class module up in sys.modules (3.12+).
-sys.modules[_SPEC.name] = checker
-_SPEC.loader.exec_module(checker)
 
 
 class EngineeringInvariantTests(unittest.TestCase):
@@ -1412,7 +1405,7 @@ class EngineeringInvariantTests(unittest.TestCase):
     def test_pyright_typed_slice_strict_pins_are_included(self):
         for path in checker.PYRIGHT_TYPED_SLICE_STRICT:
             with self.subTest(path=path):
-                self.assertTrue(checker._under_typed_slice_scope(path))
+                self.assertTrue(pyright_slice._under_typed_slice_scope(path))
 
     def test_pyright_typed_slice_rejects_dropped_scope(self):
         for dropped in checker.PYRIGHT_TYPED_SLICE_SCOPES:
@@ -1694,7 +1687,7 @@ class EngineeringInvariantTests(unittest.TestCase):
         """Genuine cache-only excludes must not trip INV-PYRIGHT-002."""
         for pattern in ("**/__pycache__", "**/__pycache__/**", "__pycache__"):
             with self.subTest(pattern=pattern):
-                self.assertFalse(checker._path_covers_typed_slice(pattern))
+                self.assertFalse(pyright_slice._path_covers_typed_slice(pattern))
                 with tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     self._write_valid_pyright_tree(root)

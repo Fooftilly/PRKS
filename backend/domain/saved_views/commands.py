@@ -65,12 +65,12 @@ def create(db: Database, ctx: RequestContext, name: Any, search: Any) -> dict[st
     return _command(db, ctx, lambda scope: views.create(scope, view_id, name, search))
 
 
-def update(db: Database, ctx: RequestContext, view_id: Optional[str], *,
+def update(db: Database, ctx: RequestContext, view_id: Optional[str], *, base_revision: Any,
            name: Any = None, search: Any = None) -> dict[str, Any]:
     vid = _id(view_id)
     if not vid:
         raise SavedViewError(views.NOT_FOUND, 404)
-    return _command(db, ctx, lambda scope: views.update(scope, vid, name, search))
+    return _command(db, ctx, lambda scope: views.update(scope, vid, base_revision, name, search))
 
 
 def delete(db: Database, ctx: RequestContext, view_id: Optional[str]) -> None:

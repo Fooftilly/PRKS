@@ -13,6 +13,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const FIELDS = root.PRKS_LOCAL_PERSON_GROUP_FIELDS ||
         Object.freeze(['name', 'description', 'parent_id']);
@@ -73,6 +76,11 @@
     }
 
     /* ---- fields ---- */
+
+    /** Whether this device has an unsent move of `groupId`. */
+    function hasPendingMove(operations, groupId) {
+        return pendingFieldValues(operations, groupId).has('parent_id');
+    }
 
     function pendingFieldValues(operations, groupId) {
         const values = new Map();
@@ -218,10 +226,31 @@
      * membership operation names an id, and a member chip renders a profile
      * name, so the row comes from the People projection rather than being
      * invented here.
+     *
+     * A pending move changes `parent_id`; the nested `parent` the page and
+     * editor show follows it, named from `catalogue` (the effective Group
+     * rows) where it holds the new parent. Otherwise the editor would open on
+     * the old parent and refuse its own pending move as changed elsewhere.
      */
-    function effectivePersonGroupDetail(group, operations, people) {
+    function effectivePersonGroupDetail(group, operations, people, catalogue) {
         if (!group || typeof group !== 'object') return group;
-        const out = applyFields(group, pendingFieldValues(operations, group.id));
+        const fields = pendingFieldValues(operations, group.id);
+        const out = applyFields(group, fields);
+        if (fields.has('parent_id')) {
+            /* The parent shown is where the effective catalogue places this
+             * group: a pending deletion of the move's destination moves it up
+             * to the surviving ancestor there. `parent_id` keeps the queued
+             * value, which is what the edit pin compares. */
+            const rows = Array.isArray(catalogue) ? catalogue : [];
+            const own = rows.find(g => g && String(g.id) === String(group.id));
+            const parentId = (own ? own.parent_id : out.parent_id) || null;
+            const held = group.parent && group.parent.id ? group.parent : null;
+            if (!parentId) Object.assign(out, { parent: null });
+            else if (!held || String(held.id) !== String(parentId)) {
+                const row = rows.find(g => g && String(g.id) === String(parentId));
+                Object.assign(out, { parent: { id: parentId, name: row ? String(row.name || '') : '' } });
+            }
+        }
         const memberships = pendingMemberships(operations);
         /* Somebody this device has asked to delete is gone from the member list
          * too: the Group page is one of the places a Person is read, and a
@@ -398,6 +427,9 @@
      * that exists only as a pending creation takes that creation's payload at
      * revision 0 -- known rather than assumed.
      */
+    /* The edit base of a group PRKS no longer has. */
+    const DELETED_GROUP = Object.freeze({ prksDeleted: true });
+
     async function acknowledgedGroupBase(groupId, operations) {
         if (typeof groupId !== 'string' || !groupId) return null;
         const creating = pendingCreates(operations).find(op => op.entity_id === groupId);
@@ -405,37 +437,145 @@
             return observedGroupFields(catalogRowFromOp(creating), newGroupState(groupId));
         }
         let state = null;
+        let stateSource = null;
         try {
             const result = await readPersonGroupState(groupId);
             state = result && result.value;
+            stateSource = result && result.source;
         } catch (_e) { state = null; }
-        if (!state) return null;
+        /* PRKS answered that the group is not there. */
+        if (!state) return stateSource === 'server' ? DELETED_GROUP : cachedEditBase(groupId);
+        /* Offline, two cached reads are not one snapshot: a revisions read can
+         * reach the server while the record read does not, or refresh without
+         * it, and pair newer revisions with older values. The base offline is
+         * the pair this device last read together. */
+        if (stateSource !== 'server') return cachedEditBase(groupId);
         let group = null;
         try {
-            /* The group's own acknowledged record, not the catalogue: it is the
-             * page the user is editing, so it is the one this device is most
-             * likely to hold -- and it is one read rather than a whole list. */
             const cached = await root.prksOfflineReadEntity('person-group', groupId,
-                '/api/person-groups/' + encodeURIComponent(groupId), {});
-            group = cached && cached.value;
+                '/api/person-groups/' + encodeURIComponent(groupId),
+                /* A record read joined to an older flight would predate the
+                 * revisions while still answering from the server. */
+                { requestPolicy: { dedupe: false } });
+            /* Values from the cache may be older than the revisions, so they form no base. */
+            if (cached && cached.source === 'server' && cached.value === null) return DELETED_GROUP;
+            group = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { group = null; }
-        return group ? observedGroupFields(group, state) : null;
+        if (!group) return null;
+        /* Revisions unchanged across the record read prove its values are at them. */
+        let after = null;
+        try {
+            after = await readPersonGroupState(groupId, { requestPolicy: { dedupe: false } });
+        } catch (_e) { after = null; }
+        if (after && after.source === 'server' && after.value === null) return DELETED_GROUP;
+        if (!after || after.source !== 'server' || !after.value || !after.value.fields) return null;
+        const base = observedGroupFields(group, state);
+        /* A field whose revision moved during the record read has no known pair. */
+        for (const name of FIELDS) {
+            const a = state.fields[name];
+            const b = after.value.fields[name];
+            if (!a || !b || a.revision !== b.revision) base[name] = null;
+        }
+        await cacheEditBase(groupId, base);
+        return base;
     }
 
-    /** What this editing session changed, measured against what it was showing. */
-    function dirtyGroupFields(groupId, draft, base, operations) {
-        const changes = {};
-        if (!draft || !base) return changes;
-        const pending = pendingFieldValues(operations, groupId);
-        FIELDS.forEach(function (field) {
-            if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
-            const observed = base[field];
-            if (!observed || typeof observed.value !== 'string') return;
-            const shown = pending.has(field) ? pending.get(field) : observed.value;
-            const desired = String(draft[field] == null ? '' : draft[field]);
-            if (desired !== shown) changes[field] = desired;
-        });
-        return changes;
+    /* The kind under which an edit base read as one pair is kept for offline Edit. */
+    const PERSON_GROUP_EDIT_BASE = 'person-group-edit-base';
+
+
+    async function cachedEditBase(groupId) {
+        let held = null;
+        try {
+            held = typeof root.prksOfflinePeekEntity === 'function'
+                ? await root.prksOfflinePeekEntity(PERSON_GROUP_EDIT_BASE, groupId) : null;
+        } catch (_e) { held = null; }
+        if (!held || held.group_id !== groupId || !held.fields || typeof held.fields !== 'object') return null;
+        const base = {};
+        for (const name of FIELDS) {
+            const entry = held.fields[name];
+            if (entry === null) { base[name] = null; continue; }
+            if (!entry || typeof entry.value !== 'string' || !reconcileCore.isRevision(entry.revision)) return null;
+            base[name] = { value: entry.value, revision: entry.revision };
+        }
+        return base;
+    }
+
+    /* Merged in one store transaction, so a newer pair another tab
+     * published or acknowledged meanwhile is kept. */
+    async function cacheEditBase(groupId, base) {
+        if (typeof root.prksOfflineMergeEntity !== 'function') return;
+        try {
+            await root.prksOfflineMergeEntity(PERSON_GROUP_EDIT_BASE, groupId, function (held) {
+                const kept = held && held.group_id === groupId && held.fields && typeof held.fields === 'object' ? held.fields : {};
+                const fields = {};
+                for (const name of FIELDS) {
+                    fields[name] = base[name] ? reconcileCore.newerEditBase(kept[name], base[name])
+                        : (kept[name] === undefined ? null : kept[name]);
+                }
+                return { group_id: groupId, fields: fields };
+            });
+        } catch (_e) { /* the next online Edit writes it again */ }
+    }
+
+    /**
+     * This device's newest unsent edit per field: the value an editor shows
+     * and the revision that edit was measured against.
+     */
+    function pendingFieldBases(operations, groupId) {
+        const out = {};
+        unsettled(operations, 'SET_PERSON_GROUP_FIELD', groupId)
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+            .forEach(function (op) {
+                const field = op.payload && op.payload.field;
+                if (!isSupportedField(field)) return;
+                out[field] = {
+                    value: String((op.payload && op.payload.value) || ''),
+                    revision: op.base_revision,
+                    pendingOp: op.op_id,
+                };
+            });
+        return out;
+    }
+
+    /**
+     * The base an edit session saves against, pinned when the editor opens:
+     * each field's revision where the read holds what the form shows (see
+     * `prksSyncReconcile.pinEditBase`). Null when the revisions cannot be read.
+     */
+    async function pinGroupEditBase(groupId, shown, operations) {
+        const read = await acknowledgedGroupBase(groupId, operations);
+        if (read === DELETED_GROUP) return read;
+        const pending = pendingFieldBases(operations, groupId);
+        const move = pending.parent_id;
+        const shownParent = String(shown && shown.parent_id != null ? shown.parent_id : '');
+        if (move && move.value && move.value !== shownParent && pendingDeletions(operations).has(move.value)) {
+            /* The move's destination is itself waiting to be deleted, so the
+             * editor shows the ancestor the deletion moves this group up to
+             * (`effectivePersonGroupDetail`). That ancestor IS this device's
+             * pending parent, at the move's revision -- but only when the
+             * same hierarchy projection places the group there: a form still
+             * showing an older parent must not replace a move it never
+             * showed, so then the parent base stays unknown (#1454 review). */
+            let rows = null;
+            try {
+                rows = typeof root.prksEffectivePersonGroupCatalogue === 'function'
+                    ? await root.prksEffectivePersonGroupCatalogue(operations) : null;
+            } catch (_e) { rows = null; }
+            const own = Array.isArray(rows) ? rows.find(g => g && String(g.id) === String(groupId)) : null;
+            if (own && String(own.parent_id || '') === shownParent) {
+                pending.parent_id = Object.assign({}, move, { value: shownParent });
+                const pinned = reconcileCore.pinEditBase(shown, read, pending);
+                /* The pin may equal the acknowledged parent and drop the op
+                 * id, yet this form showed the move: it may replace it. */
+                if (pinned && pinned.parent_id) {
+                    pinned.parent_id = Object.assign({}, pinned.parent_id, { pendingOp: move.pendingOp });
+                }
+                return pinned;
+            }
+        }
+        return reconcileCore.pinEditBase(shown, read, pending);
     }
 
     /**
@@ -620,9 +760,16 @@
             if (data.person_id !== (op.payload && op.payload.person_id)) return false;
             switch (data.code) {
                 case 'ACKNOWLEDGED':
+                    /* The Group name and its revision come as a pair or
+                     * not at all: without them the chip is not patched. */
                     return typeof data.changed === 'boolean' &&
                         typeof data.present === 'boolean' &&
-                        Number.isSafeInteger(data.server_revision);
+                        Number.isSafeInteger(data.server_revision) &&
+                        (data.group_name === undefined
+                            ? data.group_name_revision === undefined
+                            : typeof data.group_name === 'string' &&
+                                Number.isSafeInteger(data.group_name_revision) &&
+                                data.group_name_revision >= 0);
                 case 'REVISION_CONFLICT': case 'FUTURE_REVISION':
                     return Number.isSafeInteger(data.current_revision) &&
                         typeof data.current_present === 'boolean';
@@ -690,6 +837,7 @@
         prksPersonGroupMembershipKey: membershipKey,
         prksEffectivePersonGroups: effectivePersonGroups,
         prksEffectivePersonGroupDetail: effectivePersonGroupDetail,
+        prksPersonGroupHasPendingMove: hasPendingMove,
         prksEffectivePersonGroupChips: effectivePersonGroupChips,
         prksEffectivePersonGroupChipRows: effectivePersonGroupChipRows,
         prksIsPersonGroupStateShape: isGroupStateShape,
@@ -699,7 +847,7 @@
         prksNewPersonGroupState: newGroupState,
         prksObservedPersonGroupFields: observedGroupFields,
         prksAcknowledgedPersonGroupBase: acknowledgedGroupBase,
-        prksDirtyPersonGroupFields: dirtyGroupFields,
+        prksPinPersonGroupEditBase: pinGroupEditBase,
         prksAcknowledgedPersonGroupMembership: acknowledgedMembership,
         prksCreatePersonGroupDurably: createGroupDurably,
         prksSavePersonGroupFieldsDurably: saveGroupFieldsDurably,

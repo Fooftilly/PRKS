@@ -487,8 +487,15 @@ def apply_member_operation(scope: LibraryScope, group_id: str, person_id: str, d
                       current_present=existing, requested_present=desired)
         return 409, result
     changed = set_member(scope, group_id, person_id, desired)
+    # The group's name and its own revision, under the same lock: a client
+    # patches the member chip it shows from this ACK instead of dropping a
+    # People list it cannot refetch offline, unless it already holds a newer
+    # name (the name is revisioned apart from the membership).
+    name_scope = field_scope(group_id, "name")
     result.update(code="ACKNOWLEDGED", changed=changed, present=desired,
-                  server_revision=revision + int(changed))
+                  server_revision=revision + int(changed),
+                  group_name=_current_field(scope, group_id, "name") or "",
+                  group_name_revision=revisions.read(scope, FIELD_SCOPE_TYPE, [name_scope])[name_scope])
     return 200, result
 
 

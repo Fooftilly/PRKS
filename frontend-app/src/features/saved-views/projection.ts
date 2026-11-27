@@ -23,11 +23,13 @@ export function acceptSavedViewRecord(value: unknown): SavedViewRecord | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const id = text(record.id).trim()
-  if (!id) return null
+  const revision = record.revision
+  if (!id || typeof revision !== 'number' || !Number.isSafeInteger(revision) || revision < 0) return null
   return {
     id,
     name: text(record.name) || 'Saved View',
     search: acceptSavedViewDefinition(record.search),
+    revision,
   }
 }
 

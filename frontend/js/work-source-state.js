@@ -289,11 +289,11 @@
          * operation: the two differ exactly when it matters, and the server is
          * the one that knows. No second request either -- the ACK already
          * carries the whole row. */
-        reconcile: data => root.prksOfflineReconcileWorkSource({
+        reconcile: (data, op) => root.prksOfflineReconcileWorkSource({
             work_id: data.work_id,
             source: acknowledgedSource(data),
             server_revision: data.server_revision,
-        }),
+        }, op),
     };
 
     Object.assign(root, {

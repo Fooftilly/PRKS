@@ -456,7 +456,10 @@ function getPrksAnnotationAuthor() {
 function prksLoadAppSettings() {
     if (__prksAppSettingsPromise) return __prksAppSettingsPromise;
     __prksAppSettingsPromise = prksRequest('/api/settings')
-        .then((r) => (r.ok ? r.json() : {}))
+        .then((r) => {
+            if (!r.ok) throw new Error('settings read failed');
+            return r.json();
+        })
         .then((data) => {
             const raw =
                 data && typeof data.annotation_author === 'string' ? data.annotation_author.trim() : '';
@@ -483,6 +486,8 @@ function prksLoadAppSettings() {
             return data;
         })
         .catch(() => {
+            /* A failed read is not kept, so the next caller reads again. */
+            __prksAppSettingsPromise = null;
             prksSetAnnotationAuthorCache('');
             return {};
         });

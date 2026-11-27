@@ -22,6 +22,7 @@ async function main() {
     const opts = { work_id: 'W-A', assigned: [], known_absent: {} };
     await cache.putEntity('work', 'W-A', { id: 'W-A', title: 'Complete base', tags: [] });
     await cache.putEntity('work-tag-options', 'W-A', opts);
+    await readSettles();
     let requestFails = false;
     let response = [tag];
     const offline = createPrksOfflineRuntime({ store: cache, window: null, prksRequest: async () => {
@@ -47,7 +48,7 @@ async function main() {
     let received = [];
     const runtime = globalThis.createPrksSyncRuntime({ store, online: () => true,
         request: async (path, init) => { received.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ack }; },
-        handlers: tagHandlers(async result => cacheWorks && await offline.reconcileWorkTag(result)),
+        handlers: tagHandlers(async (result, op) => cacheWorks && await offline.reconcileWorkTag(result, op)),
     });
     await runtime.wake(); runtime.stop();
     assert.equal((await store.getOperation(op.op_id)).status, 'pending');
@@ -58,7 +59,7 @@ async function main() {
     cacheWorks = true;
     const recovered = globalThis.createPrksSyncRuntime({ store, online: () => true,
         request: async (path, init) => { received.push(JSON.parse(init.body)); return { ok: true, status: 200, json: async () => ack }; },
-        handlers: tagHandlers(result => offline.reconcileWorkTag(result)),
+        handlers: tagHandlers((result, op) => offline.reconcileWorkTag(result, op)),
     });
     await recovered.wake(); recovered.stop();
     assert.equal(await store.getOperation(op.op_id), null, 'a reconciled ACK retires the local operation');
@@ -99,6 +100,9 @@ async function waitFor(predicate, label) {
     throw new Error('timed out waiting for: ' + label);
 }
 async function settle() { for (let i = 0; i < 5; i++) await tick(); }
+/* A cached read and a later operation must not share a millisecond: the
+ * reconcile core proves "read before the operation" only with a strict `<`. */
+function readSettles() { return new Promise(resolve => setTimeout(resolve, 3)); }
 
 /* The coordinator dispatches per family now; these selftests still exercise
  * the Work-Tag family, with its reconciliation swapped for the scenario's. */
@@ -366,6 +370,7 @@ async function lifecycle() {
     const cache = createPrksOfflineStore({ dbName: 'prks-offline-v2:test', indexedDB: factory });
     await cache.putEntity('work', 'W-L', { id: 'W-L', title: 'Lifecycle', tags: [] });
     await cache.putEntity('work-tag-options', 'W-L', { work_id: 'W-L', assigned: [], known_absent: {} });
+    await readSettles();
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
     const acked = { ...ack, work_id: 'W-L' };
@@ -375,7 +380,7 @@ async function lifecycle() {
     const sent = [];
     const runtime = syncRuntime(store,
         async (path, init) => { sent.push(JSON.parse(init.body).op_id); return { ok: true, status: 200, json: async () => acked }; },
-        async result => { order.push('reconcile'); return cacheWorks && offline.reconcileWorkTag(result); });
+        async (result, op) => { order.push('reconcile'); return cacheWorks && offline.reconcileWorkTag(result, op); });
     runtime.subscribe(event => { if (event.acknowledged) order.push('ack'); });
 
     const op = await store.coalesceWorkTag('W-L', tag.id, true, false, 0, tag);
@@ -452,8 +457,11 @@ async function staleReads() {
     const detail = offline.readThroughEntity('work', 'W-S', '/api/works/W-S');
     await settle();
 
-    // ...and an ACK at revision 6 reconciles while they are still open.
-    assert.equal(await offline.reconcileWorkTag({ ...ack, work_id: 'W-S', server_revision: 6 }), true);
+    // ...and an ACK at revision 6, for an operation created after the cached
+    // Work was read, reconciles while they are still open.
+    await readSettles();
+    const sent = { created_at: new Date().toISOString() };
+    assert.equal(await offline.reconcileWorkTag({ ...ack, work_id: 'W-S', server_revision: 6 }, sent), true);
     assert.deepEqual((await cache.getEntity('work-tag-options', 'W-S')).value.assigned,
         [{ tag_id: tag.id, relation_revision: 6 }]);
 

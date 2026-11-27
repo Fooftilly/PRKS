@@ -314,6 +314,21 @@ async function conflictResolution() {
         { kind: 'video', url: SHORT('CCC'), identity: identity(SHORT('CCC')) }, serverBase), null);
     assert.equal((await store.listOperations()).filter(r => r.entity_id === 'W-2').length, 0);
 
+    /* A draft kept on an older revision is paired with the identity the
+     * editor last read (#1450 review). Typing the older video A back over a
+     * queued B, after the server moved to D, cancels B and queues A against
+     * the older revision: it conflicts with D instead of vanishing. */
+    await store.saveWorkSource('W-3',
+        { kind: 'video', url: WATCH('BBB'), identity: identity(WATCH('BBB')) },
+        { identity: identity(WATCH('AAA')), revision: 0 });
+    const back = await store.saveWorkSource('W-3',
+        { kind: 'video', url: WATCH('AAA'), identity: identity(WATCH('AAA')) },
+        { identity: identity(WATCH('DDD')), revision: 0 });
+    assert(back, 'returning to the older video is queued, not cancelled');
+    assert.equal(back.payload.source.url, WATCH('AAA'));
+    assert.equal(back.base_revision, 0, 'against the revision the draft was typed over');
+    assert.equal((await store.listOperations()).filter(r => r.entity_id === 'W-3').length, 1);
+
     /* Codes that name no revision to overwrite are NOT reappliable: there is
      * nothing to apply against, and offering it would loop forever. */
     for (const code of ['ENTITY_NOT_FOUND', 'UNSUPPORTED_SOURCE_TRANSITION']) {
@@ -388,11 +403,14 @@ async function reconciliation() {
     const offline = createPrksOfflineRuntime({ store: cache, window: null,
         prksRequest: async () => { throw new Error('no reads in this scenario'); } });
 
+    // Operations created after every record above was cached.
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const sent = { created_at: new Date().toISOString() };
     // Exactly the shape an acknowledgement carries.
     const ack = { work_id: 'W-1', source: { source_kind: 'video', provider: 'youtube',
         provider_id: 'BBB', source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' },
         server_revision: 5 };
-    assert.equal(await offline.reconcileWorkSource(ack), true);
+    assert.equal(await offline.reconcileWorkSource(ack, sent), true);
 
     const coherent = row => {
         assert.equal(row.provider_id, 'BBB');
@@ -425,7 +443,7 @@ async function reconciliation() {
     assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5);
 
     // An acknowledgement older than the cache has been superseded.
-    await offline.reconcileWorkSource(Object.assign({}, ack, { server_revision: 2 }));
+    await offline.reconcileWorkSource(Object.assign({}, ack, { server_revision: 2 }), sent);
     assert.equal((await cache.getEntity('work-source-state', 'W-1')).value.revision, 5,
         'the base never moves backwards');
 
@@ -433,7 +451,7 @@ async function reconciliation() {
     await cache.deleteEntity('folder', 'F1');
     assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 6,
         source: { source_kind: 'video', provider: 'youtube', provider_id: 'CCC',
-            source_url: WATCH('CCC'), thumb_url: null, urldate: '2026-09-13' } }), true);
+            source_url: WATCH('CCC'), thumb_url: null, urldate: '2026-09-13' } }, sent), true);
 
     /* An UNREADABLE cache is a different answer: the operation must be
      * replayed rather than retired believing it patched what it could not
@@ -464,8 +482,9 @@ async function reconciliation() {
         prksRequest: async () => { throw new Error('no reads in convergent scenario'); },
     });
     globalThis.prksOfflineReconcileWorkSource =
-        result => convergentRuntime.reconcileWorkSource(result);
-    const asked = op('W-1', SHORT('BBB'));
+        (result, sentOp) => convergentRuntime.reconcileWorkSource(result, sentOp);
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const asked = Object.assign(op('W-1', SHORT('BBB')), { created_at: new Date().toISOString() });
     const convergentAck = {
         work_id: 'W-1', code: 'ACKNOWLEDGED', changed: false, server_revision: 1,
         provider: 'youtube', provider_id: 'BBB', source_kind: 'video',
@@ -474,7 +493,7 @@ async function reconciliation() {
     };
     assert.equal(globalThis.prksWorkSourceSyncHandler.isResult(convergentAck, asked), true,
         'handler accepts the stored spelling even though it is not the URL asked');
-    assert.equal(await globalThis.prksWorkSourceSyncHandler.reconcile(convergentAck), true);
+    assert.equal(await globalThis.prksWorkSourceSyncHandler.reconcile(convergentAck, asked), true);
     const converged = (await convergentCache.getEntity('work', 'W-1')).value;
     assert.equal(converged.source_url, WATCH('BBB'),
         'the stored spelling, never the URL this device asked for');
@@ -502,9 +521,11 @@ async function staleRead() {
     const reading = offline.readThroughList('works-browse:index', '/api/works?projection=browse',
         { domain: 'works-browse', validate: rows => Array.isArray(rows) });
     await settle();
+    await new Promise(resolve => setTimeout(resolve, 3));
     assert.equal(await offline.reconcileWorkSource({ work_id: 'W-1', server_revision: 1,
         source: { source_kind: 'video', provider: 'youtube', provider_id: 'BBB',
-            source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' } }), true);
+            source_url: WATCH('BBB'), thumb_url: null, urldate: '2026-09-13' } },
+    { created_at: new Date().toISOString() }), true);
     release();
     await reading;
     await settle();
@@ -616,4 +637,4 @@ async function main() {
     console.log('All ' + checks + ' Work source checks passed');
 }
 
-main().catch(error => { console.error(error); process.exit(1); });
+main().then(() => process.exit(0)).catch(error => { console.error(error); process.exit(1); });
