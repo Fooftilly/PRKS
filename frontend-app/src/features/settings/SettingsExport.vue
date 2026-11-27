@@ -261,7 +261,10 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-    <PrksInlineMessage v-if="bibtexStatus" tone="error" status>{{ bibtexStatus }}</PrksInlineMessage>
+    <!-- Mounted while empty: a screen reader announces text added to an existing live region. -->
+    <div id="prks-bibtex-export-status" role="alert">
+      <PrksInlineMessage v-if="bibtexStatus" tone="error">{{ bibtexStatus }}</PrksInlineMessage>
+    </div>
     <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" @click="restoreDefaults">
       Restore export defaults
     </PrksButton>

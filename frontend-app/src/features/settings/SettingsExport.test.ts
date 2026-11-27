@@ -317,11 +317,19 @@ describe('SettingsExport BibTeX toggles', () => {
     // The whole map goes back to what PRKS confirmed, Author included.
     expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: true, url: true })
     expect(['author', 'doi', 'url'].map((id) => isOn(wrapper, id))).toEqual([false, true, true])
-    expect(wrapper.get('.prks-inline-message--error').text()).toContain('BibTeX export settings could not be saved')
+    expect(wrapper.get('#prks-bibtex-export-status[role="alert"]').text()).toContain('BibTeX export settings could not be saved')
     win.prksPatchAppSettings = vi.fn(async () => ({})) as StyleWindow['prksPatchAppSettings']
     await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
     expect(wrapper.find('.prks-inline-message--error').exists()).toBe(false) // a new choice clears it
     warn.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps the BibTeX alert region mounted while it is empty', async () => {
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    expect(wrapper.get('#prks-bibtex-export-status').attributes('role')).toBe('alert')
+    expect(wrapper.get('#prks-bibtex-export-status').text()).toBe('')
     wrapper.unmount()
   })
 
