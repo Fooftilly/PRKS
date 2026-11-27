@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CitationExportError, exportCitations } from '../citations/export'
 import { citationsBridge } from '../citations/session'
 import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from '../citations/styles'
-import { settingsActiveCategory } from './navigation'
+import { openSettingsToLastCategory, settingsActiveCategory } from './navigation'
 import SettingsExport from './SettingsExport.vue'
 
 type StyleWindow = Window & {
@@ -104,6 +104,7 @@ describe('SettingsExport citation style', () => {
     expect(select.value).toBe('apa')
     expect(select.querySelector('optgroup')).toBeNull()
     expect(sent).toEqual([])
+    wrapper.unmount()
   })
 })
 
@@ -376,18 +377,27 @@ describe('SettingsExport BibTeX toggles', () => {
     expect(patches).toEqual([])
     expect(isOn(wrapper, 'doi')).toBe(true)
     expect(wrapper.get('#prks-bibtex-export-status').text()).toContain('could not be read')
-    wrapper.unmount()
     await exportCitations(['W-1'], 'bibtex') // PRKS's saved profile, which nothing here changed
     expect(seen.posts).toBe(1)
     win.prksLoadAppSettings = vi.fn(async () => {
-      bib.prksSetBibtexExportFieldsCache?.(server)
-      return { bibtex_export_fields: server }
+      bib.prksSetBibtexExportFieldsCache?.({ ...server, doi: false })
+      return { bibtex_export_fields: { ...server, doi: false } }
     })
-    const reopened = mount(SettingsExport)
+    openSettingsToLastCategory() // the modal reopens; the panel stays mounted
     await flushPromises()
-    expect(reopened.get('[data-bibtex-field="doi"]').attributes('disabled')).toBeUndefined()
-    expect(reopened.get('#prks-bibtex-export-status').text()).toBe('')
-    reopened.unmount()
+    expect(win.prksLoadAppSettings).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-bibtex-field="doi"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('#prks-bibtex-export-reset').attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('#prks-bibtex-export-status').text()).toBe('')
+    expect(isOn(wrapper, 'doi')).toBe(false)
+    openSettingsToLastCategory()
+    await flushPromises()
+    expect(win.prksLoadAppSettings).toHaveBeenCalledTimes(1) // a known profile is not read again
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(patches).toEqual([{ doi: true }])
+    wrapper.unmount()
   })
 
   it('keeps the BibTeX alert region mounted while it is empty', async () => {

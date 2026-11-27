@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
@@ -7,6 +7,7 @@ import { setBibtexProfileFlush, setBibtexProfileUnreconciled, trackBibtexProfile
 import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
 import ImportedCitationStyles from './ImportedCitationStyles.vue'
 import { bibtexExportSummary } from './bibtex-summary'
+import { settingsOpenCount } from './navigation'
 import { createSerialSave } from './serial-save'
 import SettingsSwitch from './SettingsSwitch.vue'
 
@@ -206,29 +207,43 @@ function flushDebounced(): void {
   flush()
 }
 
-onMounted(async () => {
-  setBibtexProfileFlush(flushDebounced)
-  applyMap({})
+let reading = false
+
+async function readProfile(): Promise<void> {
+  if (reading) return
+  reading = true
   let settings: unknown = null
   try {
     settings = await window.prksLoadAppSettings?.()
   } catch {
     settings = null
+  } finally {
+    reading = false
   }
   const profile = settings && typeof settings === 'object'
     ? (settings as { bibtex_export_fields?: unknown }).bibtex_export_fields : null
   profileKnown.value = !!profile && typeof profile === 'object'
-  if (!profileKnown.value) {
-    bibtexStatus.value = 'The BibTeX export settings could not be read. Reopen Settings when PRKS is reachable.'
-  }
-  if (!styleDirty) {
-    style.value = libraryCitationStyle()
-    styleSave.reset(style.value)
-  }
+  bibtexStatus.value = profileKnown.value
+    ? '' : 'The BibTeX export settings could not be read. Reopen Settings when PRKS is reachable.'
   if (profileKnown.value && !confirmed) confirmed = storedMap()
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
+}
+
+// Settings stays mounted while closed, so a reopen is the retry for a failed read.
+watch(settingsOpenCount, () => {
+  if (!profileKnown.value) void readProfile()
+})
+
+onMounted(async () => {
+  setBibtexProfileFlush(flushDebounced)
+  applyMap({})
+  await readProfile()
+  if (!styleDirty) {
+    style.value = libraryCitationStyle()
+    styleSave.reset(style.value)
+  }
 })
 
 onBeforeUnmount(() => {
