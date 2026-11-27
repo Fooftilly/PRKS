@@ -94,8 +94,8 @@
     "group": "model",
     "file": "Sequence.dfy",
     "name": "Save measured against the current edit base",
-    "from": "Created(s, v, f.pin.value.revision, f.origin)",
-    "to": "Created(s, v, if s.editBase.Ok? then s.editBase.revision else f.pin.value.revision, if s.editBase.Ok? then s.editBase.value else f.origin)"
+    "from": "Created(s, v, q.0.revision, q.1)",
+    "to": "Created(s, v, if s.editBase.Ok? then s.editBase.revision else q.0.revision, if s.editBase.Ok? then s.editBase.value else q.1)"
   },
   {
     "group": "model",
@@ -103,5 +103,19 @@
     "name": "stale convergent write refused",
     "from": "    if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])\n    else if o.base != Cur(s) then s.(op := None)",
     "to": "    if o.base != Cur(s) then s.(op := None)\n    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "a revert to the pin queues a write",
+    "from": "if v == q.0.value && s.op.Some? then",
+    "to": "if false then"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "pin not settled after its edit syncs",
+    "from": "    then (Base(p.pending.value, s.editBase.revision, None, None, None), s.editBase.value)\n    else (p, f.origin)",
+    "to": "    then (p, f.origin)\n    else (p, f.origin)"
   }
 ]

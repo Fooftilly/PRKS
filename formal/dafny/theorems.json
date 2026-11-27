@@ -99,6 +99,14 @@
     "ConvergentStaleWriteIsAcknowledged": {
       "file": "Sequence.dfy",
       "sha256": "9abed9b047b8f60668fc237ad78ab36b3f7949723fad18f504e463e05b2f8128"
+    },
+    "CancelLeavesNothingToSend": {
+      "file": "Sequence.dfy",
+      "sha256": "90bd16793f86787feaad0cbcdd60e2c63389756a3510e38cf431ca0eeaf1fb7d"
+    },
+    "FollowUpSaveAfterAck": {
+      "file": "Sequence.dfy",
+      "sha256": "380aacc640f0d51ed521e71b25b8f1eff174b50a7fcf5917b2ae18aff0fb5260"
     }
   },
   "witnesses": {

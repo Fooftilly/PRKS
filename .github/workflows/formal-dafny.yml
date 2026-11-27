@@ -79,10 +79,30 @@ jobs:
           set -o pipefail
           python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Differential test against sync-reconcile.js
+      - name: Compile the model to JS
+        id: compile
         if: always()
         run: |
-          "$DAFNY" translate js --no-verify --include-runtime --output "$RUNNER_TEMP/model/reconcile" formal/dafny/Reconcile.dfy
-          generated=$(find "$RUNNER_TEMP/model" -name '*.js' | head -n 1)
+          "$DAFNY" translate js --no-verify --include-runtime --output "$RUNNER_TEMP/model/model" formal/dafny/Sequence.dfy
+          echo "generated=$(find "$RUNNER_TEMP/model" -name '*.js' | head -n 1)" >> "$GITHUB_OUTPUT"
           npm ci --ignore-scripts --no-audit --no-fund --prefix scripts/formal/difftest
-          node scripts/formal/dafny_differential.cjs "$generated" scripts/formal/difftest/node_modules
+
+      - name: Keep the compiled model
+        if: always() && steps.compile.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dafny-model-js
+          path: ${{ runner.temp }}/model
+          retention-days: 7
+
+      - name: Differential test against sync-reconcile.js
+        if: always() && steps.compile.outcome == 'success'
+        env:
+          GENERATED: ${{ steps.compile.outputs.generated }}
+        run: node scripts/formal/dafny_differential.cjs "$GENERATED" scripts/formal/difftest/node_modules
+
+      - name: Bounded sequences against sync-reconcile.js
+        if: always() && steps.compile.outcome == 'success'
+        env:
+          GENERATED: ${{ steps.compile.outputs.generated }}
+        run: node scripts/formal/dafny_sequences.cjs "$GENERATED" scripts/formal/difftest/node_modules

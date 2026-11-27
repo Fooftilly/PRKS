@@ -89,11 +89,16 @@ module Sequence {
     case Reload => true)
   }
 
+  // The operation id as production stamps it on an edit base or a pin.
+  function IdTag(n: nat): string decreases n {
+    if n < 10 then ["0123456789"[n]] else IdTag(n / 10) + ["0123456789"[n % 10]]
+  }
+
   function EditBaseAfterAck(m: Model, s: State, o: Op, a: nat): Entry<Val> {
     match AcknowledgeEditBase(s.editBase, Stamp(m, o.value), Valid(o.base), a)
     case Keep => s.editBase
     case Clear => Broken
-    case Pair(v, r) => Ok(v, r, None, Some("ack"))
+    case Pair(v, r) => Ok(v, r, None, Some(IdTag(o.id)))
   }
 
   function CacheAfterAck(s: State, o: Op, a: nat): Option<Cached> {
@@ -132,18 +137,34 @@ module Sequence {
   // The form shows this device's unsent edit, else the cached value.
   function Opened(s: State): State requires s.op.Some? || s.cache.Some? {
     var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
-    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some(IdTag(s.op.value.id))) else NoOwn;
     var p := PinField(shown, s.editBase, own);
     var origin := if p.1 == MaxWrite && s.op.Some? then s.op.value.origin
       else if p.0.Some? then p.0.value.value else shown;
     s.(form := Some(Form(shown, p.0, p.1, origin)))
   }
 
-  // An unknown pin refuses the save; an unchanged draft sends nothing.
+  // settlePinnedPlaylistBase: a pin whose shown unsent edit has left the
+  // queue moves to the revision that edit's own ACK stamped. Returns the pin
+  // and its origin.
+  function Settled(s: State, f: Form): (Base<Val>, Val) requires f.pin.Some? {
+    var p := f.pin.value;
+    if p.pending.Some? && !(s.op.Some? && p.pendingOp == Some(IdTag(s.op.value.id))) &&
+      s.editBase.Ok? && s.editBase.ackOp.Some? && s.editBase.ackOp == p.pendingOp && s.editBase.revision > p.revision
+    then (Base(p.pending.value, s.editBase.revision, None, None, None), s.editBase.value)
+    else (p, f.origin)
+  }
+
+  // An unknown pin refuses the save; an unchanged draft sends nothing. A
+  // draft back at the pinned value cancels the unsent edit the form showed
+  // (fieldWriteRevision); otherwise the draft replaces it.
   function Saved(s: State, v: Val): State requires Wf(s) && s.form.Some? {
     var f := s.form.value;
     if f.pin.None? || v == f.shown then s.(form := None)
-    else Created(s, v, f.pin.value.revision, f.origin).(form := None)
+    else
+      var q := Settled(s, f);
+      if v == q.0.value && s.op.Some? then s.(op := None, form := None)
+      else Created(s, v, q.0.revision, q.1).(form := None)
   }
 
   function Apply1(m: Model, s: State, e: Event): State requires Enabled(m, s, e) {
@@ -248,7 +269,7 @@ module Sequence {
     case ReadEditBase(r, stored) => {}
     case Open => {
       var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
-      var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+      var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some(IdTag(s.op.value.id))) else NoOwn;
       PinKinds(shown, s.editBase, own);
     }
     case Save(v) => {}
@@ -341,7 +362,7 @@ module Sequence {
       (f.pin.Some? && f.tag != MaxWrite ==> f.origin == f.pin.value.value)
   {
     var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
-    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some(IdTag(s.op.value.id))) else NoOwn;
     PinShowsTheForm(shown, s.editBase, own);
   }
 
@@ -418,7 +439,7 @@ module Sequence {
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M0, ss, es, Deliver);
-    assert Last(ss).editBase == Ok(SpacedB, 1, None, Some("ack"));
+    assert Last(ss).editBase == Ok(SpacedB, 1, None, Some("0"));
   }
 
   // M0, S3 by the clock (#1473): one sender, a backward clock step.
@@ -468,7 +489,7 @@ module Sequence {
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M0, ss, es, Deliver);
-    assert Last(ss).cache == Some(Cached(B, 0, 1)) && Last(ss).editBase == Ok(B, 1, None, Some("ack"));
+    assert Last(ss).cache == Some(Cached(B, 0, 1)) && Last(ss).editBase == Ok(B, 1, None, Some("0"));
     ss, es := Push(M0, ss, es, Open);
     assert Last(ss).form == Some(Form(B, Some(Base(B, 1, None, None, None)), ReadPair, B));
     ss, es := Push(M0, ss, es, Save(C));
@@ -523,6 +544,53 @@ module Sequence {
     assert Last(ss).history == [A, B];
     ss, es := Push(M1, ss, es, Save(B));
     assert Last(ss).op == Some(Op(0, B, 0, 4, 1, A));
+    ss, es := Push(M1, ss, es, Send);
+  }
+
+  // Saving the pinned value from a form opened on an unsent edit cancels it.
+  lemma CancelLeavesNothingToSend() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Save(A) && ss[|es| - 1].op.Some? && ss[|es|].op.None? && ss[|es|].history == [A]
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, Save(B));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
+    ss, es := Push(M1, ss, es, Open);
+    assert IdTag(0) == "0";
+    assert Last(ss).form == Some(Form(B, Some(Base(A, 0, Some(B), Some("0"), None)), WriteBase, A));
+    ss, es := Push(M1, ss, es, Save(A));
+  }
+
+  // A form opened on an unsent edit that then synced saves from that edit's
+  // ACK, not from the base it replaced.
+  lemma FollowUpSaveAfterAck() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Send && ss[|es|].history == [A, B, C]
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, Save(B));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
+    ss, es := Push(M1, ss, es, Open);
+    assert IdTag(0) == "0";
+    assert Last(ss).form == Some(Form(B, Some(Base(A, 0, Some(B), Some("0"), None)), WriteBase, A));
+    ss, es := Push(M1, ss, es, Send);
+    assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
+    ss, es := Push(M1, ss, es, Deliver);
+    assert Last(ss).editBase == Ok(B, 1, None, Some("0")) && Last(ss).op.None?;
+    ss, es := Push(M1, ss, es, Save(C));
+    assert Last(ss).op == Some(Op(1, C, 1, 7, 1, B));
     ss, es := Push(M1, ss, es, Send);
   }
 }

@@ -2,35 +2,20 @@
 /* Differential test (#1472): the Dafny model, compiled to JS at test time,
  * against the shipped frontend/js/sync-reconcile.js on generated inputs.
  *
- * Usage: node dafny_differential.cjs <generated reconcile.js> <node_modules prefix>
+ * Usage: node dafny_differential.cjs <generated model.js> <node_modules prefix>
  *
  * The conversions below are trusted boundary code: they map a JS value to the
  * model's input type, and production output to the model's output type. Tags
  * are dropped from the model output; nothing is read back from production
  * except its plain return value. */
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const { loader } = require('./model_loader.cjs');
 
 const [generatedPath, prefix] = process.argv.slice(2);
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'prks-difftest-'));
-process.on('exit', () => fs.rmSync(work, { recursive: true, force: true }));
-fs.symlinkSync(path.resolve(prefix), path.join(work, 'node_modules'), 'dir');
-function load(name, source) {
-    const file = path.join(work, name);
-    fs.writeFileSync(file, source);
-    return require(file);
-}
-const fc = load('fc.cjs', "module.exports = require('fast-check');\n");
-const BigNumber = load('bignumber.cjs', "module.exports = require('bignumber.js');\n");
-
-const { _dafny, Reconcile: D } = load('model.cjs',
-    fs.readFileSync(generatedPath, 'utf8') + '\nmodule.exports = { _dafny, Reconcile };\n');
+const loaded = loader(generatedPath, prefix);
+const { fc, BigNumber, _dafny, load, classicSource } = loaded;
+const D = loaded.Reconcile;
 const M = D.__default;
-
-const root = path.resolve(__dirname, '..', '..');
-const classicSource = fs.readFileSync(path.join(root, 'frontend/js/sync-reconcile.js'), 'utf8');
-let classic = load('classic.cjs', classicSource);
+let classic = loaded.classic;
 
 const RUNS = Number.parseInt(process.env.PRKS_FC_RUNS || '', 10) || 5000;
 const SEED = Number.parseInt(process.env.PRKS_FC_SEED || '', 10);
@@ -123,7 +108,7 @@ const write = fc.record({ value: text, baseRevision: anyRevision, ackRevision: f
 
 /* ---- branch labels: the model's case split, from the model's inputs ---- */
 const FLOOR = 20;
-const MIN_RUNS = 1000;
+const MIN_RUNS = 5000;
 const ACK_TIME = ['time:before', 'time:equal', 'time:after', 'time:missing'];
 function timing(e) {
     const o = instant(e.observedAt);
@@ -155,7 +140,11 @@ function pinLabel(f) {
     const shown = f.shown == null ? '' : String(f.shown);
     const tag = M.PinField(str(shown), entry(f.read), own(f.own))[1];
     const name = TAGS.find(n => _dafny.areEqual(tag, D.Tag['create_' + n]()));
-    return name === 'Unknown' && !isBase(f.read) ? 'Unknown:broken' : name;
+    if (name !== 'Unknown') return name;
+    if (!isBase(f.read)) return 'Unknown:broken';
+    if (f.own === undefined) return 'Unknown:read-differs';
+    if (!isBase(f.own) || f.own.value !== shown) return 'Unknown:own-differs';
+    return 'Unknown:revision-differs';
 }
 function newerLabel(h, r) {
     if (!isBase(h) || r === null) return 'broken';
@@ -179,7 +168,7 @@ const checks = [
         branches: ['invalid-ack', 'held:invalid', 'held:superseded', 'held:apply', 'agrees', ...ACK_TIME],
         agree: e => same(outcome(() => classic.decideAck(e)), M.DecideAck(evidence(e))) },
     { name: 'pinEditBase (per field)', arbs: [pinField], label: pinLabel,
-        branches: [...TAGS, 'Unknown:broken'],
+        branches: ['ReadPair', 'MaxRead', 'MaxWrite', 'WriteBase', 'Unknown:broken', 'Unknown:read-differs', 'Unknown:own-differs', 'Unknown:revision-differs'],
         agree: f => {
             const shown = f.shown == null ? '' : String(f.shown);
             const got = classic.pinEditBase({ x: f.shown }, { x: f.read }, f.own === undefined ? undefined : { x: f.own });
@@ -221,7 +210,7 @@ if (!fc.check(counted(checks[0], new Map()), PARAMS).failed) {
     console.log('FAIL control: a <= mutant of sync-reconcile.js passed the planAck check');
     process.exit(1);
 }
-classic = require(path.join(work, 'classic.cjs'));
+classic = loaded.reloadClassic();
 const narrow = new Map();
 fc.check(counted(checks[0], narrow, [ackWith(validRevision)]), PARAMS);
 if (!coverage(checks[0], narrow).some(gap => gap.startsWith('invalid-ack '))) {
