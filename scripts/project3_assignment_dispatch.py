@@ -610,8 +610,8 @@ class GitHubRateBudget:
             raise DispatchError("the full-plan deadline passed; no new batch starts")
 
     def wait(self, cost: int) -> None:
-        self._before_deadline()
         _, remaining, reset = self._core()
+        self._before_deadline()
         if remaining >= cost:
             return
         if reset + 5 >= self._deadline:

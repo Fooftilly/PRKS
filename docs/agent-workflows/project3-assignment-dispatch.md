@@ -217,7 +217,7 @@ The job reads it before each batch. Every later apply of that manifest, by full 
 | Actions-token rate | 1,000 requests per hour, shared by every workflow in the repository |
 | Job time | 360 minutes. A full plan stops at a batch boundary after 300 minutes |
 
-Before the first claim, the apply reads `GET /rate_limit`, which does not count against the limit. It refuses a plan whose estimate does not fit before the 300-minute deadline. No batch starts after that deadline. Before each batch it waits for the next reset when fewer requests remain than the batch needs. A 300-row apply can take more than three hours when other workflows use the same token budget. Project reads use `PROJECT_SYNC_TOKEN` (about 3 GraphQL queries and 1 mutation per changed row). The claim history grows by 4 statuses per batch; at 200 pages the claim reader refuses to prove non-replay.
+Before the first claim, the apply reads `GET /rate_limit`, which does not count against the limit. It refuses a plan whose estimate does not fit before the 300-minute deadline. No batch starts after that deadline. Before each batch it waits for the next reset when fewer requests remain than the batch needs. A 300-row apply can take more than three hours when other workflows use the same token budget. Project reads use `PROJECT_SYNC_TOKEN` (about 4 GraphQL queries and 1 mutation per changed row). The claim history grows by 4 statuses per batch; at 200 pages the claim reader refuses to prove non-replay.
 
 ## Safety and audit
 
