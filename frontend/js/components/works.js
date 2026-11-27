@@ -2386,6 +2386,12 @@ async function copyBibTeX(workId, btn) {
         restore();
     }
     try {
+        /* PRKS builds BibTeX from the saved export profile, so toggles still being saved are sent first. */
+        const citations = window.prksCitations;
+        if (citations && typeof citations.settleBibtexProfile === 'function' &&
+            !await citations.settleBibtexProfile()) {
+            throw Object.assign(new Error('bibtex profile unsaved'), { code: 'bibtex_profile_unsaved' });
+        }
         const res = await prksRequest('/api/bibtex/' + encodeURIComponent(workId));
         if (!res.ok) throw new Error('bibtex fetch failed');
         const text = await res.text();
@@ -2405,7 +2411,8 @@ async function copyBibTeX(workId, btn) {
         snapshotIfNeeded();
         btn.innerHTML =
             (typeof prksIcon === 'function' ? prksIcon('x', { size: 'sm' }) : '') +
-            (e && e.code === 'bibtex_empty' ? ' No BibTeX available — refresh' : ' Copy failed');
+            (e && e.code === 'bibtex_empty' ? ' No BibTeX available — refresh'
+                : e && e.code === 'bibtex_profile_unsaved' ? ' Export settings not saved' : ' Copy failed');
         if (typeof prksRefreshIcons === 'function') prksRefreshIcons(btn);
         btn.style.color = '#ef4444';
         btn.style.borderColor = '#ef4444';

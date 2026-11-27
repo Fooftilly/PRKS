@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CitationExportError, exportCitations } from '../citations/export'
+import { citationsBridge } from '../citations/session'
 import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from '../citations/styles'
 import { settingsActiveCategory } from './navigation'
 import SettingsExport from './SettingsExport.vue'
@@ -269,6 +270,23 @@ describe('SettingsExport BibTeX toggles', () => {
     expect(patches).toEqual([{ doi: false }])
     expect(copied).toEqual(['@book{w1,\n}'])
     wrapper.unmount()
+  })
+
+  it('makes the Work Details copy wait for a toggle saved as Settings closes', async () => {
+    const held = holdPatches()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    wrapper.unmount()
+    let settled: boolean | null = null
+    void citationsBridge().settleBibtexProfile().then((ok) => { settled = ok })
+    await flushPromises()
+    expect(held).toHaveLength(1)
+    expect(settled).toBeNull()
+    held[0]()
+    await flushPromises()
+    expect(settled).toBe(true)
+    expect(server.doi).toBe(false)
   })
 
   it('refuses a BibTeX export when a pending toggle patch fails', async () => {
