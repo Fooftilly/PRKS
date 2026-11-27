@@ -87,6 +87,18 @@
     "SecondSenderViolatesNoRegressionM0": {
       "file": "Sequence.dfy",
       "sha256": "3781d27fa641ffebaa2f9cf046f8543239d49b7e6358d795604648c2c3ca1112"
+    },
+    "OpenPinsTheForm": {
+      "file": "Sequence.dfy",
+      "sha256": "f2bc9f270341a4180e31db1ce9d1ee63f95af7fadb4ebd0c4a9f828d3bc1ce4c"
+    },
+    "PinnedBaseRefusesAnInterveningWrite": {
+      "file": "Sequence.dfy",
+      "sha256": "1d2f3097dda3ba83477eae19edbb599daa29ce76837efbae04a41d6cf14e359e"
+    },
+    "ConvergentStaleWriteIsAcknowledged": {
+      "file": "Sequence.dfy",
+      "sha256": "9abed9b047b8f60668fc237ad78ab36b3f7949723fad18f504e463e05b2f8128"
     }
   },
   "witnesses": {
@@ -94,6 +106,7 @@
     "TraceInv": "NoRegressionM1Witness",
     "Intent": "NoRegressionM1Witness",
     "ProvenanceM1": "NoRegressionM1Witness",
-    "NoRegressionM1": "NoRegressionM1Witness"
+    "NoRegressionM1": "NoRegressionM1Witness",
+    "OpenPinsTheForm": "PinnedBaseRefusesAnInterveningWrite"
   }
 }

@@ -1,5 +1,10 @@
 // Sequence model of one field on one device (#1472, section S).
 //
+// The field joins two sync families. The cache and its projection follow
+// reconcileFolderField. The edit base and the Edit form's pin follow Playlist
+// (patchEditBase, pinPlaylistEditBase); Folder keeps no edit base. Playlist's
+// cache path is not modelled. Both handlers use the server decision below.
+//
 // M0 is current behaviour: the wall clock can step back (#1473), a second
 // sender can reconcile a stored ACK late (#1072), and edit bases are stamped
 // with the client payload. M1 is the corrected model: no clock step (O1), one
@@ -7,8 +12,8 @@
 // use M0 only.
 //
 // The server is an oracle: it stores Canonical(value), applies a write only on
-// its current revision, and answers a write that changes nothing with a no-op
-// ACK at the current revision. A read holds a real server state. The cache
+// its current revision, and acknowledges a write whose value it already holds,
+// at any base, with a no-op ACK at the current revision. A read holds a real server state. The cache
 // write after a read may fail. Each event advances the clock by one, except
 // ClockStep. Fields are independent in production, so one field is modelled;
 // a list row shares its snapshot's read time, which is the case modelled here.
@@ -31,6 +36,10 @@ module Sequence {
 
   datatype Cached = Cached(value: Val, observed: int, rev: nat)
 
+  // An open Edit form: the value it shows and the base PinField pinned.
+  // origin: the server value at the pinned revision.
+  datatype Form = Form(shown: Val, pin: Option<Base<Val>>, tag: Tag, origin: Val)
+
   datatype State = State(
     history: seq<Val>,
     now: int,
@@ -38,6 +47,7 @@ module Sequence {
     proj: Option<nat>,
     editBase: Entry<Val>,
     op: Option<Op>,
+    form: Option<Form>,
     ops: map<nat, Op>,
     ledger: map<nat, nat>,
     nextId: nat)
@@ -46,8 +56,8 @@ module Sequence {
     | Read(r: nat, stored: bool)
     | ReadProjection(r: nat)
     | ReadEditBase(r: nat, stored: bool)
+    | Open
     | Save(v: Val)
-    | Resave(v: Val)
     | Send
     | OtherWrite(v: Val)
     | Deliver
@@ -56,7 +66,7 @@ module Sequence {
     | Reload
 
   function Init(): State {
-    State([A], 0, None, None, Broken, None, map[], map[], 0)
+    State([A], 0, None, None, Broken, None, None, map[], map[], 0)
   }
 
   predicate Wf(s: State) { |s.history| >= 1 }
@@ -69,8 +79,8 @@ module Sequence {
     case Read(r, _) => r <= Cur(s)
     case ReadProjection(r) => r <= Cur(s)
     case ReadEditBase(r, _) => r <= Cur(s)
-    case Save(_) => s.op.None? && s.editBase.Ok? && s.editBase.revision <= Cur(s)
-    case Resave(_) => s.op.Some? && s.op.value.id !in s.ledger
+    case Open => s.op.Some? || s.cache.Some?
+    case Save(_) => s.form.Some? && (s.op.None? || s.op.value.id !in s.ledger)
     case Send => s.op.Some? && s.op.value.id !in s.ledger && s.op.value.base <= Cur(s)
     case OtherWrite(_) => true
     case Deliver => s.op.Some? && s.op.value.id in s.ledger && s.ledger[s.op.value.id] <= Cur(s)
@@ -97,7 +107,8 @@ module Sequence {
   }
 
   // reconcileFolderField: the projection decides first, then the cached value
-  // under planAck (patchProvenEntity keeps the old read time), then the edit base.
+  // under planAck (patchProvenEntity keeps the old read time). Then the edit
+  // base as patchEditBase moves it.
   function Reconciled(m: Model, s: State, o: Op, a: nat): State {
     if s.proj.Some? && a < s.proj.value then s
     else s.(
@@ -113,9 +124,26 @@ module Sequence {
 
   function Received(s: State): State requires Wf(s) && s.op.Some? {
     var o := s.op.value;
-    if o.base != Cur(s) then s.(op := None)
-    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])
+    if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])
+    else if o.base != Cur(s) then s.(op := None)
     else s.(history := s.history + [Canonical(o.value)], ledger := s.ledger[o.id := Cur(s) + 1])
+  }
+
+  // The form shows this device's unsent edit, else the cached value.
+  function Opened(s: State): State requires s.op.Some? || s.cache.Some? {
+    var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
+    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+    var p := PinField(shown, s.editBase, own);
+    var origin := if p.1 == MaxWrite && s.op.Some? then s.op.value.origin
+      else if p.0.Some? then p.0.value.value else shown;
+    s.(form := Some(Form(shown, p.0, p.1, origin)))
+  }
+
+  // An unknown pin refuses the save; an unchanged draft sends nothing.
+  function Saved(s: State, v: Val): State requires Wf(s) && s.form.Some? {
+    var f := s.form.value;
+    if f.pin.None? || v == f.shown then s.(form := None)
+    else Created(s, v, f.pin.value.revision, f.origin).(form := None)
   }
 
   function Apply1(m: Model, s: State, e: Event): State requires Enabled(m, s, e) {
@@ -124,8 +152,8 @@ module Sequence {
     case ReadProjection(r) => s.(proj := Some(r))
     case ReadEditBase(r, stored) =>
       if stored then s.(editBase := NewerEditBase(s.editBase, Ok(s.history[r], r, None, None))) else s
-    case Save(v) => Created(s, v, s.editBase.revision, s.editBase.value)
-    case Resave(v) => Created(s, v, s.op.value.base, s.op.value.origin)
+    case Open => Opened(s)
+    case Save(v) => Saved(s, v)
     case Send => Received(s)
     case OtherWrite(v) => s.(history := s.history + [Canonical(v)])
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
@@ -160,6 +188,12 @@ module Sequence {
     (m == M1 && s.cache.Some? && s.cache.value.observed < o.created ==> s.cache.value.rev <= o.curAtCreate)
   }
 
+  predicate FormInv(s: State) {
+    s.form.Some? && s.form.value.pin.Some? ==>
+      s.form.value.pin.value.revision < |s.history| &&
+      Canonical(s.form.value.origin) == s.history[s.form.value.pin.value.revision]
+  }
+
   predicate Inv(m: Model, s: State) {
     Wf(s) &&
     (forall r :: 0 <= r < |s.history| ==> Canonical(s.history[r]) == s.history[r]) &&
@@ -168,6 +202,7 @@ module Sequence {
     (m == M1 ==> Provenance(s)) &&
     (forall id :: id in s.ledger ==> id in s.ops && s.ledger[id] < |s.history| && s.history[s.ledger[id]] == Canonical(s.ops[id].value)) &&
     (forall id :: id in s.ops ==> id < s.nextId) &&
+    FormInv(s) &&
     (s.op.Some? ==> OpInv(m, s, s.op.value))
   }
 
@@ -211,8 +246,12 @@ module Sequence {
     case Read(r, stored) => {}
     case ReadProjection(r) => {}
     case ReadEditBase(r, stored) => {}
+    case Open => {
+      var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
+      var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+      PinKinds(shown, s.editBase, own);
+    }
     case Save(v) => {}
-    case Resave(v) => {}
     case Send => {
       var o := s.op.value;
       if o.base == Cur(s) && Canonical(o.value) != s.history[Cur(s)] {
@@ -287,11 +326,24 @@ module Sequence {
   }
 
   // S1 (both models): when the server applies a write, the value it replaces
-  // is, canonically, the one the user saw when the intent was formed.
+  // is, canonically, the origin pinned when the form opened.
   lemma Intent(m: Model, s: State)
     requires Inv(m, s) && s.op.Some? && s.op.value.base == Cur(s)
     ensures Canonical(s.op.value.origin) == s.history[Cur(s)]
   {}
+
+  // S1: the pin shows the form's value, or carries it as this device's
+  // unsent edit. Except for MaxWrite, the origin is the pinned pair's value.
+  lemma OpenPinsTheForm(m: Model, s: State)
+    requires Inv(m, s) && Enabled(m, s, Open)
+    ensures var f := Step(m, s, Open).form.value;
+      (f.pin.Some? ==> (f.pin.value.value == f.shown || f.pin.value.pending == Some(f.shown))) &&
+      (f.pin.Some? && f.tag != MaxWrite ==> f.origin == f.pin.value.value)
+  {
+    var shown := if s.op.Some? then s.op.value.value else s.cache.value.value;
+    var own := if s.op.Some? then Own(s.op.value.value, s.op.value.base, Some("own")) else NoOwn;
+    PinShowsTheForm(shown, s.editBase, own);
+  }
 
   // S2 (M1): every edit base is a pair the server stored.
   lemma ProvenanceM1(s: State)
@@ -338,8 +390,10 @@ module Sequence {
     assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M1, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
     ss, es := Push(M1, ss, es, Save(B));
-    assert Last(ss).op == Some(Op(0, B, 0, 2, 0, A));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
     ss, es := Push(M1, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M1, ss, es, Deliver);
@@ -353,10 +407,14 @@ module Sequence {
     ensures !Provenance(ss[|es|])
   {
     ss, es := Start(M0);
+    ss, es := Push(M0, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M0, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
     ss, es := Push(M0, ss, es, Save(SpacedB));
-    assert Last(ss).op == Some(Op(0, SpacedB, 0, 1, 0, A));
+    assert Last(ss).op == Some(Op(0, SpacedB, 0, 3, 0, A));
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M0, ss, es, Deliver);
@@ -371,10 +429,14 @@ module Sequence {
       !NoRegression(s, ss[|es|], s.ledger[s.op.value.id])
   {
     ss, es := Start(M0);
+    ss, es := Push(M0, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M0, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
     ss, es := Push(M0, ss, es, Save(B));
-    assert Last(ss).op == Some(Op(0, B, 0, 1, 0, A));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M0, ss, es, OtherWrite(C));
@@ -399,19 +461,66 @@ module Sequence {
     assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M0, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
     ss, es := Push(M0, ss, es, Save(B));
-    assert Last(ss).op == Some(Op(0, B, 0, 2, 0, A));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
     ss, es := Push(M0, ss, es, Deliver);
     assert Last(ss).cache == Some(Cached(B, 0, 1)) && Last(ss).editBase == Ok(B, 1, None, Some("ack"));
+    ss, es := Push(M0, ss, es, Open);
+    assert Last(ss).form == Some(Form(B, Some(Base(B, 1, None, None, None)), ReadPair, B));
     ss, es := Push(M0, ss, es, Save(C));
-    assert Last(ss).op == Some(Op(1, C, 1, 5, 1, B));
+    assert Last(ss).op == Some(Op(1, C, 1, 7, 1, B));
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B, C] && Last(ss).ledger == map[0 := 1, 1 := 2];
     ss, es := Push(M0, ss, es, Deliver);
     assert Last(ss).cache == Some(Cached(C, 0, 2));
     ss, es := Push(M0, ss, es, Replay(0));
     assert Last(ss).cache == Some(Cached(B, 0, 1));
+  }
+
+  // S1: a read that lands after Edit opened does not move the pin. The save
+  // stays measured against what the form showed, so the server refuses it.
+  lemma PinnedBaseRefusesAnInterveningWrite() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Send && ss[|es| - 1].op == Some(Op(0, C, 0, 5, 1, A))
+    ensures ss[|es|].history == [A, B] && ss[|es|].op.None?
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, OtherWrite(B));
+    assert Last(ss).history == [A, B];
+    ss, es := Push(M1, ss, es, ReadEditBase(1, true));
+    assert Last(ss).editBase == Ok(B, 1, None, None);
+    ss, es := Push(M1, ss, es, Save(C));
+    assert Last(ss).op == Some(Op(0, C, 0, 5, 1, A));
+    ss, es := Push(M1, ss, es, Send);
+  }
+
+  // The server acknowledges a stale write whose value it already holds.
+  lemma ConvergentStaleWriteIsAcknowledged() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Send && ss[|es| - 1].op == Some(Op(0, B, 0, 4, 1, A))
+    ensures ss[|es|].history == [A, B] && ss[|es|].ledger == map[0 := 1]
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, OtherWrite(B));
+    assert Last(ss).history == [A, B];
+    ss, es := Push(M1, ss, es, Save(B));
+    assert Last(ss).op == Some(Op(0, B, 0, 4, 1, A));
+    ss, es := Push(M1, ss, es, Send);
   }
 }

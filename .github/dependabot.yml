@@ -72,6 +72,16 @@ updates:
       - dependency-name: "codemirror"
         update-types: ["version-update:semver-major"]
 
+  # Dafny pilot differential test (fast-check, the Dafny JS runtime's bignumber.js).
+  - package-ecosystem: "npm"
+    directory: "/scripts/formal/difftest"
+    schedule:
+      interval: "weekly"
+    multi-ecosystem-group: "weekly-dependencies"
+    patterns: ["*"]
+    cooldown:
+      default-days: 7
+
   # Maintainer-only Vue 3 + Vite application build. Not a PRKS runtime dependency.
   - package-ecosystem: "npm"
     directory: "/frontend-app"
