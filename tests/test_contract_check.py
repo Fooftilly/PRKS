@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from backend.api import ROUTES
 from backend.web.http import Request, Response
+from backend.web.routing import RouteTable
 from tests.contract_check import ContractCheck
 
 _JOBS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/diagnostics/jobs")
@@ -19,6 +20,7 @@ _HEAD_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/
 _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/openapi.json")
 _PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/processing-items/{item_id}/pdf")
 _STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
+_PROGRESS = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/backups/progress")
 _STORAGE_BODY = {"field": "value"}  # not read: the header checks run before the schema
 
 
@@ -136,6 +138,33 @@ class ContractCheckTests(unittest.TestCase):
         self.assertEqual(len(found), 2, self.check.violations)
         self.assertIn("required header Cache-Control missing", found[0])
         self.assertIn("header Cache-Control", found[1])
+
+    def test_a_malformed_integer_header_is_a_violation(self) -> None:
+        integer = {"headers": {"Content-Length": {"schema": {"type": "integer"}}}}
+        self.check._check_headers("x", integer, {"Content-Length": "--1"}.get)
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+
+    def test_a_backup_stream_must_be_sent_no_store(self) -> None:
+        ndjson = [("Content-Type", "application/x-ndjson")]
+        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson + [("Cache-Control", "no-store")]))
+        self.assertEqual(self.check.violations, [])
+        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson))
+        self.check.check(_PROGRESS, _request(), _streamed(200, ndjson + [("Cache-Control", "public, max-age=3600")]))
+        self.assertEqual(len(self.check.violations), 2, self.check.violations)
+
+    def test_the_restored_epoch_is_checked_on_the_answer_sent(self) -> None:
+        self.check.wrap(RouteTable(ROUTES))
+        restored = _json(200, {"status": "restored", "epoch": 7, "objects_held": 0, "warnings": []})
+        restore = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/backups/restore")
+        self.check.check(restore, _request(), restored)
+        self.assertEqual([v for v in self.check.violations if "header" in v], [],
+                         "the route's own answer has no epoch yet")
+        self.check.violations.clear()
+        self.check.check_sent("POST", "/api/backups/restore", 200, [("PRKS-Library-Epoch", "7")])
+        self.assertEqual(self.check.violations, [])
+        self.check.check_sent("POST", "/api/backups/restore", 200, [])
+        self.check.check_sent("POST", "/api/backups/restore", 200, [("PRKS-Library-Epoch", "07")])
+        self.assertEqual(len(self.check.violations), 2, self.check.violations)
 
 
 if __name__ == "__main__":
