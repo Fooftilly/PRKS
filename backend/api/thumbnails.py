@@ -343,5 +343,5 @@ ROUTES = (
          404: plain("No such Work, no managed PDF, or the page cannot be rendered.")},
         params=(Param("page", schema={"type": "string"},
                       description="1-based page; else the Work's thumbnail page, else 1. "
-                                  "Not a number: the default."),))),
+                                  "Not a number: the default. Past the last page: page 1."),))),
 )
