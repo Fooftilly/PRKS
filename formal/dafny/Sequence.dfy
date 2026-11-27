@@ -379,7 +379,7 @@ module Sequence {
   function Last(ss: seq<State>): State requires |ss| >= 1 { ss[|ss| - 1] }
 
   // Non-vacuity of NoRegressionM1: a reachable M1 Deliver that patches the cache.
-  lemma {:isolate_assertions} NoRegressionM1Witness() returns (ss: seq<State>, es: seq<Event>)
+  lemma NoRegressionM1Witness() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
     ensures var s := ss[|es| - 1];
       es[|es| - 1] == Deliver && Inv(M1, s) && Enabled(M1, s, Deliver) && s.cache.Some? &&
@@ -402,7 +402,7 @@ module Sequence {
   }
 
   // M0, S2: a client payload stamped at the ACK revision is not what the server stored.
-  lemma {:isolate_assertions} StampViolatesProvenanceM0() returns (ss: seq<State>, es: seq<Event>)
+  lemma StampViolatesProvenanceM0() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M0, ss, es) && NoClock(es) && NoReplay(es)
     ensures !Provenance(ss[|es|])
   {
@@ -422,7 +422,7 @@ module Sequence {
   }
 
   // M0, S3 by the clock (#1473): one sender, a backward clock step.
-  lemma {:isolate_assertions} ClockViolatesNoRegressionM0() returns (ss: seq<State>, es: seq<Event>)
+  lemma ClockViolatesNoRegressionM0() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M0, ss, es) && NoReplay(es) && |es| >= 1
     ensures var s := ss[|es| - 1];
       es[|es| - 1] == Deliver && s.op.Some? && s.op.value.id in s.ledger &&
@@ -485,7 +485,7 @@ module Sequence {
 
   // S1: a read that lands after Edit opened does not move the pin. The save
   // stays measured against what the form showed, so the server refuses it.
-  lemma {:isolate_assertions} PinnedBaseRefusesAnInterveningWrite() returns (ss: seq<State>, es: seq<Event>)
+  lemma PinnedBaseRefusesAnInterveningWrite() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
     ensures es[|es| - 1] == Send && ss[|es| - 1].op == Some(Op(0, C, 0, 5, 1, A))
     ensures ss[|es|].history == [A, B] && ss[|es|].op.None?
@@ -507,7 +507,7 @@ module Sequence {
   }
 
   // The server acknowledges a stale write whose value it already holds.
-  lemma {:isolate_assertions} ConvergentStaleWriteIsAcknowledged() returns (ss: seq<State>, es: seq<Event>)
+  lemma ConvergentStaleWriteIsAcknowledged() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
     ensures es[|es| - 1] == Send && ss[|es| - 1].op == Some(Op(0, B, 0, 4, 1, A))
     ensures ss[|es|].history == [A, B] && ss[|es|].ledger == map[0 := 1]
