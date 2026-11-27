@@ -1009,9 +1009,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -1047,9 +1048,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -1143,9 +1145,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -1173,9 +1176,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -2241,9 +2245,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -2279,9 +2284,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -2375,9 +2381,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -2405,9 +2412,10 @@
                 "required": true
               },
               "Cache-Control": {
-                "description": "`no-store, max-age=0, must-revalidate`.",
+                "description": "Always no-store.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
                 },
                 "required": true
               },
@@ -2809,7 +2817,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2830,7 +2839,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -2872,7 +2882,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -2893,7 +2904,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -3671,7 +3683,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -3702,7 +3715,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -4270,7 +4284,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -4288,7 +4303,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -4350,7 +4366,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -4368,7 +4385,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -4523,7 +4541,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             },
             "content": {
@@ -4541,7 +4560,8 @@
                 "description": "Opaque representation token for conditional GETs.",
                 "schema": {
                   "type": "string"
-                }
+                },
+                "required": true
               }
             }
           },
@@ -6186,18 +6206,9 @@
             "type": "integer"
           },
           "value": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Value"
+            "description": "The sync wire form: always text, empty when unset.",
+            "title": "Value",
+            "type": "string"
           }
         },
         "required": [

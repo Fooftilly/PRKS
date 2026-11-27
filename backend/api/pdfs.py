@@ -109,7 +109,7 @@ def managed_pdf(req: Request) -> Response:
 
 _LENGTH = Header("The bytes in this answer.", {"type": "integer", "minimum": 0}, required=True)
 _ACCEPT_RANGES = Header("Always `bytes`.", {"type": "string", "enum": ["bytes"]}, required=True)
-_NO_STORE_HEADER = Header("`no-store, max-age=0, must-revalidate`.", required=True)
+_NO_STORE_HEADER = Header("Always no-store.", {"type": "string", "const": _NO_STORE[0][1]}, required=True)
 #: The answers of :func:`pdf_response`, shared by every route that streams a PDF through it.
 PDF_RANGE_REPLIES: dict[int, Reply] = {
     200: ok(BINARY, "The whole file.", media_type=PDF, headers={

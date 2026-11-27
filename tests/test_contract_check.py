@@ -8,6 +8,7 @@ import unittest
 from typing import Any, cast
 
 from backend.api import ROUTES
+from backend.domain.works import metadata_rules as rules
 from backend.web.http import Request, Response
 from backend.web.routing import RouteTable
 from tests.contract_check import ContractCheck
@@ -20,6 +21,8 @@ _HEAD_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/
 _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/openapi.json")
 _PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/processing-items/{item_id}/pdf")
 _STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
+_METADATA_STATE = next(r for r in ROUTES if r.method == "GET"
+                       and r.pattern == "/api/works/{work_id}/metadata-state")
 _PROGRESS = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/backups/progress")
 _STORAGE_BODY = {"field": "value"}  # not read: the header checks run before the schema
 
@@ -169,6 +172,37 @@ class ContractCheckTests(unittest.TestCase):
         self.check.check_sent("POST", "/api/backups/restore", 200, [])
         self.check.check_sent("POST", "/api/backups/restore", 200, [("PRKS-Library-Epoch", "07")])
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
+
+    def test_a_pdf_must_be_sent_no_store(self) -> None:
+        cacheable = [("Accept-Ranges", "bytes"), ("Cache-Control", "public, max-age=3600"),
+                     ("Content-Length", "10"), ("Content-Type", "application/pdf")]
+        answer = Response(200, cacheable, b"")
+        answer.stream = cast(Any, object())
+        self.check.check(_PDF, _request(), answer)
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+        self.assertIn("header Cache-Control", self.check.violations[0])
+
+    def test_a_revalidated_read_must_send_its_etag(self) -> None:
+        self.check.check(_METADATA_STATE, _request(), Response(304, [], b""))
+        self.assertEqual(self.check.violations, [f"GET {_METADATA_STATE.pattern} -> 304: "
+                                                 "required header ETag missing"])
+
+    def test_a_metadata_state_value_is_its_wire_text(self) -> None:
+        def state(value: Any) -> Response:
+            fields: dict[str, Any] = {field: {"revision": 0} if field in rules.BYTE_LIMITED_FIELDS
+                                      else {"revision": 0, "value": ""} for field in rules.SYNCED_FIELDS}
+            fields["thumb_page"]["value"] = value
+            answer = _json(200, {"work_id": "W1", "fields": fields})
+            answer.headers.append(("ETag", '"e"'))
+            return answer
+
+        for value in ("", "3"):
+            self.check.check(_METADATA_STATE, _request(), state(value))
+        self.assertEqual(self.check.violations, [])
+        for value in (3, None):
+            self.check.check(_METADATA_STATE, _request(), state(value))
+        self.assertEqual(len(self.check.violations), 2, self.check.violations)
+        self.assertIn("fields/thumb_page/value", self.check.violations[0])
 
 
 if __name__ == "__main__":

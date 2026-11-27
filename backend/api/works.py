@@ -555,7 +555,7 @@ def linearize_existing(req: Request) -> Response:
 
 
 _TAG = "works"
-_ETAG = Header("Opaque representation token for conditional GETs.")
+_ETAG = Header("Opaque representation token for conditional GETs.", required=True)
 _NOT_MODIFIED = Reply("Not modified: If-None-Match matched the current ETag. Bodyless.", headers={"ETag": _ETAG})
 _MISSING = error("No Work with that id in this Library.")
 _MISSING_TEXT = plain("No Work with that id in this Library.")

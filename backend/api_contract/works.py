@@ -239,7 +239,7 @@ class MetadataFieldValue(BaseModel):
     model_config = _FORBID
 
     revision: int
-    value: Optional[Union[str, int]]
+    value: str = Field(description="The sync wire form: always text, empty when unset.")
 
 
 class WorkMetadataFields(BaseModel):
