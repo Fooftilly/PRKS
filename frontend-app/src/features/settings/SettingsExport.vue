@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
-import { setBibtexProfileFlush, trackBibtexProfileWrite } from '../citations/bibtex-profile'
+import { setBibtexProfileFlush, setBibtexProfileUnreconciled, trackBibtexProfileWrite } from '../citations/bibtex-profile'
 import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
 import ImportedCitationStyles from './ImportedCitationStyles.vue'
 import { bibtexExportSummary } from './bibtex-summary'
@@ -125,6 +125,7 @@ function send(patch: Record<string, boolean>): Promise<unknown> {
       return true
     }, (error: unknown) => {
       failed = true
+      setBibtexProfileUnreconciled(true)
       bibtexStatus.value = 'The BibTeX export settings could not be saved. Try again when PRKS is reachable.'
       console.warn(error)
       return false
@@ -144,6 +145,7 @@ function send(patch: Record<string, boolean>): Promise<unknown> {
     }
     if (failed) {
       failed = false
+      setBibtexProfileUnreconciled(false)
       if (confirmed) {
         window.prksSetBibtexExportFieldsCache?.(confirmed)
         applyMap(confirmed)

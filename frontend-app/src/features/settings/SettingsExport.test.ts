@@ -325,6 +325,37 @@ describe('SettingsExport BibTeX toggles', () => {
     wrapper.unmount()
   })
 
+  it('refuses a BibTeX export started after a failure while later toggles still save', async () => {
+    const seen = serveCitations()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const calls: Array<{ resolve: () => void; reject: () => void }> = []
+    win.prksPatchAppSettings = vi.fn(() => new Promise((resolve, reject) => {
+      calls.push({ resolve: () => resolve({}), reject: () => reject(new Error('offline')) })
+    })) as StyleWindow['prksPatchAppSettings']
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    calls[0].reject()
+    await flushPromises()
+    expect(calls).toHaveLength(2) // URL was refused; DOI is still being saved
+    expect(isOn(wrapper, 'url')).toBe(false) // shown until the queue drains
+    wrapper.unmount()
+    const exported = exportCitations(['W-1'], 'bibtex')
+    await flushPromises()
+    calls[1].resolve()
+    await expect(exported).rejects.toBeInstanceOf(CitationExportError)
+    expect(seen.posts).toBe(0)
+    vi.stubGlobal('prksCopyTextToClipboard', async () => undefined)
+    await exportCitations(['W-1'], 'bibtex') // Settings has rolled URL back; PRKS's profile is what it shows
+    expect(seen.posts).toBe(1)
+    warn.mockRestore()
+  })
+
   it('keeps the BibTeX alert region mounted while it is empty', async () => {
     const wrapper = mount(SettingsExport)
     await flushPromises()
