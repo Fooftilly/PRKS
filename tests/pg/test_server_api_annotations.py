@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
+from backend.api import annotations as annotations_api
 from backend.domain.annotations import annotation_commands
 from tests.acting_context import current_context
 from tests.narrowing import require
@@ -293,6 +294,7 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
                 self.refused(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=claim), 409)
         self.ok(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=float(tip)))
         self.assertFalse(self.materialization(work_id)["stale"])
+        self.assertEqual([annotations_api._whole(v) for v in (float(2 ** 53), float(2 ** 53 + 2))], [2 ** 53, None])
 
     def test_a_claim_overtaken_by_another_save_is_refused_and_the_current_one_wins(self) -> None:
         work_id = self.pdf_work("Legacy Race Claim")
