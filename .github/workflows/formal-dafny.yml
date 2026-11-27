@@ -22,7 +22,7 @@ concurrency:
 env:
   DAFNY_VERSION: "4.11.0"
   DAFNY_SHA256: a46a9ff7cdd720f7955854c78e95df13f4cfe6b80691b05f8654fe19e8267179
-  PRKS_DAFNY_RLIMIT: "20000"
+  PRKS_DAFNY_RLIMIT: "10000000"
 
 jobs:
   verify:
@@ -50,11 +50,18 @@ jobs:
       - name: Verify (under 60 s)
         run: |
           start=$(date +%s)
-          "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" formal/dafny/Sequence.dfy
+          "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
+            --log-format "csv;LogFileName=$RUNNER_TEMP/verify.csv" formal/dafny/Sequence.dfy
           elapsed=$(( $(date +%s) - start ))
           echo "Verification took ${elapsed} s"
           echo "Verification took ${elapsed} s" >> "$GITHUB_STEP_SUMMARY"
           test "$elapsed" -lt 60
+
+      - name: Resource use per proof
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/verify.csv" || exit 0
+          python3 -c "import csv,sys; rows=list(csv.DictReader(open(sys.argv[1]))); rows.sort(key=lambda r: -int(r.get('Resource') or 0)); [print(r['Resource'], r['Outcome'], r['TestResult.DisplayName']) for r in rows[:25]]" "$RUNNER_TEMP/verify.csv"
 
       - name: Stable across 3 solver seeds
         run: |

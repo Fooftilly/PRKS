@@ -112,7 +112,7 @@ module Reconcile {
   }
 
   // B2: every pin is one of the four tagged kinds, and nothing else.
-  lemma PinKinds<V(==)>(shown: V, entry: Entry<V>, own: Own<V>)
+  lemma PinKinds<V>(shown: V, entry: Entry<V>, own: Own<V>)
     ensures var (pin, tag) := PinField(shown, entry, own);
       (pin.None? <==> tag == Unknown) &&
       (tag == ReadPair ==> entry.Ok? && own.NoOwn? && pin == Some(Base(shown, entry.revision, None, None, None))) &&
@@ -125,14 +125,14 @@ module Reconcile {
   {}
 
   // A read-tagged pin is a pair the read held. A MaxWrite pin is not.
-  lemma ReadTaggedPinsAreReadPairs<V(==)>(shown: V, entry: Entry<V>, own: Own<V>)
+  lemma ReadTaggedPinsAreReadPairs<V>(shown: V, entry: Entry<V>, own: Own<V>)
     ensures var (pin, tag) := PinField(shown, entry, own);
       (tag == ReadPair || tag == MaxRead) ==>
         entry.Ok? && pin.Some? && pin.value.value == entry.value && pin.value.revision == entry.revision
   {}
 
   // A pin shows the form's value, or carries it as this device's pending edit.
-  lemma PinShowsTheForm<V(==)>(shown: V, entry: Entry<V>, own: Own<V>)
+  lemma PinShowsTheForm<V>(shown: V, entry: Entry<V>, own: Own<V>)
     ensures var (pin, tag) := PinField(shown, entry, own);
       pin.Some? ==> pin.value.value == shown || pin.value.pending == Some(shown)
   {}
@@ -152,7 +152,7 @@ module Reconcile {
     set f | f in PinnedChanges(shown, draft) && !(f in pinned && pinned[f].Some?)
   }
 
-  lemma PinnedEditsSendExactlyTheChangedFields<V(==)>(shown: map<string, V>, draft: map<string, V>, pinned: map<string, Option<Base<V>>>)
+  lemma PinnedEditsSendExactlyTheChangedFields<V>(shown: map<string, V>, draft: map<string, V>, pinned: map<string, Option<Base<V>>>)
     ensures forall f :: f in PinnedChanges(shown, draft) <==> (f in shown && f in draft && draft[f] != shown[f])
     ensures forall f :: f in PinnedChanges(shown, draft) ==> f in PinnedBases(shown, pinned) || f in PinnedUnknown(shown, draft, pinned)
     ensures forall f :: f in PinnedUnknown(shown, draft, pinned) ==> f in PinnedChanges(shown, draft) && f !in PinnedBases(shown, pinned)

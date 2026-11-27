@@ -26,19 +26,19 @@
     },
     "PinKinds": {
       "file": "Reconcile.dfy",
-      "sha256": "6ba3e46926583c05915fa5924c231a1097c6ed380d6c8dfc3806e4f8a058925b"
+      "sha256": "7219633a021a5bba81aad8fe661ee3e0b90006c1b54919002a46419401050525"
     },
     "ReadTaggedPinsAreReadPairs": {
       "file": "Reconcile.dfy",
-      "sha256": "43e21dd0dc413319ae35c781f225b3a6ca6c23c90cf488950860e644e50250b1"
+      "sha256": "6e66f60e961c2c5ab027e7dde02adc5279b24052d2960671fdd4c8f97840cb62"
     },
     "PinShowsTheForm": {
       "file": "Reconcile.dfy",
-      "sha256": "0599fbfcc257e538a22bddf70b0fa6496edb5008edc7ec124aab179657c04b60"
+      "sha256": "096cfc54a21f983345578f5bf0c740105cd4c29716ca681f04ab46e7a650fe53"
     },
     "PinnedEditsSendExactlyTheChangedFields": {
       "file": "Reconcile.dfy",
-      "sha256": "7302f3eee9321f8613c5a06b0158332dbc1e24ab1ec606375f8b0d79cd130bd1"
+      "sha256": "97da4f9b8578e52d0542f6d01e3dbaddaf045698663381f3a381d3b51b3f028a"
     },
     "NewerEditBaseKeepsNewerState": {
       "file": "Reconcile.dfy",
