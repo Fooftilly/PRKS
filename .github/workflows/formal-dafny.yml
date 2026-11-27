@@ -82,7 +82,7 @@ jobs:
       - name: Differential test against sync-reconcile.js
         if: always()
         run: |
-          "$DAFNY" translate js --no-verify --output "$RUNNER_TEMP/model/reconcile" formal/dafny/Reconcile.dfy
+          "$DAFNY" translate js --no-verify --include-runtime --output "$RUNNER_TEMP/model/reconcile" formal/dafny/Reconcile.dfy
           generated=$(find "$RUNNER_TEMP/model" -name '*.js' | head -n 1)
           find "$RUNNER_TEMP/model" -type f
           grep -nE "^(let|const|var|module|exports)|require\(" "$generated" | head -40
