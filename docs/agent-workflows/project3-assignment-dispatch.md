@@ -147,24 +147,25 @@ One approval can cover up to 30 checked batches. Each batch still has 1–10 row
 4. The maintainer reviews the manifest and sets the manifest digest as `PROJECT3_ORDER_APPROVED_SHA256`. A checked manifest is not approval.
 5. Run each batch with `"operation": "apply"`, in manifest order, with the same manifest.
 
-Each plan apply:
+Each plan apply runs these steps in this order:
 
-- recomputes the batch digest from live evidence and refuses the batch when it differs from the manifest entry. A changed rank, item ID, field ID, label, update time or open blocker after the check stops the batch before any claim;
-- refuses a manifest that is not the approved one;
-- reads the claims once and refuses the batch when the digest of this or a later batch was already used on either path, when an earlier batch has no `success` under this manifest, or when this or a later batch already started under it. So a plan with a used digest stops before its first write;
-- claims `prks/project3-order-approval/<batch digest>` and `prks/project3-order-plan/<manifest digest>/<batch>` on the claim commit, then marks both `success` or `failure`.
+1. It refuses a manifest that is not the approved one.
+2. It reads the claims once. It refuses the batch when the digest of this or a later batch was already used on either path, when an earlier batch has no `success` under this manifest, or when this or a later batch already started under it. So a plan with a used digest stops before its first write.
+3. It claims the step `prks/project3-order-plan/<manifest digest>/<batch>` on the claim commit.
+4. It recomputes the batch digest from live evidence. When the digest differs from the manifest entry, the step is marked `failure` and the manifest ends. A changed rank, item ID, field ID, label, update time or open blocker after the check causes this. The batch digest stays unused.
+5. It claims `prks/project3-order-approval/<batch digest>`, applies the batch, and marks both claims `success` or `failure`.
 
-So batches cannot be substituted, skipped, reordered or replayed. A single-batch approval cannot apply a batch of a plan, and the reverse. After a failed or possibly partial batch, every later batch of that manifest is refused. The run log names the failed batch and the blocked batches.
+Steps 1 and 2 write nothing. A check, a dry run and an unapproved or out-of-order apply never claim. So batches cannot be substituted, skipped, reordered or replayed. A single-batch approval cannot apply a batch of a plan, and the reverse. After a refused, failed or possibly partial batch, every later batch of that manifest is refused, also when the live values return to the checked ones. The run log names the failed batch and the blocked batches.
 
 To recover after a failure:
 
 1. Read the refreshed planning snapshot and compare it with the manifest. Batches before the failed one are done. The failed batch is possibly partial. Later batches are pending.
-2. Check the remaining rows again as new batches. Use the live `expected_before` values. When the failed batch reached its claim, its digest is used: change its `reason`, for example by adding the date, to get a new digest. A batch refused before its claim, for example for stale evidence, has no used digest.
+2. Check the remaining rows again as new batches. Use the live `expected_before` values. When the failed batch reached its batch claim, its digest is used: change its `reason`, for example by adding the date, to get a new digest. A batch refused by its live preflight keeps an unused digest.
 3. Write a new manifest for the remaining batches and get a new approval.
 
 To revoke a plan, delete `PROJECT3_ORDER_WRITE_MODE` or change `PROJECT3_ORDER_APPROVED_SHA256`. Batches that already ran stay applied.
 
-Budget: one plan command MUST stay within 12,000 bytes. A full 30-batch manifest with 10 rows in the current batch uses about 9 KB when each reason has about 60 characters. Each apply reads the claim history once (at most 200 pages) and writes four statuses. Project reads and issue reads stay at the single-batch cost.
+Budget: one plan command MUST stay within 12,000 bytes. A full 30-batch manifest with 10 rows in the current batch uses about 9 KB when each reason has about 60 characters. Each apply reads the claim history once (at most 200 pages) and writes up to four statuses. Project reads and issue reads stay at the single-batch cost.
 
 ## Safety and audit
 

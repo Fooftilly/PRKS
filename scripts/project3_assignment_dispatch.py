@@ -399,27 +399,19 @@ def execute_order(command: str, *, project: pm.Project,
     return f"APPLIED — {triage.ORDER_FIELD} verified; order digest {digest}", changed, len(rows)
 
 
-def execute_plan(command: str, *, project: pm.Project,
-                 read: triage.Callable[[str], Any],
-                 env: Mapping[str, str],
-                 claims: OrderClaims | None) -> tuple[str, int, int]:
-    operation, manifest, index, rows = parse_plan(command)
-    total = len(manifest["batches"])
+def _plan_batch(rows: list[dict], manifest: dict, index: int, project: pm.Project,
+                read: triage.Callable[[str], Any]) -> tuple[dict, str]:
     plan, digest = _checked_batch(rows, project, read)
     if plan["field"] != manifest["field"]:
         raise DispatchError(f"{triage.ORDER_FIELD} field identity differs from the manifest")
     if digest != manifest["batches"][index - 1]["digest"]:
         raise DispatchError(f"batch {index}: live evidence differs from its checked order digest; "
                             "check the remaining work again")
-    approval = manifest_digest(manifest)
-    where = f"batch {index}/{total}; manifest digest {approval}"
-    if operation == "check":
-        return f"CHECK ONLY — no Project fields changed; order digest {digest}; {where}", 0, len(rows)
-    if not order_apply_allowed(approval, env):
-        return f"DRY RUN — order write mode is not enabled; {where}", 0, len(rows)
-    if claims is None:
-        raise DispatchError("order apply refused: no approval claim store")
-    steps = [plan_claim(approval, n) for n in range(1, total + 1)]
+    return plan, digest
+
+
+def _plan_sequence(claims: OrderClaims, manifest: dict, approval: str, index: int) -> list[str]:
+    steps = [plan_claim(approval, n) for n in range(1, len(manifest["batches"]) + 1)]
     # A used digest in a later batch would strand the plan after this batch writes.
     remaining = {n: batch_claim(entry["digest"])
                  for n, entry in enumerate(manifest["batches"], start=1) if n >= index}
@@ -434,13 +426,46 @@ def execute_plan(command: str, *, project: pm.Project,
                                 "run in order and stop after a failure")
         if n >= index and states:
             raise DispatchError(f"batch {n} already started under this manifest; no replay")
+    return steps
+
+
+def execute_plan(command: str, *, project: pm.Project,
+                 read: triage.Callable[[str], Any],
+                 env: Mapping[str, str],
+                 claims: OrderClaims | None) -> tuple[str, int, int]:
+    operation, manifest, index, rows = parse_plan(command)
+    total = len(manifest["batches"])
+    approval = manifest_digest(manifest)
+    where = f"batch {index}/{total}; manifest digest {approval}"
+    if operation == "check":
+        _, digest = _plan_batch(rows, manifest, index, project, read)
+        return f"CHECK ONLY — no Project fields changed; order digest {digest}; {where}", 0, len(rows)
+    if env.get("PROJECT3_ORDER_WRITE_MODE") != "apply":
+        _plan_batch(rows, manifest, index, project, read)
+        return f"DRY RUN — order write mode is not enabled; {where}", 0, len(rows)
+    order_apply_allowed(approval, env)
+    if claims is None:
+        raise DispatchError("order apply refused: no approval claim store")
+    # The step is claimed before live preflight, so any refusal ends this manifest.
+    held = [_plan_sequence(claims, manifest, approval, index)[index - 1]]
+    claims.mark(held[0], "pending")
     try:
-        changed = _claimed_apply(plan, project, read, claims,
-                                 [batch_claim(digest), steps[index - 1]])
+        plan, digest = _plan_batch(rows, manifest, index, project, read)
+        claims.mark(batch_claim(digest), "pending")
+        held.insert(0, batch_claim(digest))
+        changed = triage.apply_order(plan, project, read)
     except BaseException:
+        for context in held:
+            try:
+                claims.mark(context, "failure")
+            except DispatchError:
+                print("order approval claim completion failed; pending claim is durable",
+                      file=sys.stderr)
         print(f"order plan {where}: FAILED / POSSIBLY PARTIAL; batches {index + 1}–{total} "
               "stay blocked under this manifest", file=sys.stderr)
         raise
+    for context in held:
+        claims.mark(context, "success")
     return (f"APPLIED — {triage.ORDER_FIELD} verified; {total - index} batches pending; {where}",
             changed, len(rows))
 

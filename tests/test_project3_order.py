@@ -540,8 +540,8 @@ class OrderPlanTests(unittest.TestCase):
         self.assertEqual({m[1]["field"] for m in self.fx.api.mutations}, {field})
         expected = []
         for index, entry in enumerate(self.manifest["batches"], start=1):
-            contexts = [dispatch.batch_claim(entry["digest"]), dispatch.plan_claim(self.approval, index)]
-            expected += [(c, "pending") for c in contexts] + [(c, "success") for c in contexts]
+            step, batch = dispatch.plan_claim(self.approval, index), dispatch.batch_claim(entry["digest"])
+            expected += [(step, "pending"), (batch, "pending"), (batch, "success"), (step, "success")]
         self.assertEqual(self.claims.log, expected)
 
     def test_skipped_or_reordered_batch_is_refused_before_claim(self):
@@ -633,25 +633,49 @@ class OrderPlanTests(unittest.TestCase):
         self.assertIn(f"batch 2/3; manifest digest {self.approval}: FAILED / POSSIBLY PARTIAL", written)
         self.assertIn("batches 3–3 stay blocked", written)
 
-    def test_stale_evidence_after_check_is_refused_before_claim(self):
+    def stale(self, change, restore, error="live evidence differs"):
+        self.setUp()
         env = armed_for(self.approval)
         self.run_plan(1, env)
-        self.fx.issues[509]["labels"].append({"name": "accepted"})
-        with self.assertRaisesRegex(dispatch.DispatchError, "batch 2: live evidence differs"):
+        change()
+        with self.assertRaisesRegex(dispatch.DispatchError, error):
             self.run_plan(2, env)
-        self.fx.issues[509]["labels"].pop()
-        self.fx.dependencies[509] = [{"number": 4, "state": "open"}]
-        with self.assertRaisesRegex(dispatch.DispatchError, "live evidence differs"):
+        restore()
+        self.assertEqual(self.claims.log[-2:], [(dispatch.plan_claim(self.approval, 2), "pending"),
+                                                (dispatch.plan_claim(self.approval, 2), "failure")])
+        with self.assertRaisesRegex(dispatch.DispatchError, "batch 2 already started"):
             self.run_plan(2, env)
-        self.fx.dependencies[509] = []
-        self.fx.api.items["J509"] = self.fx.api.items.pop("I509")
-        with self.assertRaisesRegex(dispatch.DispatchError, "live evidence differs"):
-            self.run_plan(2, env)
-        self.fx.api.items["I509"] = self.fx.api.items.pop("J509")
+        self.assertEqual(self.order_of(509), None)
+        manifest = self.build(self.batches[1:])
+        self.assertEqual(manifest["batches"][0]["digest"], self.manifest["batches"][1]["digest"])
+        self.run_plan(1, armed_for(dispatch.manifest_digest(manifest)), manifest, self.batches[1])
+        self.assertEqual(self.order_of(509), 4)
+
+    def test_stale_refusal_ends_the_manifest_but_keeps_the_batch_digest(self):
+        values = lambda: self.fx.api.items["I509"]["values"]
+        labels = lambda: self.fx.issues[509]["labels"]
+        self.stale(lambda: values().update({ORDER: 9}), lambda: values().pop(ORDER), "expected_before")
+        self.stale(lambda: labels().append({"name": "accepted"}), lambda: labels().pop())
+        self.stale(lambda: self.fx.dependencies.update({509: [{"number": 4, "state": "open"}]}),
+                   lambda: self.fx.dependencies.update({509: []}))
+        self.stale(lambda: self.fx.api.items.update(J509=self.fx.api.items.pop("I509")),
+                   lambda: self.fx.api.items.update(I509=self.fx.api.items.pop("J509")))
+
+    def test_replaced_field_ends_the_manifest(self):
+        env = armed_for(self.approval)
+        self.run_plan(1, env)
         self.fx.api._fid = lambda name: "F_new_" + name.replace(" ", "_")
         with self.assertRaisesRegex(dispatch.DispatchError, "field identity differs"):
             self.run_plan(2, env)
-        self.assertEqual(len(self.claims.log), 4)
+        self.assertEqual(self.claims.log[-1], (dispatch.plan_claim(self.approval, 2), "failure"))
+
+    def test_unapproved_or_out_of_order_apply_stays_read_only(self):
+        self.fx.issues[509]["labels"].append({"name": "accepted"})
+        with self.assertRaisesRegex(dispatch.DispatchError, "batch 1 has not succeeded"):
+            self.run_plan(2, armed_for(self.approval))
+        with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
+            self.run_plan(1, armed_for("0" * 64))
+        self.assertEqual(self.claims.log, [])
 
     def test_altered_manifest_and_revoked_approval_are_refused(self):
         env = armed_for(self.approval)
@@ -670,10 +694,11 @@ class OrderPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(dispatch.DispatchError, "rows differ from its manifest entry"):
             dispatch.command_kind(raw)
         forged = copy.deepcopy(self.manifest)
-        forged["batches"][1]["items"] = [[635, 5]]
-        forged["batches"][2]["items"] = [[509, 4]]
+        forged["batches"][0]["items"] = [[635, 5]]
+        forged["batches"][2]["items"] = [[815, 3]]
         with self.assertRaisesRegex(dispatch.DispatchError, "live evidence differs"):
-            self.run_plan(2, armed_for(dispatch.manifest_digest(forged)), forged, self.batches[2])
+            self.run_plan(1, armed_for(dispatch.manifest_digest(forged)), forged, self.batches[2])
+        self.assertEqual(self.fx.api.mutations, [])
 
     def test_malformed_manifests_are_refused(self):
         def variant(change):
