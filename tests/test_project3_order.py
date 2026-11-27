@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +25,7 @@ from test_project3_triage import Fixture
 ORDER = t.ORDER_FIELD
 
 
-def rank(number=815, order=3, **overrides):
+def rank(number: int = 815, order: Any = 3, **overrides: Any) -> dict[str, Any]:
     row = {"number": number, "order": order,
            "reason": "Ranked after reviewing roadmap order and open pull requests.",
            "roadmap_checked": True, "overlap_checked": True}
@@ -37,15 +38,16 @@ def order_command(*rows, operation="check"):
                        "operation": operation, "items": list(rows)})
 
 
-def request_row(number=815, order=3, before=None, **overrides):
+def request_row(number: int = 815, order: Any = 3, before: Any = None, **overrides: Any) -> dict[str, Any]:
     return {**rank(number, order), "expected_before": before, **overrides}
 
 
 class OrderFixture(Fixture):
     def __init__(self):
         super().__init__()
-        self.api.fields[ORDER] = "NUMBER"
-        self.api.fields["Roadmap Order"] = "NUMBER"
+        fields: dict[str, Any] = self.api.fields
+        fields[ORDER] = "NUMBER"
+        fields["Roadmap Order"] = "NUMBER"
         self.api.items["I815"]["values"]["Roadmap Order"] = 7.0
 
     def order_plan(self, *rows):
