@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "PRKS API \u2014 Saved Views slice",
-    "version": "0.1.0",
+    "title": "PRKS API — Saved Views slice",
+    "version": "0.2.0",
     "description": "Vertical-slice OpenAPI for the online-only Saved Views family (#45 / #232). Schemas are generated from the same Pydantic boundary as the rest of backend/api_contract."
   },
   "paths": {
@@ -184,7 +184,7 @@
             }
           },
           "409": {
-            "description": "Name already used by another Saved View.",
+            "description": "Name already used by another Saved View, or the view changed since `base_revision` (code `revision_conflict`).",
             "content": {
               "application/json": {
                 "schema": {
@@ -379,6 +379,12 @@
           "search": {
             "$ref": "#/components/schemas/SavedViewSearch"
           },
+          "revision": {
+            "description": "Advanced by every update; an edit sends it back as `base_revision`.",
+            "minimum": 0,
+            "title": "Revision",
+            "type": "integer"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -406,6 +412,7 @@
           "id",
           "name",
           "search",
+          "revision",
           "created_at",
           "updated_at"
         ],
@@ -429,8 +436,14 @@
         "type": "object"
       },
       "SavedViewUpdateRequest": {
-        "description": "PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.\n\nSending neither field (or only nulls) is a domain refusal\n(``Nothing to update.``).",
+        "description": "PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.\n\nSending neither field (or only nulls) is a domain refusal\n(``Nothing to update.``). ``base_revision`` is the ``revision`` the editor\nopened on; any other current revision is ``409`` with code\n``revision_conflict`` (#873).",
         "properties": {
+          "base_revision": {
+            "description": "The `revision` the edit was opened on.",
+            "minimum": 0,
+            "title": "Base Revision",
+            "type": "integer"
+          },
           "name": {
             "anyOf": [
               {
@@ -455,6 +468,9 @@
             "default": null
           }
         },
+        "required": [
+          "base_revision"
+        ],
         "type": "object"
       },
       "SavedViewDeleted": {

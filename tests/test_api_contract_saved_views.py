@@ -81,6 +81,7 @@ class SavedViewsContractTests(unittest.TestCase):
                 "search_tag": "",
                 "search_author": "Adorno",
                 "search_publisher": "",
+                "revision": 3,
                 "created_at": "2026-10-03 10:00:00",
                 "updated_at": None,
             }
@@ -89,7 +90,7 @@ class SavedViewsContractTests(unittest.TestCase):
 
     def test_response_models_refuse_unknown_keys_and_bad_modes(self):
         search = {"mode": "all", "q": "x", "tag": "", "author": "", "publisher": ""}
-        row = {"id": "SV-1", "name": "x", "search": search, "created_at": None, "updated_at": None}
+        row = {"id": "SV-1", "name": "x", "search": search, "revision": 0, "created_at": None, "updated_at": None}
         with self.assertRaises(ValidationError):
             SavedView.model_validate({**row, "mode": "all"})
         with self.assertRaises(ValidationError):

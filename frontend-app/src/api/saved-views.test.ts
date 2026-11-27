@@ -45,7 +45,7 @@ afterEach(() => {
 })
 
 const SEARCH = { mode: 'advanced', q: 'culture', tag: '', author: 'Adorno', publisher: '' }
-const ROW = { id: 'SV-1', name: 'Adorno', search: SEARCH, created_at: '2026-10-03 10:00:00', updated_at: null }
+const ROW = { id: 'SV-1', name: 'Adorno', search: SEARCH, revision: 2, created_at: '2026-10-03 10:00:00', updated_at: null }
 
 function stub(status: number, body: unknown) {
   const fetchMock = vi.fn(async () => new Response(JSON.stringify(body), { status }))
@@ -122,9 +122,12 @@ describe('Saved Views client', () => {
     expect(created()[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ name: 'Adorno', search: SEARCH }) })
 
     const updated = stub(200, ROW)
-    await updateSavedView('SV-1', { name: 'Adorno', search: ROW.search as never })
+    await updateSavedView('SV-1', { name: 'Adorno', search: ROW.search as never }, 2)
     expect(updated()[0]).toBe('/api/saved-views/SV-1')
-    expect(updated()[1].method).toBe('PATCH')
+    expect(updated()[1]).toMatchObject({
+      method: 'PATCH',
+      body: JSON.stringify({ base_revision: 2, name: 'Adorno', search: SEARCH }),
+    })
 
     stub(409, { error: 'A Saved View with that name already exists.' })
     await expect(createSavedView({ name: 'Adorno', search: ROW.search as never })).rejects.toMatchObject({
