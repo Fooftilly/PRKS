@@ -26,7 +26,8 @@ class FakeBudget:
     def __init__(self):
         self.required: list[int] = []
         self.waited: list[int] = []
-        self.fail_require = self.fail_wait_after = None
+        self.fail_require: str | None = None
+        self.fail_wait_after: int | None = None
 
     def require(self, cost):
         self.required.append(cost)
@@ -353,9 +354,13 @@ class FullPlanTests(unittest.TestCase):
 class RateBudgetTests(unittest.TestCase):
     def budget(self, cores, now=1000.0, seconds=3 * 3600):
         clock = {"now": now}
-        sleeps = []
-        budget = dispatch.GitHubRateBudget("t", seconds=seconds, clock=lambda: clock["now"],
-                                           sleep=lambda s: (sleeps.append(s), clock.update(now=clock["now"] + s)))
+        sleeps: list[float] = []
+
+        def sleep(seconds: float) -> None:
+            sleeps.append(seconds)
+            clock["now"] += seconds
+
+        budget = dispatch.GitHubRateBudget("t", seconds=seconds, clock=lambda: clock["now"], sleep=sleep)
         values = iter(cores)
         budget._core = lambda: next(values)
         return budget, sleeps
