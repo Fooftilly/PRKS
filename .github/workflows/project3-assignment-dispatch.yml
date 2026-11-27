@@ -51,7 +51,7 @@ jobs:
           PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
           PROJECT3_ORDER_WRITE_MODE: ${{ vars.PROJECT3_ORDER_WRITE_MODE }}
           PROJECT3_ORDER_APPROVED_SHA256: ${{ vars.PROJECT3_ORDER_APPROVED_SHA256 }}
-        run: python3 scripts/project3_assignment_dispatch.py
+        run: exec python3 scripts/project3_assignment_dispatch.py
 
       # Even a failed attempt may have applied some fields before drift stopped it.
       - name: Refresh read-only snapshots after writes or possible partial writes

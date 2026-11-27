@@ -5,6 +5,8 @@ import copy
 import json
 import os
 from pathlib import Path
+import signal
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -158,6 +160,19 @@ class FullPlanTests(unittest.TestCase):
                                    *self.batches[1:]])
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, 5])
 
+    def test_rank_change_after_project_load_stops_before_the_first_write(self):
+        _, manifest, _ = self.check()
+        approval = dispatch.manifest_digest(manifest)
+        project = self.fx.project(apply=True)
+        self.fx.api.items["I635"]["values"][ORDER] = 42
+        with (mock.patch.object(dispatch, "publish"),
+              self.assertRaisesRegex(t.TriageError, "#635: .* changed since review")):
+            dispatch.run(full_command(self.batches, "apply", manifest), project=project,
+                         read=self.fx.read, env=armed_for(approval), claims=self.claims,
+                         budget=self.budget)
+        self.assertEqual(self.fx.api.mutations, [])
+        self.assertEqual(self.claims.log[-1], (dispatch.plan_claim(approval, 1), "failure"))
+
     def test_stale_later_batch_during_apply_stops_and_reports_the_remainder(self):
         _, manifest, _ = self.check()
         approval = dispatch.manifest_digest(manifest)
@@ -240,6 +255,43 @@ class FullPlanTests(unittest.TestCase):
             self.apply(manifest)
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, None, None])
         self.assertIn((dispatch.plan_claim(approval, 2), "failure"), self.claims.log)
+
+    def test_revocation_during_the_last_budget_wait_stops_the_last_batch(self):
+        _, manifest, _ = self.check()
+        approval = dispatch.manifest_digest(manifest)
+        waits: list[int] = []
+
+        def wait(cost):
+            waits.append(cost)
+            if len(waits) == 6:
+                self.claims.log.append((dispatch.revoke_claim(approval), "failure"))
+
+        self.budget.wait = wait
+        with self.assertRaisesRegex(dispatch.DispatchError, "revoked this manifest during the run"):
+            self.apply(manifest)
+        self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, None])
+        self.assertIn((dispatch.plan_claim(approval, 3), "failure"), self.claims.log)
+
+    def test_writer_steps_exec_python_so_cancellation_signals_reach_it(self):
+        for name, script in (("project3-assignment-dispatch.yml", "project3_assignment_dispatch.py"),
+                             ("project3-assignment-request-processor.yml", "project3_assignment_request.py")):
+            text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+            self.assertIn(f"run: exec python3 scripts/{script}\n", text)
+
+    def test_sigterm_through_an_exec_shell_runs_the_cleanup(self):
+        code = ("import sys, time; sys.path.insert(0, 'scripts'); import project3_assignment_dispatch as d\n"
+                "with d._cancellable():\n"
+                "    try:\n"
+                "        print('ready', flush=True); time.sleep(30)\n"
+                "    except KeyboardInterrupt:\n"
+                "        print('cleanup', flush=True)\n")
+        shell = subprocess.Popen(["bash", "-c", 'exec "$0" -c "$1"', sys.executable, code], cwd=ROOT,
+                                 stdout=subprocess.PIPE, text=True)
+        assert shell.stdout is not None
+        self.assertEqual(shell.stdout.readline().strip(), "ready")
+        shell.send_signal(signal.SIGTERM)
+        output, _ = shell.communicate(timeout=20)
+        self.assertEqual(output.strip(), "cleanup")
 
     def test_revocation_before_start_refuses_every_path_without_claims(self):
         _, manifest, _ = self.check()
@@ -334,7 +386,8 @@ class FullPlanTests(unittest.TestCase):
         self.assertLessEqual(apply_reads + claim_calls,
                              300 * (dispatch.CHECK_COST_PER_ROW + dispatch.APPLY_COST_PER_ROW)
                              + 30 * dispatch.BATCH_OVERHEAD)
-        self.assertEqual(self.budget.required[-1], 300 * 10 + 30 * dispatch.BATCH_OVERHEAD)
+        self.assertEqual(self.budget.required[-1],
+                         dispatch.ORDER_CLAIM_PAGES + 300 * 10 + 30 * dispatch.BATCH_OVERHEAD)
         self.assertLessEqual(reads, 300 * dispatch.CHECK_COST_PER_ROW)
 
     def test_size_limits_stay_per_kind(self):
@@ -383,6 +436,12 @@ class RateBudgetTests(unittest.TestCase):
         with self.assertRaisesRegex(dispatch.DispatchError, "before the job deadline"):
             budget.wait(90)
         self.assertEqual(sleeps, [])
+
+    def test_no_batch_starts_after_the_deadline(self):
+        budget, _ = self.budget([], now=1000.0, seconds=60)
+        budget._clock = lambda: 1061.0
+        with self.assertRaisesRegex(dispatch.DispatchError, "deadline passed"):
+            budget.wait(1)
 
     def test_recent_reads_only_the_newest_statuses(self):
         claims = dispatch.GitHubOrderClaims("t", "77")

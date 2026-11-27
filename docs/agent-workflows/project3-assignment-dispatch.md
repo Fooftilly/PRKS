@@ -189,9 +189,9 @@ A full-plan command carries every batch, so one check and one apply cover the wh
 
 The apply runs in one job:
 
-1. It refuses a manifest that is not the approved one, and the plan rules of [Multi-batch plans](#multi-batch-plans): used batch digests, started steps and a revocation status.
-2. It claims step 1 and checks every batch against its manifest digest before the first write. A stale later batch ends the manifest here, with no write.
-3. For each batch in order, it claims the step, reads the revocation status, waits for REST budget when needed, checks the batch again, claims the batch digest, applies the batch with the per-write guards and marks both claims `success`.
+1. It refuses a plan whose REST estimate does not fit, a manifest that is not the approved one, and the plan rules of [Multi-batch plans](#multi-batch-plans): used batch digests, started steps and a revocation status.
+2. It claims step 1 and checks every batch against its manifest digest before the first write. This check reads each Project item again, so a change after the job loaded the Project is found here. A stale later batch ends the manifest here, with no write.
+3. For each batch in order, it claims the step, waits for REST budget when needed, reads the revocation status, checks the batch again, claims the batch digest, applies the batch with the per-write guards and marks both claims `success`.
 4. Any refusal, failure, revocation, budget stop or cancellation marks the open claims `failure` and stops. The summary says how many batches are verified, whether the stopped batch is **FAILED / POSSIBLY PARTIAL** or refused before any write, and which batches were not applied. The workflow then refreshes the agent queue and the planning snapshot.
 
 Recovery after a stopped full plan uses the steps of [Multi-batch plans](#multi-batch-plans). Check only the remaining rows as a new full plan and approve its new manifest digest.
@@ -203,7 +203,7 @@ gh api repos/Fooftilly/PRKS/statuses/126d25fb6f50ef9bd00cfad52065461eca993c7e \
   -f state=failure -f context='prks/project3-order-revoke/<manifest digest>'
 ```
 
-The job reads it before each batch. Every later apply of that manifest, by full plan or by step command, is refused. A revocation status can only stop work. To stop at once, cancel the workflow run: the job gets SIGINT, then SIGTERM, marks the running batch `failure` and the refresh step still runs. A write in flight can land, so treat that batch as possibly partial.
+The job reads it before each batch. Every later apply of that manifest, by full plan or by step command, is refused. A revocation status can only stop work. To stop at once, cancel the workflow run. The step runs `exec python3`, so Python itself gets SIGINT, then SIGTERM. It marks the running batch `failure` and the refresh step still runs. A write in flight can land, so treat that batch as possibly partial.
 
 **Limits.** These numbers come from the code and GitHub's documented limits.
 
@@ -213,11 +213,11 @@ The job reads it before each batch. Every later apply of that manifest, by full 
 | Request file (full plan) | 131,072 bytes. 300 rows with 60-character reasons: about 54 KB for check and 61 KB for apply |
 | Owner dispatch input | 60,000 bytes (GitHub allows 65,535 characters for all inputs). Use the request branch for a larger plan |
 | Other commands | 12,000 bytes, unchanged |
-| Actions-token REST requests | About 2 per row for a check, 10 per row and 8 per batch for an apply. A 300-row apply needs about 3,240 |
+| Actions-token REST requests | About 2 per row for a check, 10 per row and 8 per batch for an apply, plus 200 for the claim history scan. A 300-row apply needs about 3,440 |
 | Actions-token rate | 1,000 requests per hour, shared by every workflow in the repository |
 | Job time | 360 minutes. A full plan stops at a batch boundary after 300 minutes |
 
-Before the first claim, the apply reads `GET /rate_limit`, which does not count against the limit. It refuses a plan whose estimate does not fit before the 300-minute deadline. Before each batch it waits for the next reset when fewer requests remain than the batch needs. A 300-row apply can take more than three hours when other workflows use the same token budget. Project reads use `PROJECT_SYNC_TOKEN` (about 3 GraphQL queries and 1 mutation per changed row). The claim history grows by 4 statuses per batch; at 200 pages the claim reader refuses to prove non-replay.
+Before the first claim, the apply reads `GET /rate_limit`, which does not count against the limit. It refuses a plan whose estimate does not fit before the 300-minute deadline. No batch starts after that deadline. Before each batch it waits for the next reset when fewer requests remain than the batch needs. A 300-row apply can take more than three hours when other workflows use the same token budget. Project reads use `PROJECT_SYNC_TOKEN` (about 3 GraphQL queries and 1 mutation per changed row). The claim history grows by 4 statuses per batch; at 200 pages the claim reader refuses to prove non-replay.
 
 ## Safety and audit
 

@@ -484,6 +484,12 @@ def _plan_batch(rows: list[dict], manifest: dict, index: int, project: pm.Projec
     return plan, digest
 
 
+def _fresh_items(plan: dict, project: pm.Project) -> None:
+    """Re-read Project items without repeating the issue reads of this check."""
+    for row in plan["items"]:
+        triage.order_guard(row, project.refresh(row["expected_item"]), row["expected_issue"])
+
+
 def _plan_sequence(claims: OrderClaims, manifest: dict, approval: str, index: int) -> list[str]:
     steps = [plan_claim(approval, n) for n in range(1, len(manifest["batches"]) + 1)]
     # A used digest in a later batch would strand the plan after this batch writes.
@@ -599,7 +605,12 @@ class GitHubRateBudget:
             raise DispatchError(f"plan needs about {cost} Actions-token requests; about "
                                 f"{remaining + windows * limit} fit before the job deadline")
 
+    def _before_deadline(self) -> None:
+        if self._clock() >= self._deadline:
+            raise DispatchError("the full-plan deadline passed; no new batch starts")
+
     def wait(self, cost: int) -> None:
+        self._before_deadline()
         _, remaining, reset = self._core()
         if remaining >= cost:
             return
@@ -610,6 +621,7 @@ class GitHubRateBudget:
         self._sleep(max(0.0, reset + 5 - self._clock()))
         if self._core()[1] < cost:
             raise DispatchError("Actions-token requests still exhausted after the reset")
+        self._before_deadline()
 
 
 @contextmanager
@@ -672,29 +684,31 @@ def execute_full(command: str, *, project: pm.Project,
     if env.get("PROJECT3_ORDER_WRITE_MODE") != "apply":
         for n, rows in enumerate(batches, start=1):
             budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
-            _plan_batch(rows, given, n, project, read, preflight=False)
+            _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
         return f"DRY RUN — order write mode is not enabled; manifest digest {approval}", 0, issues
     order_apply_allowed(approval, env)
     if claims is None:
         raise DispatchError("order apply refused: no approval claim store")
+    budget.require(ORDER_CLAIM_PAGES + issues * (CHECK_COST_PER_ROW + APPLY_COST_PER_ROW)
+                   + total * BATCH_OVERHEAD)
     steps = _plan_sequence(claims, given, approval, 1)
-    budget.require(issues * (CHECK_COST_PER_ROW + APPLY_COST_PER_ROW) + total * BATCH_OVERHEAD)
-    # The first step is claimed before the whole-plan preflight, so any refusal ends the manifest.
-    held = [steps[0]]
-    claims.mark(steps[0], "pending")
+    held: list[str] = []
     done, changed, index, wrote = 0, 0, 1, False
     with _cancellable():
         try:
+            # The first step is claimed before the whole-plan preflight, so any refusal ends the manifest.
+            held = [steps[0]]
+            claims.mark(steps[0], "pending")
             for n, rows in enumerate(batches, start=1):
                 budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
-                _plan_batch(rows, given, n, project, read, preflight=False)
+                _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
             for index, rows in enumerate(batches, start=1):
                 if index > 1:
                     held = [steps[index - 1]]
                     claims.mark(held[0], "pending")
+                budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
                 if claims.recent(revoke_claim(approval)):
                     raise DispatchError("the maintainer revoked this manifest during the run")
-                budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
                 plan, digest = _plan_batch(rows, given, index, project, read, preflight=False)
                 claims.mark(batch_claim(digest), "pending")
                 held.insert(0, batch_claim(digest))

@@ -54,7 +54,7 @@ jobs:
           PROJECT3_ORDER_APPROVED_SHA256: ${{ vars.PROJECT3_ORDER_APPROVED_SHA256 }}
           PROJECT3_REQUEST_RULESET_ID: ${{ vars.PROJECT3_REQUEST_RULESET_ID }}
           PROJECT3_REQUEST_RULESET_UPDATED_AT: ${{ vars.PROJECT3_REQUEST_RULESET_UPDATED_AT }}
-        run: python3 scripts/project3_assignment_request.py
+        run: exec python3 scripts/project3_assignment_request.py
 
       - name: Refresh read-only snapshots after writes or possible partial writes
         if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')
