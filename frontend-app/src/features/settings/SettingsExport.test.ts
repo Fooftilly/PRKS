@@ -317,9 +317,35 @@ describe('SettingsExport BibTeX toggles', () => {
     // The whole map goes back to what PRKS confirmed, Author included.
     expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: true, url: true })
     expect(['author', 'doi', 'url'].map((id) => isOn(wrapper, id))).toEqual([false, true, true])
-    expect(wrapper.get('[role="alert"]').text()).toContain('BibTeX export settings could not be saved')
+    expect(wrapper.get('.prks-inline-message--error').text()).toContain('BibTeX export settings could not be saved')
+    win.prksPatchAppSettings = vi.fn(async () => ({})) as StyleWindow['prksPatchAppSettings']
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    expect(wrapper.find('.prks-inline-message--error').exists()).toBe(false) // a new choice clears it
+    warn.mockRestore()
+    wrapper.unmount()
+  })
+
+  it('keeps a failed toggle explained when a later toggle saves', async () => {
+    const patch = win.prksPatchAppSettings!
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    let release: () => void = () => undefined
+    win.prksPatchAppSettings = vi.fn((partial: { bibtex_export_fields?: Record<string, boolean> }) =>
+      partial.bibtex_export_fields && 'url' in partial.bibtex_export_fields
+        ? new Promise((_resolve, reject) => { release = () => reject(new Error('offline')) })
+        : patch(partial)) as StyleWindow['prksPatchAppSettings']
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
     await wrapper.get('[data-bibtex-field="url"]').trigger('click')
-    expect(wrapper.find('[role="alert"]').exists()).toBe(false) // a new choice clears it
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    release()
+    await flushPromises()
+    expect(server.doi).toBe(false)
+    expect(isOn(wrapper, 'url')).toBe(true)
+    expect(wrapper.get('.prks-inline-message--error').text()).toContain('could not be saved')
     warn.mockRestore()
     wrapper.unmount()
   })

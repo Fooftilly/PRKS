@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
 import { setBibtexProfileFlush, trackBibtexProfileWrite } from '../citations/bibtex-profile'
 import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
@@ -121,7 +122,6 @@ function send(patch: Record<string, boolean>): Promise<unknown> {
   const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
     .then(() => {
       confirmed = storedMap()
-      bibtexStatus.value = ''
       return true
     }, (error: unknown) => {
       failed = true
@@ -261,7 +261,7 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-    <p v-if="bibtexStatus" class="prks-settings-hint prks-inline-message--error" role="alert">{{ bibtexStatus }}</p>
+    <PrksInlineMessage v-if="bibtexStatus" tone="error" status>{{ bibtexStatus }}</PrksInlineMessage>
     <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" @click="restoreDefaults">
       Restore export defaults
     </PrksButton>
