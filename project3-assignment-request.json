@@ -1,77 +1,85 @@
 {
   "version": 1,
   "kind": "implementation-order",
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1466,
-      "order": 40,
+      "number": 689,
+      "order": 220,
       "expected_before": null,
-      "reason": "Plan cross-Library schema and route isolation checks first; #1461 and #310; prerequisite PRs #1458 and #1455 merged. No current native blocker.",
+      "reason": "Candidate pending acceptance: current people.js reads profile revision at save time instead of pinning it at edit entry; coordinate #58 and #1425.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1464,
-      "order": 60,
+      "number": 403,
+      "order": 240,
       "expected_before": null,
-      "reason": "Establish PostgreSQL ledger outcome and replay invariants before browser fault injection; #1461 and #391. Pin current device behavior pending #1175.",
+      "reason": "Review the Person profile dirty-editor close path with #689; current closePersonProfileEdit clears the draft. Explicit v1.0 acceptance example in #616.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1465,
-      "order": 80,
+      "number": 601,
+      "order": 260,
       "expected_before": null,
-      "reason": "Exercise real browser queue and pending intent using ledger answers from #1464; sequence after that test foundation. Related #1425 and #391.",
+      "reason": "Candidate pending acceptance: current argument-state.js warms at edit entry but reads acknowledged base again on commit; coordinate #58 and #1425.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1462,
-      "order": 100,
+      "number": 558,
+      "order": 280,
       "expected_before": null,
-      "reason": "Make existing engineering allowlists fail on stale paths before extending storage rules; #1461 and #651. Asset transition PR #1448 merged.",
+      "reason": "Candidate pending acceptance: current local-store.js rejects blocked deleteDatabase without cancelling the native deletion; durable reset safety under #57 and #58.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1463,
-      "order": 120,
+      "number": 559,
+      "order": 300,
       "expected_before": null,
-      "reason": "Retarget managed-file invariants to the merged Asset storage model; #1461 and #311. Sequence after #1462; #1448 merged.",
+      "reason": "Candidate pending acceptance: current sync-runtime.js clears the timeout before consuming response.json; preserve durable queue progress under #58 and #1465.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1175,
-      "order": 140,
+      "number": 1089,
+      "order": 320,
       "expected_before": null,
-      "reason": "Review device ownership before multi-user Libraries under #310. Separate design/approval gate; not a claim of a current production exploit.",
+      "reason": "Candidate pending acceptance: current sync-runtime.js can leave a claimed row syncing after pending-state update failure; coordinate generated queue tests #1465.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1371,
-      "order": 160,
+      "number": 1072,
+      "order": 340,
       "expected_before": null,
-      "reason": "Named saved workspaces explicitly required by v0.9 tracker #615 and roadmap #58; preserve dirty-editor guard and typed workspace model.",
+      "reason": "Candidate pending acceptance: current sync-runtime.js startup recovery resets syncing rows without a cross-tab lock when deps.lock is absent; coordinate #1465 and #1089.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1467,
-      "order": 180,
+      "number": 1475,
+      "order": 360,
       "expected_before": null,
-      "reason": "Enforce canonical frontend network, storage and bridge owners under #1461 and #179 after correctness work; #1454 merged. Avoid dependency-artifact overlap.",
+      "reason": "Proposed release compatibility design under #616; specify supported disconnected-client upgrades before ledger retention decisions; not implementation approval.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1468,
-      "order": 200,
+      "number": 66,
+      "order": 380,
       "expected_before": null,
-      "reason": "Incrementally type-check sync, Library scope and object lifecycle after core invariant work; #1461 and #651; prerequisite PRs #1448 and #1455 merged.",
+      "reason": "Candidate research/design: canonical sync contract still defers ledger compaction; sequence after #1475 establishes compatibility and replay limits, preserve exact replay.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 721,
+      "order": 400,
+      "expected_before": null,
+      "reason": "Storage relocation implementation under #57 and #310; native prerequisite issues #635 and #720 closed; coordinate merged Asset storage and #1463.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
