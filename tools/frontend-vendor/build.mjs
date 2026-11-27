@@ -158,6 +158,29 @@ function tryCopyLicense(pkgName, destDir) {
   console.log("vendored citeproc", version, hash);
 }
 
+// --- Swagger UI ---
+// Only the admin API reference page (/api/docs) loads it.
+{
+  const version = pkg.dependencies["swagger-ui-dist"];
+  const dest = join(vendorRoot, "swagger-ui");
+  const dist = join(root, "node_modules", "swagger-ui-dist");
+  copyOne(join(dist, "swagger-ui-bundle.js"), join(dest, "swagger-ui-bundle.js"));
+  copyOne(join(dist, "swagger-ui.css"), join(dest, "swagger-ui.css"));
+  copyOne(join(dist, "NOTICE"), join(dest, "NOTICE"));
+  tryCopyLicense("swagger-ui-dist", dest);
+  writeVersion(dest, [
+    version,
+    "source: https://github.com/swagger-api/swagger-ui",
+    "npm: swagger-ui-dist@" + version,
+    "js: node_modules/swagger-ui-dist/swagger-ui-bundle.js",
+    "css: node_modules/swagger-ui-dist/swagger-ui.css",
+    "sha256-js: " + sha256(readFileSync(join(dest, "swagger-ui-bundle.js"))),
+    "sha256-css: " + sha256(readFileSync(join(dest, "swagger-ui.css"))),
+    "license: Apache-2.0",
+  ]);
+  console.log("vendored swagger-ui", version);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

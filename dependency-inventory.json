@@ -386,6 +386,21 @@
       "dependabot_monitored": true
     },
     {
+      "name": "swagger-ui-dist",
+      "scope": "vendor",
+      "authoritative_source": "tools/frontend-vendor/package.json -> dependencies.swagger-ui-dist",
+      "manifest": "tools/frontend-vendor/package.json",
+      "lockfile": "tools/frontend-vendor/package-lock.json",
+      "generated_assets": [
+        "frontend/vendor/swagger-ui/swagger-ui-bundle.js",
+        "frontend/vendor/swagger-ui/swagger-ui.css",
+        "frontend/vendor/swagger-ui/VERSION"
+      ],
+      "version_metadata": "frontend/vendor/swagger-ui/VERSION",
+      "exact_installed_version_check": false,
+      "dependabot_monitored": true
+    },
+    {
       "name": "vue",
       "scope": "build",
       "authoritative_source": "frontend-app/package.json -> dependencies.vue",

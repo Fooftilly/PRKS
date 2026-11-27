@@ -1,4 +1,4 @@
-# Maintainer-only ordinary frontend vendor pins (DOMPurify, EasyMDE, CodeMirror, Lucide, citeproc-js).
+# Maintainer-only ordinary frontend vendor pins (DOMPurify, EasyMDE, CodeMirror, Lucide, citeproc-js, Swagger UI).
 
 Not used at PRKS application runtime. Docker does not run npm.
 
@@ -21,6 +21,8 @@ its `VERSION` + assets manually, then:
 ```bash
 python scripts/dependency_gate.py --write-manifest
 ```
+
+`scarfSettings.enabled: false` in `package.json` stops the install analytics of Swagger UI's `@scarf/scarf` dependency.
 
 `npm ci` + `npm run build` with unchanged inputs must leave a clean git tree
 for the files this island owns (no `fetched:` dates).

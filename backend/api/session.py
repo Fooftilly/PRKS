@@ -99,8 +99,8 @@ _READ_METHODS = frozenset({"GET", "HEAD"})
 _ADMIN_MUTATIONS = frozenset({"/api/settings"})
 # Importing or deleting a citation style feeds the Library's style setting.
 _CITATION_STYLES = "/api/citation-styles"
-# Reads only the Library owner may make: instance-level job diagnostics.
-_ADMIN_READS = frozenset({"/api/diagnostics/jobs", "/api/deployment-settings", "/api/storage-status"})
+# Reads only the Library owner may make.
+_ADMIN_READS = frozenset({"/api/diagnostics/jobs", "/api/deployment-settings", "/api/storage-status", "/api/docs"})
 # Mutations that change no Library content: authorized, never epoch-fenced.
 # Mutations whose route looks up its ledger before it fences the epoch.
 _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
@@ -288,7 +288,7 @@ def _epoch_claim(request: HttpRequest) -> Optional[int]:
 
 
 def route_capability(method: str, path: str) -> Capability:
-    """What a route needs (§9.4): backups, settings, imported citation styles and job diagnostics are Library administration."""
+    """What a route needs (§9.4): backups, settings, imported citation styles, job diagnostics and the API reference are Library administration."""
     if path == "/api/backups" or path.startswith("/api/backups/"):
         return Capability.ADMIN_LIBRARY
     if method in _MUTATING_METHODS:

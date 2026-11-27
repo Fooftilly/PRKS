@@ -2396,6 +2396,52 @@
         ]
       }
     },
+    "/api/docs": {
+      "get": {
+        "operationId": "getApiDocs",
+        "summary": "The API reference page",
+        "tags": [
+          "meta"
+        ],
+        "description": "Library owner only.",
+        "responses": {
+          "200": {
+            "description": "An HTML page that renders this document with Swagger UI.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/folders": {
       "get": {
         "operationId": "listFolders",

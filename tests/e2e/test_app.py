@@ -14175,6 +14175,22 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         self.assertEqual(panel.locator("input, select, textarea").count(), 0)
         self.assertIn("needs a restart", panel.inner_text())
 
+    def test_the_api_reference_renders_under_the_csp(self):
+        server, page, _collector = self._start_app()
+        _open_settings(page)
+        page.locator("#prks-settings-tab-deployment").click()
+        link = page.locator("#prks-api-docs-link")
+        link.wait_for()
+        self.assertEqual(link.get_attribute("target"), "_blank")
+        # The same page, so the collector fails the test on a CSP refusal or an off-site request.
+        with page.expect_response(lambda r: urlparse(r.url).path == "/api/openapi.json") as info:
+            response = page.goto(server.origin + link.get_attribute("href"))
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers.get("cache-control"), "no-store")
+        self.assertEqual(info.value.status, 200)
+        page.locator("#prks-api-docs h3.opblock-tag", has_text="annotations").wait_for()
+        self.assertEqual(page.title(), "PRKS API reference")
+
     def test_storage_status_is_shown_read_only(self):
         server, page, _collector = self._start_app()
         _open_settings(page)

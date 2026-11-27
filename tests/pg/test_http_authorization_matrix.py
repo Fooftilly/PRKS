@@ -128,6 +128,7 @@ ROWS: tuple[Row, ...] = (
     Row("sync", EDIT, "POST", "/api/sync/operations", {"operations": []}, allowed=(400,)),
     Row("diagnostics", READ, "GET", "/api/diagnostics/performance"),
     Row("diagnostics", ADMIN, "POST", "/api/diagnostics/performance/reset", {}),
+    Row("diagnostics", ADMIN, "GET", "/api/docs"),
 )
 # Modules that are not a route family of their own. ``setup`` serves only a
 # first run's setup phase, before any session or Library exists (#612); its

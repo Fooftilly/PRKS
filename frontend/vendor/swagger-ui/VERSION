@@ -1,0 +1,8 @@
+5.34.1
+source: https://github.com/swagger-api/swagger-ui
+npm: swagger-ui-dist@5.34.1
+js: node_modules/swagger-ui-dist/swagger-ui-bundle.js
+css: node_modules/swagger-ui-dist/swagger-ui.css
+sha256-js: 36eeb4d5640b9c036b1d0f854499af1cceebbdb260b790a03a18be5e8488fbf5
+sha256-css: c3cfe8248c4b0b89673600fb829924eafbac6de4bc4b2b06f5f5243483074d0a
+license: Apache-2.0

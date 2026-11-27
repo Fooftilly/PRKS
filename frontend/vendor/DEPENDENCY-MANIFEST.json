@@ -233,7 +233,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "49b77d052e3d82364ab74e1ad3eecb77a30e648036487c7cd30793856f1b0372"
+          "sha256": "83ba49229db0480bdc75d0bf50e1aa4bb0c02d0165a5afb0ca4a7eecc475f686"
         }
       ],
       "source_category": "npm:frontend-app",
@@ -260,6 +260,21 @@
       ],
       "source_category": "frontend-app:workspace-model",
       "version": "1"
+    },
+    {
+      "name": "swagger-ui",
+      "runtime_files": [
+        {
+          "path": "/vendor/swagger-ui/swagger-ui-bundle.js",
+          "sha256": "36eeb4d5640b9c036b1d0f854499af1cceebbdb260b790a03a18be5e8488fbf5"
+        },
+        {
+          "path": "/vendor/swagger-ui/swagger-ui.css",
+          "sha256": "c3cfe8248c4b0b89673600fb829924eafbac6de4bc4b2b06f5f5243483074d0a"
+        }
+      ],
+      "source_category": "npm:tools/frontend-vendor",
+      "version": "5.34.1"
     }
   ],
   "schema_version": 1

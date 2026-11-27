@@ -65,6 +65,7 @@ describe('SettingsDeployment', () => {
     // Read-only: no input and no Save.
     expect(wrapper.findAll('input, select, textarea')).toHaveLength(0)
     expect(wrapper.text()).not.toContain('Save')
+    expect(wrapper.get('#prks-api-docs-link').attributes('href')).toBe('/api/docs')
   })
 
   it('tells a member who is not the owner why nothing shows', async () => {
@@ -73,6 +74,7 @@ describe('SettingsDeployment', () => {
     const wrapper = mountPanel()
     await flushPromises()
     expect(wrapper.text()).toContain('Only the Library owner can see how this PRKS is deployed.')
+    expect(wrapper.find('#prks-api-docs-link').exists()).toBe(false)
   })
 
   it('refuses a body that claims the browser may edit', () => {
