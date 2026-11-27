@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  acknowledgeEditBase,
+  newerEditBase,
   adoptFresh,
   applyOwnerAck,
   carryObservation,
@@ -11,6 +13,8 @@ import {
   observedAt,
   overlay,
   pendingFor,
+  pinEditBase,
+  pinnedEdits,
   planAck,
   readBefore,
   timeOf,
@@ -261,5 +265,96 @@ describe('applyOwnerAck', () => {
     await flush()
     expect(state.value).toEqual({ id: 'W', tags: ['N'], folder: 'pending' })
     expect(observedAt(state.value)).toBe(50)
+  })
+})
+
+describe('edit-session bases', () => {
+  const shown = { name: 'Group', description: 'old' }
+
+  it('pins the revision read for each field the form shows', () => {
+    const pinned = pinEditBase(shown, {
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'old', revision: 0 },
+    })
+    expect(pinned).toEqual({ name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } })
+  })
+
+  it('leaves a field unknown when the read already holds a newer value', () => {
+    const pinned = pinEditBase(shown, {
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'from another tab', revision: 1 },
+      extra: { value: 'ignored', revision: 9 },
+    })
+    expect(pinned).toEqual({ name: { value: 'Group', revision: 3 }, description: null })
+    expect(pinEditBase(shown, { name: { value: 'Group', revision: -1 } })).toEqual({ name: null, description: null })
+    expect(pinEditBase(shown, null)).toBeNull()
+  })
+
+  it('pins an unsent edit of this device at the revision it was measured against', () => {
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 2 } }
+    const showsPending = { name: 'Group', description: 'unsent' }
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2 } })).toEqual({
+      name: { value: 'Group', revision: 3 },
+      description: { value: 'old', revision: 2, pending: 'unsent' },
+    })
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 2, pendingOp: 'op-1' } })
+      ?.description).toEqual({ value: 'old', revision: 2, pending: 'unsent', pendingOp: 'op-1' })
+    // A read at a later revision holds another device's value, not the base
+    // the unsent edit replaced.
+    const newer = { ...read, description: { value: 'theirs', revision: 4 } }
+    expect(pinEditBase(showsPending, newer, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
+    expect(pinEditBase(shown, read, { description: { value: 'unsent', revision: 2 } })?.description).toBeNull()
+    expect(pinEditBase(shown, read, { description: 'malformed' })?.description).toBeNull()
+  })
+
+  it('moves a cached edit base only along this device\'s own acknowledged write', () => {
+    const write = { value: 'mine', baseRevision: 2, ackRevision: 3 }
+    expect(acknowledgeEditBase({ value: 'old', revision: 2 }, write)).toEqual({ value: 'mine', revision: 3 })
+    // A read at the ACK revision comes back for the caller to stamp, whatever its text.
+    expect(acknowledgeEditBase({ value: 'mine ', revision: 3 }, write)).toEqual({ value: 'mine ', revision: 3 })
+    expect(acknowledgeEditBase({ value: 'mine', revision: 3, ackOp: 'op-1' }, write)).toBeUndefined()
+    expect(acknowledgeEditBase({ value: 'later', revision: 5 }, write)).toBeUndefined()
+    // Read at revision 1, written against 2: revision 2's value was never read here.
+    expect(acknowledgeEditBase({ value: 'older', revision: 1 }, write)).toBeNull()
+    expect(acknowledgeEditBase(null, write)).toBeNull()
+  })
+
+  it('keeps an acknowledged edit base newer than a late read', () => {
+    const read = { value: 'read', revision: 2 }
+    expect(newerEditBase({ value: 'mine', revision: 3 }, read)).toEqual({ value: 'mine', revision: 3 })
+    expect(newerEditBase({ value: 'old', revision: 1 }, read)).toBe(read)
+    expect(newerEditBase({ value: 'same', revision: 2 }, read)).toBe(read)
+    // A read at the stamped revision keeps the stamp; a newer read drops it.
+    expect(newerEditBase({ value: 'raw ', revision: 2, ackOp: 'op-1' }, read)).toEqual({ value: 'read', revision: 2, ackOp: 'op-1' })
+    expect(newerEditBase({ value: 'mine', revision: 1, ackOp: 'op-1' }, read)).toBe(read)
+    expect(newerEditBase(null, read)).toBe(read)
+    expect(newerEditBase({ value: 'mine', revision: 3 }, null)).toBeNull()
+  })
+
+  it('pins an unsent edit the read already holds at the read revision', () => {
+    // The edit was acknowledged while the opening read was in flight: the
+    // read holds it at revision 4, the queued row still says base 3.
+    const read = { name: { value: 'Group', revision: 3 }, description: { value: 'unsent', revision: 4 } }
+    const showsPending = { name: 'Group', description: 'unsent' }
+    expect(pinEditBase(showsPending, read, { description: { value: 'unsent', revision: 3 } })?.description).toEqual({
+      value: 'unsent',
+      revision: 4,
+    })
+  })
+
+  it('sends changed fields against the pinned revision, never a newer one', () => {
+    const pinned = { name: { value: 'Group', revision: 3 }, description: { value: 'old', revision: 0 } }
+    expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned)).toEqual({
+      changes: { description: 'mine' },
+      base: pinned,
+      unknown: [],
+    })
+  })
+
+  it('refuses a changed field whose base is unknown, but not an untouched one', () => {
+    const pinned = { name: { value: 'Group', revision: 3 }, description: null }
+    expect(pinnedEdits(shown, { name: 'Renamed', description: 'old' }, pinned).unknown).toEqual([])
+    expect(pinnedEdits(shown, { name: 'Group', description: 'mine' }, pinned).unknown).toEqual(['description'])
+    expect(pinnedEdits(shown, {}, pinned).changes).toEqual({})
   })
 })

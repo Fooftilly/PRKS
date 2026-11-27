@@ -306,22 +306,50 @@ async function createPlaylist(title, description) {
  * reconciler now does that from the acknowledgement rather than from whatever
  * the editor happened to have on screen.
  */
+/**
+ * The base a Playlist edit session saves against, pinned when Edit opens:
+ * each field's acknowledged revision where it holds the value the form shows.
+ * Null when this device cannot read the Playlist's revisions.
+ */
+async function prksPinPlaylistEdit(playlistId, shown) {
+    try {
+        const ops = typeof prksDurableOperationsOrNone === 'function'
+            ? await prksDurableOperationsOrNone() : [];
+        return await prksPinPlaylistEditBase(playlistId, shown, ops);
+    } catch (_e) {
+        return null;
+    }
+}
+
+/**
+ * Save the fields an edit session changed. `options.base` is the base pinned
+ * when that session opened (`prksPinPlaylistEdit`), never one read now: a
+ * field saved elsewhere since then reaches the server as a revision conflict
+ * instead of silently replacing that save (#894). `options.still`, when given,
+ * is the caller's session check, made again just before the durable write.
+ */
 async function updatePlaylist(playlistId, fields, options) {
-    const draft = {};
+    const base = options && options.base;
+    if (!base) throw prksPlaylistBaseUnavailable('playlist');
+    const changes = {};
     (PRKS_PLAYLIST_FIELDS || []).forEach(function (field) {
         if (!fields || !Object.prototype.hasOwnProperty.call(fields, field)) return;
         const value = fields[field];
-        draft[field] = value == null || value === false ? '' : String(value);
+        changes[field] = value == null || value === false ? '' : String(value);
     });
-    if (!Object.keys(draft).length) return {};
-    const ops = typeof prksDurableOperationsOrNone === 'function'
-        ? await prksDurableOperationsOrNone() : [];
-    const base = await prksAcknowledgedPlaylistBase(playlistId, ops);
-    if (!base) throw prksPlaylistBaseUnavailable('playlist');
-    const changes = prksDirtyPlaylistFields(playlistId, draft, base, ops);
     if (!Object.keys(changes).length) return {};
+    let settled = base;
+    if (typeof prksSettlePinnedPlaylistBase === 'function') {
+        try {
+            settled = await prksSettlePinnedPlaylistBase(playlistId, base,
+                typeof prksDurableOperationsOrNone === 'function' ? await prksDurableOperationsOrNone() : []);
+        } catch (_e) { settled = base; }
+    }
+    /* That read can outlast the session: a Save cancelled meanwhile writes nothing. */
+    const still = options && options.still;
+    if (typeof still === 'function' && !still()) return {};
     try {
-        await prksSavePlaylistFieldsDurably(playlistId, changes, base);
+        await prksSavePlaylistFieldsDurably(playlistId, changes, settled, still);
     } catch (error) {
         throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
     }
@@ -902,6 +930,7 @@ window.prksBindPlaylistsIndexCreateBtn = prksBindPlaylistsIndexCreateBtn;
 window.prksOpenNewPlaylistModalFromPlaylistsPage = prksOpenNewPlaylistModalFromPlaylistsPage;
 window.prksTakePlaylistIndexCreateTabId = prksTakePlaylistIndexCreateTabId;
 window.prksReloadPlaylistDetail = prksReloadPlaylistDetail;
+window.prksPinPlaylistEdit = prksPinPlaylistEdit;
 window.deletePlaylistFromDetail = deletePlaylistFromDetail;
 window.renderPlaylistsIndex = renderPlaylistsIndex;
 window.prksApplyPlaylistPanelOfflineState = prksApplyPlaylistPanelOfflineState;

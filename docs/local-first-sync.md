@@ -1251,6 +1251,16 @@ pending overlay stays separate: caches hold acknowledged state only, and
 `overlay` folds the durable queue over it at read time. No protocol or ledger
 change is involved.
 
+The same module pins **edit-session bases**. A field editor's Save is measured
+against the revisions read when Edit opened (`pinEditBase`, `pinnedEdits`),
+never against what PRKS holds when Save is pressed: re-reading at Save hands
+the server the newest revision, and a stale draft then silently replaces a
+change saved elsewhere. A field whose open-time read already held a value the
+form did not show has no known base; changing it is refused with a "changed
+elsewhere" message and the draft is kept. This device's own unsent edit counts
+as shown, at the revision it was measured against. Person Groups (#783) and
+Playlists (#894) save this way; Concept Definitions already did (#568).
+
 ### An acknowledgement states the stored row; the client never rebuilds it
 
 A field acknowledgement can omit a byte-limited value because the client

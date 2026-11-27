@@ -1354,7 +1354,8 @@ async function prksEffectivePersonGroupCatalogue(ops) {
     let rows = [];
     try {
         const cached = await prksOfflineReadList(
-            PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups', {});
+            PRKS_PERSON_GROUPS_LIST_KEY, '/api/person-groups',
+            { domain: PRKS_PERSON_GROUPS_DOMAIN, validate: prksIsPersonGroupsIndexShape });
         rows = cached && Array.isArray(cached.value) ? cached.value : [];
     } catch (_e) { rows = []; }
     return await prksEffectivePersonGroupRows(rows, ops);
@@ -1374,11 +1375,15 @@ async function prksEffectivePersonGroupRecord(group) {
     /* The People index is only needed to NAME someone added while
      * unsynchronized, so a device with nothing pending never reads it. */
     const memberships = prksPendingPersonGroupMemberships(ops);
-    if (!memberships.size) return prksEffectivePersonGroupDetail(group, ops, []);
+    /* Likewise the catalogue only names the parent of a pending move. */
+    const catalogue = typeof prksPersonGroupHasPendingMove === 'function' &&
+        prksPersonGroupHasPendingMove(ops, group.id)
+        ? await prksEffectivePersonGroupCatalogue(ops) : [];
+    if (!memberships.size) return prksEffectivePersonGroupDetail(group, ops, [], catalogue);
     const people = await prksCachedPeopleRows();
     return prksEffectivePersonGroupDetail(group, ops,
         typeof prksEffectivePeople === 'function'
-            ? prksEffectivePeople(people, ops) || people : people);
+            ? prksEffectivePeople(people, ops) || people : people, catalogue);
 }
 
 /** A Group that exists only because of an unsynchronized creation. */
@@ -3241,6 +3246,7 @@ async function prksCommitTabRouteRender(ctx, hash, options) {
                         ctx.ui.personGroupEditing = false;
                         ctx.ui.personGroupMembersEditing = false;
                         ctx.ui.personGroupFieldBaseline = null;
+                        ctx.ui.personGroupEditPin = null;
                     }
                     prksPresentVueRoute(ctx, contentDiv, 'person-group-detail', {
                         availability: 'unavailable',

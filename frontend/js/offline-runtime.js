@@ -560,6 +560,21 @@
             }
         }
 
+        /** Merge into a cached entity in one store transaction (`store.updateEntity`). */
+        function mergeEntityIfCurrent(kind, id, merge, coherenceToken) {
+            if (!store || typeof store.updateEntity !== 'function') return Promise.resolve(false);
+            if (coherenceToken !== currentEntityGeneration(kind, id)) return Promise.resolve(false);
+            return Promise.resolve(store.updateEntity(kind, id, merge)).then(function (ok) {
+                return !!ok && coherenceToken === currentEntityGeneration(kind, id);
+            }, function () {
+                return false;
+            });
+        }
+
+        function mergeEntity(kind, id, merge) {
+            return mergeEntityIfCurrent(kind, id, merge, currentEntityGeneration(kind, id));
+        }
+
         /* One acknowledged Tag link (Work or Folder), merged into the two
          * cached records that carry it: the owner's detail (its `tags` rows)
          * and its revisioned tag-options projection.
@@ -2365,10 +2380,47 @@
                 await patchEntity('playlist-state', playlist.id,
                     () => root.prksNewPlaylistState(playlist.id));
             }
+            if (result.changed && !await seedEditBase('playlist-edit-base', 'playlist_id', playlist,
+                root.PRKS_PLAYLIST_FIELDS)) return false;
             return true;
         }
 
+        /* A record this device created is known at revision 0, so its first
+         * field ACK has a pair to move. */
+        function seedEditBase(kind, idKey, record, names) {
+            if (!Array.isArray(names)) return Promise.resolve(true);
+            const token = currentEntityGeneration(kind, record.id) + 1;
+            entityCoherence.set(entityKey(kind, record.id), token);
+            const fields = {};
+            names.forEach(function (name) {
+                fields[name] = { value: record[name] == null ? '' : String(record[name]), revision: 0 };
+            });
+            const seed = { fields: fields };
+            seed[idKey] = record.id;
+            return mergeEntityIfCurrent(kind, record.id, function (held) {
+                return held ? null : seed;
+            }, token);
+        }
+
         /** One Playlist field the server has applied. */
+        /* The pair an editor last read together moves only along this
+         * device's own acknowledged write (`prksSyncReconcile.acknowledgeEditBase`). */
+        function patchEditBase(kind, id, field, value, op, ackRevision) {
+            const token = currentEntityGeneration(kind, id) + 1;
+            entityCoherence.set(entityKey(kind, id), token);
+            return mergeEntityIfCurrent(kind, id, function (held) {
+                if (!held || !held.fields || typeof held.fields !== 'object') return null;
+                const entry = reconcileCore.acknowledgeEditBase(held.fields[field],
+                    { value: value, baseRevision: op && op.base_revision, ackRevision: ackRevision });
+                if (entry === undefined) return null;
+                const fields = Object.assign({}, held.fields);
+                /* Stamped with the write it came from: a read can hold the same text at a later revision. */
+                fields[field] = entry && op && typeof op.op_id === 'string'
+                    ? Object.assign({}, entry, { ackOp: op.op_id }) : entry;
+                return Object.assign({}, held, { fields: fields });
+            }, token);
+        }
+
         async function reconcilePlaylistField(result, op) {
             if (!store || !await store.isAvailable()) return false;
             const id = result.playlist_id;
@@ -2377,17 +2429,26 @@
                 !root.prksIsSupportedPlaylistField(field)) return false;
             const raw = String((op && op.payload && op.payload.value) || '');
             const value = field === 'original_url' ? (raw || null) : raw;
-            await patchEntity('playlist-state', id, function (state) {
+            let stateNewer = false;
+            const stateWritten = await patchEntity('playlist-state', id, function (state) {
                 if (typeof root.prksIsPlaylistStateShape === 'function' &&
                     !root.prksIsPlaylistStateShape(state, id)) return null;
                 const entry = state.fields[field];
+                if (entry && entry.revision > result.server_revision) stateNewer = true;
                 if (!entry || entry.revision > result.server_revision) return null;
                 const next = Object.assign({}, state,
                     { fields: Object.assign({}, state.fields) });
                 next.fields[field] = { revision: result.server_revision };
                 return next;
             });
-            const rows = await cachedPlaylistRows();
+            if (!stateWritten) return false;
+            if (!await patchEditBase('playlist-edit-base', id, field, raw, op, result.server_revision)) return false;
+            /* The held revisions are past this ACK, so its value is older than
+             * them: written into the body, it would be paired with a revision
+             * that vouches for newer text. */
+            const held = await store.getEntity('playlist', id).catch(function () { return null; });
+            if (stateNewer) fenceEntity('playlist', id);
+            const rows = stateNewer ? null : await cachedPlaylistRows();
             if (rows && rows.some(row => row && row.id === id)) {
                 const patched = rows.map(function (row) {
                     if (!row || row.id !== id) return row;
@@ -2397,7 +2458,7 @@
                 });
                 if (!await writePlaylistRows(patched)) return false;
             }
-            await patchEntity('playlist', id, function (playlist) {
+            const bodyWritten = !stateNewer && await patchEntity('playlist', id, function (playlist) {
                 if (!playlist || playlist.id !== id) return null;
                 const next = Object.assign({}, playlist);
                 next[field] = value;
@@ -2409,20 +2470,28 @@
                  * Folder family the acknowledgement does not name the members
                  * -- the detail this device holds does, and when it holds none
                  * there is nothing cached to be wrong. */
-                const cached = await store.getEntity('playlist', id)
-                    .catch(function () { return null; });
-                const items = cached && cached.value && Array.isArray(cached.value.items)
-                    ? cached.value.items : [];
+                const items = held && held.value && Array.isArray(held.value.items)
+                    ? held.value.items : [];
+                let worksDropped = true;
                 for (let i = 0; i < items.length; i += 1) {
                     const workId = items[i] && items[i].id;
-                    if (workId) await invalidateEntity('work', workId);
+                    if (workId && !await invalidateEntity('work', workId)) worksDropped = false;
                 }
                 if (items.length) {
                     prksOfflineMarkWorksBrowseChanged();
                     prksOfflineMarkRecentChanged();
                     prksOfflineMarkRecentlyAddedChanged();
                 }
+                /* The body is the only list of members, so it stays for the retry. */
+                if (!worksDropped) {
+                    if (!bodyWritten) fenceEntity('playlist', id);
+                    return false;
+                }
             }
+            /* The revisions already moved: a body left at the older value
+             * would be paired with them, so it goes. Only a body behind newer
+             * revisions retires the ACK once it is gone. */
+            if (!bodyWritten) return await dropUnprovenEntity('playlist', id) && stateNewer;
             return true;
         }
 
@@ -2525,6 +2594,7 @@
             }
             await invalidateEntity('playlist', id);
             await invalidateEntity('playlist-state', id);
+            if (!await invalidateEntity('playlist-edit-base', id)) return false;
             return true;
         }
 
@@ -2880,6 +2950,8 @@
                 await patchEntity('person-group-state', group.id,
                     () => root.prksNewPersonGroupState(group.id));
             }
+            if (result.changed && !await seedEditBase('person-group-edit-base', 'group_id', group,
+                root.PRKS_PERSON_GROUP_FIELDS)) return false;
             return true;
         }
 
@@ -2918,6 +2990,7 @@
                 next.fields[field] = { revision: ackRevision };
                 return next;
             });
+            if (!await patchEditBase('person-group-edit-base', id, field, raw, op, ackRevision)) return false;
             const sameValue = row => (field === 'parent_id' ? (row[field] || null) : row[field]) === value;
             if (!await patchProvenList(PERSON_GROUPS_LIST_KEY, DOMAIN_PERSON_GROUPS, ackRevision, op,
                 rows => rows.every(row => !row || row.id !== id || sameValue(row)),
@@ -3162,6 +3235,7 @@
             }
             await invalidateEntity('person-group', id);
             await invalidateEntity('person-group-state', id);
+            if (!await invalidateEntity('person-group-edit-base', id)) return false;
             const people = await store.getList(PEOPLE_LIST_KEY)
                 .catch(function () { return null; });
             const peopleRows = people && Array.isArray(people.value) ? people.value : null;
@@ -3190,10 +3264,15 @@
          * whether the deletion COMMITTED. False keeps the operation, so a
          * replay deletes it again; retiring it instead would let a reload
          * serve the stale value with nothing left to overlay or retry. */
-        function dropUnprovenEntity(kind, id) {
+        /* Until the page ends, no read serves or rewrites this entity's cached value. */
+        function fenceEntity(kind, id) {
             const key = entityKey(kind, id);
             entityCoherence.set(key, currentEntityGeneration(kind, id) + 1);
             ineligibleEntities.add(key);
+        }
+
+        function dropUnprovenEntity(kind, id) {
+            fenceEntity(kind, id);
             return invalidateEntity(kind, id).then(function (ok) {
                 if (ok === true) refillDroppedWork(kind, id);
                 return ok === true;
@@ -3623,6 +3702,7 @@
             reconcileDeletedPersonGroup,
             cacheEntity: cacheEntity,
             cacheEntityIfCurrent: cacheEntityIfCurrent,
+            mergeEntity: mergeEntity,
             peekEntity: peekEntity,
             invalidateEntity: invalidateEntity,
             invalidateList: invalidateList,
@@ -3680,6 +3760,9 @@
     }
     function prksOfflineCacheEntity(kind, id, value) {
         return production.cacheEntity(kind, id, value);
+    }
+    function prksOfflineMergeEntity(kind, id, merge) {
+        return production.mergeEntity(kind, id, merge);
     }
     function prksOfflinePeekEntity(kind, id) {
         return production.peekEntity(kind, id);
@@ -3833,6 +3916,7 @@
         prksOfflineReadEntity: prksOfflineReadEntity,
         prksOfflineReadList: prksOfflineReadList,
         prksOfflineCacheEntity: prksOfflineCacheEntity,
+        prksOfflineMergeEntity: prksOfflineMergeEntity,
         prksOfflinePeekEntity: prksOfflinePeekEntity,
         prksOfflineReconcileWorkTag: (result, op) => production.reconcileWorkTag(result, op),
         prksOfflineReconcileFolderTag: (result, op) => production.reconcileFolderTag(result, op),

@@ -15,9 +15,28 @@ function escapeHtmlGroup(s) {
  * it are all durable intents now, so a cached Group page is exactly as usable
  * as a connected one -- the same feature, not two. What can still stop a save
  * is not knowing this group's revisions, which is a fact about this device's
- * cache rather than about the network and is decided at save time by
- * `prksAcknowledgedPersonGroupBase`.
+ * cache rather than about the network. Those revisions are pinned when Edit
+ * opens (`prksReadPersonGroupEditPin`), so a Save is measured against what the
+ * form showed and a change saved elsewhere meanwhile is a conflict, not
+ * silently overwritten (#783).
  */
+
+/** Pins the edit base when Edit opens. Null when the revisions cannot be read here. */
+async function prksReadPersonGroupEditPin(groupId, shown) {
+    try {
+        const ops = typeof prksDurableOperationsOrNone === 'function'
+            ? await prksDurableOperationsOrNone() : [];
+        return await prksPinPersonGroupEditBase(groupId, shown, ops);
+    } catch (_e) {
+        return null;
+    }
+}
+
+function prksPersonGroupEditPin(ctx, groupId, session) {
+    const pin = ctx && ctx.ui ? ctx.ui.personGroupEditPin : null;
+    if (!pin || pin.groupId !== String(groupId) || pin.session !== session) return null;
+    return pin.base;
+}
 
 /**
  * What this device believes the parent should be, as an id.
@@ -302,7 +321,10 @@ function prksRetainPersonGroupEditAcrossRefresh(ctx, keepEditing, keepMembers) {
     if (!ctx || !ctx.ui) return;
     ctx.ui.personGroupEditing = !!keepEditing;
     ctx.ui.personGroupMembersEditing = keepEditing ? false : !!keepMembers;
-    if (!keepEditing) ctx.ui.personGroupFieldBaseline = null;
+    if (!keepEditing) {
+        ctx.ui.personGroupFieldBaseline = null;
+        ctx.ui.personGroupEditPin = null;
+    }
 }
 window.prksRetainPersonGroupEditAcrossRefresh = prksRetainPersonGroupEditAcrossRefresh;
 window.prksRefreshPersonGroupMain = prksRefreshPersonGroupMain;
@@ -346,15 +368,39 @@ window.prksOpenNewGroupModalFromGroupsPage = prksOpenNewGroupModalFromGroupsPage
 window.prksTakePersonGroupCreateNavigation = prksTakePersonGroupCreateNavigation;
 window.prksClearPersonGroupIndexCreateOrigin = prksClearPersonGroupIndexCreateOrigin;
 
-async function prksRerenderPersonGroupDetail(ctx, groupId) {
+/* A record read from the server only, for an Edit refused as changed
+ * elsewhere: the cache-first read would hand back the held version the
+ * refusal was about. Null when the server is out of reach. */
+async function prksFreshPersonGroupRecordFor(groupId) {
+    let fresh = null;
+    try {
+        if (typeof prksOfflineReadEntity === 'function') {
+            const result = await prksOfflineReadEntity('person-group', groupId,
+                '/api/person-groups/' + encodeURIComponent(groupId),
+                { domain: typeof PRKS_PERSON_GROUPS_DOMAIN === 'string' ? PRKS_PERSON_GROUPS_DOMAIN : undefined,
+                    validate: value => typeof prksIsPersonGroupShape !== 'function' ||
+                    prksIsPersonGroupShape(value, groupId) });
+            fresh = result && result.source === 'server' ? result.value : null;
+        }
+    } catch (_e) { fresh = null; }
+    if (!fresh) return null;
+    return typeof prksEffectivePersonGroupRecord === 'function'
+        ? await prksEffectivePersonGroupRecord(fresh) : fresh;
+}
+
+async function prksRerenderPersonGroupDetail(ctx, groupId, options) {
     if (!ctx || ctx.destroyed) return;
     const live = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!live || String(live.id) !== String(groupId)) return;
-    const group = typeof prksPersonGroupRecordFor === 'function'
-        ? await prksPersonGroupRecordFor(groupId) : null;
-    if (!group || ctx.destroyed) return;
+    const generation = ctx.generation;
+    const fresh = !!(options && options.fresh);
+    const group = fresh
+        ? await prksFreshPersonGroupRecordFor(groupId)
+        : (typeof prksPersonGroupRecordFor === 'function' ? await prksPersonGroupRecordFor(groupId) : null);
+    if (!group || ctx.destroyed || ctx.generation !== generation) return;
     const stillLive = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!stillLive || String(stillLive.id) !== String(groupId)) return;
+    if (fresh && ctx.ui && ctx.ui.personGroupStale === String(groupId)) ctx.ui.personGroupStale = null;
     ctx.setEntity('personGroup', group);
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
@@ -393,20 +439,46 @@ function openPersonGroupEdit(owner) {
     if (!ctx || !ctx.ui) return;
     const g = ctx.getEntity ? ctx.getEntity('personGroup') : null;
     if (!g) return;
+    /* A refused Save showed a held version; the next Edit waits for the
+     * current one, or it would pin that held version again. */
+    if (!ctx.ui.personGroupEditing && ctx.ui.personGroupStale === String(g.id)) {
+        const generation = ctx.generation;
+        void prksRerenderPersonGroupDetail(ctx, g.id, { fresh: true }).then(() => {
+            const shown = ctx.getEntity ? ctx.getEntity('personGroup') : null;
+            if (ctx.destroyed || ctx.generation !== generation || !shown || String(shown.id) !== String(g.id)) return;
+            if (ctx.ui && ctx.ui.personGroupStale === String(g.id)) {
+                void prksAlertMessage('PRKS could not load the current version of this group. '
+                    + 'Try again when the server is reachable.', 'Changed elsewhere');
+            } else {
+                openPersonGroupEdit(ctx);
+            }
+        });
+        return;
+    }
     const same = !!(ctx.ui.personGroupEditing && ctx.ui.personGroupFieldBaseline &&
         String(ctx.ui.personGroupFieldBaseline.groupId) === String(g.id));
     if (ctx.ui.personGroupMembersEditing) prksBumpPersonGroupMemberSession(ctx);
     ctx.ui.personGroupMembersEditing = false;
     ctx.ui.personGroupEditing = true;
     if (!same) {
-        prksBumpPersonGroupEditSession(ctx);
+        const session = prksBumpPersonGroupEditSession(ctx);
         const parent = g.parent && g.parent.id ? g.parent : null;
-        ctx.ui.personGroupFieldBaseline = {
+        const baseline = {
             groupId: String(g.id),
             name: String(g.name || ''),
             description: String(g.description || ''),
             parent_id: parent ? String(parent.id) : '',
             parent_name: parent ? String(parent.name || '') : '',
+        };
+        ctx.ui.personGroupFieldBaseline = baseline;
+        ctx.ui.personGroupEditPin = {
+            groupId: baseline.groupId,
+            session: session,
+            base: prksReadPersonGroupEditPin(baseline.groupId, {
+                name: baseline.name,
+                description: baseline.description,
+                parent_id: baseline.parent_id,
+            }),
         };
     }
     prksRefreshPersonGroupMain(ctx);
@@ -416,14 +488,18 @@ function openPersonGroupEdit(owner) {
 function closePersonGroupEdit(owner) {
     const ctx = prksPersonGroupActionContext(owner);
     const group = ctx && ctx.getEntity ? ctx.getEntity('personGroup') : null;
+    /* The refusal asked the user to cancel and edit again: the next Edit
+     * has to open on the current version, not the held one it refused. */
+    const stale = !!(group && ctx && ctx.ui && ctx.ui.personGroupStale === String(group.id));
     if (ctx && ctx.ui) {
         prksBumpPersonGroupEditSession(ctx);
         ctx.ui.personGroupEditing = false;
         ctx.ui.personGroupFieldBaseline = null;
+        ctx.ui.personGroupEditPin = null;
     }
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id);
+    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id, { fresh: stale });
 }
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
@@ -436,6 +512,7 @@ function prksTogglePersonGroupMembersEdit(owner) {
         prksBumpPersonGroupEditSession(ctx);
         ctx.ui.personGroupEditing = false;
         ctx.ui.personGroupFieldBaseline = null;
+        ctx.ui.personGroupEditPin = null;
     }
     prksBumpPersonGroupMemberSession(ctx);
     ctx.ui.personGroupMembersEditing = !ctx.ui.personGroupMembersEditing;
@@ -452,12 +529,24 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         await prksAlertMessage('Name is required.', 'Validation');
         return { ok: false, message: 'Name is required.' };
     }
-    const ops = typeof prksDurableOperationsOrNone === 'function'
-        ? await prksDurableOperationsOrNone() : [];
+    let pinned = await prksPersonGroupEditPin(ctx, groupId, session);
     if (!stillOwns()) return { ok: true, quiet: true };
-    const base = await prksAcknowledgedPersonGroupBase(groupId, ops);
-    if (!stillOwns()) return { ok: true, quiet: true };
-    if (!base) {
+    if (!pinned) {
+        /* The pin read at open can fail (a disconnect while it was in
+         * flight). The Save pins again against the values the form showed,
+         * so a field changed elsewhere meanwhile still reads as unknown
+         * rather than as a base. */
+        const fields = baseline || {};
+        const base = prksReadPersonGroupEditPin(String(groupId), {
+            name: String(fields.name == null ? '' : fields.name),
+            description: String(fields.description == null ? '' : fields.description),
+            parent_id: String(fields.parent_id == null ? '' : fields.parent_id),
+        });
+        ctx.ui.personGroupEditPin = { groupId: String(groupId), session: session, base: base };
+        pinned = await base;
+        if (!stillOwns()) return { ok: true, quiet: true };
+    }
+    if (!pinned) {
         await prksAlertMessage(
             'This group cannot be edited offline yet. Open it once while connected to PRKS '
             + 'so its synchronization state is prepared.', 'Unavailable');
@@ -484,13 +573,24 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
             ? String(baseFields.parent_id == null ? '' : baseFields.parent_id)
             : String(parentId || ''),
     };
-    const changes = {};
+    const shown = {};
     ['name', 'description', 'parent_id'].forEach((field) => {
-        const desired = String(next[field] == null ? '' : next[field]);
-        const shown = String(baseFields[field] == null ? '' : baseFields[field]);
-        if (desired !== shown) changes[field] = desired;
+        shown[field] = String(baseFields[field] == null ? '' : baseFields[field]);
     });
+    /* Measured against the revisions pinned when Edit opened, never the ones
+     * PRKS holds now: a field saved elsewhere since then reaches the server
+     * as a revision conflict instead of silently replacing that save. */
+    const edits = window.prksSyncReconcile.pinnedEdits(shown, next, pinned);
+    const changes = edits.changes;
+    const base = edits.base;
     if (!Object.keys(changes).length && !createParent) return { ok: true };
+    if (edits.unknown.length || (createParent && !base.parent_id)) {
+        if (ctx && ctx.ui) ctx.ui.personGroupStale = String(groupId);
+        await prksAlertMessage(
+            'This group changed in another tab or on another device after you started editing. '
+            + 'Cancel and edit it again to see the current version.', 'Changed elsewhere');
+        return { ok: false, message: 'Changed elsewhere' };
+    }
     try {
         await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns, createParent);
     } catch (error) {

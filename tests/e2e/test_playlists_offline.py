@@ -535,6 +535,8 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.open_details_panel(page)
         page.locator('#prks-playlist-edit-btn').click()
         page.wait_for_selector('#prks-playlist-edit-save')
+        # A Save offline measures the edit against the pair the Edit read stored.
+        o._wait_entity_cached(page, 'playlist-edit-base', pid)
         page.locator('#prks-playlist-edit-title').fill('Renamed while disconnected')
         page.locator('#prks-playlist-edit-desc').fill('Changed offline')
 
@@ -809,8 +811,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def prepare_bases(self, page, ids):
         """Every revision a durable Playlist write measures itself against."""
         for pid in (ids['playlist_a'], ids['playlist_b']):
-            page.evaluate(
-                "id => { void Promise.resolve(prksReadPlaylistState(id)).catch(() => {}); }", pid)
+            self.assertTrue(page.evaluate("id => prksAcknowledgedPlaylistBase(id, []).then(b => !!b)", pid))
             o._wait_entity_cached(page, 'playlist-state', pid)
         for wid in (ids['playlist_video_one'], ids['playlist_video_two'], ids['work_b']):
             page.evaluate(

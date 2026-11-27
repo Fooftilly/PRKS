@@ -1,4 +1,5 @@
 import type { InjectionKey } from 'vue'
+import { pinnedEdits, type PinnedBase } from '../../sync/reconcile'
 import type { PlaylistFieldDraft } from './types'
 
 /** Owning TabContext fields Playlist intents need. Not a second route model. */
@@ -14,6 +15,10 @@ export interface PlaylistIntentOwner {
     playlistEditing?: boolean
     /** Increments when an edit session ends or a new one begins. */
     playlistEditSession?: number
+    /** The base the current edit session saves against, pinned when it opened. */
+    playlistEditPin?: { playlistId: string; session: number; base: Promise<PinnedBase | null> } | null
+    /** A Save found the held Playlist older than the server: Cancel reloads it. */
+    playlistStale?: string | null
     playlistRename?: Record<string, boolean>
     workPlaylistEditing?: boolean
   }
@@ -44,6 +49,8 @@ export interface PlaylistIntents {
   /** Current edit session. A later session means an older save must not settle it. */
   editSession(): number
   invalidateEditSession(): void
+  /** Pin the field revisions the current edit session saves against. Call when Edit opens. */
+  pinEditBase(playlistId: string, shown: PlaylistFieldDraft): void
   saveFields(
     playlistId: string,
     draft: PlaylistFieldDraft,
@@ -159,12 +166,21 @@ export function browserPlaylistIntents(
     cancelEdit(playlistId) {
       if (!ownsDetail(owner, generation, playlistId) || !owner) return
       bumpEditSession(owner)
+      const stale = owner.ui?.playlistStale === playlistId
       if (owner.ui) {
         owner.ui.playlistEditing = false
         owner.ui.playlistRename = {}
       }
       repaint(owner, playlistId)
       if (typeof window.updatePanelContent === 'function') window.updatePanelContent('details')
+      // The refusal asked the user to cancel and edit again: the next Edit
+      // has to open on the current version, so the stale mark (which holds
+      // Edit closed) stays until that version is painted.
+      if (stale) {
+        void reloadIfOwned(owner, generation, playlistId).then((painted) => {
+          if (painted && owner.ui?.playlistStale === playlistId) owner.ui.playlistStale = null
+        })
+      }
     },
 
     editSession() {
@@ -173,6 +189,18 @@ export function browserPlaylistIntents(
 
     invalidateEditSession() {
       bumpEditSession(owner)
+      if (owner?.ui) owner.ui.playlistEditPin = null
+    },
+
+    pinEditBase(playlistId, shown) {
+      if (!owner || !playlistId) return
+      if (!owner.ui) owner.ui = {}
+      const pin = window.prksPinPlaylistEdit
+      owner.ui.playlistEditPin = {
+        playlistId,
+        session: editSessionOf(owner),
+        base: typeof pin === 'function' ? pin(playlistId, { ...shown }).catch(() => null) : Promise.resolve(null),
+      }
     },
 
     async saveFields(playlistId, draft, baseline) {
@@ -195,8 +223,40 @@ export function browserPlaylistIntents(
       if (typeof update !== 'function') {
         return { ok: false, message: 'Could not save this playlist.' }
       }
+      /* Measured against the revisions pinned when Edit opened, never the
+       * ones PRKS holds now: a field saved elsewhere meanwhile becomes a
+       * revision conflict instead of being silently replaced (#894). */
+      const pin = owner.ui?.playlistEditPin
+      let pinned = pin && pin.playlistId === playlistId && pin.session === session ? await pin.base : null
+      if (!sessionCurrent()) return { ok: true, message: '' }
+      if (!pinned) {
+        // The pin read at open can fail (a disconnect while it was in
+        // flight). The Save pins again against what the form showed, so a
+        // field changed elsewhere meanwhile still reads as unknown rather
+        // than as a base.
+        this.pinEditBase(playlistId, { ...baseline })
+        const repinned = owner.ui?.playlistEditPin
+        pinned = repinned ? await repinned.base : null
+        if (!sessionCurrent()) return { ok: true, message: '' }
+      }
+      if (!pinned) {
+        return {
+          ok: false,
+          message:
+            'This playlist cannot be changed offline yet. Open it once while connected to PRKS so its synchronization state is prepared.',
+        }
+      }
+      const edits = pinnedEdits({ ...baseline }, { ...draft }, pinned)
+      if (edits.unknown.length) {
+        if (owner.ui) owner.ui.playlistStale = playlistId
+        return {
+          ok: false,
+          message:
+            'This playlist changed in another tab or on another device after you started editing. Cancel and edit it again to see the current version.',
+        }
+      }
       try {
-        await update(playlistId, changes, {})
+        await update(playlistId, edits.changes, { base: edits.base, still: sessionCurrent })
       } catch (err) {
         return { ok: false, message: messageOf(err, 'Could not save this playlist.') }
       }

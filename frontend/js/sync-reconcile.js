@@ -136,6 +136,107 @@ var prksSyncReconcile = (function(exports) {
 		}).catch(() => false);
 		return plan;
 	}
+	function isFieldBase(value) {
+		if (!value || typeof value !== "object") return false;
+		const entry = value;
+		return typeof entry.value === "string" && isRevision(entry.revision);
+	}
+	/**
+	* Pin each field's base when an editor opens. A field keeps the revision that
+	* was read only where that read holds the value the form shows: a read that
+	* already holds another value is newer than the form, so the revision the form
+	* was shown at is unknown and that field is null. Null when nothing was read.
+	*
+	* `pending` holds this device's own unsent edit per field (its value and the
+	* revision it was measured against). The form shows that value, and the field
+	* keeps that revision, so editing it again replaces the unsent edit rather
+	* than measuring it against a base the form never showed.
+	*/
+	function pinEditBase(shown, read, pending) {
+		if (!read || typeof read !== "object") return null;
+		const pinned = {};
+		for (const field of Object.keys(shown)) {
+			const entry = read[field];
+			const own = pending ? pending[field] : void 0;
+			const value = shown[field] == null ? "" : String(shown[field]);
+			if (!isFieldBase(entry)) pinned[field] = null;
+			else if (own !== void 0) {
+				if (!isFieldBase(own) || own.value !== value) pinned[field] = null;
+				else if (own.value === entry.value) pinned[field] = {
+					value: entry.value,
+					revision: Math.max(entry.revision, own.revision)
+				};
+				else pinned[field] = entry.revision === own.revision ? {
+					value: entry.value,
+					revision: own.revision,
+					pending: own.value,
+					...typeof own.pendingOp === "string" ? { pendingOp: own.pendingOp } : {}
+				} : null;
+			} else pinned[field] = entry.value === value ? {
+				value: entry.value,
+				revision: entry.revision
+			} : null;
+		}
+		return pinned;
+	}
+	/**
+	* The entry an edit-base snapshot keeps when a read finishes: a read that
+	* started before a newer acknowledgement must not roll the pair back.
+	*/
+	function newerEditBase(held, read) {
+		if (!isFieldBase(held) || !isFieldBase(read)) return read;
+		if (held.revision > read.revision) return held;
+		if (held.revision === read.revision && typeof held.ackOp === "string") return {
+			...read,
+			ackOp: held.ackOp
+		};
+		return read;
+	}
+	/**
+	* An edit base, read as one value/revision pair, after this device's own
+	* write of that field is acknowledged. `undefined` keeps the entry: it is
+	* past the ACK. An unstamped entry at the ACK revision comes back as it is,
+	* for the caller to stamp. The write's value at the ACK revision replaces an entry the
+	* write was measured against. Any other entry is null: a revision between the
+	* two holds a value nobody here has read.
+	*/
+	function acknowledgeEditBase(entry, write) {
+		if (!isFieldBase(entry)) return null;
+		if (entry.revision > write.ackRevision) return void 0;
+		if (entry.revision === write.ackRevision) return typeof entry.ackOp === "string" ? void 0 : {
+			value: entry.value,
+			revision: entry.revision
+		};
+		return entry.revision === write.baseRevision ? {
+			value: write.value,
+			revision: write.ackRevision
+		} : null;
+	}
+	/**
+	* The fields this session changed, each measured against its pinned base. A
+	* changed field whose base is unknown is listed in `unknown` and must not be
+	* sent: the caller tells the user it changed elsewhere and keeps the draft.
+	*/
+	function pinnedEdits(shown, draft, pinned) {
+		const changes = {};
+		const base = {};
+		const unknown = [];
+		for (const field of Object.keys(shown)) {
+			const entry = pinned[field];
+			if (entry) base[field] = entry;
+			if (!Object.prototype.hasOwnProperty.call(draft, field)) continue;
+			const desired = draft[field] == null ? "" : String(draft[field]);
+			if (desired === (shown[field] == null ? "" : String(shown[field]))) continue;
+			changes[field] = desired;
+			if (!entry) unknown.push(field);
+		}
+		return {
+			changes,
+			base,
+			unknown
+		};
+	}
+	exports.acknowledgeEditBase = acknowledgeEditBase;
 	exports.adoptFresh = adoptFresh;
 	exports.applyOwnerAck = applyOwnerAck;
 	exports.carryObservation = carryObservation;
@@ -143,10 +244,13 @@ var prksSyncReconcile = (function(exports) {
 	exports.decideAck = decideAck;
 	exports.entityKey = entityKey;
 	exports.isRevision = isRevision;
+	exports.newerEditBase = newerEditBase;
 	exports.observe = observe;
 	exports.observedAt = observedAt;
 	exports.overlay = overlay;
 	exports.pendingFor = pendingFor;
+	exports.pinEditBase = pinEditBase;
+	exports.pinnedEdits = pinnedEdits;
 	exports.planAck = planAck;
 	exports.readBefore = readBefore;
 	exports.timeOf = timeOf;

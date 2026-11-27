@@ -133,6 +133,49 @@ async function groupField() {
         assert.equal((await cache.getList('person-groups:index')).value[0].name, 'After', 'a forward name ACK applies');
         assert.equal((await cache.getEntity('person-group', 'G')).value.name, 'After');
     }
+    /* The pair an offline Edit pins moves along this device's own write, and
+     * a write it was not measured against leaves that field unknown. */
+    {
+        const { cache, offline } = setup();
+        const base = (name, revision) => ({ group_id: 'G', fields: {
+            name: { value: name, revision }, description: { value: '', revision: 0 }, parent_id: { value: '', revision: 0 },
+        } });
+        await cache.putEntity('person-group-edit-base', 'G', base('Before', 1));
+        assert(await offline.reconcilePersonGroupField(ack(2), createdNow({ base_revision: 1, payload: { value: 'After' } })));
+        assert.deepEqual((await cache.getEntity('person-group-edit-base', 'G')).value.fields.name,
+            { value: 'After', revision: 2 }, 'own ACK moves the pair');
+        await cache.putEntity('person-group-edit-base', 'G', base('Older', 0));
+        assert(await offline.reconcilePersonGroupField(ack(2), createdNow({ base_revision: 1, payload: { value: 'After' } })));
+        assert.equal((await cache.getEntity('person-group-edit-base', 'G')).value.fields.name, null,
+            'revision 1 was never read here, so the name has no base');
+    }
+    /* A Group created here is known at revision 0, so its first field ACK
+     * moves a pair; a pair already held is kept. */
+    {
+        const { cache, offline } = setup();
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'G', changed: true,
+            group: { id: 'G', name: 'Before', description: null, parent_id: null, member_count: 0 } }));
+        assert.deepEqual((await cache.getEntity('person-group-edit-base', 'G')).value.fields, {
+            name: { value: 'Before', revision: 0 }, description: { value: '', revision: 0 }, parent_id: { value: '', revision: 0 },
+        }, 'the create seeds the pair');
+        assert(await offline.reconcilePersonGroupField(ack(1), createdNow({ base_revision: 0, payload: { value: 'After' } })));
+        assert.deepEqual((await cache.getEntity('person-group-edit-base', 'G')).value.fields.name,
+            { value: 'After', revision: 1 }, 'the first field ACK moves it');
+        assert(await offline.reconcileCreatedPersonGroup({ group_id: 'G', changed: true,
+            group: { id: 'G', name: 'Before', description: null, parent_id: null, member_count: 0 } }));
+        assert.deepEqual((await cache.getEntity('person-group-edit-base', 'G')).value.fields.name,
+            { value: 'After', revision: 1 }, 'a replayed create keeps the newer pair');
+        const remove = cache.deleteEntity;
+        cache.deleteEntity = async (kind, id) => kind === 'person-group-edit-base' ? false : remove(kind, id);
+        try {
+            assert.equal(await offline.reconcileDeletedPersonGroup({ group_id: 'G' }), false,
+                'a pair that could not be dropped keeps the delete ACK for a retry');
+        } finally {
+            cache.deleteEntity = remove;
+        }
+        assert(await offline.reconcileDeletedPersonGroup({ group_id: 'G' }));
+        assert.equal(await cache.getEntity('person-group-edit-base', 'G'), null, 'a delete drops the pair');
+    }
 }
 
 async function groupMembership() {

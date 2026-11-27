@@ -273,3 +273,152 @@ export function applyOwnerAck<T extends object>(
   return plan
 }
 
+
+/* ---- Edit-session bases ----
+ *
+ * An editor's Save is measured against what the form showed when it opened,
+ * not against whatever PRKS holds by the time Save is pressed. Re-reading the
+ * base at Save hands the server the newest revision, and a draft typed over an
+ * older value then silently replaces a change the user never saw. */
+
+/** One field's acknowledged value and the revision it carried. */
+export interface FieldBase {
+  value: string
+  revision: number
+  /**
+   * This device's own unsent edit the form showed when the base was pinned.
+   * Returning to `value` cancels it only while it is still unsent; once it has
+   * left the queue the server holds it, and returning is a real change.
+   */
+  pending?: string
+  /** The queued operation that carries `pending`; another with the same payload is not it. */
+  pendingOp?: string
+  /** The acknowledged operation that produced `revision`. */
+  ackOp?: string
+}
+
+/** Field -> pinned base, or null where the base is not known. */
+export type PinnedBase = Record<string, FieldBase | null>
+
+function isFieldBase(value: unknown): value is FieldBase {
+  if (!value || typeof value !== 'object') return false
+  const entry = value as Partial<FieldBase>
+  return typeof entry.value === 'string' && isRevision(entry.revision)
+}
+
+/**
+ * Pin each field's base when an editor opens. A field keeps the revision that
+ * was read only where that read holds the value the form shows: a read that
+ * already holds another value is newer than the form, so the revision the form
+ * was shown at is unknown and that field is null. Null when nothing was read.
+ *
+ * `pending` holds this device's own unsent edit per field (its value and the
+ * revision it was measured against). The form shows that value, and the field
+ * keeps that revision, so editing it again replaces the unsent edit rather
+ * than measuring it against a base the form never showed.
+ */
+export function pinEditBase(
+  shown: Readonly<Record<string, unknown>>,
+  read: Readonly<Record<string, unknown>> | null | undefined,
+  pending?: Readonly<Record<string, unknown>> | null,
+): PinnedBase | null {
+  if (!read || typeof read !== 'object') return null
+  const pinned: PinnedBase = {}
+  for (const field of Object.keys(shown)) {
+    const entry = read[field]
+    const own = pending ? pending[field] : undefined
+    const value = shown[field] == null ? '' : String(shown[field])
+    if (!isFieldBase(entry)) {
+      pinned[field] = null
+    } else if (own !== undefined) {
+      // A read that already holds the unsent value has seen it applied (or
+      // the same value written): the server is at that read's revision, so
+      // the next write is measured from it, never from the older base the
+      // edit replaced, which would conflict with this device's own write.
+      // Otherwise the read value is the base the edit replaced only when it is
+      // at the edit's own revision; a read at any other revision holds a value
+      // nobody can pair with that revision, so the base is unknown.
+      if (!isFieldBase(own) || own.value !== value) {
+        pinned[field] = null
+      } else if (own.value === entry.value) {
+        pinned[field] = { value: entry.value, revision: Math.max(entry.revision, own.revision) }
+      } else {
+        pinned[field] = entry.revision === own.revision
+          ? {
+              value: entry.value, revision: own.revision, pending: own.value,
+              ...(typeof own.pendingOp === 'string' ? { pendingOp: own.pendingOp } : {}),
+            }
+          : null
+      }
+    } else {
+      pinned[field] = entry.value === value ? { value: entry.value, revision: entry.revision } : null
+    }
+  }
+  return pinned
+}
+
+/**
+ * The entry an edit-base snapshot keeps when a read finishes: a read that
+ * started before a newer acknowledgement must not roll the pair back.
+ */
+export function newerEditBase(held: unknown, read: FieldBase | null): FieldBase | null {
+  if (!isFieldBase(held) || !isFieldBase(read)) return read
+  if (held.revision > read.revision) return held
+  /* One write produces a revision, so its stamp holds for any text read at it. */
+  if (held.revision === read.revision && typeof held.ackOp === 'string') return { ...read, ackOp: held.ackOp }
+  return read
+}
+
+/**
+ * An edit base, read as one value/revision pair, after this device's own
+ * write of that field is acknowledged. `undefined` keeps the entry: it is
+ * past the ACK. An unstamped entry at the ACK revision comes back as it is,
+ * for the caller to stamp. The write's value at the ACK revision replaces an entry the
+ * write was measured against. Any other entry is null: a revision between the
+ * two holds a value nobody here has read.
+ */
+export function acknowledgeEditBase(
+  entry: unknown,
+  write: { value: string; baseRevision: unknown; ackRevision: number },
+): FieldBase | null | undefined {
+  if (!isFieldBase(entry)) return null
+  if (entry.revision > write.ackRevision) return undefined
+  /* A no-op write is acknowledged at the revision an earlier write produced: that write keeps the stamp. */
+  if (entry.revision === write.ackRevision) {
+    return typeof entry.ackOp === 'string' ? undefined : { value: entry.value, revision: entry.revision }
+  }
+  return entry.revision === write.baseRevision ? { value: write.value, revision: write.ackRevision } : null
+}
+
+/** What a Save sends: the changed fields, their pinned bases, and any changed field whose base is unknown. */
+export interface PinnedEdits {
+  changes: Record<string, string>
+  base: Record<string, FieldBase>
+  unknown: string[]
+}
+
+/**
+ * The fields this session changed, each measured against its pinned base. A
+ * changed field whose base is unknown is listed in `unknown` and must not be
+ * sent: the caller tells the user it changed elsewhere and keeps the draft.
+ */
+export function pinnedEdits(
+  shown: Readonly<Record<string, unknown>>,
+  draft: Readonly<Record<string, unknown>>,
+  pinned: PinnedBase,
+): PinnedEdits {
+  const changes: Record<string, string> = {}
+  const base: Record<string, FieldBase> = {}
+  const unknown: string[] = []
+  for (const field of Object.keys(shown)) {
+    const entry = pinned[field]
+    if (entry) base[field] = entry
+    if (!Object.prototype.hasOwnProperty.call(draft, field)) continue
+    const desired = draft[field] == null ? '' : String(draft[field])
+    const was = shown[field] == null ? '' : String(shown[field])
+    if (desired === was) continue
+    changes[field] = desired
+    if (!entry) unknown.push(field)
+  }
+  return { changes, base, unknown }
+}

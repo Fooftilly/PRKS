@@ -27,6 +27,7 @@ require("../../frontend/js/person-metadata-state.js");
 require("../../frontend/js/person-group-state.js");
 require("../../frontend/js/work-role-state.js");
 globalThis.window = globalThis.window || globalThis;
+globalThis.prksSyncReconcile = require("../../frontend/js/sync-reconcile.js");
 require("../../frontend/js/components/people-groups.js");
 
 let sequence = 0;
@@ -494,12 +495,12 @@ async function theBaseIsAcknowledgedAndNeverGuessed() {
     assert.equal(base.name.revision, 0, "at revision 0 -- known, not assumed");
 
     const draft = { name: "Analysts", description: "Engine", parent_id: "" };
-    assert.deepEqual(globalThis.prksDirtyPersonGroupFields(created.entity_id, draft, base, ops), {},
+    const pinned = await globalThis.prksPinPersonGroupEditBase(created.entity_id, draft, ops);
+    const core = globalThis.prksSyncReconcile;
+    assert.deepEqual(core.pinnedEdits(draft, draft, pinned).changes, {},
         "reopening the form and saving changes nothing");
-    assert.deepEqual(
-        globalThis.prksDirtyPersonGroupFields(created.entity_id,
-            Object.assign({}, draft, { name: "Engineers" }), base, ops),
-        { name: "Engineers" }, "only what was typed");
+    assert.deepEqual(core.pinnedEdits(draft, Object.assign({}, draft, { name: "Engineers" }), pinned),
+        { changes: { name: "Engineers" }, base: pinned, unknown: [] }, "only what was typed");
 
     /* A group the server has never heard of and this device did not create is
      * UNKNOWN, not empty: guessing revision 0 would overwrite whatever another
@@ -699,6 +700,12 @@ async function aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn() {
     assert.ok(runtime.notifications() >= 1, "a committed field edit still notifies sync");
 }
 
+/* The edit-session pin `openPersonGroupEdit` stores: revisions read at Edit. */
+function pinFor(groupId, session, shown, base) {
+    const fields = { name: shown.name, description: shown.description, parent_id: shown.parent_id };
+    return { groupId, session, base: Promise.resolve(globalThis.prksSyncReconcile.pinEditBase(fields, base)) };
+}
+
 async function aStaleGroupEditDoesNotCreateATypedParent() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
@@ -722,7 +729,8 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
     function editingContext() {
         return {
             destroyed: false,
-            ui: { personGroupEditing: true, personGroupEditSession: 4 },
+            ui: { personGroupEditing: true, personGroupEditSession: 4,
+                personGroupEditPin: pinFor("PG-A", 4, shown, base) },
             lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
             getEntity: () => ({ id: "PG-A", name: "Group A" }),
         };
@@ -804,6 +812,325 @@ async function aStaleGroupEditDoesNotCreateATypedParent() {
     }
 }
 
+/* #783: two tabs open Edit at revision 0. Tab A saves; tab B's later Save is
+ * still measured against revision 0, so the server sees a conflict instead of
+ * B silently replacing A's description. */
+/* Resolves once `ready()` holds; fails instead of waiting forever. */
+async function until(ready) {
+    for (let turn = 0; turn < 500; turn += 1) {
+        if (ready()) return;
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    throw new Error("condition not reached");
+}
+
+/* Revisions from the server with values from the cache are two snapshots:
+ * a newer revision would vouch for older text, so no base is formed. */
+async function serverRevisionsNeverPairWithCachedValues() {
+    const previous = {
+        read: globalThis.prksOfflineReadEntity,
+        peek: globalThis.prksOfflinePeekEntity,
+        cache: globalThis.prksOfflineCacheEntity,
+        merge: globalThis.prksOfflineMergeEntity,
+    };
+    const held = new Map();
+    globalThis.prksOfflinePeekEntity = async (kind, id) => held.get(kind + ":" + id) || null;
+    globalThis.prksOfflineCacheEntity = async (kind, id, value) => { held.set(kind + ":" + id, value); return true; };
+    globalThis.prksOfflineMergeEntity = async (kind, id, merge) => {
+        const next = merge(held.get(kind + ":" + id) || null);
+        if (next != null) held.set(kind + ":" + id, next);
+        return true;
+    };
+    const sources = { state: "server", record: "cache" };
+    const server = { revision: 1, description: "B" };
+    const cachedRecord = { description: "A" };
+    const recordOptions = [];
+    globalThis.prksOfflineReadEntity = async (kind, id, _path, options) => {
+        if (kind !== "person-group-state") recordOptions.push(options || {});
+        if (kind === "person-group-state") {
+            const fields = {};
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: server.revision }; });
+            return { value: { group_id: id, fields, members: [] }, source: sources.state };
+        }
+        const description = sources.record === "server" ? server.description : cachedRecord.description;
+        return { value: { id, name: "Old", description, parent: null }, source: sources.record };
+    };
+    try {
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
+            "server revisions never pair with cached values");
+        assert.equal(held.size, 0, "and that refused pair is not kept");
+        sources.state = "cache";
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null,
+            "offline, cached revisions beside a cached record form no base either");
+
+        sources.state = "server"; sources.record = "server";
+        recordOptions.length = 0;
+        assert.equal((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description.value, "B",
+            "values read from the server after the revisions are one base");
+        assert.equal(recordOptions[0].requestPolicy && recordOptions[0].requestPolicy.dedupe, false,
+            "the record read never joins a flight older than the revisions");
+
+        /* #1454 review: another device writes C at revision 2. Edit online
+         * reaches the server for the revisions but not for the record, and is
+         * refused. The offline retry uses the pair last read together (B at
+         * revision 1), never revision 2 beside a cached record. */
+        server.revision = 2; server.description = "C";
+        sources.record = "cache"; cachedRecord.description = "B";
+        assert.equal(await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []), null);
+        sources.state = "cache";
+        const offline = await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        assert.deepEqual(offline.description, { value: "B", revision: 1 },
+            "offline, the base is the pair read together, so a Save conflicts instead of replacing C");
+
+        /* A sync-state refresh for membership leaves that pair editable. */
+        cachedRecord.description = "stale";
+        assert.deepEqual((await globalThis.prksAcknowledgedPersonGroupBase("PG-S", [])).description,
+            { value: "B", revision: 1 }, "a newer cached state or record does not change the pair");
+
+        /* Another device writes while the record is read: the values are past the revisions. */
+        sources.state = "server"; sources.record = "server";
+        const reader = globalThis.prksOfflineReadEntity;
+        globalThis.prksOfflineReadEntity = async (kind, id, path, options) => {
+            if (kind !== "person-group-state") { server.revision += 1; server.description = "E"; }
+            return reader(kind, id, path, options);
+        };
+        const raced = await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        globalThis.prksOfflineReadEntity = reader;
+        assert(Object.values(raced).every(entry => entry === null), "values read across a revision change form no base");
+        assert.deepEqual(held.get("person-group-edit-base:PG-S").fields.description, { value: "B", revision: 1 },
+            "and that pair is not kept");
+        server.revision = 2; server.description = "C";
+
+        /* Another tab commits its ACK after this read and before this tab's write. */
+        const merge = globalThis.prksOfflineMergeEntity;
+        globalThis.prksOfflineMergeEntity = async (kind, id, fn) => {
+            const theirs = held.get(kind + ":" + id);
+            held.set(kind + ":" + id, { ...theirs, fields: { ...theirs.fields, description: { value: "D", revision: 3 } } });
+            return merge(kind, id, fn);
+        };
+        await globalThis.prksAcknowledgedPersonGroupBase("PG-S", []);
+        globalThis.prksOfflineMergeEntity = merge;
+        assert.deepEqual(held.get("person-group-edit-base:PG-S").fields.description, { value: "D", revision: 3 },
+            "a delayed write merges against the pair another tab committed");
+    } finally {
+        globalThis.prksOfflineReadEntity = previous.read;
+        globalThis.prksOfflinePeekEntity = previous.peek;
+        globalThis.prksOfflineCacheEntity = previous.cache;
+        globalThis.prksOfflineMergeEntity = previous.merge;
+    }
+}
+
+/* A pin read that failed must not strand the edit session: a Save pins again
+ * against the values the form showed and uses that pin. */
+async function aFailedPinIsTakenAgainOnTheNextSave() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+    };
+    const alerts = [];
+    const current = baseAt({ name: 2, description: 0, parent_id: 0 }, { name: "Group R", description: "" });
+    let failing = true;
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (failing) throw new Error("stub failure");
+        if (kind === "person-group-state") {
+            const fields = {};
+            Object.keys(current).forEach((name) => { fields[name] = { revision: current[name].revision }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        const row = { id };
+        Object.keys(current).forEach((name) => { row[name] = current[name].value; });
+        return { value: row, source: "server" };
+    };
+    const r = {
+        tabId: "tab-r", destroyed: false,
+        ui: { personGroupEditing: false, personGroupEditSession: 0 },
+        lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-R" } },
+        getEntity: () => ({ id: "PG-R", name: "Group R", description: "", parent: null }),
+    };
+    const next = { name: "Group R renamed", description: "", parent_id: "", parent_name: "" };
+    try {
+        globalThis.openPersonGroupEdit(r);
+        assert.equal(await r.ui.personGroupEditPin.base, null, "the pin read failed");
+        const shown = r.ui.personGroupFieldBaseline;
+        /* Still unreadable: the Save pins again, fails again and is refused. */
+        failing = true;
+        const refused = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "a Save that cannot pin is refused");
+        assert.ok(alerts.some(m => m.indexOf("cannot be edited offline yet") !== -1));
+        /* Readable now (from the cache after a disconnect, say): the same
+         * Save pins again against what the form showed and goes through. */
+        failing = false;
+        alerts.length = 0;
+        const saved = await globalThis.savePersonGroupEditor(r, "PG-R", next, shown, r.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true, "the Save uses the pin taken again");
+        assert.deepEqual(alerts, [], "with no refusal first");
+        const rows = (await store.listOperations())
+            .filter(row => row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-R");
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0].base_revision, 2);
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
+async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+    };
+    const alerts = [];
+    let current = baseAt({ name: 2, description: 0, parent_id: 0 },
+        { name: "Group B", description: "original" });
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    /* The server as each read finds it: revisions from the sync state, values
+     * from the group's own record. */
+    globalThis.prksOfflineReadEntity = async (kind, id, _path, opts) => {
+        if (kind === "person-group-state") {
+            const fields = {};
+            Object.keys(current).forEach((name) => { fields[name] = { revision: current[name].revision }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        const row = { id, parent: null, children: [], members: [], member_count: 0 };
+        Object.keys(current).forEach((name) => { row[name] = current[name].value; });
+        row.parent_id = row.parent_id || null;
+        if (opts && typeof opts.validate === "function" && !opts.validate(row)) {
+            return { value: null, source: "unavailable" };
+        }
+        return { value: row, source: "server" };
+    };
+    function tab() {
+        return {
+            tabId: "tab-b", destroyed: false,
+            ui: { personGroupEditing: false, personGroupEditSession: 0 },
+            lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-B" } },
+            getEntity: () => ({ id: "PG-B", name: "Group B", description: "original", parent: null }),
+        };
+    }
+    const writes = async () => (await store.listOperations())
+        .filter(row => row.operation === "SET_PERSON_GROUP_FIELD" && row.entity_id === "PG-B");
+    try {
+        const b = tab();
+        globalThis.openPersonGroupEdit(b);
+        assert.equal(b.ui.personGroupEditPin.groupId, "PG-B", "Edit pins the base when it opens");
+        await b.ui.personGroupEditPin.base;
+        /* Tab A saves the description; the acknowledged revision moves to 1. */
+        current = baseAt({ name: 2, description: 1, parent_id: 0 },
+            { name: "Group B", description: "from A" });
+        const shown = b.ui.personGroupFieldBaseline;
+        const saved = await globalThis.savePersonGroupEditor(b, "PG-B",
+            { name: "Group B", description: "from stale B", parent_id: "", parent_name: "" },
+            shown, b.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true);
+        const [row] = await writes();
+        assert.equal(row.payload.value, "from stale B");
+        assert.equal(row.base_revision, 0,
+            "the stale tab sends the revision its form opened on, not the one read at Save");
+
+        /* A form whose own read already held a newer value has no base for
+         * that field: editing it is refused and the draft kept. */
+        const store2 = newStore();
+        runtimeForStore(store2);
+        globalThis.prksDurableOperationsOrNone = async () => store2.listOperations();
+        const c = tab();
+        current = baseAt({ name: 2, description: 1, parent_id: 0 },
+            { name: "Group B", description: "from A" });
+        globalThis.openPersonGroupEdit(c);
+        const refused = await globalThis.savePersonGroupEditor(c, "PG-B",
+            { name: "Group B", description: "mine", parent_id: "", parent_name: "" },
+            c.ui.personGroupFieldBaseline, c.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "an unknown base refuses the changed field");
+        assert.match(alerts.join(" "), /changed in another tab/);
+        assert.deepEqual((await store2.listOperations()).filter(r => r.entity_id === "PG-B"), [],
+            "nothing is queued for a field whose base is unknown");
+        const renamed = await globalThis.savePersonGroupEditor(c, "PG-B",
+            { name: "Renamed", description: "original", parent_id: "", parent_name: "" },
+            c.ui.personGroupFieldBaseline, c.ui.personGroupEditSession);
+        assert.equal(renamed && renamed.ok, true, "an untouched unknown field does not block another");
+        const [name] = (await store2.listOperations()).filter(r => r.entity_id === "PG-B");
+        assert.equal(name.payload.field, "name");
+        assert.equal(name.base_revision, 2);
+
+        /* The refusal asked for Cancel and Edit again: Cancel reloads the
+         * Group from the server, so the next Edit opens on the current
+         * version instead of the held one it refused (#1454 review). */
+        const reads = [];
+        const serverRead = globalThis.prksOfflineReadEntity;
+        let reachable = false;
+        let refusedReads = 0;
+        globalThis.prksOfflineReadEntity = async (kind, id, ...rest) => {
+            reads.push(kind);
+            if (!reachable && kind === "person-group") {
+                await new Promise(resolve => setImmediate(resolve));
+                refusedReads += 1;
+                return { value: null, source: "unavailable" };
+            }
+            return serverRead(kind, id, ...rest);
+        };
+        let shownGroup = { id: "PG-B", name: "Group B", description: "original", parent: null };
+        c.getEntity = () => shownGroup;
+        let repaint = null;
+        const nextPaint = () => new Promise((resolve) => { repaint = resolve; });
+        c.setEntity = (_name, value) => { shownGroup = value; if (repaint) repaint(value); };
+        globalThis.closePersonGroupEdit(c);
+        assert.equal(c.ui.personGroupEditPin, null, "closing Edit drops the pin");
+        assert.equal(c.ui.personGroupEditing, false, "Cancel closes the editor at once");
+        await until(() => refusedReads === 1);
+        await new Promise(resolve => setImmediate(resolve));
+        assert(reads.includes("person-group"), "Cancel after the refusal reads the Group from the server");
+        assert.equal(c.ui.personGroupStale, "PG-B", "an unreachable server keeps the stale mark");
+
+        /* Edit waits for the current version: offline it stays closed and
+         * says why, and no baseline is captured from the held version. */
+        const alertsBefore = alerts.length;
+        globalThis.openPersonGroupEdit(c);
+        assert.equal(c.ui.personGroupEditing, false, "Edit does not open on the held version");
+        assert.equal(c.ui.personGroupFieldBaseline, null, "and captures no baseline");
+        await until(() => alerts.length > alertsBefore);
+        assert.equal(alerts.length, alertsBefore + 1, "the user is told why Edit did not open");
+        assert.match(alerts[alerts.length - 1], /could not load the current version/);
+
+        reachable = true;
+        const painted = nextPaint();
+        globalThis.openPersonGroupEdit(c);
+        assert.equal((await painted).description, "from A", "a reachable server repaints the current version");
+        await until(() => c.ui.personGroupEditing === true);
+        globalThis.prksOfflineReadEntity = serverRead;
+        assert.equal(c.ui.personGroupStale, null, "the stale mark is spent");
+        assert.equal(c.ui.personGroupEditing, true, "and Edit then opens");
+        assert.equal(c.ui.personGroupFieldBaseline.description, "from A", "on the current version");
+        globalThis.closePersonGroupEdit(c);
+
+        /* This device's own unsent edit is what the form shows: editing it
+         * again keeps the revision that edit was measured against. */
+        const d = tab();
+        d.getEntity = () => ({ id: "PG-B", name: "Renamed", description: "from A", parent: null });
+        globalThis.openPersonGroupEdit(d);
+        const again = await globalThis.savePersonGroupEditor(d, "PG-B",
+            { name: "Renamed twice", description: "from A", parent_id: "", parent_name: "" },
+            d.ui.personGroupFieldBaseline, d.ui.personGroupEditSession);
+        assert.equal(again && again.ok, true, "an unsent edit can be edited again");
+        const rows = (await store2.listOperations()).filter(r => r.entity_id === "PG-B");
+        assert.equal(rows.length, 1, "the unsent rename is replaced, not stacked");
+        assert.equal(rows[0].payload.value, "Renamed twice");
+        assert.equal(rows[0].base_revision, 2);
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
 async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     const idb = createFakeIndexedDBFactory();
     const store = createPrksLocalStore({ dbName: 'prks-local-v2:test', indexedDB: idb, uuid });
@@ -828,7 +1155,9 @@ async function aRefusedGroupUpdateDoesNotLeaveTheTypedParent() {
     globalThis.prksEffectivePersonGroupCatalogue = async () => [];
     const ctx = {
         destroyed: false,
-        ui: { personGroupEditing: true, personGroupEditSession: 4 },
+        ui: { personGroupEditing: true, personGroupEditSession: 4,
+            personGroupEditPin: pinFor("PG-A", 4,
+                { name: "Group A", description: "Kept", parent_id: "" }, base) },
         lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-A" } },
         getEntity: () => ({ id: "PG-A", name: "Group A" }),
     };
@@ -1159,6 +1488,99 @@ async function deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts() {
     }
 }
 
+/* Edit opened on this device's own unsent rename: once it has been
+ * acknowledged, renaming back is recorded against its ACK, not dropped. */
+async function aRevertAfterTheShownRenameSyncedIsSaved() {
+    const core = globalThis.prksSyncReconcile;
+    const store = newStore();
+    const read = baseAt({ name: 4 }, { name: "Analysts" });
+    const [sent] = await store.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const shown = { name: "Engineers", description: "", parent_id: "" };
+    const pinned = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4, pendingOp: sent.op_id } });
+    await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 5 });
+    const edits = core.pinnedEdits(shown, Object.assign({}, shown, { name: "Analysts" }), pinned);
+    await store.savePersonGroupFields("PG-R", edits.changes, edits.base);
+    const rows = (await rowsFor(store, "SET_PERSON_GROUP_FIELD")).filter(r => r.status !== "acknowledged");
+    assert.equal(rows.length, 1, "the revert is recorded");
+    assert.equal(rows[0].payload.value, "Analysts");
+    assert.equal(rows[0].base_revision, 5, "against the shown rename's ACK");
+
+    /* The shown rename retired; a stale pane queued the same name at the
+     * same base. That row is not the shown rename, so the revert is kept. */
+    const again = newStore();
+    const [first] = await again.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const pin = core.pinEditBase(shown, read, { name: { value: "Engineers", revision: 4, pendingOp: first.op_id } });
+    await again.updateOperationSyncState(first.op_id, { status: "acknowledged", server_revision: 5 });
+    await again.deleteAcknowledgedOperation(first.op_id);
+    await again.savePersonGroupFields("PG-R", { name: "Engineers" }, read);
+    const revert = core.pinnedEdits(shown, Object.assign({}, shown, { name: "Analysts" }), pin);
+    await again.savePersonGroupFields("PG-R", revert.changes, revert.base);
+    assert.deepEqual((await rowsFor(again, "SET_PERSON_GROUP_FIELD")).map(r => [r.payload.value, r.base_revision]),
+        [["Analysts", 4]], "the revert is queued at the pin, where a moved server refuses it");
+}
+
+/* A pending move shows the new parent on the nested `parent` too, so Edit
+ * opens on it and does not refuse its own move as changed elsewhere. */
+async function aPendingMoveShowsTheNewParent() {
+    const group = { id: "PG-C", name: "Child", parent_id: "PG-OLD", parent: { id: "PG-OLD", name: "Old" },
+        members: [] };
+    const ops = [{ operation: "SET_PERSON_GROUP_FIELD", entity_type: "person-group", entity_id: "PG-C",
+        status: "pending", sequence: 1, base_revision: 2, payload: { field: "parent_id", value: "PG-NEW" } }];
+    const catalogue = [{ id: "PG-NEW", name: "New" }];
+    const moved = globalThis.prksEffectivePersonGroupDetail(group, ops, [], catalogue);
+    assert.equal(moved.parent_id, "PG-NEW");
+    assert.deepEqual(moved.parent, { id: "PG-NEW", name: "New" }, "the shown parent follows the move");
+    assert.equal(globalThis.prksPersonGroupHasPendingMove(ops, "PG-C"), true);
+    const toTop = globalThis.prksEffectivePersonGroupDetail(group, [Object.assign({}, ops[0],
+        { payload: { field: "parent_id", value: "" } })], [], catalogue);
+    assert.equal(toTop.parent, null, "a move to the top level shows no parent");
+    assert.deepEqual(globalThis.prksEffectivePersonGroupDetail(group, [], [], catalogue).parent,
+        { id: "PG-OLD", name: "Old" }, "no pending move leaves the parent alone");
+    /* The destination is deleted offline after the move: the page shows the
+     * ancestor the catalogue moved the group up to. */
+    const rows = [{ id: "PG-ANC", name: "Ancestor", parent_id: null },
+        { id: "PG-NEW", name: "New", parent_id: "PG-ANC" },
+        { id: "PG-OLD", name: "Old", parent_id: null },
+        { id: "PG-C", name: "Child", parent_id: "PG-OLD" }];
+    const both = ops.concat([{ operation: "DELETE_PERSON_GROUP", entity_type: "person-group", entity_id: "PG-NEW",
+        status: "pending", sequence: 2, payload: {} }]);
+    const effective = globalThis.prksEffectivePersonGroups(rows, both);
+    const orphaned = globalThis.prksEffectivePersonGroupDetail(group, both, [], effective);
+    assert.deepEqual(orphaned.parent, { id: "PG-ANC", name: "Ancestor" },
+        "a deleted destination shows the surviving ancestor");
+    assert.equal(orphaned.parent_id, "PG-NEW", "the queued move stays the value the edit pin compares");
+    const atRoot = globalThis.prksEffectivePersonGroupDetail(group, both, [],
+        globalThis.prksEffectivePersonGroups(rows.map(r => (r.id === "PG-NEW" ? { ...r, parent_id: null } : r)), both));
+    assert.equal(atRoot.parent, null, "a destination at the top level leaves the group at the top level");
+    /* Edit opens on that ancestor: the pin takes it as this device's pending
+     * parent, at the move's revision, rather than as changed elsewhere. */
+    const previousRead = globalThis.prksOfflineReadEntity;
+    globalThis.prksOfflineReadEntity = async (kind, id) => (kind === "person-group-state"
+        ? { value: { group_id: id, fields: { name: { revision: 0 }, description: { revision: 0 },
+            parent_id: { revision: 2 } }, members: [] }, source: "server" }
+        : { value: { id, name: "Child", description: "", parent_id: "PG-OLD" }, source: "server" });
+    const previousCatalogue = globalThis.prksEffectivePersonGroupCatalogue;
+    globalThis.prksEffectivePersonGroupCatalogue = async opsNow => globalThis.prksEffectivePersonGroups(rows, opsNow);
+    try {
+        const pinned = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-ANC" }, both);
+        assert(pinned && pinned.parent_id, "the shown ancestor is a known base");
+        assert.equal(pinned.parent_id.revision, 2, "measured against the pending move's revision");
+        assert.equal(pinned.parent_id.pending, "PG-ANC");
+        const stale = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OTHER" }, ops);
+        assert.equal(stale.parent_id, null, "without the deletion a different parent is still unknown");
+        /* A form still showing the old parent never showed the move, so it
+         * cannot replace it: the parent base stays unknown. */
+        const unseen = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OLD" }, both);
+        assert.equal(unseen.parent_id, null, "a form that never showed the move cannot replace it");
+    } finally {
+        globalThis.prksEffectivePersonGroupCatalogue = previousCatalogue;
+        globalThis.prksOfflineReadEntity = previousRead;
+    }
+}
+
 /* A membership ACK names the Group with its name revision, or not at all
  * (#1452 review): an answer that states neither still settles the operation,
  * and half a pair is refused. */
@@ -1178,6 +1600,8 @@ async function main() {
     await aGroupIsUsableTheMomentItIsCreated();
     await aGroupNeedsAName();
     await fieldEditsCoalesceAndCancel();
+    await aRevertAfterTheShownRenameSyncedIsSaved();
+    await aPendingMoveShowsTheNewParent();
     await movingIntoALocalGroupWaitsForIt();
     await editsFollowTheGroupsOwnCreation();
     await aRefusedCreationTakesItsEditsDownVisibly();
@@ -1206,6 +1630,9 @@ async function main() {
     await aCommittedGroupFieldWriteStillNotifiesAfterTheEditorMovesOn();
     await aStaleGroupEditDoesNotCreateATypedParent();
     await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
+    await aSaveUsesTheRevisionsPinnedWhenEditOpened();
+    await aFailedPinIsTakenAgainOnTheNextSave();
+    await serverRevisionsNeverPairWithCachedValues();
     await aMembershipAckNamesItsGroupAsAPairOrNotAtAll();
     console.log("All " + checks + " person group checks passed");
 }

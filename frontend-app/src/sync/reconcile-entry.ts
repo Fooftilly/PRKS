@@ -4,6 +4,7 @@
  * No Vue mount, Pinia, or Vue Router.
  */
 export {
+  acknowledgeEditBase,
   adoptFresh,
   applyOwnerAck,
   carryObservation,
@@ -11,10 +12,13 @@ export {
   decideAck,
   entityKey,
   isRevision,
+  newerEditBase,
   observe,
   observedAt,
   overlay,
   pendingFor,
+  pinEditBase,
+  pinnedEdits,
   planAck,
   readBefore,
   timeOf,
