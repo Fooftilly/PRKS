@@ -94,6 +94,16 @@ class ContractCheckTests(unittest.TestCase):
         self.assertEqual(len(self.check.violations), 1, self.check.violations)
         self.assertIn("streamed text/plain not documented", self.check.violations[0])
 
+    def test_an_integer_header_is_read_as_its_decimal(self) -> None:
+        self.check._check_headers("x", {"headers": {"Content-Length": {"schema": {"type": "integer", "minimum": 0}}}},
+                                  {"Content-Length": "10"}.get)
+        self.assertEqual(self.check.violations, [])
+        for text in ("-1", "ten"):
+            self.check._check_headers("x", {"headers": {"Content-Length": {"schema": {"type": "integer",
+                                                                                      "minimum": 0}}}},
+                                      {"Content-Length": text}.get)
+        self.assertEqual(len(self.check.violations), 2, self.check.violations)
+
     def test_a_declared_header_holds_its_schema(self) -> None:
         def status(cache: list[tuple[str, str]]) -> Response:
             answer = _json(200, _STORAGE_BODY)
