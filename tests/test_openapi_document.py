@@ -300,6 +300,7 @@ class OpenApiDocumentTests(unittest.TestCase):
 
     def test_a_rest_parameter_is_one_openapi_parameter(self) -> None:
         self.assertEqual(openapi_path("/api/pdfs/{filename:path}"), "/api/pdfs/{filename}")
+        self.assertEqual(openapi_path("/api/things/{clé:path}"), "/api/things/{clé}")
 
     def test_a_head_route_sends_no_body(self) -> None:
         op = self.document["paths"]["/api/processing-items/{item_id}/pdf"]["head"]

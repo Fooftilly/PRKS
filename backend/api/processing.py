@@ -359,7 +359,8 @@ _PDF = Operation(
              headers={"Content-Range": Header("The range sent, as `bytes <first>-<last>/<size>`.",
                                               required=True)}),
      404: _refusal("No ready item with that id (ENTITY_NOT_FOUND)."),
-     416: Reply("The range is outside the file.")},
+     416: Reply("The range is outside the file.",
+                headers={"Content-Range": Header("The file size, as `bytes */<size>`.", required=True)})},
     params=(Param("Range", "header", description="One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."),))
 
 ROUTES = (
@@ -377,7 +378,8 @@ ROUTES = (
                        "shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE)."),
          408: _refusal("The body stalled for 30 seconds, or did not arrive within 60 seconds plus its "
                        "length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT)."),
-         409: _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED)."),
+         409: _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are "
+                       "missing and no item was registered (PROCESSING_OBJECT_MISSING)."),
          411: _refusal("No Content-Length (PROCESSING_LENGTH_REQUIRED)."),
          413: _refusal("Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE)."),
          415: _refusal("Not sent as application/pdf (unsupported_media_type), or the body does not start "
