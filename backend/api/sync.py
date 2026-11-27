@@ -28,7 +28,7 @@ def post_operation(req: Request) -> Response:
 
     data = req.data
     database, ctx = req.actor
-    status, result = process_operation(database, ctx, data, Environment(pdfs_dir=req.app.pdfs_dir))
+    status, result = process_operation(database, ctx, data, Environment())
     acknowledged = status == 200 and result.get("code") == "ACKNOWLEDGED"
     operation = data.get("operation")
     if acknowledged and operation == note_rules.RESEARCH_OPERATION:

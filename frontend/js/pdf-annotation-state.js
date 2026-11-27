@@ -245,9 +245,10 @@
         };
     }
 
+    /** A managed PDF's Asset content URL, content version included (#1427). */
     function managedPdfPath(filePath) {
-        const raw = String(filePath || '').split('?')[0];
-        return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+        const raw = String(filePath || '').split('#')[0].trim();
+        return /^\/api\/assets\/AS-[0-9A-Za-z-]+\/content(?:\?v=[0-9a-f]{1,64})?$/.test(raw) ? raw : '';
     }
 
     async function hasCachedManagedPdf(filePath) {

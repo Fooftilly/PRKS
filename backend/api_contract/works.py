@@ -42,7 +42,7 @@ class _WorkCard(BaseModel):
     title: str
     status: str
     doc_type: Optional[str]
-    file_path: str = Field(description="``/api/pdfs/<name>`` for a managed PDF, else empty.")
+    file_path: str = Field(description="``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.")
     source_kind: Optional[Literal["pdf", "video"]]
     source_url: Optional[str]
     thumb_url: Optional[str]
@@ -60,7 +60,9 @@ class _WorkCard(BaseModel):
     primary_editor: Optional[str]
     linked_authors: Optional[str] = Field(description="The Authors' display names, comma separated.")
     linked_people: list[LinkedPerson]
-    file_size_bytes: Optional[int] = Field(description="The managed PDF's size on disk; null without one.")
+    file_size_bytes: Optional[int] = Field(description=(
+        "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, "
+        "not the disk; null without one."))
 
 
 class WorkBrowseRow(_WorkCard):
@@ -339,7 +341,7 @@ class WorkCreateRequest(BaseModel):
     pages: str = omittable()
     isbn: str = omittable()
     doi: str = omittable()
-    file_path: str = omittable("A managed PDF (``/api/pdfs/<name>``) the new Work adopts.")
+    file_path: str = omittable("A managed PDF (its ``/api/assets/<id>/content?v=<version>`` URL) the new Work adopts.")
     file_name: Optional[str] = omittable("The uploaded file's name; sent with file_b64. Null: no upload.")
     file_b64: Optional[str] = omittable("The uploaded PDF, base64 encoded. Null: no upload.")
     source_kind: str = omittable("``pdf`` or ``video``; inferred when left out.")

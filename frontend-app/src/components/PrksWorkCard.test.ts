@@ -33,7 +33,7 @@ describe('Work-card helpers', () => {
   })
 
   it('suppresses cached thumbs and states PDF page 1 explicitly', () => {
-    const pdf = { id: 'W-8', file_path: '/api/pdfs/w8.pdf' }
+    const pdf = { id: 'W-8', file_path: '/api/assets/AS-w8-pdf/content' }
     expect(workCardThumbUrl(pdf)).toBe('/api/works/W-8/thumbnail?page=1')
     expect(workCardThumbUrl(pdf, { suppressThumbnail: true })).toBe('')
     expect(workCardEmptyThumbTitle(pdf, { suppressThumbnail: true })).toBe('Preview not available offline')
@@ -45,7 +45,7 @@ describe('Work-card helpers', () => {
   })
 
   it('fingerprints work/thumb identity, not parent noise', () => {
-    const pdf = { id: 'W-8', file_path: '/api/pdfs/w8.pdf', thumb_page: 1, title: 'One' }
+    const pdf = { id: 'W-8', file_path: '/api/assets/AS-w8-pdf/content', thumb_page: 1, title: 'One' }
     const sameThumb = workCardCollectionFingerprint([{ ...pdf, title: 'Edited' }])
     const origin = workCardCollectionFingerprint([pdf])
     expect(sameThumb).toBe(origin)
@@ -74,7 +74,7 @@ describe('PrksWorkCard', () => {
           year: '1972',
           status: 'In Progress',
           file_size_bytes: 1024 * 1024,
-          file_path: '/api/pdfs/w1.pdf',
+          file_path: '/api/assets/AS-w1-pdf/content',
         },
         options: { subtitle: 'Added Sep 5, 2026' },
       },
@@ -147,7 +147,7 @@ describe('PrksWorkCard', () => {
         work: {
           id: 'W-8',
           title: 'Paged',
-          file_path: '/api/pdfs/w8.pdf',
+          file_path: '/api/assets/AS-w8-pdf/content',
           thumb_page: 1,
         },
       },
@@ -160,7 +160,7 @@ describe('PrksWorkCard', () => {
       work: {
         id: 'W-8',
         title: 'Paged',
-        file_path: '/api/pdfs/w8.pdf',
+        file_path: '/api/assets/AS-w8-pdf/content',
         thumb_page: 2,
       },
     })
@@ -177,7 +177,7 @@ describe('PrksWorkCard', () => {
 
     const stored = mount(PrksWorkCard, {
       props: {
-        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 5 },
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/assets/AS-x-pdf/content', thumb_page: 5 },
       },
     })
     expect(stored.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('5')
@@ -186,7 +186,7 @@ describe('PrksWorkCard', () => {
     const pendingPage = mount(PrksWorkCard, {
       props: {
         // Already-effective row after pending SET thumb_page=3.
-        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 3 },
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/assets/AS-x-pdf/content', thumb_page: 3 },
       },
     })
     expect(pendingPage.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('3')
@@ -195,7 +195,7 @@ describe('PrksWorkCard', () => {
     const pendingClear = mount(PrksWorkCard, {
       props: {
         // Already-effective row after pending CLEAR while server still has 5.
-        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: null },
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/assets/AS-x-pdf/content', thumb_page: null },
       },
     })
     expect(pendingClear.get('.work-card__thumb').attributes('data-prks-thumb-page')).toBe('1')
@@ -208,7 +208,7 @@ describe('PrksWorkCard', () => {
     vi.stubGlobal('prksRegisterWorkThumbUrl', register)
     const wrapper = mount(PrksWorkCard, {
       props: {
-        work: { id: 'W-P', title: 'Paper', file_path: '/api/pdfs/x.pdf', thumb_page: 4 },
+        work: { id: 'W-P', title: 'Paper', file_path: '/api/assets/AS-x-pdf/content', thumb_page: 4 },
         options: { suppressThumbnail: true },
       },
     })
@@ -223,7 +223,7 @@ describe('PrksWorkCard', () => {
   it('exposes selection anchors without injecting a checkbox', () => {
     const wrapper = mount(PrksWorkCard, {
       props: {
-        work: { id: 'W-1', title: 'Alpha', file_path: '/api/pdfs/a.pdf' },
+        work: { id: 'W-1', title: 'Alpha', file_path: '/api/assets/AS-a-pdf/content' },
       },
     })
     const html = wrapper.html()

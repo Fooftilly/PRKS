@@ -4,9 +4,7 @@ Reads: the Work catalog and its browse projections, the Work detail, the
 primary Asset's thumbnail fields, the metadata, source and notes revision
 states, the BibTeX entry and the managed-PDF ownership check. Each runs in one
 :func:`~backend.domain.identity.library_scope.library_query` snapshot,
-authorized for ``READ_LIBRARY``. A list's rows are finished outside the
-transaction with each managed PDF's size on disk
-(``finish_work_summary_rows``).
+authorized for ``READ_LIBRARY``.
 
 Writes: create (from an existing managed PDF, an upload, a stream or no
 file), the metadata PATCH, the open mark, delete and the bulk actions. Each is
@@ -19,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, TypeVar
@@ -28,8 +25,8 @@ from backend.db.database import Database, Isolation
 from backend.domain.identity.authorization import Capability
 from backend.domain.identity.library_scope import LibraryScope, library_command, library_query
 from backend.domain.identity.request_context import RequestContext
+from backend.domain.objects.content_url import is_current_version
 from backend.domain.works import projection, queries
-from backend.domain.works.rules import finish_work_summary_rows
 from backend.storage.objects import StorageBackend, Writer
 
 T = TypeVar("T")
@@ -38,39 +35,32 @@ RECENT_LIMIT = 30
 RECENTLY_ADDED_LIMIT = 50
 
 
-def _finish(rows: List[dict], pdfs_dir: str) -> List[dict]:
-    finish_work_summary_rows(rows, pdfs_dir)
-    return rows
-
-
-def catalog(db: Database, ctx: RequestContext, pdfs_dir: str) -> List[dict]:
+def catalog(db: Database, ctx: RequestContext) -> List[dict]:
     """``GET /api/works``: every Work summary, newest first."""
     cores = library_query(db, ctx, queries.works_by_created)
-    return _finish([projection.work_summary(core) for core in cores], pdfs_dir)
+    return [projection.work_summary(core) for core in cores]
 
 
-def browse_catalog(db: Database, ctx: RequestContext, pdfs_dir: str) -> List[dict]:
+def browse_catalog(db: Database, ctx: RequestContext) -> List[dict]:
     """``GET /api/works?projection=browse``: the compact browse rows, by title."""
     cores = library_query(db, ctx, queries.works_by_title)
-    return _finish([projection.work_browse(core) for core in cores], pdfs_dir)
+    return [projection.work_browse(core) for core in cores]
 
 
-def recent_browse(db: Database, ctx: RequestContext, pdfs_dir: str, limit: int = RECENT_LIMIT) -> List[dict]:
+def recent_browse(db: Database, ctx: RequestContext, limit: int = RECENT_LIMIT) -> List[dict]:
     """``GET /api/recent``: the most recently opened Works."""
     cores = library_query(db, ctx, lambda scope: queries.works_by_opened(scope, limit))
-    return _finish([projection.work_browse(core, excerpt=False, extra=("last_opened_at",))
-                    for core in cores], pdfs_dir)
+    return [projection.work_browse(core, excerpt=False, extra=("last_opened_at",)) for core in cores]
 
 
-def recently_added_browse(db: Database, ctx: RequestContext, pdfs_dir: str,
-                          limit: int = RECENTLY_ADDED_LIMIT) -> List[dict]:
+def recently_added_browse(db: Database, ctx: RequestContext, limit: int = RECENTLY_ADDED_LIMIT) -> List[dict]:
     """``GET /api/recently-added``: the most recently created Works."""
     cores = library_query(db, ctx, lambda scope: queries.works_by_created(scope, limit))
-    return _finish([projection.work_browse(core, excerpt=False, extra=("created_at", "publisher", "folder_id"))
-                    for core in cores], pdfs_dir)
+    return [projection.work_browse(core, excerpt=False, extra=("created_at", "publisher", "folder_id"))
+            for core in cores]
 
 
-def detail(db: Database, ctx: RequestContext, pdfs_dir: str, work_id: str) -> Optional[dict]:
+def detail(db: Database, ctx: RequestContext, work_id: str) -> Optional[dict]:
     """``GET /api/works/:id`` without its Research refs; ``None`` for a missing Work.
 
     The Work, its Tags, its annotations and the Research Note's wiki links
@@ -98,7 +88,7 @@ def detail(db: Database, ctx: RequestContext, pdfs_dir: str, work_id: str) -> Op
     work["annotations"] = json.dumps(annotations)
     if html_content is not None:
         work["html_content"] = html_content
-    return _finish([work], pdfs_dir)[0]
+    return work
 
 
 def thumbnail_fields(db: Database, ctx: RequestContext, work_id: str) -> Optional[dict]:
@@ -232,21 +222,24 @@ def citations(db: Database, ctx: RequestContext, data: Any) -> dict:
     return {"format": fmt, "text": "\n\n".join(entries), "missing": missing}
 
 
-def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
-    """Whether the acting Library has an Asset whose bytes are the managed PDF ``name``.
+def asset_object(db: Database, ctx: RequestContext, asset_id: str, version: Optional[str] = None) -> Optional[str]:
+    """The storage key name the acting Library's managed Asset ``asset_id`` names now.
 
-    One data root serves every Library, so ``/api/pdfs/<name>`` serves a file
-    only to a member of a Library that references it: a name from another
-    Library reads as missing.
+    One data root serves every Library, so the content route serves bytes
+    only through an Asset of the acting Library: an id from another Library,
+    a stream or an unknown id reads as missing (``None``). So does a
+    ``version`` (a content URL's ``v``) that no longer names the Asset's bytes.
     """
 
-    def read(scope: LibraryScope) -> bool:
+    def read(scope: LibraryScope) -> Optional[str]:
         row = scope.execute(
-            "SELECT 1 FROM prks.assets WHERE library_id = %(library_id)s"
-            " AND (storage_locator = %(name)s OR source_locator = %(name)s) LIMIT 1",
-            {"name": name},
+            "SELECT storage_locator, content_sha256 FROM prks.assets WHERE library_id = %(library_id)s"
+            " AND id = %(asset_id)s AND kind = 'managed_file'",
+            {"asset_id": asset_id},
         ).fetchone()
-        return row is not None
+        if row is None or not is_current_version(version, row["content_sha256"]):
+            return None
+        return str(row["storage_locator"])
 
     return library_query(db, ctx, read)
 
@@ -256,7 +249,7 @@ def holds_managed_pdf(db: Database, ctx: RequestContext, name: str) -> bool:
 #: The fields of a new Work and their defaults (SQLite's ``add_work`` arguments).
 NEW_WORK_DEFAULTS: dict[str, Any] = {
     "title": "", "status": "Not Started", "abstract": "", "text_content": "", "published_date": "",
-    "file_path": "", "author_text": "", "year": "", "publisher": "", "location": "", "edition": "",
+    "stored_key": "", "author_text": "", "year": "", "publisher": "", "location": "", "edition": "",
     "journal": "", "volume": "", "issue": "", "pages": "", "isbn": "", "doi": "", "doc_type": "article",
     "source_kind": "", "source_url": "", "source_mime": "", "thumb_url": "", "provider": "",
     "provider_id": "", "urldate": "", "thumb_page": None, "private_notes": "",
@@ -292,7 +285,7 @@ def _authorize_edit(db: Database, ctx: RequestContext) -> None:
     library_query(db, ctx, lambda scope: None, capability=Capability.EDIT_LIBRARY)
 
 
-def create(db: Database, ctx: RequestContext, pdfs_dir: str, objects: StorageBackend,
+def create(db: Database, ctx: RequestContext, objects: StorageBackend,
            fields: dict[str, Any], upload: Optional[tuple[str, Writer]] = None) -> str:
     """Create a Work; its id.
 
@@ -300,12 +293,13 @@ def create(db: Database, ctx: RequestContext, pdfs_dir: str, objects: StorageBac
     rules (``_canonical_new_source``): a contradictory or unsupported source
     raises ``ValueError``. Then:
 
-    - a managed ``file_path`` must name an existing file under ``pdfs_dir``,
-      whose SHA-256 and size the Asset records (a missing or non-managed path
-      raises ``ValueError``);
+    - a ``stored_key`` is the name of an existing object in ``objects``
+      asset namespace (an Asset of this Library already names it: the route
+      finds it from the Asset's content URL), whose SHA-256 and size the new
+      Asset records; an invalid or missing key raises ``ValueError``;
     - ``upload`` (file name, writer) is a new PDF: ``objects.ingest.store_pdf``
       writes the source key (and a linearized working key) and the create
-      adopts them; with ``upload``, ``file_path`` must be empty. Bytes a
+      adopts them; with ``upload``, ``stored_key`` must be empty. Bytes a
       refused or failed create leaves behind are the orphan sweep's (§11.2);
     - a video becomes an ``external_stream`` Asset, and a video with a file
       is refused (a stream stores no bytes);
@@ -320,20 +314,20 @@ def create(db: Database, ctx: RequestContext, pdfs_dir: str, objects: StorageBac
     from backend.domain.works.rules import _canonical_new_source, normalize_doc_type
     from backend.domain.entity_ids import generate
 
-    file_path = fields["file_path"]
-    if upload is not None and file_path:
+    stored_key = fields["stored_key"]
+    if upload is not None and stored_key:
         raise TypeError("the uploaded PDF is the Work's file")
     _authorize_edit(db, ctx)
     # An upload has a file before it has a key: classified as one.
     kind, url, provider, provider_id = _canonical_new_source(
         fields["source_kind"], fields["source_url"], fields["provider"], fields["provider_id"],
-        upload[0] if upload is not None else file_path)
+        upload[0] if upload is not None else stored_key)
     managed: Optional[commands.ManagedFile] = None
     if upload is not None:
         if kind == "video":
             raise ValueError("a video Work has no managed file")
         managed = ingest.store_pdf(objects, *upload).managed_file()
-    asset = _new_asset(pdfs_dir, kind, file_path, url, provider, provider_id, fields["source_mime"],
+    asset = _new_asset(objects, kind, stored_key, url, provider, provider_id, fields["source_mime"],
                        fields["thumb_url"], fields["thumb_page"], managed)
     bibliographic = {name: fields[name] for name in (
         "year", "published_date", "edition", "publisher", "location", "journal", "volume",
@@ -362,7 +356,7 @@ def create(db: Database, ctx: RequestContext, pdfs_dir: str, objects: StorageBac
     return created
 
 
-def _new_asset(pdfs_dir: str, kind: Optional[str], file_path: str, url: Optional[str],
+def _new_asset(objects: StorageBackend, kind: Optional[str], stored_key: str, url: Optional[str],
                provider: Optional[str], provider_id: Optional[str], source_mime: str,
                thumb_url: str, thumb_page: Any, managed: Any = None) -> Any:
     from backend.domain.works import commands
@@ -372,7 +366,7 @@ def _new_asset(pdfs_dir: str, kind: Optional[str], file_path: str, url: Optional
         "thumb_url": (thumb_url or "").strip() or None,
         "thumb_page": _thumb_page(thumb_page),
     }
-    has_file = managed is not None or bool((file_path or "").strip())
+    has_file = managed is not None or bool((stored_key or "").strip())
     if kind == "video":
         if has_file:
             raise ValueError("a video Work has no managed file")
@@ -382,25 +376,31 @@ def _new_asset(pdfs_dir: str, kind: Optional[str], file_path: str, url: Optional
         )
     if not has_file:
         return None
-    return commands.NewAsset(source=managed or _managed_file(pdfs_dir, file_path), **presentation)
+    return commands.NewAsset(source=managed or _managed_file(objects, stored_key), **presentation)
 
 
-def _managed_file(pdfs_dir: str, file_path: str) -> Any:
+def _managed_file(objects: StorageBackend, name: str) -> Any:
     from backend.domain.works import commands
-    from backend.pdf.managed_pdf_names import managed_pdf_filename, safe_pdf_path_under_dir
+    from backend.storage.objects import (
+        NAMESPACE_ASSET_OBJECTS, InvalidStorageKey, ObjectIntegrityError, ObjectNotFound, StorageKey,
+    )
 
-    name = managed_pdf_filename(file_path)
-    path = safe_pdf_path_under_dir(pdfs_dir, name) if name else None
-    if name is None or path is None:
+    try:
+        key = StorageKey(NAMESPACE_ASSET_OBJECTS, name) if name else None
+    except InvalidStorageKey:
+        key = None
+    if key is None:
         raise ValueError("file_path is not a managed PDF")
-    if not os.path.isfile(path):
-        raise ValueError("the managed PDF does not exist")
     digest = hashlib.sha256()
     size = 0
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(_HASH_CHUNK), b""):
-            digest.update(chunk)
-            size += len(chunk)
+    try:
+        with objects.open_read(key) as handle:
+            for chunk in iter(lambda: handle.read(_HASH_CHUNK), b""):
+                digest.update(chunk)
+                size += len(chunk)
+    except (ObjectNotFound, ObjectIntegrityError):
+        # A key that names no regular file (a directory, a link) is no managed PDF either.
+        raise ValueError("the managed PDF does not exist") from None
     return commands.ManagedFile(storage_locator=name, sha256=digest.hexdigest(), byte_size=size)
 
 

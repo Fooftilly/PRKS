@@ -42,7 +42,6 @@ SPAN_NAMES = frozenset(
         "db",
         "json_encode",
         "gzip",
-        "pdf_file_stats",
         "pdf_text_search",
         "thumbnail_render",
         "thumbnail_encode",
@@ -67,8 +66,6 @@ COUNTER_NAMES = frozenset(
     {
         "thumbnail_cache_hits",
         "thumbnail_cache_misses",
-        "pdf_file_stat_rows",
-        "pdf_file_stat_files",
         "db_read",
         "db_write",
     }
@@ -85,7 +82,6 @@ _SERVER_TIMING_ORDER = (
     "db",
     "json_encode",
     "gzip",
-    "pdf_file_stats",
     "pdf_text_search",
     "thumbnail_render",
     "thumbnail_encode",

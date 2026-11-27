@@ -56,8 +56,6 @@ class PerformanceCounters(BaseModel):
 
     thumbnail_cache_hits: int = Field(..., ge=0)
     thumbnail_cache_misses: int = Field(..., ge=0)
-    pdf_file_stat_rows: int = Field(..., ge=0)
-    pdf_file_stat_files: int = Field(..., ge=0)
     db_read: int = Field(..., ge=0)
     db_write: int = Field(..., ge=0)
 

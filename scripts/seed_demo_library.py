@@ -273,7 +273,7 @@ def ensure_demo_note(api: Client) -> None:
         works = []
     note = _work_by_title(works, NOTE_TITLE)
     file_path = (note.get("file_path") or "").strip() if note else ""
-    if note and file_path.startswith("/api/pdfs/"):
+    if note and file_path.startswith("/api/assets/"):
         return
     if note:
         api.delete(f"/api/works/{note['id']}")

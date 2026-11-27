@@ -17,7 +17,7 @@ _JOBS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/diagn
 _CREATE_POSITION = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/positions")
 _IMPORT_ONE = next(r for r in ROUTES if r.method == "POST" and r.pattern.endswith("/import")
                    and "{item_id}" in r.pattern)
-_HEAD_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/pdfs/{filename:path}")
+_HEAD_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/assets/{asset_id}/content")
 _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/openapi.json")
 _PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/processing-items/{item_id}/pdf")
 _STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
@@ -95,7 +95,7 @@ class ContractCheckTests(unittest.TestCase):
 
     def test_an_answer_without_a_required_header_is_a_violation(self) -> None:
         self.check.check(_HEAD_PDF, _request(), Response(416, [], b""))
-        self.assertEqual(self.check.violations, ["HEAD /api/pdfs/{filename:path} -> 416: required header "
+        self.assertEqual(self.check.violations, ["HEAD /api/assets/{asset_id}/content -> 416: required header "
                                                  "Content-Range missing"])
         self.check.violations.clear()
         self.check.check(_HEAD_PDF, _request(), Response(416, [("Content-Range", "bytes */10")], b""))

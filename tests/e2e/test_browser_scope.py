@@ -738,7 +738,7 @@ class BrowserScopePdfCacheTests(unittest.TestCase):
         self.server = AppServer(seed_fn=seed_library, auth="session", members=(READER,))
         self.addCleanup(self.server.stop_later)
         self.server.start()
-        self.pdf_path = "/api/pdfs/%s" % self.server.ids["pdf_name"]
+        self.pdf_path = self.server.ids["pdf_path"]
         self.context = _BROWSER.new_context(viewport={"width": 1400, "height": 900})
         self.addCleanup(self.context.close)
 

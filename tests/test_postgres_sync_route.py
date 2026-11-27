@@ -18,7 +18,7 @@ class PostgresSyncRouteTests(unittest.TestCase):
     def answer(self, operation: str, refs) -> tuple[int, dict]:
         acked = (200, {"code": "ACKNOWLEDGED", "work_id": "W-1", "changed": True, "file_path": "x"})
         library = SimpleNamespace(database=object())
-        storage = SimpleNamespace(pdfs_dir="/unused/pdfs")
+        storage = SimpleNamespace()
         context = object()
         request = Request(
             "POST", "/api/sync/operations", "", Headers(),

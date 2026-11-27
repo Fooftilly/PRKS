@@ -58,7 +58,7 @@ function noteLibraryEpoch(response: Response): void {
 const reportableTransportFailures = new WeakSet<object>()
 
 function isManagedPdfPath(path: string): boolean {
-  return /^\/api\/pdfs\/[^/]+$/.test(path)
+  return /^\/api\/assets\/[^/]+\/content$/.test(path)
 }
 
 function callReachabilityHook(

@@ -23,6 +23,7 @@ otherwise (``ANNOTATION_MATERIALIZATION_STALE`` for a stale claim).
 
 from __future__ import annotations
 
+from backend.domain.objects.content_url import asset_content_url
 import json
 import logging
 from typing import Any, Callable, List, NoReturn, Optional, TypeVar
@@ -116,7 +117,7 @@ def materialize_pdf(db: Database, ctx: RequestContext, storage: StorageBackend, 
     # ``export_*`` name the bytes as uploaded; ``content_*`` the stored
     # working file, which linearization may have rewritten. The viewer
     # compares the export to tell its own document from a replacement.
-    return {"work_id": work_id, "file_path": "/api/pdfs/" + done.locator,
+    return {"work_id": work_id, "file_path": asset_content_url(done.asset_id, done.sha256),
             "content_sha256": done.sha256, "byte_size": done.size,
             "export_sha256": written.source.sha256, "export_byte_size": written.source.size,
             "materialized_pdf_annotation_revision": done.revision,

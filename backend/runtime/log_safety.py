@@ -121,7 +121,7 @@ _RESOURCE_SLOT = {
     "concepts": ":id",
     "positions": ":id",
     "arguments": ":id",
-    "pdfs": ":pdf",
+    "assets": ":id",
     "bibtex": ":id",
 }
 
@@ -148,6 +148,7 @@ _NESTED_STATIC = {
         }
     ),
     "playlists": frozenset({"items", "reorder"}),
+    "assets": frozenset({"content"}),
     "persons": frozenset({"profile-image"}),
     "person-groups": frozenset({"members"}),
     "folders": frozenset({"works", "tags"}),

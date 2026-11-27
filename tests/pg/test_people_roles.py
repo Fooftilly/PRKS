@@ -38,7 +38,7 @@ class RoleTestCase(PeopleFacadeTestCase):
         self.ann = people_fixtures.add_person(self.db, self.ctx, "Ann", "Lee")
         self.bo = people_fixtures.add_person(self.db, self.ctx, "Bo", "Ng")
         self.work = works_fixtures.add_work(self.db, self.ctx, self.storage, "Essay")
-        self.primary = require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["primary_manifestation_id"]
+        self.primary = require(work_commands.detail(self.db, self.ctx, self.work))["primary_manifestation_id"]
 
     def add_manifestation(self, work_id: str, manifestation_id: str) -> str:
         self.sql("INSERT INTO prks.manifestations (library_id, id, work_id) VALUES (%s, %s, %s)",
@@ -67,10 +67,10 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual([(r["id"], r["role_type"], r["manifestation_id"])
                           for r in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work))],
                          [(self.ann, "Author", None), (self.bo, "Translator", self.primary)])
-        self.assertEqual([p["display_name"] for p in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)[0]["linked_people"]],
+        self.assertEqual([p["display_name"] for p in work_commands.catalog(self.db, self.ctx)[0]["linked_people"]],
                          ["Ann Lee", "B. N."])
         # The Translator role on the other Version is not one of the primary's credits.
-        self.assertEqual([w["role_type"] for w in require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["works"]], ["Author"])
+        self.assertEqual([w["role_type"] for w in require(person_commands.detail(self.db, self.ctx, self.ann))["works"]], ["Author"])
         self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, self.work, self.ann, "Translator")))
         self.assertEqual(self.revisions("manifestation-person-role"), {
             roles.Role(self.work, self.bo, "Translator", self.primary).revision_scope()[1]: 1,
@@ -85,7 +85,7 @@ class ManifestationScopeTests(RoleTestCase):
         self.assertEqual(self.count("roles"), 2)
 
     def test_a_manifestation_of_another_work_is_refused(self) -> None:
-        elsewhere = require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")))["primary_manifestation_id"]
+        elsewhere = require(work_commands.detail(self.db, self.ctx, works_fixtures.add_work(self.db, self.ctx, self.storage, "Other")))["primary_manifestation_id"]
         with self.assertRaises(roles.RoleTargetMissing) as caught:
             self.set_role(roles.Role(self.work, self.ann, "Translator", elsewhere), True)
         self.assertEqual(caught.exception.code, "MANIFESTATION_NOT_FOUND")
@@ -114,7 +114,7 @@ class IsolationTests(RoleTestCase):
             their_person = people_fixtures.add_person(self.db, self.ctx, "Cy", "Oh")
             self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work)), [])
             self.assertFalse(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, self.work, self.ann, "Author")))
-            self.assertIsNone(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))
+            self.assertIsNone(person_commands.detail(self.db, self.ctx, self.ann))
             self.assertEqual(role_commands.missing_person_ids(self.db, self.ctx, [self.ann]), [self.ann])
             self.assertEqual(role_commands.next_order_index(self.db, self.ctx, self.work), 0)
             with self.assertRaisesRegex(ValueError, "Work not found"):
@@ -199,7 +199,7 @@ class RevisionTests(RoleTestCase):
 
 class CatalogEtagTests(RoleTestCase):
     def etag(self) -> str:
-        return etags.etag_for_representation("works", work_commands.catalog(self.db, self.ctx, self.pdfs_dir))
+        return etags.etag_for_representation("works", work_commands.catalog(self.db, self.ctx))
 
     def test_adding_and_removing_a_credit_change_the_catalog_etag(self) -> None:
         before = self.etag()
@@ -297,7 +297,7 @@ class ConcurrencyTests(RoleTestCase):
             lambda scope: roles.set_role(scope, roles.Role(other, self.ann, "Author"), True),
             lambda: person_commands.update_profile(self.db, self.ctx, self.ann, {"last_name": "Lea"}))
         self.assertEqual((holder, contender), (True, None))
-        self.assertEqual(sorted(row["linked_authors"] for row in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)),
+        self.assertEqual(sorted(row["linked_authors"] for row in work_commands.catalog(self.db, self.ctx)),
                          ["Ann Lea", "Ann Lea"])
 
     def test_two_links_on_one_work_append_in_turn(self) -> None:
@@ -349,7 +349,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
             {**_PERSON, "credit_name": None, "first_name": "Bo", "id": "<P Ng>", "last_name": "Ng",
              "manifestation_id": None, "order_index": 1, "role_type": "Editor"},
             {"credit_name": None, "id": "<P Ng>", "order_index": 2, "role_type": "Author"}])
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, self.work))["roles"], stored)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.work))["roles"], stored)
         linked = [
             {"canonical_name": "Ann Lee", "credit_name": "A. Lee", "display_name": "A. Lee", "order_index": 0,
              "person_id": "<P Lee>", "role_type": "Author"},
@@ -359,14 +359,14 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
              "person_id": "<P Ng>", "role_type": "Author"}]
         summary = {"linked_authors": "A. Lee, Bo Ng", "linked_people": linked, "primary_author": "A. Lee",
                    "primary_editor": "Bo Ng"}
-        for rows in (work_commands.catalog(self.db, self.ctx, self.pdfs_dir), work_commands.browse_catalog(self.db, self.ctx, self.pdfs_dir),
+        for rows in (work_commands.catalog(self.db, self.ctx), work_commands.browse_catalog(self.db, self.ctx),
                      works_fixtures.recently_added_works(self.db, self.ctx, self.storage),
                      works_fixtures.summaries_by_ids(self.db, self.ctx, self.storage, [self.work])):
             self.answer(rows, [summary])
         self.assertTrue(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, self.work, self.bo, "Editor")))
         self.assertFalse(library_query(self.db, self.ctx, lambda scope: roles.has_role(scope, self.work, self.ann, "Editor")))
         self.assertEqual(role_commands.next_order_index(self.db, self.ctx, self.work), 3)
-        works = require(person_commands.detail(self.db, self.ctx, self.bo, self.pdfs_dir))["works"]
+        works = require(person_commands.detail(self.db, self.ctx, self.bo))["works"]
         self.answer(works, [{"credit_name": None, "id": "<W Essay>", "order_index": 1, "role_type": "Editor", **summary},
                             {"credit_name": None, "id": "<W Essay>", "order_index": 2, "role_type": "Author"}])
 
@@ -374,7 +374,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work)), [])
         self.assertEqual(role_commands.next_order_index(self.db, self.ctx, self.work), 0)
         self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, _MISSING_WORK)), [])
-        self.answer(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), [{"linked_authors": None, "linked_people": [],
+        self.answer(work_commands.catalog(self.db, self.ctx), [{"linked_authors": None, "linked_people": [],
                                                     "primary_author": None, "primary_editor": None}])
 
     def test_refusals(self) -> None:
@@ -395,12 +395,12 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         self.assertFalse(role_commands.update_credit(self.db, self.ctx, self.work, self.bo, "Author", "x"))
         self.assertFalse(role_commands.update_credit(self.db, self.ctx, self.work, self.ann, "Producer", "x"))
         # A credit that is not the name becomes an alias of the Person.
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["aliases"], "Ann L.")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann))["aliases"], "Ann L.")
         state = require(person_commands.metadata_state(self.db, self.ctx, self.ann))
         self.assertEqual(state["fields"]["aliases"]["revision"], 1)
         # Clearing the override keeps the alias; the link shows the Person's name again.
         self.assertTrue(role_commands.update_credit(self.db, self.ctx, self.work, self.ann, "Author", ""))
-        self.assertEqual(work_commands.catalog(self.db, self.ctx, self.pdfs_dir)[0]["linked_authors"], "Ann Lee")
+        self.assertEqual(work_commands.catalog(self.db, self.ctx)[0]["linked_authors"], "Ann Lee")
         self.assertTrue(role_commands.remove(self.db, self.ctx, self.work, self.ann, "Author"))
         self.assertFalse(role_commands.remove(self.db, self.ctx, self.work, self.ann, "Author"))
         self.assertFalse(role_commands.remove(self.db, self.ctx, _MISSING_WORK, self.ann, "Author"))
@@ -410,7 +410,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         for role, credit in (("Author", "Ann Lee"), ("Editor", "Lee, Ann"), ("Reviewer", "A. Lee"),
                              ("Translator", "A. Lee")):
             role_commands.add(self.db, self.ctx, self.ann, self.work, role, credit)
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["aliases"], "A. Lee")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann))["aliases"], "A. Lee")
         self.assertEqual(require(person_commands.metadata_state(self.db, self.ctx, self.ann))["fields"]["aliases"],
                          {"revision": 1})
 
@@ -428,7 +428,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         self.assertEqual(role_commands.missing_initial_person_ids(self.db, self.ctx, wanted), [])
         self.assertEqual(role_commands.insert_initial(self.db, self.ctx, self.work, wanted), 3)
         self.assertEqual(self.roles(), [("Editor", 0, None), ("Author", 1, "A. Lee"), ("Mentioned", 7, None)])
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["aliases"], "A. Lee")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann))["aliases"], "A. Lee")
         self.assertEqual(role_commands.insert_initial(self.db, self.ctx, self.work, []), 0)
 
     def test_construction_with_a_missing_person_writes_nothing(self) -> None:
@@ -439,7 +439,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         with self.assertRaisesRegex(ValueError, "no longer exists"):
             role_commands.insert_initial(self.db, self.ctx, self.work, wanted)
         self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work)), [])
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["aliases"], "")
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann))["aliases"], "")
 
     def test_one_constructed_role(self) -> None:
         people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.ann, "Author", order_index=2, credit_name="A. Lee")
@@ -459,7 +459,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         firsts = lambda work_id: [(row["first_name"], row["order_index"]) for row in library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, work_id))]
         self.assertEqual(firsts(self.work), [("Ann", 0), ("Bo", 0), ("Cy", 0)])
         self.assertEqual(firsts(notes), [("Ann", 0), ("Cy", 0), ("Bo", 1)])
-        rows = sorted(work_commands.catalog(self.db, self.ctx, self.pdfs_dir), key=lambda row: row["title"])
+        rows = sorted(work_commands.catalog(self.db, self.ctx), key=lambda row: row["title"])
         self.assertEqual([row["linked_authors"] for row in rows], ["Ann Lee, Bo Ng, Cy Oh", "Ann Lee, Cy Oh, Bo Ng"])
 
     def test_a_constructed_duplicate_is_refused(self) -> None:
@@ -473,7 +473,7 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         role_commands.add(self.db, self.ctx, self.ann, notes, "Editor")
         role_commands.add(self.db, self.ctx, self.bo, self.work, "Author")
         role_commands.add(self.db, self.ctx, self.ann, self.work, "Author", "A. Lee")
-        self.answer(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["works"], [
+        self.answer(require(person_commands.detail(self.db, self.ctx, self.ann))["works"], [
             {"credit_name": None, "id": "<W Notes>", "linked_authors": None, "order_index": 0,
              "primary_editor": "Ann Lee", "publisher": "Verso", "role_type": "Editor", "title": "Notes",
              "year": "1951"},
@@ -486,13 +486,13 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
             person_commands.delete_if_unlinked(self.db, self.ctx, self.ann)
         role_commands.remove(self.db, self.ctx, self.work, self.ann, "Author")
         person_commands.delete_if_unlinked(self.db, self.ctx, self.ann)
-        self.assertIsNone(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))
+        self.assertIsNone(person_commands.detail(self.db, self.ctx, self.ann))
 
     def test_a_deleted_work_takes_its_roles(self) -> None:
         role_commands.add(self.db, self.ctx, self.ann, self.work, "Author")
         people_fixtures.insert_initial_role(self.db, self.ctx, self.work, self.bo, "Editor", order_index=5)
         self.assertIsNotNone(work_commands.delete(self.db, self.ctx, self.work))
-        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann, self.pdfs_dir))["works"], [])
+        self.assertEqual(require(person_commands.detail(self.db, self.ctx, self.ann))["works"], [])
         self.assertEqual(library_query(self.db, self.ctx, lambda scope: roles.work_roles(scope, self.work)), [])
         self.assertIsNone(person_commands.delete_if_unlinked(self.db, self.ctx, self.bo))
 
@@ -501,4 +501,4 @@ class AnswerTests(AnswerAssertions, RoleTestCase):
         for work_id in (self.work, notes):
             role_commands.add(self.db, self.ctx, self.ann, work_id, "Author")
         person_commands.update_profile(self.db, self.ctx, self.ann, {"last_name": "Leigh"})
-        self.assertEqual([row["linked_authors"] for row in work_commands.catalog(self.db, self.ctx, self.pdfs_dir)], ["Ann Leigh", "Ann Leigh"])
+        self.assertEqual([row["linked_authors"] for row in work_commands.catalog(self.db, self.ctx)], ["Ann Leigh", "Ann Leigh"])

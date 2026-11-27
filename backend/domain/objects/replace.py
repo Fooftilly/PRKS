@@ -46,6 +46,7 @@ markup bounds the memory or the commands used.
 
 from __future__ import annotations
 
+from backend.domain.objects.content_url import asset_content_url
 from dataclasses import dataclass
 from typing import Any, LiteralString, Optional, Union
 
@@ -181,7 +182,7 @@ def stored_labels(storage: StorageBackend, key: StorageKey) -> list[str]:
 def result(replaced: Replaced) -> dict[str, Any]:
     """The facade's answer: SQLite's success body with what the Asset now holds."""
     stale = replaced.canonical > replaced.materialized
-    return {"status": "success", "work_id": replaced.work_id, "file_path": "/api/pdfs/" + replaced.locator,
+    return {"status": "success", "work_id": replaced.work_id, "file_path": asset_content_url(replaced.asset_id, replaced.sha256),
             "content_sha256": replaced.sha256, "ingest_sha256": replaced.ingest_sha256,
             "byte_size": replaced.size, "canonical_annotation_set_revision": replaced.canonical,
             "materialized_pdf_annotation_revision": replaced.materialized, "stale": stale}

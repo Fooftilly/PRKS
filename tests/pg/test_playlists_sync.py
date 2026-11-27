@@ -41,7 +41,7 @@ class PlaylistSyncTestCase(SyncTestCase, PlaylistTestCase):  # pyright: ignore[r
     def setUp(self) -> None:
         super().setUp()
         # The real filing: the Organization lane's Folder and Playlist, then People's roles.
-        self.env = Environment(pdfs_dir=self.storage.pdfs_dir)
+        self.env = Environment()
 
     def envelope(self, operation: str, entity_id: str, payload: dict[str, Any],
                  base: Optional[int] = None, **changes: Any) -> dict[str, Any]:
@@ -147,7 +147,7 @@ class EnvelopeTests(PlaylistSyncTestCase):
         for label, data, code in refused:
             with self.subTest(label):
                 self.assertEqual(self.send(data), (400, {"code": code}))
-        self.assertEqual((self.ledger(), require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["description"]), (before, ""))
+        self.assertEqual((self.ledger(), require(playlist_commands.detail(self.db, self.ctx, playlist_id))["description"]), (before, ""))
 
     def test_a_title_may_repeat(self) -> None:
         self.create_playlist("Lectures")
@@ -283,7 +283,7 @@ class CreateWorkFilingTests(PlaylistSyncTestCase):
         self.assertEqual(self.send(data), (status, result))  # a replay
         self.assertEqual(self.items(playlist_id), [(listed, 0), (data["entity_id"], 1)])
         self.assertEqual((self.membership(data["entity_id"]), self.state(playlist_id)[1]), ((playlist_id, 0), 1))
-        detail = work_commands.detail(self.db, self.ctx, self.pdfs_dir, data["entity_id"])
+        detail = work_commands.detail(self.db, self.ctx, data["entity_id"])
         assert detail is not None
         self.assertEqual((detail["playlist_id"], detail["playlist_title"]), (playlist_id, "Talks"))
 
@@ -364,7 +364,7 @@ class LedgerAndIsolationTests(PlaylistSyncTestCase):
                  (200, {"code": "ACKNOWLEDGED", "playlist_id": playlist_id, "changed": False}))):
             with self.subTest(operation=data["operation"]):
                 self.assertEqual(self.send(data | device, other.context), answer)
-        self.assertEqual((require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))["title"], self.items(playlist_id)),
+        self.assertEqual((require(playlist_commands.detail(self.db, self.ctx, playlist_id))["title"], self.items(playlist_id)),
                          ("Mine", [(work_id, 0)]))
 
     def test_an_op_id_of_another_library_is_reuse_and_discloses_nothing(self) -> None:
@@ -426,7 +426,7 @@ class AnswerTests(PlaylistSyncTestCase):
         missing = generate("PL")
         self.assertEqual(self.send(self.playlist_field(missing, "title", "X", 0)),
                          (404, {"code": "ENTITY_NOT_FOUND", "playlist_id": missing, "field": "title"}))
-        detail = require(playlist_commands.detail(self.db, self.ctx, playlist_id, self.pdfs_dir))
+        detail = require(playlist_commands.detail(self.db, self.ctx, playlist_id))
         self.assertEqual((detail["title"], detail["original_url"]), ("Untitled playlist", None))
 
     def test_work_playlist_and_order_decision_tables(self) -> None:

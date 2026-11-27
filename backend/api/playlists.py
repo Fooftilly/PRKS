@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import Any, Optional
 from urllib.parse import unquote
 
-from backend.api.common import optional_pdfs_dir, revalidated
+from backend.api.common import revalidated
 from backend.api_contract.operation import Operation, body, error, ok, plain
 from backend.api_contract.operation import revalidated as revalidated_read
 from backend.api_contract.organization import (
@@ -61,7 +61,7 @@ def catalog(req: Request) -> Response:
 def detail(req: Request) -> Response:
     from backend.domain.organization import playlist_commands
 
-    data = playlist_commands.detail(*req.actor, req.params["playlist_id"], optional_pdfs_dir(req))
+    data = playlist_commands.detail(*req.actor, req.params["playlist_id"])
     if data:
         return json_response(req, 200, data)
     return error_response(404, "Playlist not found")

@@ -69,10 +69,6 @@ class App:
         return self.storage
 
     @property
-    def pdfs_dir(self) -> str:
-        return self.require_storage().pdfs_dir
-
-    @property
     def thumbs_dir(self) -> str:
         return self.require_storage().thumbs_dir
 

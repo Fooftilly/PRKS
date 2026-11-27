@@ -8,10 +8,9 @@ PDF text hits. The matching itself is :mod:`backend.domain.search.queries`
 and :mod:`backend.domain.search.text`. Before PG-C3 the route made one facade
 call per step, each its own snapshot; it now reads them all from one.
 
-The rows are Work summaries (``projection.work_summary``) in result order,
-finished outside the transaction with the on-disk PDF size
-(``finish_work_summary_rows``). The Tag filter's rows carry no
-``folder_id``, which is the shape SQLite's Tag filter selected.
+The rows are Work summaries (``projection.work_summary``) in result order.
+The Tag filter's rows carry no ``folder_id``, which is the shape SQLite's Tag
+filter selected.
 """
 
 from __future__ import annotations
@@ -31,14 +30,6 @@ def summaries(scope: LibraryScope, work_ids: List[str], *, with_folder: bool = T
 
     by_id = queries.works_by_ids(scope, work_ids)
     return [projection.work_summary(by_id[i], with_folder=with_folder) for i in work_ids if i in by_id]
-
-
-def finish(rows: List[dict], pdfs_dir: str) -> List[dict]:
-    """``rows`` with each managed PDF's size on disk (outside any transaction)."""
-    from backend.domain.works.rules import finish_work_summary_rows
-
-    finish_work_summary_rows(rows, pdfs_dir)
-    return rows
 
 
 def keyword_rows(scope: LibraryScope, search_term: str, author: str = "", publisher: str = "") -> List[dict]:
@@ -141,7 +132,7 @@ def _search(scope: LibraryScope, q: str, tag: str, author: str, publisher: str, 
     return rows
 
 
-def search(db: Database, ctx: RequestContext, pdfs_dir: str, *, q: str = "", tag: str = "", author: str = "",
+def search(db: Database, ctx: RequestContext, *, q: str = "", tag: str = "", author: str = "",
            publisher: str = "", any_mode: bool = False) -> List[Any]:
     """``GET /api/search``'s answer: Work summaries in result order.
 
@@ -151,8 +142,7 @@ def search(db: Database, ctx: RequestContext, pdfs_dir: str, *, q: str = "", tag
     the Works whose PDF text matches ``q`` (after the author and publisher
     filters); without it, ``q`` is the keyword search ANDed with the filters.
     """
-    rows = library_query(db, ctx, lambda scope: _search(scope, q, tag, author, publisher, any_mode))
-    return finish(rows, pdfs_dir)
+    return library_query(db, ctx, lambda scope: _search(scope, q, tag, author, publisher, any_mode))
 
 
 def queue_text_rebuild(db: Database, ctx: RequestContext) -> dict[str, Any]:

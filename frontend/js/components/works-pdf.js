@@ -5,9 +5,12 @@
 import { prksPdfCacheInstallOutcome, prksPostPdfCacheInstall } from '/js/pdf-cache-install.js';
 import { createPrksPdfViewer } from '/js/pdf-viewer-runtime.js';
 
+const PRKS_MANAGED_PDF_URL = /^\/api\/assets\/AS-[0-9A-Za-z-]+\/content(?:\?v=[0-9a-f]{1,64})?$/;
+
+/** A managed PDF's identity: its Asset content URL, content version included (#1427). */
 function prksManagedPdfApiPath(filePath) {
-    const raw = String(filePath || '').split('?')[0].trim();
-    return raw.indexOf('/api/pdfs/') === 0 ? raw : '';
+    const raw = String(filePath || '').split('#')[0].trim();
+    return PRKS_MANAGED_PDF_URL.test(raw) ? raw : '';
 }
 
 /**
@@ -2447,7 +2450,7 @@ async function setupAnnotationPersistence(ctx, runtime, workId, viewer, setupTok
         // until this point).
         viewer = newViewer;
         runtime.viewer = newViewer;
-        runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '').split('?')[0];
+        runtime.viewerFilePath = managedPdfApiPath(newPath) || String(newPath || '');
         runtime.viewerStoredExport = null;
         runtime._cowRemountPendingPath = '';
         const searchGeneration = ctx && typeof ctx.generation === 'number' ? ctx.generation : runtime._searchGeneration;
@@ -4272,7 +4275,7 @@ async function prksMountPdfViewer(ctx, work, runtime, targetNode, initialPage, m
     }
     if (runtime.lastPage && typeof runtime.lastPage.setViewer === 'function') runtime.lastPage.setViewer(viewer);
     runtime.viewer = viewer;
-    runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '').split('?')[0];
+    runtime.viewerFilePath = prksManagedPdfApiPath(work.file_path) || String(work.file_path || '');
     runtime.viewerStoredExport = null;
     if (
         runtime.annotationDrawer &&

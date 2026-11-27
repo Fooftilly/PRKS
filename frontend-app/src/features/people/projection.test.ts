@@ -23,7 +23,7 @@ const ada = {
       role_type: 'Author',
       order_index: 0,
       credit_name: 'Ada',
-      file_path: '/api/pdfs/notes.pdf',
+      file_path: '/api/assets/AS-notes-pdf/content',
       status: 'read',
       doc_type: 'article',
       year: '1843',
@@ -60,7 +60,7 @@ describe('People projections', () => {
     expect(person?.fields.death_date).toBe('1852')
     expect(person?.works[0]?.title).toBe('Notes on the engine')
     expect(person?.works[0]?.roleType).toBe('Author')
-    expect(person?.works[0]?.filePath).toBe('/api/pdfs/notes.pdf')
+    expect(person?.works[0]?.filePath).toBe('/api/assets/AS-notes-pdf/content')
     expect(person?.works[0]?.status).toBe('read')
     expect(person?.works[0]?.docType).toBe('article')
     expect(person?.works[0]?.year).toBe('1843')

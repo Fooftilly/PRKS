@@ -25,6 +25,7 @@ import heapq
 import logging
 import os
 import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -207,7 +208,8 @@ class ObjectInfo:
     # Set only when this call computed it (put_new/replace with hash=True).
     sha256: Optional[str] = None
     # Seconds since the epoch the bytes were last written; set by ``stat``.
-    # Maintenance only: the orphan sweep's grace period (postgresql-architecture §11.2).
+    # Maintenance and derived caches only: the orphan sweep's grace period
+    # (postgresql-architecture §11.2) and a thumbnail copy's freshness.
     modified_at: Optional[float] = None
 
 
@@ -680,6 +682,24 @@ class LocalFilesystemStorage:
         if found is None:
             raise ObjectNotFound("key does not exist")
         yield found[0]
+
+
+@contextmanager
+def readable_path(storage: StorageBackend, key: StorageKey, *, suffix: str = ".pdf") -> Iterator[str]:
+    """A local file holding the object, for a reader that needs a path (a PDF engine, qpdf).
+
+    The stored file itself when the backend is :class:`LocalPathCapable`,
+    else a temporary copy read through ``open_read``. Use the path only
+    inside the ``with`` block.
+    """
+    if isinstance(storage, LocalPathCapable):
+        with storage.local_path(key) as path:
+            yield path
+        return
+    with tempfile.NamedTemporaryFile(suffix=suffix) as copy, storage.open_read(key) as source:
+        shutil.copyfileobj(source, copy)
+        copy.flush()
+        yield copy.name
 
 
 def root_holds_objects(root: str) -> bool:

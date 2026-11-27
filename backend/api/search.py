@@ -16,7 +16,6 @@ current row).
 
 from __future__ import annotations
 
-from backend.api.common import pdfs_dir
 from backend.api_contract.operation import Operation, Param, body, ok
 from backend.api_contract.works import TextRebuildQueued, TextRebuildRequest, WorkSummary
 from backend.web.http import Request, Response, json_response
@@ -31,7 +30,7 @@ def search(req: Request) -> Response:
     from backend.domain.search import search_commands
 
     data = search_commands.search(
-        *req.actor, pdfs_dir(req),
+        *req.actor,
         q=req.query_value("q"),
         tag=req.query_value("tag"),
         author=req.query_value("author"),

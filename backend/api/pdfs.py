@@ -1,4 +1,4 @@
-"""Managed PDF bytes: ``GET``/``HEAD /api/pdfs/<filename>`` (#1424).
+"""Managed Asset bytes: ``GET``/``HEAD /api/assets/<asset id>/content`` (#1427).
 
 The PDF viewer reads a Work's managed PDF with ``Range`` requests (required
 for HTTP/1.1 WASM PDF engines), so :func:`pdf_response` answers ``206`` for
@@ -6,21 +6,28 @@ one satisfiable range, ``416`` for an unsatisfiable one and ``200`` for the
 whole file; the Processing queue's preview uses it too. PDF answers are
 never stored (``no-store``).
 
-The whole ``<filename>`` is validated (``managed_pdf_names``), not just its
-last ``/``-separated piece: ``/api/pdfs/nested/victim.pdf`` is 404, never
-``victim.pdf``. The data root is shared by every Library, so the file must
-also be one of the acting Library's Assets.
+The Asset id is the identity: the route finds the storage key the acting
+Library's Asset names (an id from another Library reads as missing) and
+streams the bytes from the Library's ``StorageBackend``. The URL a Work
+reports carries ``?v=<sha256 head>`` so it changes with the bytes
+(``backend/domain/objects/content_url.py``).
 """
 
 from __future__ import annotations
 
+import io
 import logging
-import os
 from typing import BinaryIO
 
 from backend.api_contract.operation import BINARY, PDF, Header, Operation, Param, Reply, ok, plain
 from backend.web.byte_range import parse_byte_range
-from backend.pdf.managed_pdf_names import safe_pdf_path_under_dir
+from backend.storage.objects import (
+    NAMESPACE_ASSET_OBJECTS,
+    InvalidStorageKey,
+    ObjectNotFound,
+    StorageKey,
+    StorageObjectError,
+)
 from backend.web.http import Request, Response, Write, error_response
 from backend.web.routing import route
 
@@ -90,19 +97,47 @@ def pdf_response(req: Request, file_size: int, stream: BinaryIO) -> Response:
     return Response(status, headers, stream=send, cleanup=stream.close)
 
 
-def managed_pdf(req: Request) -> Response:
-    """``GET``/``HEAD /api/pdfs/<filename>``: a managed PDF of the acting Library."""
-    from backend.api import works as works_api
+def _object_size(stream: BinaryIO) -> int:
+    """The byte size of an open object stream, read from the stream itself."""
+    end = stream.seek(0, io.SEEK_END)
+    stream.seek(0)
+    return end
 
-    pdf_path = safe_pdf_path_under_dir(req.app.pdfs_dir, req.params["filename"])
-    if pdf_path is None or not os.path.exists(pdf_path):
+
+def asset_content(req: Request) -> Response:
+    """``GET``/``HEAD /api/assets/<asset id>/content``: a managed Asset's bytes in the acting Library.
+
+    A ``?v=`` that no longer names the Asset's bytes is 404: a viewer or a
+    cache holding an earlier version never receives newer bytes (or ranges
+    of them) under the older URL.
+    """
+    from backend.api.common import objects
+    from backend.domain.works import work_commands
+
+    versions = req.query.get("v") or [None]
+    if len(versions) > 1:
         return error_response(404, "PDF not found")
-    if not works_api.holds_managed_pdf(req, os.path.basename(pdf_path)):
+    name = work_commands.asset_object(*req.actor, req.params["asset_id"], versions[0])
+    try:
+        key = StorageKey(NAMESPACE_ASSET_OBJECTS, name) if name else None
+    except InvalidStorageKey:
+        key = None
+    if key is None:
+        return error_response(404, "PDF not found")
+    store = objects(req)
+    try:
+        stream = store.open_read(key)
+    except (StorageObjectError, OSError):
         return error_response(404, "PDF not found")
     try:
-        file_size = os.path.getsize(pdf_path)
-        stream = open(pdf_path, "rb")
-    except OSError:
+        file_size = _object_size(stream) if stream.seekable() else None
+        if file_size is None:
+            info = store.stat(key)
+            if info is None:
+                raise ObjectNotFound("key does not exist")
+            file_size = info.size
+    except (StorageObjectError, OSError):
+        stream.close()
         return error_response(404, "PDF not found")
     return pdf_response(req, file_size, stream)
 
@@ -123,12 +158,17 @@ PDF_RANGE_REPLIES: dict[int, Reply] = {
 RANGE = Param("Range", "header", description=(
     "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."))
 
+VERSION = Param("v", description=(
+    "The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. "
+    "A version that no longer names the Asset's bytes is 404."))
+
 _PDF = Operation(
-    "getManagedPdf", "A managed PDF of this Library, with Range support", "works",
-    {**PDF_RANGE_REPLIES, 404: plain("No managed PDF of this Library by that name.")},
-    params=(RANGE,))
+    "getAssetContent", "A managed Asset's bytes in this Library, with Range support", "works",
+    {**PDF_RANGE_REPLIES, 404: plain(
+        "No managed Asset of this Library by that id, or `v` no longer names its bytes.")},
+    params=(RANGE, VERSION))
 
 ROUTES = (
-    route("GET", "/api/pdfs/{filename:path}", managed_pdf, contract=_PDF),
-    route("HEAD", "/api/pdfs/{filename:path}", managed_pdf, contract=_PDF.head()),
+    route("GET", "/api/assets/{asset_id}/content", asset_content, contract=_PDF),
+    route("HEAD", "/api/assets/{asset_id}/content", asset_content, contract=_PDF.head()),
 )

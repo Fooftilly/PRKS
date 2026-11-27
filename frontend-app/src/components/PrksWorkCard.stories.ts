@@ -9,7 +9,7 @@ const pdfWork = {
   status: 'In Progress',
   doc_type: 'article',
   file_size_bytes: 1024 * 1024,
-  file_path: '/api/pdfs/w1.pdf',
+  file_path: '/api/assets/AS-w1-pdf/content',
 }
 
 const meta = {

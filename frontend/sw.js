@@ -28,7 +28,7 @@
     // frontend/js/route-model.js, or
     // frontend/js/sync-reconcile.js) retires old
     // shell/static caches.
-    const DEPENDENCY_REVISION = '13ad7207ab31';
+    const DEPENDENCY_REVISION = '6e2ac7b5175a';
     const SHELL_CACHE = 'prks-shell-' + DEPENDENCY_REVISION;
     const STATIC_CACHE = 'prks-static-' + DEPENDENCY_REVISION;
     // Managed PDFs are cached per signed-in scope and Library epoch,
@@ -260,9 +260,29 @@
         });
     }
 
-    /** Canonical managed-PDF route only: /api/pdfs/<one filename segment>. */
-    function isManagedPdfPath(pathname) {
-        return /^\/api\/pdfs\/[^/]+$/.test(pathname);
+    /**
+     * A managed PDF's cache key: its Asset content route with the content
+     * version the server named, /api/assets/<asset id>/content?v=<hex> (#1427).
+     * The version is part of the key, so replaced bytes are a new entry.
+     */
+    function isManagedPdfPath(key) {
+        return /^\/api\/assets\/AS-[0-9A-Za-z-]+\/content(?:\?v=[0-9a-f]{1,64})?$/.test(key);
+    }
+
+    /**
+     * The cache key of a managed-PDF request: its path and its `v` parameter
+     * only. Other parameters (the viewer's per-load `prksv`) never split the
+     * cache. '' when the request is no managed PDF.
+     */
+    function managedPdfKey(pathname, search) {
+        let version = null;
+        try {
+            version = new URLSearchParams(search || '').get('v');
+        } catch (_e) {
+            return '';
+        }
+        const key = version === null ? pathname : pathname + '?v=' + version;
+        return isManagedPdfPath(key) ? key : '';
     }
 
     /**
@@ -1146,12 +1166,14 @@
             const url = request.url;
             if (!isSameOriginUrl(url, origin)) return;
             const pathname = pathnameOf(url, origin);
+            const search = searchOf(url, origin);
+            // A managed PDF is cached under its versioned URL (#1427).
+            const pdfKey = managedPdfKey(pathname, search);
 
-            if (isManagedPdfPath(pathname)) {
-                event.respondWith(handlers.handlePdfRequest(request, pathname, event.clientId || ''));
+            if (pdfKey) {
+                event.respondWith(handlers.handlePdfRequest(request, pdfKey, event.clientId || ''));
                 return;
             }
-            const search = searchOf(url, origin);
             if (isRemoteFigureRequest(pathname, search)) {
                 const keepAlive = typeof event.waitUntil === 'function' ? event.waitUntil.bind(event) : null;
                 event.respondWith(handlers.handleRemoteFigureRequest(request, pathname + search, event.clientId || '', keepAlive));
@@ -1214,6 +1236,7 @@
         isNavigationRequest: isNavigationRequest,
         isStaticEligiblePath: isStaticEligiblePath,
         isManagedPdfPath: isManagedPdfPath,
+        managedPdfKey: managedPdfKey,
         isRemoteFigureRequest: isRemoteFigureRequest,
         hasRangeHeader: hasRangeHeader,
         parseRangeHeaderValue: parseRangeHeaderValue,

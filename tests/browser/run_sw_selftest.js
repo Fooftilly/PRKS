@@ -124,7 +124,7 @@ async function run() {
     assert('malformed base origin rejected', !sw.isSameOriginUrl('/js/app.js', 'not-a-valid-origin'));
 
     /* ---- pathnameOf ---- */
-    assertEq('pathnameOf strips query', sw.pathnameOf('/api/pdfs/abc.pdf?x=1', origin), '/api/pdfs/abc.pdf');
+    assertEq('pathnameOf strips query', sw.pathnameOf('/api/assets/AS-abc-pdf/content?v=1a2b', origin), '/api/assets/AS-abc-pdf/content');
     assertEq('pathnameOf absolute url', sw.pathnameOf('https://prks.example/js/app.js', origin), '/js/app.js');
 
     /* ---- isNavigationRequest ---- */
@@ -143,10 +143,20 @@ async function run() {
     assert('unrelated path not static-eligible', !sw.isStaticEligiblePath('/random.txt'));
 
     /* ---- isManagedPdfPath ---- */
-    assert('managed pdf path matches', sw.isManagedPdfPath('/api/pdfs/abc123.pdf'));
-    assert('nested pdf path rejected', !sw.isManagedPdfPath('/api/pdfs/abc/def.pdf'));
-    assert('bare pdfs root rejected', !sw.isManagedPdfPath('/api/pdfs'));
-    assert('trailing-slash pdfs root rejected', !sw.isManagedPdfPath('/api/pdfs/'));
+    assert('managed pdf path matches', sw.isManagedPdfPath('/api/assets/AS-abc123-pdf/content'));
+    assert('versioned managed pdf key matches', sw.isManagedPdfPath('/api/assets/AS-abc123-pdf/content?v=0123456789abcdef'));
+    assert('other query rejected', !sw.isManagedPdfPath('/api/assets/AS-abc123-pdf/content?x=1'));
+    assert('non-hex version rejected', !sw.isManagedPdfPath('/api/assets/AS-abc123-pdf/content?v=zz'));
+    assert('nested asset path rejected', !sw.isManagedPdfPath('/api/assets/AS-abc/def/content'));
+    assert('non-asset id rejected', !sw.isManagedPdfPath('/api/assets/W-1/content'));
+    assert('asset without content rejected', !sw.isManagedPdfPath('/api/assets/AS-abc123'));
+    assert('retired pdfs route rejected', !sw.isManagedPdfPath('/api/pdfs/abc.pdf'));
+    assertEq('the viewer load parameter never splits the cache',
+        sw.managedPdfKey('/api/assets/AS-abc/content', '?v=0a1b&prksv=1712'), '/api/assets/AS-abc/content?v=0a1b');
+    assertEq('an unversioned content URL is its own key',
+        sw.managedPdfKey('/api/assets/AS-abc/content', '?prksv=1712'), '/api/assets/AS-abc/content');
+    assertEq('a non-hex version is no managed PDF', sw.managedPdfKey('/api/assets/AS-abc/content', '?v=zz'), '');
+    assertEq('another route is no managed PDF', sw.managedPdfKey('/api/works/W-1', '?v=0a'), '');
     assert('unrelated api path rejected', !sw.isManagedPdfPath('/api/works/W-1'));
 
     /* ---- hasRangeHeader ---- */
@@ -478,7 +488,8 @@ async function run() {
                 );
             },
         });
-        const pathname = '/api/pdfs/abc123.pdf';
+        // The cache key is the versioned content URL (#1427).
+        const pathname = '/api/assets/AS-abc123-pdf/content?v=0123456789abcdef';
         const wholeReq = fakeRequest({ url: 'https://prks.example' + pathname });
         const res1 = await handlers.handlePdfRequest(wholeReq, pathname);
         const buf1 = Buffer.from(await res1.arrayBuffer());
@@ -511,6 +522,12 @@ async function run() {
         const buf2 = Buffer.from(await res2.arrayBuffer());
         assert('handlePdfRequest offline whole-file serves cached body', buf2.equals(pdfBody));
 
+        // Replaced bytes are a new version: the old version's entry is never served for it.
+        const replaced = '/api/assets/AS-abc123-pdf/content?v=fedcba9876543210';
+        const resReplaced = await offlineHandlers.handlePdfRequest(
+            fakeRequest({ url: 'https://prks.example' + replaced }), replaced);
+        assertEq('handlePdfRequest offline never serves another version', resReplaced.status, 503);
+
         // Offline Range request: synthesized 206 sliced from the cached whole file.
         const rangeReqOffline = fakeRequest({ url: 'https://prks.example' + pathname, headers: { range: 'bytes=4-7' } });
         const res3 = await offlineHandlers.handlePdfRequest(rangeReqOffline, pathname);
@@ -535,7 +552,7 @@ async function run() {
                 return Promise.reject(new Error('offline'));
             },
         });
-        const pathname = '/api/pdfs/never-opened.pdf';
+        const pathname = '/api/assets/AS-never-opened-pdf/content';
         const res = await handlers.handlePdfRequest(fakeRequest({ url: 'https://prks.example' + pathname }), pathname);
         assertEq('handlePdfRequest offline uncached pdf returns 503', res.status, 503);
     }
@@ -555,7 +572,7 @@ async function run() {
                 );
             },
         });
-        const pathname = '/api/pdfs/ranged-first.pdf';
+        const pathname = '/api/assets/AS-ranged-first-pdf/content';
         await handlers.handlePdfRequest(
             fakeRequest({ url: 'https://prks.example' + pathname, headers: { range: 'bytes=0-6' } }),
             pathname
@@ -567,7 +584,7 @@ async function run() {
         // A whole-file GET that started before the post-save install must not
         // commit its pre-edit body after that install.
         const cacheStorage = makeFakeCacheStorage();
-        const pathname = '/api/pdfs/race-inflight.pdf';
+        const pathname = '/api/assets/AS-race-inflight-pdf/content';
         let releaseFetch;
         const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
         let fetchStarted;
@@ -617,7 +634,7 @@ async function run() {
         // cache at the same path must not cancel account A's in-flight
         // whole-file write, or A cannot reopen that PDF offline.
         const cacheStorage = makeFakeCacheStorage();
-        const pathname = '/api/pdfs/race-other-account.pdf';
+        const pathname = '/api/assets/AS-race-other-account-pdf/content';
         const otherCache = sw.PRKS_SW_PDF_CACHE_BASE + ':I1.L1.U2';
         let releaseFetch;
         const fetchGate = new Promise(function (resolve) { releaseFetch = resolve; });
@@ -665,7 +682,7 @@ async function run() {
         // authoritative install: the chain runs the install after it and
         // advances the generation first.
         const cacheStorage = makeFakeCacheStorage();
-        const pathname = '/api/pdfs/race-queued.pdf';
+        const pathname = '/api/assets/AS-race-queued-pdf/content';
         let releasePut;
         const putGate = new Promise(function (resolve) { releasePut = resolve; });
         let puts = 0;
@@ -716,7 +733,7 @@ async function run() {
     }
     {
         const cacheStorage = makeFakeCacheStorage();
-        const pathname = '/api/pdfs/message-install.pdf';
+        const pathname = '/api/assets/AS-message-install-pdf/content';
         const ok = await sw.handlePdfCacheMessage({
             type: sw.PDF_CACHE_INSTALL_MESSAGE,
             pathname: pathname,
@@ -794,7 +811,7 @@ async function run() {
         }
 
         const slowStorage = delayPut(makeFakeCacheStorage(), 2500);
-        const pathname = '/api/pdfs/slow-install.pdf';
+        const pathname = '/api/assets/AS-slow-install-pdf/content';
         const payload = Buffer.from('SLOW-BUT-STORED');
         const body = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);
         const slow = controllerDeliveringTo(slowStorage, true);

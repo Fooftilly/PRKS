@@ -25,7 +25,7 @@ import logging
 from typing import Optional
 from urllib.parse import unquote
 
-from backend.api.common import objects, optional_pdfs_dir, revalidated
+from backend.api.common import objects, revalidated
 from backend.api_contract.operation import BINARY, Header, Operation, body, error, ok, plain
 from backend.api_contract.operation import revalidated as revalidated_read
 from backend.api_contract.organization import Created, Done
@@ -76,7 +76,7 @@ def metadata_state(req: Request) -> Response:
 def detail(req: Request) -> Response:
     from backend.domain.people import person_commands
 
-    data = person_commands.detail(*req.actor, unquote(req.params["person_id"]), optional_pdfs_dir(req))
+    data = person_commands.detail(*req.actor, unquote(req.params["person_id"]))
     if data:
         return json_response(req, 200, data)
     return error_response(404, "Person not found")
@@ -98,7 +98,7 @@ def profile_image(req: Request) -> Response:
 
     person_id = unquote(req.params["person_id"])
     database, ctx = req.actor
-    row = person_commands.detail(database, ctx, person_id, optional_pdfs_dir(req))
+    row = person_commands.detail(database, ctx, person_id)
     if not row:
         return error_response(404, "Person not found")
     url = (row.get("image_url") or "").strip()

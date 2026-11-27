@@ -21,7 +21,6 @@ from backend.domain.identity.library_scope import LibraryScope, library_command,
 from backend.domain.identity.request_context import RequestContext
 from backend.domain.organization import playlists
 from backend.domain.works import projection, queries
-from backend.domain.works.rules import finish_work_summary_rows
 from backend.domain.entity_ids import generate
 
 T = TypeVar("T")
@@ -42,13 +41,10 @@ def catalog(db: Database, ctx: RequestContext) -> list[dict[str, Any]]:
     return library_query(db, ctx, playlists.catalog)
 
 
-def detail(db: Database, ctx: RequestContext, playlist_id: str,
-           pdfs_dir: Optional[str]) -> Optional[dict[str, Any]]:
+def detail(db: Database, ctx: RequestContext, playlist_id: str) -> Optional[dict[str, Any]]:
     """One Playlist with its Works in order (``items``), or ``None``.
 
-    Each item is the Work summary plus its ``position``; file sizes are read
-    from ``pdfs_dir`` after the snapshot, as every Work summary's are; a
-    Library without a data root (``None``) can still answer that one is missing.
+    Each item is the Work summary plus its ``position``.
     """
 
     def read(scope: LibraryScope) -> Optional[dict[str, Any]]:
@@ -60,12 +56,7 @@ def detail(db: Database, ctx: RequestContext, playlist_id: str,
                              for core in queries.works_in_playlist(scope, playlist_id)]
         return playlist
 
-    found = library_query(db, ctx, read)
-    if found is not None:
-        if pdfs_dir is None:
-            raise RuntimeError("this PostgreSQL library has no data root")
-        finish_work_summary_rows(found["items"], pdfs_dir)
-    return found
+    return library_query(db, ctx, read)
 
 
 def sync_state(db: Database, ctx: RequestContext, playlist_id: str) -> Optional[dict[str, Any]]:

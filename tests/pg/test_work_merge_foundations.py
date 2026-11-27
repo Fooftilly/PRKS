@@ -180,7 +180,7 @@ class SyncGateTests(MergeTestCase):
                                 depends_on=[pending])
         self.assertEqual(self.send(waiting), (400, {"code": "UNSATISFIED_DEPENDENCY"}))
         self.assertEqual(len(self.ledger()), 1)
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, live))["title"], "Live")
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, live))["title"], "Live")
 
     def test_playlist_reorder_with_a_merged_payload_work_is_terminal_and_ledgered(self) -> None:
         # REORDER_PLAYLIST_ITEMS has entity_type=playlist and a Playlist id
@@ -599,7 +599,7 @@ class OwnershipTests(MergeTestCase):
 
         with self.refused_by("23503"):
             self.command(move_primary)  # checked at COMMIT: the source's pointer names a moved row
-        self.assertEqual(require(work_commands.detail(self.db, self.ctx, self.pdfs_dir, source))["id"], source)
+        self.assertEqual(require(work_commands.detail(self.db, self.ctx, source))["id"], source)
 
     def test_a_work_with_manifestations_cannot_be_deleted(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "W")
@@ -607,7 +607,7 @@ class OwnershipTests(MergeTestCase):
             self.command(lambda scope: scope.execute(
                 "DELETE FROM prks.works WHERE library_id = %(library_id)s AND id = %(work_id)s",
                 {"work_id": work_id}))
-        self.assertIsNotNone(work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id))
+        self.assertIsNotNone(work_commands.detail(self.db, self.ctx, work_id))
 
     def test_a_manifestation_cannot_move_to_another_librarys_work(self) -> None:
         work_id = works_fixtures.add_work(self.db, self.ctx, self.storage, "Mine")

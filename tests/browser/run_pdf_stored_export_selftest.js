@@ -120,19 +120,19 @@ function plainHash() {
 
 function boundPath() {
     const viewer = { id: 'mounted' };
-    const loaded = '/api/pdfs/works/W-1/object-a.pdf';
-    const stored = '/api/pdfs/works/W-1/object-b.pdf';
-    const runtime = { viewer, viewerFilePath: loaded + '?v=1' };
+    const loaded = '/api/assets/AS-W1/content?v=aaaa';
+    const stored = '/api/assets/AS-W1/content?v=bbbb';
+    const runtime = { viewer, viewerFilePath: loaded };
 
     assert.equal(bound(runtime, loaded), true, 'the loaded path');
     assert.equal(bound(runtime, stored), false, 'an unconfirmed new key');
 
     // The confirmed export: bound for this viewer, loaded path unchanged.
     runtime.viewerStoredExport = { viewer, path: stored };
-    assert.equal(bound(runtime, stored + '?v=2'), true);
+    assert.equal(bound(runtime, stored), true);
     assert.equal(bound(runtime, loaded), true);
-    assert.equal(runtime.viewerFilePath, loaded + '?v=1');
-    assert.equal(bound(runtime, '/api/pdfs/works/W-1/object-c.pdf'), false);
+    assert.equal(runtime.viewerFilePath, loaded);
+    assert.equal(bound(runtime, '/api/assets/AS-W1/content?v=cccc'), false);
     assert.equal(bound(runtime, '/files/object-b.pdf'), false, 'only managed PDF paths');
 
     // It belongs to the viewer instance, not the runtime: a replacement
@@ -146,7 +146,7 @@ function boundPath() {
 async function cachedBytesAreTheKeys() {
     const exported = bytes('%PDF-1.7 exported by the viewer');
     const linearized = bytes('%PDF-1.7 linearized working copy of it');
-    const path = '/api/pdfs/works/W-1/object-b.pdf';
+    const path = '/api/assets/AS-W1/content?v=bbbb';
     const calls = [];
     const serve = (body, status = 200) => async (url, init) => {
         calls.push({ url, init });

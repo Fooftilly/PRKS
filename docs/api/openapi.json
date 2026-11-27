@@ -780,6 +780,295 @@
         ]
       }
     },
+    "/api/assets/{asset_id}/content": {
+      "parameters": [
+        {
+          "name": "asset_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAssetContent",
+        "summary": "A managed Asset's bytes in this Library, with Range support",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. A version that no longer names the Asset's bytes is 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            },
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/NotAuthenticated"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "No managed Asset of this Library by that id, or `v` no longer names its bytes.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "head": {
+        "operationId": "getAssetContentHead",
+        "summary": "A managed Asset's bytes in this Library, with Range support (headers only)",
+        "tags": [
+          "works"
+        ],
+        "parameters": [
+          {
+            "name": "Range",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. A version that no longer names the Asset's bytes is 404."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The whole file.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              }
+            }
+          },
+          "206": {
+            "description": "The requested range.",
+            "headers": {
+              "Accept-Ranges": {
+                "description": "Always `bytes`.",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "bytes"
+                  ]
+                },
+                "required": true
+              },
+              "Cache-Control": {
+                "description": "Always no-store.",
+                "schema": {
+                  "type": "string",
+                  "const": "no-store, max-age=0, must-revalidate"
+                },
+                "required": true
+              },
+              "Content-Length": {
+                "description": "The bytes in this answer.",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "required": true
+              },
+              "Content-Range": {
+                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "401": {
+            "description": "No live session (not_authenticated)."
+          },
+          "403": {
+            "description": "The session's role lacks the route's capability, or the Origin is not allowed."
+          },
+          "404": {
+            "description": "No managed Asset of this Library by that id, or `v` no longer names its bytes."
+          },
+          "416": {
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
+          },
+          "503": {
+            "description": "The Library is unavailable (unavailable)."
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
     "/api/backups/download": {
       "get": {
         "operationId": "downloadBackup",
@@ -3434,277 +3723,6 @@
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ]
-      }
-    },
-    "/api/pdfs/{filename}": {
-      "parameters": [
-        {
-          "name": "filename",
-          "in": "path",
-          "required": true,
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "get": {
-        "operationId": "getManagedPdf",
-        "summary": "A managed PDF of this Library, with Range support",
-        "tags": [
-          "works"
-        ],
-        "parameters": [
-          {
-            "name": "Range",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The whole file.",
-            "headers": {
-              "Accept-Ranges": {
-                "description": "Always `bytes`.",
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "bytes"
-                  ]
-                },
-                "required": true
-              },
-              "Cache-Control": {
-                "description": "Always no-store.",
-                "schema": {
-                  "type": "string",
-                  "const": "no-store, max-age=0, must-revalidate"
-                },
-                "required": true
-              },
-              "Content-Length": {
-                "description": "The bytes in this answer.",
-                "schema": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "required": true
-              }
-            },
-            "content": {
-              "application/pdf": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "206": {
-            "description": "The requested range.",
-            "headers": {
-              "Accept-Ranges": {
-                "description": "Always `bytes`.",
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "bytes"
-                  ]
-                },
-                "required": true
-              },
-              "Cache-Control": {
-                "description": "Always no-store.",
-                "schema": {
-                  "type": "string",
-                  "const": "no-store, max-age=0, must-revalidate"
-                },
-                "required": true
-              },
-              "Content-Length": {
-                "description": "The bytes in this answer.",
-                "schema": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "required": true
-              },
-              "Content-Range": {
-                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
-                "schema": {
-                  "type": "string"
-                },
-                "required": true
-              }
-            },
-            "content": {
-              "application/pdf": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/NotAuthenticated"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "description": "No managed PDF of this Library by that name.",
-            "content": {
-              "text/plain": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "416": {
-            "description": "The range is outside the file.",
-            "headers": {
-              "Content-Range": {
-                "description": "The file size, as `bytes */<size>`.",
-                "schema": {
-                  "type": "string"
-                },
-                "required": true
-              }
-            }
-          },
-          "503": {
-            "$ref": "#/components/responses/Unavailable"
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ]
-      },
-      "head": {
-        "operationId": "getManagedPdfHead",
-        "summary": "A managed PDF of this Library, with Range support (headers only)",
-        "tags": [
-          "works"
-        ],
-        "parameters": [
-          {
-            "name": "Range",
-            "in": "header",
-            "required": false,
-            "schema": {
-              "type": "string"
-            },
-            "description": "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The whole file.",
-            "headers": {
-              "Accept-Ranges": {
-                "description": "Always `bytes`.",
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "bytes"
-                  ]
-                },
-                "required": true
-              },
-              "Cache-Control": {
-                "description": "Always no-store.",
-                "schema": {
-                  "type": "string",
-                  "const": "no-store, max-age=0, must-revalidate"
-                },
-                "required": true
-              },
-              "Content-Length": {
-                "description": "The bytes in this answer.",
-                "schema": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "required": true
-              }
-            }
-          },
-          "206": {
-            "description": "The requested range.",
-            "headers": {
-              "Accept-Ranges": {
-                "description": "Always `bytes`.",
-                "schema": {
-                  "type": "string",
-                  "enum": [
-                    "bytes"
-                  ]
-                },
-                "required": true
-              },
-              "Cache-Control": {
-                "description": "Always no-store.",
-                "schema": {
-                  "type": "string",
-                  "const": "no-store, max-age=0, must-revalidate"
-                },
-                "required": true
-              },
-              "Content-Length": {
-                "description": "The bytes in this answer.",
-                "schema": {
-                  "type": "integer",
-                  "minimum": 0
-                },
-                "required": true
-              },
-              "Content-Range": {
-                "description": "The range sent, as `bytes <first>-<last>/<size>`.",
-                "schema": {
-                  "type": "string"
-                },
-                "required": true
-              }
-            }
-          },
-          "401": {
-            "description": "No live session (not_authenticated)."
-          },
-          "403": {
-            "description": "The session's role lacks the route's capability, or the Origin is not allowed."
-          },
-          "404": {
-            "description": "No managed PDF of this Library by that name."
-          },
-          "416": {
-            "description": "The range is outside the file.",
-            "headers": {
-              "Content-Range": {
-                "description": "The file size, as `bytes */<size>`.",
-                "schema": {
-                  "type": "string"
-                },
-                "required": true
-              }
-            }
-          },
-          "503": {
-            "description": "The Library is unavailable (unavailable)."
           }
         },
         "security": [
@@ -15376,7 +15394,7 @@
             "type": "string"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>``.",
+            "description": "``/api/assets/<id>/content?v=<version>``.",
             "title": "File Path",
             "type": "string"
           },
@@ -15439,7 +15457,7 @@
             "type": "string"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>``.",
+            "description": "``/api/assets/<id>/content?v=<version>``.",
             "title": "File Path",
             "type": "string"
           },
@@ -15522,16 +15540,6 @@
             "title": "Thumbnail Cache Misses",
             "type": "integer"
           },
-          "pdf_file_stat_rows": {
-            "minimum": 0,
-            "title": "Pdf File Stat Rows",
-            "type": "integer"
-          },
-          "pdf_file_stat_files": {
-            "minimum": 0,
-            "title": "Pdf File Stat Files",
-            "type": "integer"
-          },
           "db_read": {
             "minimum": 0,
             "title": "Db Read",
@@ -15546,8 +15554,6 @@
         "required": [
           "thumbnail_cache_hits",
           "thumbnail_cache_misses",
-          "pdf_file_stat_rows",
-          "pdf_file_stat_files",
           "db_read",
           "db_write"
         ],
@@ -16938,7 +16944,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -17118,7 +17124,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {
@@ -17607,7 +17613,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -17787,7 +17793,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {
@@ -19906,7 +19912,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -20086,7 +20092,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "last_opened_at": {
@@ -20157,7 +20163,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -20337,7 +20343,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "created_at": {
@@ -22230,7 +22236,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -22410,7 +22416,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract_excerpt": {
@@ -22538,7 +22544,7 @@
             "type": "string"
           },
           "file_path": {
-            "description": "A managed PDF (``/api/pdfs/<name>``) the new Work adopts.",
+            "description": "A managed PDF (its ``/api/assets/<id>/content?v=<version>`` URL) the new Work adopts.",
             "title": "File Path",
             "type": "string"
           },
@@ -23929,7 +23935,7 @@
             "title": "Doc Type"
           },
           "file_path": {
-            "description": "``/api/pdfs/<name>`` for a managed PDF, else empty.",
+            "description": "``/api/assets/<id>/content?v=<version>`` for a managed PDF, else empty.",
             "title": "File Path",
             "type": "string"
           },
@@ -24109,7 +24115,7 @@
                 "type": "null"
               }
             ],
-            "description": "The managed PDF's size on disk; null without one.",
+            "description": "The managed PDF's recorded size (its Asset's ``byte_size``), read from the database, not the disk; null without one.",
             "title": "File Size Bytes"
           },
           "abstract": {

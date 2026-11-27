@@ -470,7 +470,7 @@ cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
         a._wait_pdf_viewer(page)
         a._wait_pdf_annotation_durable(page)
         page.evaluate("() => { window.__prksViewerBeforeSave = (%s).viewer; }" % a._FOCUSED_PDF)
-        before = page.evaluate("() => String((%s).filePath || '').split('?')[0]" % a._FOCUSED_PDF)
+        before = page.evaluate("() => String((%s).filePath || '')" % a._FOCUSED_PDF)
 
         a._commit_pdf_highlight(page)
         a._wait_pdf_annotation_ops_drained(page, work_id)
@@ -478,19 +478,20 @@ cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
         # The server's revision can be read before this tab has applied the
         # response; wait for the tab to move to the new key.
         page.wait_for_function(
-            "(was) => String((%s).filePath || '').split('?')[0] !== was" % a._FOCUSED_PDF,
+            "(was) => String((%s).filePath || '') !== was" % a._FOCUSED_PDF,
             arg=before, timeout=30000)
-        canonical = page.evaluate("() => String((%s).filePath || '').split('?')[0]" % a._FOCUSED_PDF)
+        canonical = page.evaluate("() => String((%s).filePath || '')" % a._FOCUSED_PDF)
         self.assertNotEqual(canonical, before)
-        self.assertTrue(canonical.startswith("/api/pdfs/"), canonical)
+        # A new content version of the same Asset (#1427).
+        self.assertEqual(canonical.split("?")[0], before.split("?")[0])
         # Same document: no reload.
         self.assertTrue(page.evaluate("() => (%s).viewer === window.__prksViewerBeforeSave" % a._FOCUSED_PDF))
 
         assert server.library is not None
         with psycopg.connect(server.library.conninfo) as conn:
             row = conn.execute(
-                "SELECT content_sha256 FROM prks.assets WHERE library_id = %s AND storage_locator = %s",
-                (str(server.library.library_id), canonical[len("/api/pdfs/"):]),
+                "SELECT content_sha256 FROM prks.assets WHERE library_id = %s AND id = %s",
+                (str(server.library.library_id), canonical.split("/")[3]),
             ).fetchone()
         assert row is not None, canonical
         content_sha256 = str(row[0])
@@ -532,7 +533,7 @@ cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
             canonical,
         )
         self.assertEqual(served, {"status": 200, "sha256": content_sha256})
-        reopened = page.evaluate("() => String((%s).viewerFilePath || '').split('?')[0]" % a._FOCUSED_PDF)
+        reopened = page.evaluate("() => String((%s).viewerFilePath || '')" % a._FOCUSED_PDF)
         self.assertEqual(reopened, canonical)
         page.wait_for_function(
             """() => {
@@ -589,8 +590,8 @@ cat "$2" > "$3" && printf '%s\\n' '% prks-e2e-linearized' >> "$3"
                 const pdf = window.prksGetFocusedTabContext().getResource('pdf');
                 return {
                     page: pdf.viewer.getCurrentPage ? pdf.viewer.getCurrentPage() : null,
-                    filePath: String(pdf.filePath || '').split('?')[0],
-                    viewerFilePath: String(pdf.viewerFilePath || '').split('?')[0],
+                    filePath: String(pdf.filePath || ''),
+                    viewerFilePath: String(pdf.viewerFilePath || ''),
                 };
             }"""
         )

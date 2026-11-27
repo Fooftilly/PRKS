@@ -81,7 +81,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
+      rows: [{ id: 'b', file_path: '/api/assets/AS-b-pdf/content' }],
       generation: 2,
     })
     await nextTick()
@@ -89,7 +89,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
+      rows: [{ id: 'b', file_path: '/api/assets/AS-b-pdf/content' }],
       generation: 3,
     })
     expect(el.querySelector('[data-work-id="b"]')).not.toBeNull()
@@ -173,7 +173,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'a', file_path: '/api/pdfs/a.pdf' }],
+      rows: [{ id: 'a', file_path: '/api/assets/AS-a-pdf/content' }],
       offlineCached: false,
       generation: 1,
     })
@@ -184,7 +184,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
+      rows: [{ id: 'b', file_path: '/api/assets/AS-b-pdf/content' }],
       offlineCached: false,
       generation: 1,
     })
@@ -203,7 +203,7 @@ describe('Recent route bridge', () => {
     presentRecent({
       owner: pane,
       host: el,
-      rows: [{ id: 'c', file_path: '/api/pdfs/c.pdf' }],
+      rows: [{ id: 'c', file_path: '/api/assets/AS-c-pdf/content' }],
       offlineCached: true,
       generation: 2,
     })

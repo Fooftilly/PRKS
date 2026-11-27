@@ -516,7 +516,7 @@ def _classify_path(method: str, path: str) -> str:  # noqa: C901
         return "work-opened"
     if path.startswith("/api/works/") and path.endswith("/annotations-snapshot"):
         return "work-annotations-snapshot"
-    if path.startswith("/api/pdfs"):
+    if path.startswith("/api/assets/") and path.endswith("/content"):
         return "pdf"
     if m == "GET" and path.startswith("/api/works/") and path.count("/") == 3:
         return "work-detail-get"

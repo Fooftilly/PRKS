@@ -206,25 +206,25 @@ class CreateRefusalTests(ServerApiTestCase):
 
     def test_undoing_a_create_never_claims_a_pdf_it_only_adopted(self) -> None:
         """A refused create that adopted an existing managed PDF records no cleanup claim for it."""
-        def adopted(name: str) -> str:
+        def adopted(name: str) -> tuple[str, str]:
+            """Another Work's content URL and the stored file it reads."""
             assert self.storage is not None
-            path = os.path.join(self.storage.pdfs_dir, name)
-            with open(path, "wb") as handle:
-                handle.write(b"%PDF-1.4\n%ADOPTED\n%%EOF\n")
-            return path
+            owner = self.create_work("Owner of " + name, **self.upload_fields("adopted", name))
+            url = self.ok(self.get(f"/api/works/{owner['id']}"))["file_path"]
+            return url, os.path.join(self.storage.pdfs_dir, self.stored_name(url))
 
-        role_pdf = adopted("adopt-then-role-race.pdf")
+        role_url, role_pdf = adopted("adopt-then-role-race.pdf")
         with mock.patch.object(work_roles_api, "missing_initial_person_ids", return_value=[]):
             res = self.send("POST", "/api/works", {
-                "title": "Adopt Role Race", "file_path": "/api/pdfs/adopt-then-role-race.pdf",
+                "title": "Adopt Role Race", "file_path": role_url,
                 "roles": [{"person_id": "P-deleted-meanwhile", "role_type": "Author"}]})
         self.refused(res, 409)
         folder = self.ok(self.send("POST", "/api/folders", {"title": "Adopt Folder Race", "description": ""}))["id"]
-        folder_pdf = adopted("adopt-then-folder-race.pdf")
+        folder_url, folder_pdf = adopted("adopt-then-folder-race.pdf")
         with mock.patch.object(folders_api, "file_work",
                                side_effect=ValueError("The folder no longer exists.")):
             res = self.send("POST", "/api/works", {"title": "Adopt Folder Race", "folder_id": folder,
-                                                  "file_path": "/api/pdfs/adopt-then-folder-race.pdf"})
+                                                  "file_path": folder_url})
         self.refused(res, 409)
         for title, path in (("Adopt Role Race", role_pdf), ("Adopt Folder Race", folder_pdf)):
             with self.subTest(title=title):

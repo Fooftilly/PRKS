@@ -103,7 +103,7 @@ describe('prksApiRequest', () => {
     vi.stubGlobal('prksOfflineNoteRequestSuccess', success)
     vi.stubGlobal('prksOfflineNoteRequestFailure', failure)
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })))
-    await expect(prksApiRequest('/api/pdfs/item')).resolves.toEqual({})
+    await expect(prksApiRequest('/api/assets/AS-item/content')).resolves.toEqual({})
     expect(success).not.toHaveBeenCalled()
     expect(failure).not.toHaveBeenCalled()
   })

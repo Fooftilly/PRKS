@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 from backend.web.etags import etag_for_representation
 from backend.web.http import Request, Response, json_response
@@ -19,20 +19,6 @@ def objects(req: Request) -> "LocalFilesystemStorage":
     if storage is None:
         raise RuntimeError("this PostgreSQL library has no data root")
     return LocalFilesystemStorage.for_config(storage)
-
-
-def pdfs_dir(req: Request) -> str:
-    """The data root's PDF directory."""
-    storage = req.library.storage
-    if storage is None:
-        raise RuntimeError("this PostgreSQL library has no data root")
-    return storage.pdfs_dir
-
-
-def optional_pdfs_dir(req: Request) -> Optional[str]:
-    """The data root's PDF directory; ``None`` when the Library has none (the command decides)."""
-    storage = req.library.storage
-    return None if storage is None else storage.pdfs_dir
 
 
 def revalidated(req: Request, label: str, data: Any, missing: str = "Work not found") -> Response:

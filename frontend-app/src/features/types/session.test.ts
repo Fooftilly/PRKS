@@ -234,7 +234,7 @@ describe('File types route bridge', () => {
       host: el,
       docType: 'article',
       label: 'Article',
-      rows: [{ id: 'a', file_path: '/api/pdfs/a.pdf' }],
+      rows: [{ id: 'a', file_path: '/api/assets/AS-a-pdf/content' }],
       offlineCached: false,
       generation: 1,
     })
@@ -247,7 +247,7 @@ describe('File types route bridge', () => {
       host: el,
       docType: 'article',
       label: 'Article',
-      rows: [{ id: 'b', file_path: '/api/pdfs/b.pdf' }],
+      rows: [{ id: 'b', file_path: '/api/assets/AS-b-pdf/content' }],
       offlineCached: false,
       generation: 1,
     })

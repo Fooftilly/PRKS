@@ -1,23 +1,25 @@
 """Managed PDFs, their text and thumbnails over HTTP on the PostgreSQL Library (PG-C2 #641).
 
-An upload is stored as an object and served from ``/api/pdfs/<name>``; its
+An upload is stored as an object and served from its Asset's content URL; its
 text is extracted by a queued job, so ``any=1`` search finds it once the job
 ran and keyword search never does. A replace keeps the served path, drops
 the old text and queues the new, and a replace whose extraction fails leaves
-neither text. Adopting another managed PDF by ``file_path`` moves the text
-with it. The PDF route validates the whole suffix after ``/api/pdfs/``.
+neither text. Adopting another Asset's PDF by its content URL moves the
+text with it. The content route serves only an Asset of the acting Library.
 These replace the matching ``tests/test_server_api.py`` cases.
 """
 
 from __future__ import annotations
 
 import base64
+import io
+import hashlib
 import os
 from typing import Any
 from unittest import mock
 from urllib.parse import quote
 
-from backend.api import thumbnails
+from backend.api import common, thumbnails
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.pg.test_search_text import pdf_bytes
 
@@ -34,10 +36,64 @@ class ManagedPdfTestCase(ServerApiTestCase):
 class ManagedPdfTests(ManagedPdfTestCase):
     def test_an_upload_is_served_from_its_managed_path(self) -> None:
         work = self.upload("Upload API Work", "PRKS upload fetch smoke", "upload_test.pdf")
-        self.assertTrue(work["file_path"].startswith("/api/pdfs/"))
+        self.assertTrue(work["file_path"].startswith(f"/api/assets/{work['primary_asset_id']}/content?v="))
         res = self.get(work["file_path"])
         self.assertEqual(res.status, 200)
         self.assertIn(b"%PDF", res.raw[:32])
+
+    def test_the_pdf_and_its_thumbnail_are_read_through_the_storage_backend(self) -> None:
+        """#1427: a backend with no local path and unseekable streams serves both, with ranges."""
+        work = self.upload("Backend Work", "backend token", "backend.pdf")
+        data = self.get(work["file_path"]).raw
+        reads: list[str] = []
+
+        class Unseekable(io.RawIOBase):
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+
+            def readable(self) -> bool:
+                return True
+
+            def readinto(self, buffer: Any) -> int:
+                chunk = self.inner.read(len(buffer))
+                buffer[:len(chunk)] = chunk
+                return len(chunk)
+
+            def close(self) -> None:
+                self.inner.close()
+                super().close()
+
+        class RemoteLike:
+            """Only the generic StorageBackend surface: no ``local_path``."""
+
+            def __init__(self, inner: Any) -> None:
+                self.inner = inner
+
+            def open_read(self, key: Any) -> Any:
+                reads.append(f"open {key}")
+                return Unseekable(self.inner.open_read(key))
+
+            def stat(self, key: Any) -> Any:
+                reads.append(f"stat {key}")
+                return self.inner.stat(key)
+
+        real = common.objects
+        with mock.patch.object(common, "objects", lambda req: RemoteLike(real(req))):
+            whole = self.get(work["file_path"])
+            part = self.get(work["file_path"], headers=[("Range", "bytes=2-6")])
+            beyond = self.get(work["file_path"], headers=[("Range", f"bytes={len(data)}-")])
+            missing = self.get("/api/assets/AS-00000000000000000000000000000000/content")
+            served, reads[:] = list(reads), []
+            thumb = self.get(f"/api/works/{work['id']}/thumbnail?page=1")
+        self.assertEqual((whole.status, whole.raw), (200, data))
+        self.assertEqual((part.status, part.raw, part.header("Content-Range")), (206, data[2:7], [f"bytes 2-6/{len(data)}"]))
+        self.assertEqual(beyond.status, 416)
+        self.assertEqual(thumb.status, 200, thumb.raw[:300])
+        self.assertEqual(missing.status, 404)
+        name = self.stored_name(work["file_path"])
+        self.assertIn(f"open asset-objects/{name}", served)
+        # The render itself reads through the backend: with no local path, a temporary copy.
+        self.assertEqual(reads, [f"stat asset-objects/{name}", f"open asset-objects/{name}"])
 
     def test_pdf_text_is_found_by_any_mode_only_once_extracted(self) -> None:
         term = "UniqPdfSearchTermAlpha"
@@ -66,7 +122,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         path = replaced["file_path"]
         self.assertEqual(self.ok(self.get(f"/api/works/{work['id']}"))["file_path"], path)
         self.assertNotEqual(path, original, "a replace never overwrites the old object")
-        self.assertTrue(path.startswith("/api/pdfs/"))
+        self.assertEqual(path.split("?")[0], original.split("?")[0], "the Asset keeps its id")
         served = self.get(path)
         self.assertEqual(served.status, 200)
         self.assertEqual(served.raw, new_pdf)
@@ -115,6 +171,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         from backend.media.derived_caches import prks_thumb_cache_stem
 
         work = self.upload("Thumb Race", "thumbraceold", "thumb_race.pdf")
+        old_name = self.stored_name(work["file_path"])  # the Asset names other bytes once replaced
         original = thumbnails._prks_thumbnail_bytes_from_pixmap
         rendering, replaced = threading.Event(), threading.Event()
         self.addCleanup(replaced.set)
@@ -141,8 +198,8 @@ class ManagedPdfTests(ManagedPdfTestCase):
             self.assertEqual(result["res"].status, 200)
         assert self.storage is not None
         primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
-        old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=work["file_path"].rsplit("/", 1)[1])
-        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        old_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=old_name)
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=self.stored_name(new["file_path"]))
         self.assertNotEqual(old_stem, new_stem)
         names = set(os.listdir(self.storage.thumbs_dir))
         # The late render landed under the old bytes' name and evicted nothing.
@@ -153,7 +210,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         # The first render of a newer PDF prunes both older copies.
         newest = self.replace_pdf(work["id"], "thumbracenewest")
         self.assertEqual(self.get(f"/api/works/{work['id']}/thumbnail?page=1").status, 200)
-        newest_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=newest["file_path"].rsplit("/", 1)[1])
+        newest_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=self.stored_name(newest["file_path"]))
         self.assertEqual(self.thumb_names(work["id"]), {f"{newest_stem}.webp"})
 
     def test_a_render_that_resumes_its_prune_after_a_replace_keeps_the_new_copy(self) -> None:
@@ -195,7 +252,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
             self.assertEqual(result["res"].status, 200)
         self.assertEqual(resumed, [True])  # the old prune ran, after the replace
         primary = self.ok(self.get(f"/api/works/{work['id']}")).get("primary_asset_id")
-        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=new["file_path"].rsplit("/", 1)[1])
+        new_stem = prks_thumb_cache_stem(work["id"], 1, primary, source=self.stored_name(new["file_path"]))
         self.assertIn(f"{new_stem}.webp", self.thumb_names(work["id"]))
 
     def test_a_render_published_after_its_work_is_deleted_leaves_no_copy(self) -> None:
@@ -244,30 +301,76 @@ class ManagedPdfTests(ManagedPdfTestCase):
         assert self.storage is not None
         return {name for name in os.listdir(self.storage.thumbs_dir) if name.startswith(work_id + "_")}
 
-    def test_the_pdf_route_validates_the_whole_suffix(self) -> None:
-        work = self.upload("Route Suffix Guard", "route", "route_suffix_guard.pdf")
-        name = work["file_path"].rsplit("/", 1)[1]
+    def test_the_content_route_serves_only_an_asset_of_the_library(self) -> None:
+        work = self.upload("Route Guard", "route", "route_guard.pdf")
+        name = self.stored_name(work["file_path"])
+        asset = work["primary_asset_id"]
         assert self.storage is not None
         target = os.path.join(self.storage.pdfs_dir, name)
         self.assertTrue(os.path.isfile(target))
         for method in ("GET", "HEAD"):
-            self.assertEqual(self.call(method, f"/api/pdfs/{name}", cookies=self.cookies).status, 200)
-        for suffix in ("..", f"nested/{name}", f"nested%2F{name}", f"..%2F{name}", f"nested%5C{name}",
-                       f"%20{name}"):
+            self.assertEqual(self.call(method, f"/api/assets/{asset}/content", cookies=self.cookies).status, 200)
+            self.assertEqual(self.call(method, work["file_path"], cookies=self.cookies).status, 200)
+            for stale in ("?v=stale", "?v=0123456789abcdef", "?v=" + work["file_path"][-16:] + "&v=x"):
+                with self.subTest(method=method, version=stale):
+                    self.assertEqual(self.call(method, f"/api/assets/{asset}/content{stale}",
+                                               cookies=self.cookies).status, 404)
+        # The storage key is no address: neither the retired route nor a key in place of the id serves it.
+        for path in (f"/api/pdfs/{name}", f"/api/assets/{name}/content", f"/api/assets/..%2F{asset}/content",
+                     f"/api/assets/{asset}%2F..%2F{asset}/content", "/api/assets/AS-0/content"):
             for method in ("GET", "HEAD"):
-                with self.subTest(suffix=suffix, method=method):
-                    self.assertEqual(self.call(method, f"/api/pdfs/{suffix}", cookies=self.cookies).status, 404)
+                with self.subTest(path=path, method=method):
+                    self.assertEqual(self.call(method, path, cookies=self.cookies).status, 404)
         self.assertTrue(os.path.isfile(target))
+
+    def test_an_earlier_version_is_never_served_the_newer_bytes(self) -> None:
+        # A viewer that loaded version A keeps reading ranges from A's URL. After a replace,
+        # that URL must not answer with B's bytes at A's offsets: it is 404, whole or ranged.
+        work = self.upload("Version Guard", "versionold", "version_guard.pdf")
+        old_url = work["file_path"]
+        self.assertEqual(self.get(old_url, headers=[("Range", "bytes=0-3")]).status, 206)
+        new = self.replace_pdf(work["id"], "versionnew")
+        self.assertNotEqual(new["file_path"], old_url)
+        self.assertEqual(new["file_path"].split("?")[0], old_url.split("?")[0], "the Asset id stays")
+        for headers in ([], [("Range", "bytes=0-3")]):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.get(old_url, headers=headers).status, 404)
+        current = self.get(new["file_path"])
+        self.assertEqual(current.status, 200)
+        self.assertEqual(hashlib.sha256(current.raw).hexdigest()[:16], new["file_path"][-16:])
+        # Nor does a create adopt B's bytes through A's URL.
+        body = self.refused(self.send("POST", "/api/works", {"title": "Stale adopt", "file_path": old_url}), 400)
+        self.assertEqual(body.get("error"), "file_path is not a managed PDF")
+        self.assertNotIn("Stale adopt", self.titles())
+        created = self.ok(self.send("POST", "/api/works", {"title": "Current adopt", "file_path": new["file_path"]}))
+        adopted = self.ok(self.get(f"/api/works/{created['id']}"))
+        self.assertEqual(adopted["file_path"][-16:], new["file_path"][-16:], "the same bytes, so the same version")
+        self.assertEqual(hashlib.sha256(self.get(adopted["file_path"]).raw).hexdigest()[:16], new["file_path"][-16:])
 
     def test_an_unknown_work_is_404_and_a_search_is_a_list(self) -> None:
         self.assertEqual(self.get("/api/works/W-00000000-NOTFOUND").status, 404)
         self.assertEqual(self.ok(self.get("/api/search?q=nonexistenttokenxyz")), [])
 
     def test_a_dotdot_file_path_is_refused_on_create_and_on_patch(self) -> None:
-        body = self.refused(self.send("POST", "/api/works", {"title": "Dotdot create", "file_path": "/api/pdfs/.."}),
-                            400)
-        self.assertEqual(body.get("error"), "file_path is not a managed PDF")
+        # A storage key is no address (#1427): only an Asset's content URL is adopted.
+        assert self.storage is not None
+        os.makedirs(self.storage.pdfs_dir, exist_ok=True)
+        with open(os.path.join(self.storage.pdfs_dir, "loose.pdf"), "wb") as handle:
+            handle.write(b"%PDF-1.4\n%%EOF\n")
+        for spelling in ("/api/pdfs/..", "/api/pdfs/loose.pdf", "/api/assets/../content"):
+            with self.subTest(spelling=spelling):
+                body = self.refused(self.send("POST", "/api/works", {"title": "Dotdot create", "file_path": spelling}),
+                                    400)
+                self.assertEqual(body.get("error"), "file_path is not a managed PDF")
         self.assertNotIn("Dotdot create", self.titles())
+        # An Asset whose key names a directory is no managed PDF: 400, not a storage error.
+        owner = self.upload("Folder owner", "folder", "folder.pdf")
+        name = self.stored_name(owner["file_path"])
+        os.replace(os.path.join(self.storage.pdfs_dir, name), os.path.join(self.storage.pdfs_dir, name + ".moved"))
+        os.makedirs(os.path.join(self.storage.pdfs_dir, name))
+        body = self.refused(self.send("POST", "/api/works", {"title": "Folder create", "file_path": owner["file_path"]}),
+                            400)
+        self.assertEqual(body.get("error"), "the managed PDF does not exist")
         work = self.create_work("Dotdot patch target")
         res = self.send("PATCH", f"/api/works/{work['id']}", {"file_path": "/api/pdfs/.."})
         self.assertEqual((res.status, res.body.get("code")), (501, "not_ported"), res.raw)  # any file_path change
@@ -277,7 +380,7 @@ class ManagedPdfTests(ManagedPdfTestCase):
         """Managed PDFs are immutable stored objects on PostgreSQL; rewriting them in place is not ported."""
         work = self.upload("Linearize Existing Work", "linearize me", "linearize.pdf")
         assert self.storage is not None
-        path = os.path.join(self.storage.pdfs_dir, work["file_path"].rsplit("/", 1)[1])
+        path = os.path.join(self.storage.pdfs_dir, self.stored_name(work["file_path"]))
         with open(path, "rb") as handle:
             before = handle.read()
         res = self.send("POST", "/api/works/linearize-existing-pdfs", {"unlinearized_only": True})
@@ -288,23 +391,23 @@ class ManagedPdfTests(ManagedPdfTestCase):
 
 class AdoptionSpellingTests(ManagedPdfTestCase):
     def test_only_the_exact_managed_path_is_adopted(self) -> None:
-        """Encoded slashes, URL delimiters and padding never name a managed PDF.
+        """Encoded slashes, URL delimiters and padding never name an Asset.
 
-        SQLite trimmed outer whitespace before adopting; PostgreSQL refuses
-        every spelling but the exact path it serves.
+        Only the exact content URL a Work reports (with or without its
+        version) is adopted; every other spelling is refused.
         """
         work = self.upload("Spelling Owner", "spelling", "spelling.pdf")
         path = work["file_path"]
-        name = path.rsplit("/", 1)[1]
-        for spelling in (f"{path}%2F", f"/api/pdfs/x%2F{name}", f"{path}?x", f"{path};x", f"{path}#x",
-                         f"  {path}  "):
+        name = self.stored_name(path)
+        bare = path.split("?")[0]
+        for spelling in (f"{bare}%2F", f"/api/pdfs/{name}", f"{path}&x", f"{bare};x", f"{bare}#x",
+                         f"  {path}  ", f"{bare}?x"):
             with self.subTest(spelling=spelling):
                 body = self.refused(self.send("POST", "/api/works", {"title": "Adopt", "file_path": spelling}), 400)
                 self.assertEqual(body.get("error"), "file_path is not a managed PDF")
         self.assertEqual(self.titles(), ["Spelling Owner"])
-        res = self.get(f"{path}?x")
+        res = self.get(f"{bare}?x")
         self.assertEqual(res.status, 200, "a query string is not part of the path")
         self.assertIn(b"%PDF", res.raw[:32])
-        # The path is taken as sent: ";x" is part of the file name, which no
-        # managed PDF has.
-        self.assertEqual(self.get(f"{path};x").status, 404)
+        # The path is taken as sent: ";x" is part of the id, which no Asset has.
+        self.assertEqual(self.get(f"{bare};x").status, 404)

@@ -120,7 +120,7 @@ Logs may include:
 
 - event names
 - request IDs
-- safe endpoint templates (`/api/search`, `/api/pdfs/:pdf`, `/api/works/:id`)
+- safe endpoint templates (`/api/search`, `/api/assets/:id/content`, `/api/works/:id`)
 - HTTP status
 - internal opaque IDs (`work_id`, `processing_file_id`)
 - counts, page numbers, byte ranges, file sizes
@@ -157,7 +157,7 @@ The table lists API routes with:
 - **Avg / P50 / P95 / Max** — duration in milliseconds. P50 and P95 are nearest-rank percentiles of the recent bounded sample (last 128 durations for that route), not a permanent historical distribution. Tiny samples are not statistically strong.
 - **DB** — measured DB share: time spent in PostgreSQL statements run through `backend/db/database.py` divided by request time. This is directional, not profiler-grade SQL accounting.
 
-Subsystem lines (PDF file stats, JSON encode, gzip, thumbnail render, PDF text search, text-index phases, and similar) use the same timing rules with fixed span names only.
+Subsystem lines (JSON encode, gzip, thumbnail render, PDF text search, text-index phases, and similar) use the same timing rules with fixed span names only.
 
 Optional:
 

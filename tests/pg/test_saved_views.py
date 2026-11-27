@@ -155,7 +155,7 @@ class CrudTests(SavedViewTestCase):
         view = self.create("Everything", {**_ALL, "q": "kept"})
         saved_view_commands.delete(self.db, self.ctx, view["id"])
         self.assertIsNone(saved_view_commands.view(self.db, self.ctx, view["id"]))
-        work = work_commands.detail(self.db, self.ctx, self.pdfs_dir, work_id)
+        work = work_commands.detail(self.db, self.ctx, work_id)
         assert work is not None
         self.assertEqual(work["title"], "Kept Work")
         self.assertEqual(self.count("works"), 1)

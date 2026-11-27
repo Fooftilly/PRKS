@@ -332,7 +332,7 @@ async function testStalledReadHeaderDeadline() {
             fetchBundle: box, setTimeout: clock.setTimeout,
             clearTimeout: clock.clearTimeout, readHeaderTimeoutMs: 1000,
         });
-        const pdf = coord.prksRequest('/api/pdfs/managed');
+        const pdf = coord.prksRequest('/api/assets/AS-managed/content');
         record('managed PDF GET does not install ordinary metadata header watchdog',
             clock.pendingCount() === 0, 'timers=' + clock.pendingCount());
         box.calls[0].resolve(jsonResponse({ ok: true }));
@@ -1371,7 +1371,7 @@ async function testReachabilitySignalling() {
         const signals = installReachabilitySpies();
         const box = makeDeferredFetch();
         const coord = makeCoordinator({ fetchBundle: box });
-        const p = coord.prksRequest('/api/pdfs/example.pdf');
+        const p = coord.prksRequest('/api/assets/AS-example-pdf/content');
         await waitUntil(function () {
             return box.calls.length === 1;
         });

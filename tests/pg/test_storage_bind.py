@@ -41,7 +41,7 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
         self.assertIsInstance(app.library, PostgresLibrary)
         with patch.dict(os.environ, {"PRKS_STORAGE": "/tmp/changed-after-bind", "PRKS_TESTING": "1",
                                      "PRKS_FOR_PROCESSING_DIR": "/tmp/inbox-after-bind"}):
-            self.assertEqual(app.pdfs_dir, config.pdfs_dir)
+            self.assertEqual(app.thumbs_dir, config.thumbs_dir)
             library = app.require_library()
             assert library.storage is not None
             self.assertEqual(library.storage.pdfs_dir, config.pdfs_dir)
@@ -60,7 +60,7 @@ class PostgresStorageBindTests(WorksFacadeTestCase):
         second = self.bind_root(StorageConfig.for_testing(self.root()))
         self.assertIsNot(second.library, first.library)
         self.assertIs(second.require_library().storage, second.storage)
-        self.assertNotEqual(second.pdfs_dir, first.pdfs_dir)
+        self.assertNotEqual(second.thumbs_dir, first.thumbs_dir)
 
     def test_a_failed_binding_leaves_the_served_app_as_it_was(self) -> None:
         first = self.bind_root(StorageConfig.for_testing(self.root()))

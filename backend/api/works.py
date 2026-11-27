@@ -8,8 +8,8 @@ from an upload, an existing managed PDF, a video URL or no file),
 (with ETags), ``GET /api/recent``, ``GET /api/recently-added`` and
 ``GET /api/bibtex/:id``; ``PATCH`` and ``DELETE /api/works/:id``,
 ``POST /api/works/bulk``, ``POST /api/citations`` and
-``POST /api/works/:id/opened``. :func:`thumbnail_fields` and
-:func:`holds_managed_pdf` serve the thumbnail, PDF and Folder routes.
+``POST /api/works/:id/opened``. :func:`thumbnail_fields` serves the
+thumbnail route.
 
 The calls go to ``backend/domain/works/work_commands`` for the admitted
 request's context on the served Library's database, so authorization stays
@@ -34,8 +34,9 @@ from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
 
+from backend.domain.objects.content_url import parse_content_url
 from backend.domain.works import source_rules
-from backend.api.common import objects, pdfs_dir, revalidated, text_field
+from backend.api.common import objects, revalidated, text_field
 from backend.api_contract.citations import CitationsRequest, CitationsResult
 from backend.api_contract.errors import NotPortedEnvelope
 from backend.api_contract.operation import Operation, Param, Reply, body, error, ok, plain
@@ -77,13 +78,6 @@ def thumbnail_fields(req: Request, work_id: str) -> Optional[dict[str, Any]]:
     return work_commands.thumbnail_fields(*req.actor, work_id)
 
 
-def holds_managed_pdf(req: Request, name: str) -> bool:
-    """Whether the acting Library names the managed PDF ``name`` (the data root is shared)."""
-    from backend.domain.works import work_commands
-
-    return work_commands.holds_managed_pdf(*req.actor, name)
-
-
 # -- reads --------------------------------------------------------------------------
 
 
@@ -92,11 +86,11 @@ def catalog(req: Request) -> Response:
 
     # ``?projection=browse`` is an explicit, additive contract: the compact
     # catalog the browse routes cache. The default keeps its semantics for
-    # every other caller. Each list is built once: file_size_bytes is read
-    # from the managed PDF, so the ETag comes from these rows.
+    # every other caller. Each list is built once and the ETag comes from
+    # these rows; file_size_bytes is the primary Asset's byte_size.
     if req.query_value("projection") == "browse":
-        return revalidated(req, "works-browse", work_commands.browse_catalog(*req.actor, pdfs_dir(req)))
-    return revalidated(req, "works", work_commands.catalog(*req.actor, pdfs_dir(req)))
+        return revalidated(req, "works-browse", work_commands.browse_catalog(*req.actor))
+    return revalidated(req, "works", work_commands.catalog(*req.actor))
 
 
 def metadata_state(req: Request) -> Response:
@@ -133,7 +127,7 @@ def detail(req: Request) -> Response:
 
     w_id = req.params["work_id"]
     database, ctx = req.actor
-    data = work_commands.detail(database, ctx, pdfs_dir(req), w_id)
+    data = work_commands.detail(database, ctx, w_id)
     if not data:
         return error_response(404, "Work not found")
     try:
@@ -152,13 +146,13 @@ def detail(req: Request) -> Response:
 def recent(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    return revalidated(req, "recent", work_commands.recent_browse(*req.actor, pdfs_dir(req)))
+    return revalidated(req, "recent", work_commands.recent_browse(*req.actor))
 
 
 def recently_added(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    return revalidated(req, "recently-added", work_commands.recently_added_browse(*req.actor, pdfs_dir(req)))
+    return revalidated(req, "recently-added", work_commands.recently_added_browse(*req.actor))
 
 
 def bibtex(req: Request) -> Response:
@@ -204,7 +198,7 @@ def fetch_youtube_oembed(url: str) -> Optional[dict[str, Any]]:
 
 
 def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]], fields: dict[str, Any]) -> str:
-    """Create a Work from an upload, an existing managed PDF, a stream or no file; its id.
+    """Create a Work from an upload, another Asset's managed PDF, a stream or no file; its id.
 
     ``fields`` are the create's other fields (``work_commands.NEW_WORK_DEFAULTS``).
     No adoption lock: the command checks an existing file for an actor who
@@ -230,10 +224,19 @@ def _new_work(req: Request, file_path: str, upload: Optional[tuple[str, bytes]],
             out.write(data)
 
         writing = (name, write)
-    # An upload is the Work's file: a path echoed beside it is not read.
-    stored_path = "" if upload is not None else file_path
-    return work_commands.create(*req.actor, pdfs_dir(req), objects(req),
-                                work_commands.new_work_fields(file_path=stored_path, **fields), writing)
+    # An upload is the Work's file: a content URL echoed beside it is not read.
+    stored_key = ""
+    if upload is None and file_path:
+        # Adopting a file is sharing the bytes of an Asset of this Library,
+        # named by its content URL (#1427); nothing else names a file. A
+        # versioned URL adopts only the bytes it names: an earlier version is
+        # refused, never resolved to a replacement's bytes.
+        reference = parse_content_url(file_path)
+        stored_key = (work_commands.asset_object(*req.actor, *reference) if reference else None) or ""
+        if not stored_key:
+            raise ValueError("file_path is not a managed PDF")
+    return work_commands.create(*req.actor, objects(req),
+                                work_commands.new_work_fields(stored_key=stored_key, **fields), writing)
 
 
 def create(req: Request) -> Response:

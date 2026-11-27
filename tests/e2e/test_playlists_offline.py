@@ -151,7 +151,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
     def playlist(self, server, playlist_id):
         from backend.domain.organization import playlist_commands
         store = self.db_for(server)
-        return require(store.run(playlist_commands.detail, playlist_id, store.pdfs_dir))
+        return require(store.run(playlist_commands.detail, playlist_id))
 
     def offline(self, page, context):
         context.set_offline(True)
@@ -631,7 +631,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
         self.assertEqual(work_writes, [], 'no Work write of any kind left the browser')
         o._wait_content_contains(page, 'Renamed while disconnected')
         self.assertEqual(
-            require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], PLAYLIST_VIDEO_ONE_TITLE,
+            require(self.db_for(server).run(work_commands.detail, work))['title'], PLAYLIST_VIDEO_ONE_TITLE,
             'the server has not been told anything yet')
 
         self.online(page, context)
@@ -642,7 +642,7 @@ class PlaylistsOfflineTests(unittest.TestCase):
             message='the Title operation never retired',
         )
         self.assertEqual(work_writes, [], 'and synchronizing still used no Work PATCH')
-        self.assertEqual(require(self.db_for(server).run(work_commands.detail, self.db_for(server).pdfs_dir, work))['title'], 'Renamed while disconnected')
+        self.assertEqual(require(self.db_for(server).run(work_commands.detail, work))['title'], 'Renamed while disconnected')
         titles = page.evaluate("() => fetchWorks().then(ws => ws.map(w => w.title))")
         self.assertIn('Renamed while disconnected', titles)
 

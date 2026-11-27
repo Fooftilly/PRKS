@@ -52,7 +52,6 @@ def default_filing() -> WorkFiling:
 class Environment:
     """What a handler takes from outside the database."""
 
-    pdfs_dir: str  # the managed PDFs, for the projected rows' file sizes
     filing: WorkFiling = field(default_factory=default_filing)
 
 
