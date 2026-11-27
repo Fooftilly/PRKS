@@ -43,6 +43,7 @@ const VIEW: SavedView = {
   id: 'SV 1',
   name: 'Critical theory',
   search: { mode: 'all', q: 'x', tag: '', author: '', publisher: '' },
+  revision: 3,
   created_at: '2026-10-03 10:00:00',
   updated_at: '2026-10-03 10:00:00',
 }
@@ -224,6 +225,7 @@ describe('Saved Views index route', () => {
       viewId: 'SV 1',
       name: 'Critical theory',
       definition: VIEW.search,
+      baseRevision: 3,
       returnFocus: editButton,
     })
 
@@ -505,7 +507,7 @@ describe('Saved View detail route', () => {
     const el = host()
     presentSavedViewDetail({ owner: pane, host: el, availability: 'ready', view: VIEW, rows: [], generation: 4 })
     ;(el.querySelector('#prks-saved-view-edit') as HTMLButtonElement).click()
-    expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search })
+    expect(open).toHaveBeenCalledWith({ viewId: 'SV 1', name: 'Critical theory', definition: VIEW.search, baseRevision: 3 })
     ;(el.querySelector('#prks-saved-view-delete') as HTMLButtonElement).click()
     await flush()
     expect(server.count('DELETE /api/saved-views/SV%201')).toBe(1)

@@ -14,8 +14,8 @@
  * (browser-scope.js). Without a scope the cache is unavailable.
  *
  * Schema (version 1):
- *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, sourceRevision, libraryEpoch }
- *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, sourceRevision, libraryEpoch }
+ *   entities  -- keyPath ["kind", "id"]    envelope: { kind, id, value, cachedAt, observedAt, sourceRevision, libraryEpoch }
+ *   lists     -- keyPath "listKey"          envelope: { listKey, value, cachedAt, observedAt, sourceRevision, libraryEpoch }
  *   metadata  -- keyPath "key"               small operational key/value (no private content)
  *
  * Library epoch (#629, docs/postgresql-architecture.md §10.4): every
@@ -663,16 +663,46 @@
             }, true);
         }
 
-        function putEntity(kind, id, value, sourceRevision) {
+        /* `observedAt` is when the server read behind `value` finished. It
+         * defaults to now; a value rewritten from an older read (an ACK
+         * patched into a cached detail) passes that read's time, so the sync
+         * reconcile core can still prove what the rest of the value predates. */
+        function putEntity(kind, id, value, sourceRevision, observedAt) {
+            const cachedAt = now();
             const envelope = {
                 kind: String(kind),
                 id: String(id),
                 value: value,
-                cachedAt: now(),
+                cachedAt: cachedAt,
+                observedAt: Number.isFinite(observedAt) && observedAt <= cachedAt ? observedAt : cachedAt,
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
                 libraryEpoch: null,
             };
             return putCurrent(STORE_ENTITIES, envelope);
+        }
+
+        /**
+         * Replaces one entity with `merge(heldValue)` inside the transaction
+         * that read it, so a write committed by another tab is merged, never
+         * overwritten. `merge` must be synchronous; null writes nothing.
+         */
+        function updateEntity(kind, id, merge) {
+            return inCurrentEpoch(STORE_ENTITIES, function (store, epoch) {
+                return store.get([String(kind), String(id)]).then(function (row) {
+                    const next = merge(current(row) ? row.value : null);
+                    if (next == null) return undefined;
+                    const cachedAt = now();
+                    return store.put({
+                        kind: String(kind),
+                        id: String(id),
+                        value: next,
+                        cachedAt: cachedAt,
+                        observedAt: cachedAt,
+                        sourceRevision: '',
+                        libraryEpoch: epoch,
+                    });
+                });
+            }, false);
         }
 
         function getEntity(kind, id) {
@@ -727,11 +757,14 @@
                 });
         }
 
-        function putList(listKey, value, sourceRevision) {
+        /* `observedAt` as for putEntity. */
+        function putList(listKey, value, sourceRevision, observedAt) {
+            const cachedAt = now();
             const envelope = {
                 listKey: String(listKey),
                 value: value,
-                cachedAt: now(),
+                cachedAt: cachedAt,
+                observedAt: Number.isFinite(observedAt) && observedAt <= cachedAt ? observedAt : cachedAt,
                 sourceRevision: sourceRevision != null ? String(sourceRevision) : '',
                 libraryEpoch: null,
             };
@@ -874,6 +907,7 @@
             isAvailable: isAvailable,
             putEntity: putEntity,
             getEntity: getEntity,
+            updateEntity: updateEntity,
             getEntitiesByKind: getEntitiesByKind,
             deleteEntity: deleteEntity,
             deleteEntitiesByKind: deleteEntitiesByKind,

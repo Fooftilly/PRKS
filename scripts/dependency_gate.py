@@ -835,6 +835,22 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
             }
         )
 
+    sync_reconcile_path = root / "frontend" / "js" / "sync-reconcile.js"
+    if sync_reconcile_path.is_file():
+        entries.append(
+            {
+                "name": "prks-sync-reconcile",
+                "version": "1",
+                "source_category": "frontend-app:sync-reconcile",
+                "runtime_files": [
+                    {
+                        "path": "/js/sync-reconcile.js",
+                        "sha256": sha256_file(sync_reconcile_path),
+                    }
+                ],
+            }
+        )
+
     route_model_path = root / "frontend" / "js" / "route-model.js"
     if route_model_path.is_file():
         entries.append(

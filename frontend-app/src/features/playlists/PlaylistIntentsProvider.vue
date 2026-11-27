@@ -14,6 +14,7 @@ provide(playlistIntentsKey, {
   cancelEdit: (playlistId) => current.value.cancelEdit(playlistId),
   editSession: () => current.value.editSession(),
   invalidateEditSession: () => current.value.invalidateEditSession(),
+  pinEditBase: (playlistId, shown) => current.value.pinEditBase(playlistId, shown),
   saveFields: (playlistId, draft, baseline) => current.value.saveFields(playlistId, draft, baseline),
   reorder: (playlistId, workIds) => current.value.reorder(playlistId, workIds),
   removeWork: (playlistId, workId) => current.value.removeWork(playlistId, workId),

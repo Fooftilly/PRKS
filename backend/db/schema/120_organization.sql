@@ -259,6 +259,8 @@ CREATE TABLE prks.saved_views (
   search_tag       text NOT NULL DEFAULT '' CHECK (char_length(search_tag) <= 200),
   search_author    text NOT NULL DEFAULT '' CHECK (char_length(search_author) <= 200),
   search_publisher text NOT NULL DEFAULT '' CHECK (char_length(search_publisher) <= 200),
+  -- Advanced by every update; an edit names the revision it was opened at (#873).
+  revision         bigint NOT NULL DEFAULT 0 CHECK (revision >= 0),
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT saved_views_library_id_name_key_key UNIQUE (library_id, name_key),

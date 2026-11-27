@@ -32,6 +32,7 @@ const MODES: ReadonlyArray<{ value: SavedViewMode; label: string }> = [
 ]
 
 const viewId = ref('')
+const baseRevision = ref<number | null>(null)
 const draft = reactive<SavedViewDraft>(stateFromOpening(null).draft)
 const nameError = ref('')
 const saveError = ref('')
@@ -65,6 +66,7 @@ function openWith(next?: SavedViewOpening): void {
   const state = stateFromOpening(next)
   opening += 1
   viewId.value = state.viewId
+  baseRevision.value = state.baseRevision
   Object.assign(draft, state.draft)
   nameError.value = ''
   saveError.value = ''
@@ -110,10 +112,11 @@ async function onSave(): Promise<void> {
   saving.value = true
   const records = window.prksSavedViewRecords ?? savedViewRecords()
   const outcome = await saveSavedView(
-    { viewId: viewId.value, draft: { ...draft } },
+    { viewId: viewId.value, baseRevision: baseRevision.value, draft: { ...draft } },
     {
       create: (input) => records.create(input),
-      update: (id, input) => records.update(id, input),
+      update: (id, input, base) => records.update(id, input, base),
+      read: (id) => records.get(id),
       actionMessage: (err, fallback) => records.actionMessage(err, fallback),
     },
   )
@@ -121,6 +124,11 @@ async function onSave(): Promise<void> {
   saving.value = false
   if (!still()) return
   if (outcome.status === 'failed') {
+    saveError.value = outcome.message
+    return
+  }
+  if (outcome.status === 'conflict') {
+    baseRevision.value = outcome.baseRevision
     saveError.value = outcome.message
     return
   }
@@ -139,6 +147,9 @@ async function onSave(): Promise<void> {
 function onNameKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Enter' || event.isComposing || event.defaultPrevented) return
   event.preventDefault()
+  // A held key is one decision: its repeats must not save again once a
+  // conflict refreshed the revision -- that needs a second press.
+  if (event.repeat) return
   void onSave()
 }
 

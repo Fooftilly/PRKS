@@ -191,7 +191,7 @@ describe('Settings surface', () => {
       ['author', 'Author'],
       ['year', 'Year'],
     ]
-    window.prksLoadAppSettings = vi.fn(async () => ({}))
+    window.prksLoadAppSettings = vi.fn(async () => ({ bibtex_export_fields: { author: true, year: true } }))
     window.__prksBibtexExportFields = { author: true, year: true }
     const patch = vi.fn(async () => ({}))
     window.prksPatchAppSettings = patch

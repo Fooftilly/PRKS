@@ -1,9 +1,13 @@
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
-import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workNotesStateClassic from '../../../../frontend/js/work-notes-state.js?raw'
+import syncReconcileSource from '../../../../frontend/js/sync-reconcile.js?raw'
 import uiClassicSource from '../../../../frontend/js/ui.js?raw'
 import { registerWorkMetadataEditorBridge, resetWorkMetadataEditorForTests } from './metadata-session'
+
+// The notes state loads the shared ACK core as the page does, from its global.
+const workNotesStateSource = syncReconcileSource + '\n' + workNotesStateClassic
 
 type WorkRecord = {
   id: string

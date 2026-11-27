@@ -14,7 +14,7 @@ afterEach(() => {
 
 const SEARCH = { mode: 'all', q: 'x', tag: '', author: '', publisher: '' } as const
 function view(id: string, name: string): SavedView {
-  return { id, name, search: { ...SEARCH }, created_at: null, updated_at: null }
+  return { id, name, search: { ...SEARCH }, revision: 0, created_at: null, updated_at: null }
 }
 
 /** A server that commits each write before answering it with `reply`. */
@@ -116,7 +116,7 @@ describe('Saved View records', () => {
     const guard = vi.fn(() => true)
     window.prksOfflineGuardMutation = guard
     await expect(
-      savedViewRecords(createPrksQueryClient()).update('SV-1', { name: 'x', search: { ...SEARCH } }),
+      savedViewRecords(createPrksQueryClient()).update('SV-1', { name: 'x', search: { ...SEARCH } }, 0),
     ).rejects.toBeInstanceOf(SavedViewOfflineRefusal)
     expect(guard).toHaveBeenCalledWith('Saved Views require a connection to PRKS.')
     expect(fetchMock).not.toHaveBeenCalled()
@@ -269,9 +269,9 @@ describe('Saved View records', () => {
     await settle()
     expect(changed).not.toHaveBeenCalled()
 
-    await elsewhere.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await elsewhere.update('SV-1', { name: 'Renamed', search: { ...SEARCH } }, 0)
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1))
-    await elsewhere.update('SV-1', { name: 'Again', search: { ...SEARCH } })
+    await elsewhere.update('SV-1', { name: 'Again', search: { ...SEARCH } }, 0)
     await settle()
     expect(changed).toHaveBeenCalledTimes(1)
   })
@@ -303,12 +303,12 @@ describe('Saved View records', () => {
     const changed = vi.fn()
     records.follow(painted, route.signal, changed)
     const release = server.holdReads()
-    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } }, 0)
     await vi.waitFor(() => expect(server.reads()).toBe(2))
     route.abort()
     release()
     await settle()
-    await records.update('SV-1', { name: 'Again', search: { ...SEARCH } })
+    await records.update('SV-1', { name: 'Again', search: { ...SEARCH } }, 0)
     await settle()
     expect(changed).not.toHaveBeenCalled()
 
@@ -326,7 +326,7 @@ describe('Saved View records', () => {
     const release = server.holdReads()
     const read = records.get('SV-1')
     await vi.waitFor(() => expect(server.reads()).toBe(1))
-    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } }, 0)
     release()
     const painted = (await read)!
     expect(painted.name).toBe('First')
@@ -387,7 +387,7 @@ describe('Saved View records', () => {
     const earlyRecord = records.get('SV-1')
     await vi.waitFor(() => expect(listGets).toBe(1))
     gate = null
-    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } })
+    await records.update('SV-1', { name: 'Renamed', search: { ...SEARCH } }, 0)
     // Reads asked for after the write join those requests, then read again.
     const lateList = records.list()
     const lateRecord = records.get('SV-1')

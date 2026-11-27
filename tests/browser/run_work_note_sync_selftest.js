@@ -540,6 +540,85 @@ async function busyNoteHarness(tabId, options) {
     return h;
 }
 
+/* A corrective body adopted into a clean editor (#1450 review): the tab's
+ * clean committed session for the old text gives way, so a remount reads the
+ * new body; a session with typing keeps the editor's base. */
+async function adoptedBodyRetiresTheCleanSession() {
+    {
+        const h = await busyNoteHarness('adopt-clean');
+        const entry = h.session();
+        assert.equal(entry.state, 'committed');
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'other'), false,
+            'a session holding other text is kept');
+        assert.equal(h.session(), entry);
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'A'), true,
+            'the clean session for the shown text gives way');
+        assert.equal(h.session(), null, 'and is no longer the tab session');
+        /* Once A is acknowledged (no pending overlay), a remount reads B. */
+        const pending = globalThis.prksPendingWorkNoteText;
+        globalThis.prksPendingWorkNoteText = (_id, _kind, server) => server;
+        try {
+            assert.equal(globalThis.prksResearchNotesTextForWork('W-1', 'B', h.ctx), 'B',
+                'a remount does not bring the old text back');
+        } finally {
+            globalThis.prksPendingWorkNoteText = pending;
+        }
+        h.done();
+    }
+    {
+        const h = await busyNoteHarness('adopt-typing');
+        h.type('A B');
+        const entry = h.session();
+        assert.equal(globalThis.prksResearchNotesAdoptBody(h.ctx, 'W-1', 'A B'), false,
+            'a session with typing keeps its base');
+        assert.equal(h.session(), entry);
+        h.done();
+    }
+}
+
+/* The same, end to end (#1450 review): a corrective ACK re-read through
+ * prksBindWorkNotesSync replaces the body in the mounted clean editor, and
+ * the tab session is retired, so a remount shows the new body. */
+async function correctiveAckReplacesTheMountedNote() {
+    const h = await busyNoteHarness('corrective-remount');
+    let shown = 'A';
+    h.notes.editor = { value: text => (text === undefined ? shown : (shown = text)) };
+    const work = { id: 'W-1', text_content: 'older', private_notes: null };
+    h.ctx.getEntity = () => work;
+    h.resources.workNotesObserved.research = { value: 'older', revision: 0, source: 'server' };
+    h.resources.workNotesCanonical = { id: 'W-1', text_content: 'older', private_notes: '',
+        sources: { research: 'server' } };
+    const reads = [];
+    globalThis.prksOfflineReadEntity = async (kind, _id, _path, options) => {
+        reads.push([kind, options && options.requestPolicy && options.requestPolicy.dedupe]);
+        return kind === 'work-notes-state'
+            ? { value: { work_id: 'W-1', research_note_revision: 2, private_note_revision: 0 }, source: 'server' }
+            : { value: { id: 'W-1', text_content: 'B', private_notes: null }, source: 'server' };
+    };
+    try {
+        globalThis.prksBindWorkNotesSync(h.ctx);
+        const entry = h.session();
+        assert.equal(entry && entry.state, 'committed', 'a clean committed session for A');
+        /* sync-runtime: acknowledge and retire A, then emit with the op. */
+        await h.store.updateOperationSyncState(h.a.op_id, { status: 'acknowledged', last_error: null });
+        await h.store.deleteAcknowledgedOperation(h.a.op_id);
+        h.emit({ acknowledged: { code: 'ACKNOWLEDGED', work_id: 'W-1', server_revision: 1 },
+            operation: RESEARCH, op: h.a });
+        await settle();
+        assert.deepEqual(reads.map(r => r[0]), ['work-notes-state', 'work'], 'the unproven ACK is re-read');
+        assert.equal(shown, 'B', 'the mounted clean editor shows the server body');
+        assert.equal(work.text_content, 'B');
+        assert.deepEqual([h.resources.workNotesObserved.research.value,
+            h.resources.workNotesObserved.research.revision], ['B', 2], 'at the revision read with it');
+        assert.equal(h.session(), null, 'the clean session for A is retired');
+        assert.equal(globalThis.prksResearchNotesTextForWork('W-1', 'B', h.ctx), 'B',
+            'a remount shows B, not the retired A');
+    } finally {
+        delete globalThis.prksOfflineReadEntity;
+        h.done();
+    }
+}
+
 async function scopeBusyBodyRetriesAfterBlockingSaveSettles() {
     const h = await busyNoteHarness('busy-retry');
     await h.blockB();
@@ -907,7 +986,12 @@ async function reconciliation() {
         prksRequest: async () => { throw new Error('no reads in this scenario'); },
     });
 
-    const researchOp = { operation: RESEARCH, entity_id: 'W-1', payload: { text: 'B [[concept:New]]' } };
+    /* The operations were created after the Work was cached: the reconcile
+     * core proves the cached body older than each ACK by that order. */
+    await new Promise(resolve => setTimeout(resolve, 3));
+    const createdAt = new Date().toISOString();
+    const researchOp = { operation: RESEARCH, entity_id: 'W-1', payload: { text: 'B [[concept:New]]' },
+        created_at: createdAt };
     const researchAck = { work_id: 'W-1', note_kind: RESEARCH_KIND, code: 'ACKNOWLEDGED',
         changed: true, server_revision: 2, value_omitted: true };
     const conceptsBefore = offline.currentDomainGeneration('concepts');
@@ -926,7 +1010,7 @@ async function reconciliation() {
     assert.ok(offline.currentDomainGeneration('research-graph-core') > graphBefore);
     assert.ok(offline.currentDomainGeneration('research-graph-people') > peopleGraphBefore);
 
-    const privateOp = { operation: PRIVATE, entity_id: 'W-1', payload: { text: 'Q' } };
+    const privateOp = { operation: PRIVATE, entity_id: 'W-1', payload: { text: 'Q' }, created_at: createdAt };
     const privateAck = { work_id: 'W-1', note_kind: PRIVATE_KIND, code: 'ACKNOWLEDGED',
         changed: true, server_revision: 3, value_omitted: true };
     const conceptsMid = offline.currentDomainGeneration('concepts');
@@ -1324,6 +1408,7 @@ async function main() {
     await mutationTestAtoBtoA();
     await durableSaveThroughObservedBaseCancels();
     await enqueuePathAtoBtoACancels();
+    await adoptedBodyRetiresTheCleanSession();
     await scopeBusyBodyRetriesAfterBlockingSaveSettles();
     await ackOfOlderBodyNeverPaintsSaved();
     await leaveFlushSendsBlockedBodyWithoutTimer();
@@ -1336,6 +1421,9 @@ async function main() {
     await aStaleWorksBlockedSettlementLeavesTheLiveRetry();
     await reconciliation();
     committedPrivateAckProofIsExactAndBounded();
+    /* After the private ACK proof: the first bind owns that module's one
+     * private-ACK subscription. */
+    await correctiveAckReplacesTheMountedNote();
     console.log('All ' + checks + ' Work note checks passed');
 }
 

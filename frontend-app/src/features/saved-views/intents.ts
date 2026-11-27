@@ -104,7 +104,12 @@ export function browserSavedViewIntents(
   return {
     edit(view) {
       if (!ownsView(owner, generation, view.id)) return
-      window.prksOpenSavedViewModal?.({ viewId: view.id, name: view.name, definition: view.search })
+      window.prksOpenSavedViewModal?.({
+        viewId: view.id,
+        name: view.name,
+        definition: view.search,
+        baseRevision: view.revision,
+      })
     },
     async remove(viewId) {
       const still = () => ownsView(owner, generation, viewId)
@@ -130,6 +135,7 @@ export function browserSavedViewIntents(
         viewId: view.id,
         name: view.name,
         definition: view.search,
+        baseRevision: view.revision,
         returnFocus: opener ?? null,
       })
       return success()

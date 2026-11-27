@@ -7,9 +7,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import folderStateSource from '../../../../frontend/js/folder-state.js?raw'
 import ownerResourceSource from '../../../../frontend/js/owner-resource.js?raw'
 import tabContextSource from '../../../../frontend/js/tab-context.js?raw'
-import workNotesStateSource from '../../../../frontend/js/work-notes-state.js?raw'
+import workNotesStateClassic from '../../../../frontend/js/work-notes-state.js?raw'
+import syncReconcileSource from '../../../../frontend/js/sync-reconcile.js?raw'
 import uiClassicSource from '../../../../frontend/js/ui.js?raw'
 import { createFolderQueue, type FolderServer } from './test-support/folder-note-queue'
+
+// The notes state loads the shared ACK core as the page does, from its global.
+const workNotesStateSource = syncReconcileSource + '\n' + workNotesStateClassic
 
 type Folder = { id: string; title: string; private_notes: string }
 

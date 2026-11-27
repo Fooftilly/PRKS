@@ -183,17 +183,7 @@ def _open_work_from_home(page, title, *, profile_prefix=None):
         page.locator('#sidebar a.nav-link[href="#/folders"]').click()
         page.wait_for_function("() => location.hash === '#/folders'")
     with stage("recent"):
-        # Opt-in manual profile (#740): measure Playwright actionability
-        # separately from the *real* user click. trial=True performs no click.
-        # The probe can pre-scroll/warm actionability, so compare with a
-        # baseline on the same runner; it is not proof of handler time.
         tab = page.locator('.prks-folder-library__tab-btn[data-tab="recently-added"]')
-        if (
-            profile_prefix in ("person_create", "person_edit")
-            and os.environ.get("PRKS_E2E_PERSON_RECENT_TRIAL") == "1"
-        ):
-            with stage("recent_trial"):
-                tab.click(trial=True)
         with stage("recent_click"):
             tab.click()
         with stage("recent_card"):
@@ -5832,8 +5822,8 @@ class TabContextHostRootTests(_BrowserE2E):
         """A save still in flight when the tab has moved on must not repaint it.
 
         A Playlist save is durable, so what can still be in flight is the read
-        of the BASE the edit is measured against -- and it is delayed here the
-        way the PATCH used to be. The playlist is synchronized first on purpose:
+        of the BASE the edit is measured against. That base is pinned when Edit
+        opens and Save awaits it, so the read is held from Edit onwards. The playlist is synchronized first on purpose:
         the base of one this device created and has not sent is its own
         construction payload, which needs no read at all and so could not be
         delayed.
@@ -5853,8 +5843,6 @@ class TabContextHostRootTests(_BrowserE2E):
             arg=playlist_id,
         )
         page.wait_for_selector(".prks-playlist-detail")
-        page.locator("#prks-playlist-edit-btn").click()
-        page.wait_for_selector("#prks-playlist-edit-save")
         held = []
         state_path = "/api/playlists/" + playlist_id + "/sync-state"
 
@@ -5867,12 +5855,19 @@ class TabContextHostRootTests(_BrowserE2E):
 
         page.route("**/api/playlists/**", hold_playlist_base)
         try:
+            page.locator("#prks-playlist-edit-btn").click()
+            page.wait_for_selector("#prks-playlist-edit-save")
             page.fill("#prks-playlist-edit-desc", "Delayed stale response")
             page.locator("#prks-playlist-edit-save").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
                 page.wait_for_timeout(50)
             self.assertTrue(held, "Playlist base read was not intercepted")
+            # The hold is armed from Edit, so prove Save itself is waiting on it.
+            page.wait_for_function(
+                "() => { const b = document.querySelector('#prks-playlist-edit-save');"
+                " return !!b && b.textContent.indexOf('Saving') !== -1; }",
+                timeout=5000)
             page.evaluate("() => window.prksNavigate('#/folders')")
             page.wait_for_function("() => location.hash === '#/folders'")
             page.wait_for_selector(".prks-folder-library")
@@ -6318,8 +6313,6 @@ class TabContextHostRootTests(_BrowserE2E):
         page.locator("#save-group-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
         group_id = _person_group_id_from_hash(page)
-        page.locator("#panel-content button", has_text="Edit group").click()
-        page.wait_for_selector("#gd-save-btn")
         # While CREATE_PERSON_GROUP is unsettled, acknowledgedGroupBase uses the
         # create payload at revision 0 and never GETs /sync-state — so the hold
         # below would miss. Wait until construction has retired, then warm the
@@ -6327,8 +6320,9 @@ class TabContextHostRootTests(_BrowserE2E):
         _wait_person_group_create_settled(page, group_id)
 
         # There is no Group PATCH any more: the save is durable. What it DOES
-        # await is the revision base it measures the edit against, so that read
-        # is the in-flight window this test needs.
+        # await is the revision base it measures the edit against, pinned when
+        # Edit opens, so Edit opens with the hold armed and that read is the
+        # in-flight window this test needs.
         sync_path = "/api/person-groups/%s/sync-state" % group_id
 
         def hold_group_state(route):
@@ -6344,6 +6338,8 @@ class TabContextHostRootTests(_BrowserE2E):
         try:
             _warm_person_group_sync_state(page, group_id)
             hold_active["on"] = True
+            page.locator("#panel-content button", has_text="Edit group").click()
+            page.wait_for_selector("#gd-save-btn")
             page.locator("#gd-save-btn").click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -6378,37 +6374,46 @@ class TabContextHostRootTests(_BrowserE2E):
         page.fill("#group-name", "E2E Retry Group")
         page.locator("#save-group-btn").click()
         page.wait_for_function("() => location.hash.indexOf('#/people/groups/') === 0")
-        page.locator("#panel-content button", has_text="Edit group").click()
-        page.wait_for_selector("#gd-save-btn")
 
         group_id = _person_group_id_from_hash(page)
         # Pending CREATE_PERSON_GROUP skips the /sync-state GET (revision 0 from
         # the create payload). Retire construction, warm a successful base read
-        # with the hold off, then arm — so the save's next GET is interceptable.
+        # with the hold off, then arm and open Edit -- the base is pinned there
+        # and Save awaits it, so that GET is the interceptable window.
         _wait_person_group_create_settled(page, group_id)
         held = []
         hold_active = {"on": False}
         fail_next = {"value": True}
         sync_path = "/api/person-groups/%s/sync-state" % group_id
 
+        # Save re-reads a base it could not pin, within the same click, so a
+        # failed save needs that second read to fail as well.
+        fail_repin = {"value": False}
+
         def hold_then_fail_once(route):
             req = route.request
-            if (hold_active["on"]
-                    and req.method == "GET"
-                    and urlparse(req.url).path == sync_path
-                    and fail_next["value"]):
+            is_base_read = req.method == "GET" and urlparse(req.url).path == sync_path
+            if hold_active["on"] and is_base_read and fail_next["value"]:
                 held.append(route)
+                return
+            if is_base_read and fail_repin["value"]:
+                fail_repin["value"] = False
+                route.fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
                 return
             route.fallback()
 
         page.route("**/api/person-groups/**", hold_then_fail_once)
         try:
             _warm_person_group_sync_state(page, group_id)
+            # Without the pair its create ACK seeded, this device has no base.
+            page.evaluate("id => window.prksOfflineInvalidateEntity('person-group-edit-base', id)", group_id)
+            hold_active["on"] = True
+            page.locator("#panel-content button", has_text="Edit group").click()
+            page.wait_for_selector("#gd-save-btn")
             self.assertIsNone(page.locator("#gd-save-btn").get_attribute("aria-busy"))
             save_btn = page.locator("#gd-save-btn")
-            # Dirty a field so Save measures a real edit against the warmed base.
+            # Dirty a field so Save measures a real edit against the pinned base.
             page.fill("#gd-name", "E2E Retry Group Renamed")
-            hold_active["on"] = True
             save_btn.click()
             deadline = time.time() + 8
             while time.time() < deadline and not held:
@@ -6426,8 +6431,10 @@ class TabContextHostRootTests(_BrowserE2E):
             # A base this device cannot read is the one thing that still stops a
             # durable save: without the group's revisions the edit would have to
             # guess, and guessing is what a base revision exists to prevent.
+            fail_repin["value"] = True
             held.pop().fulfill(status=500, content_type="application/json", body='{"error": "stub failure"}')
             page.wait_for_selector("#prks-modal-confirm:not(.hidden)")
+            self.assertFalse(fail_repin["value"], "Save did not re-read the base it could not pin")
             self.assertIn("cannot be edited offline yet",
                           page.locator("#prks-modal-confirm-desc").inner_text())
             page.locator("#prks-modal-confirm-ok").click()
@@ -13075,8 +13082,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             else:
                 route.fulfill(status=200, content_type="text/html", body="<html></html>")
 
+        # Keep the stub for the page's whole life: the last Work's embed
+        # iframe can still load after the loop, and an unrouted request
+        # would reach the context's external-network block.
         page.route("https://www.youtube.com/**", _stub_youtube)
-        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
 
         for url, title in (
             ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "Video Watch URL Work"),
@@ -13443,8 +13452,10 @@ class WorkCreateWorkflowTests(_BrowserE2E):
             else:
                 route.fulfill(status=200, content_type="text/html", body="<html></html>")
 
+        # Keep the stub for the page's whole life: the last Work's embed
+        # iframe can still load after the loop, and an unrouted request
+        # would reach the context's external-network block.
         page.route("https://www.youtube.com/**", _stub_youtube)
-        self.addCleanup(lambda: page.unroute("https://www.youtube.com/**", _stub_youtube))
         self._open_new_file_ready(page)
         page.locator(".prks-kind-toggle__btn[data-kind='video']").click()
         page.locator("#work-video-url").wait_for(state="visible")
