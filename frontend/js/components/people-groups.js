@@ -407,6 +407,24 @@ async function prksRerenderPersonGroupDetail(ctx, groupId, options) {
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
     if (typeof prksRefreshMountedPersonSurfaces === 'function') prksRefreshMountedPersonSurfaces();
+    return true;
+}
+
+/* After a pending_elsewhere refusal the effective record on this device
+ * already holds the other tab's edit, so no server read is needed. Edit
+ * waits for this read, or it pins the record the form refused. */
+function prksRepaintPersonGroupLocally(ctx, groupId) {
+    const id = String(groupId);
+    const inFlight = ctx.ui.personGroupLocalRead;
+    if (inFlight && inFlight.groupId === id) return inFlight.promise;
+    const read = { groupId: id, promise: null };
+    read.promise = prksRerenderPersonGroupDetail(ctx, id).then((painted) => {
+        if (ctx.ui && ctx.ui.personGroupLocalRead === read) ctx.ui.personGroupLocalRead = null;
+        if (painted && ctx.ui && ctx.ui.personGroupLocalRefresh === id) ctx.ui.personGroupLocalRefresh = null;
+        return !!painted;
+    });
+    ctx.ui.personGroupLocalRead = read;
+    return read.promise;
 }
 
 function prksCollectDescendantIds(groupId, allList) {
@@ -457,6 +475,20 @@ function openPersonGroupEdit(owner) {
         });
         return;
     }
+    if (!ctx.ui.personGroupEditing && ctx.ui.personGroupLocalRefresh === String(g.id)) {
+        const generation = ctx.generation;
+        void prksRepaintPersonGroupLocally(ctx, g.id).then((painted) => {
+            const shown = ctx.getEntity ? ctx.getEntity('personGroup') : null;
+            if (ctx.destroyed || ctx.generation !== generation || !shown || String(shown.id) !== String(g.id)) return;
+            if (painted) {
+                openPersonGroupEdit(ctx);
+            } else {
+                void prksAlertMessage('PRKS could not load this group on this device. Try again.',
+                    'Changed elsewhere');
+            }
+        });
+        return;
+    }
     const same = !!(ctx.ui.personGroupEditing && ctx.ui.personGroupFieldBaseline &&
         String(ctx.ui.personGroupFieldBaseline.groupId) === String(g.id));
     if (ctx.ui.personGroupMembersEditing) prksBumpPersonGroupMemberSession(ctx);
@@ -501,7 +533,12 @@ function closePersonGroupEdit(owner) {
     }
     prksRefreshPersonGroupMain(ctx);
     if (typeof updatePanelContent === 'function') updatePanelContent('details');
-    if (group && group.id) void prksRerenderPersonGroupDetail(ctx, group.id, { fresh: stale });
+    if (!group || !group.id) return;
+    if (!stale && ctx.ui && ctx.ui.personGroupLocalRefresh === String(group.id)) {
+        void prksRepaintPersonGroupLocally(ctx, group.id);
+    } else {
+        void prksRerenderPersonGroupDetail(ctx, group.id, { fresh: stale });
+    }
 }
 window.openPersonGroupEdit = openPersonGroupEdit;
 window.closePersonGroupEdit = closePersonGroupEdit;
@@ -602,6 +639,9 @@ async function savePersonGroupEditor(ctx, groupId, draft, baseline, session) {
         await prksSavePersonGroupFieldsDurably(groupId, changes, base, stillOwns, createParent);
     } catch (error) {
         if (!stillOwns()) return { ok: true, quiet: true };
+        if (error && error.prksLocalStoreCode === 'pending_elsewhere' && ctx && ctx.ui) {
+            ctx.ui.personGroupLocalRefresh = String(groupId);
+        }
         await prksAlertMessage(prksPersonGroupSaveMessage(error, 'save this group'), 'Could not save');
         return { ok: false, message: 'Could not save' };
     }

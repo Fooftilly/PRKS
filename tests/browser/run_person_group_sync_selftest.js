@@ -1052,8 +1052,9 @@ async function aGroupDeletedElsewhereSaysSo() {
     }
 }
 
-/* #894: tab Y opened Edit before tab X queued a rename. Y's Save is refused,
- * and Cancel shows X's queued name from the effective record, with no server. */
+/* #894: tab Y opened Edit before tab X queued a rename. Y's Save is refused.
+ * Cancel and an immediate Edit wait for the local reread, then open on X's
+ * queued name, with no server. */
 async function aRefusedSaveReopensOnTheOtherTabsEdit() {
     const store = newStore();
     runtimeForStore(store);
@@ -1102,15 +1103,26 @@ async function aRefusedSaveReopensOnTheOtherTabsEdit() {
         assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["From X"]);
 
         globalThis.prksOfflineReadEntity = async () => { throw new Error("offline"); };
-        globalThis.prksPersonGroupRecordFor = async id => globalThis.prksEffectivePersonGroupDetail(
-            { id, name: "Group O", description: "", parent: null, members: [] },
-            await store.listOperations(), []);
+        let release;
+        const held = new Promise((resolve) => { release = resolve; });
+        let reads = 0;
+        globalThis.prksPersonGroupRecordFor = async (id) => {
+            reads += 1;
+            await held;
+            return globalThis.prksEffectivePersonGroupDetail(
+                { id, name: "Group O", description: "", parent: null, members: [] },
+                await store.listOperations(), []);
+        };
         globalThis.closePersonGroupEdit(y);
-        await settle();
-        assert.equal(y.getEntity().name, "From X", "Cancel shows the queued name offline");
         globalThis.openPersonGroupEdit(y);
-        assert.equal(y.ui.personGroupEditing, true, "Edit reopens");
+        assert.equal(y.ui.personGroupEditing, false, "Edit waits while the local reread is held");
+        release();
+        await settle();
+        assert.equal(reads, 1, "Cancel and Edit share one local reread");
+        assert.equal(y.getEntity().name, "From X", "Cancel shows the queued name offline");
+        assert.equal(y.ui.personGroupEditing, true, "Edit opens after the reread paints");
         assert.equal(y.ui.personGroupFieldBaseline.name, "From X", "on the other tab's edit");
+        assert.equal(y.ui.personGroupStale, undefined, "and no server reread is asked for");
     } finally {
         globalThis.prksAlertMessage = previous.alert;
         globalThis.prksDurableOperationsOrNone = previous.ops;
