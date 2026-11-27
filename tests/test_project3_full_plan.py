@@ -203,11 +203,15 @@ class FullPlanTests(unittest.TestCase):
             quota["now"] += seconds
             quota["remaining"] = 1000
 
-        self.budget = dispatch.GitHubRateBudget("t", clock=lambda: quota["now"], sleep=sleep)
-        self.budget._core = lambda: (1000, quota["remaining"], 1600.0)
-        self.claims = dispatch.GitHubOrderClaims("t", "77")
-        with mock.patch.object(self.claims, "_send", side_effect=send), mock.patch("builtins.print"):
-            outcome, _, _ = self.apply(manifest)
+        budget = dispatch.GitHubRateBudget("t", clock=lambda: quota["now"], sleep=sleep)
+        budget._core = lambda: (1000, quota["remaining"], 1600.0)
+        claims = dispatch.GitHubOrderClaims("t", "77")
+        with (mock.patch.object(claims, "_send", side_effect=send), mock.patch("builtins.print"),
+              mock.patch.object(dispatch, "publish")):
+            outcome, _, _ = dispatch.run(full_command(self.batches, "apply", manifest),
+                                         project=self.fx.project(apply=True), read=self.fx.read,
+                                         env=armed_for(dispatch.manifest_digest(manifest)),
+                                         claims=claims, budget=budget)
         self.assertTrue(outcome.startswith("APPLIED"))
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, 5])
 
