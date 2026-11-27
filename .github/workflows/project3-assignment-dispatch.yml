@@ -25,7 +25,7 @@ jobs:
       github.ref == 'refs/heads/master' &&
       github.actor_id == '46610174'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 360
     environment: project-automation
     permissions:
       contents: read
@@ -51,11 +51,11 @@ jobs:
           PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
           PROJECT3_ORDER_WRITE_MODE: ${{ vars.PROJECT3_ORDER_WRITE_MODE }}
           PROJECT3_ORDER_APPROVED_SHA256: ${{ vars.PROJECT3_ORDER_APPROVED_SHA256 }}
-        run: python3 scripts/project3_assignment_dispatch.py
+        run: exec python3 scripts/project3_assignment_dispatch.py
 
       # Even a failed attempt may have applied some fields before drift stopped it.
       - name: Refresh read-only snapshots after writes or possible partial writes
-        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
+        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

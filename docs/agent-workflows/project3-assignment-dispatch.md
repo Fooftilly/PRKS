@@ -163,9 +163,61 @@ To recover after a failure:
 2. Check the remaining rows again as new batches. Use the live `expected_before` values. When the failed batch reached its batch claim, its digest is used: change its `reason`, for example by adding the date, to get a new digest. A batch refused by its live preflight keeps an unused digest.
 3. Write a new manifest for the remaining batches and get a new approval. The new manifest digest MUST differ from the old one. When batch 1 failed and every recheck gives the old digests, the new manifest equals the old one and stays blocked: change the `reason` of one row and check that batch again.
 
-To revoke a plan, delete `PROJECT3_ORDER_WRITE_MODE` or change `PROJECT3_ORDER_APPROVED_SHA256`. Batches that already ran stay applied.
+To revoke a plan before a run starts, delete `PROJECT3_ORDER_WRITE_MODE` or change `PROJECT3_ORDER_APPROVED_SHA256`. A running job keeps the values it read at its start, so also write the revocation status (see [Full plans](#full-plans)). Batches that already ran stay applied.
 
 Budget: one plan command MUST stay within 12,000 bytes. A full 30-batch manifest with 10 rows in the current batch uses about 9 KB when each reason has about 60 characters. Each apply reads the claim history once (at most 200 pages) and writes up to four statuses. Project reads and issue reads stay at the single-batch cost.
+
+### Full plans
+
+A full-plan command carries every batch, so one check and one apply cover the whole plan. It uses the manifest, digests and claims above.
+
+1. Check the whole plan in one run:
+
+   ```json
+   {"version": 1, "kind": "implementation-order-full-plan", "operation": "check",
+    "batches": [["...rows of batch 1..."], ["...rows of batch 2..."]]}
+   ```
+
+   The run reads each batch live, including a fresh read of each Project item, and writes nothing and claims nothing. The summary shows a table of every row (batch, issue, before, order) and one log line `ORDER MANIFEST <json>`. The outcome ends with `manifest digest <sha256>`. Each batch digest equals the single-batch check of that batch.
+2. The maintainer reviews the request file and the table, then sets the manifest digest as `PROJECT3_ORDER_APPROVED_SHA256`.
+3. Apply the same batches with the manifest from the check log:
+
+   ```json
+   {"version": 1, "kind": "implementation-order-full-plan", "operation": "apply",
+    "manifest": {"...": "..."}, "batches": ["...same batches..."]}
+   ```
+
+The apply runs in one job:
+
+1. It refuses a plan whose REST estimate does not fit, a manifest that is not the approved one, and the plan rules of [Multi-batch plans](#multi-batch-plans): used batch digests, started steps and a revocation status. Before it scans the claim history, it waits until the current rate-limit window has 201 requests.
+2. It claims step 1 and checks every batch against its manifest digest before the first write. This check reads each Project item again, so a change after the job loaded the Project is found here. A stale later batch ends the manifest here, with no write.
+3. For each batch in order, it waits for REST budget when needed, reads the revocation status, checks the batch again, claims the batch digest and applies the batch with the per-write guards. It then claims the next step and marks this batch and its step `success`. A stop during the next budget wait therefore always leaves the next step started.
+4. Any refusal, failure, revocation, budget stop or cancellation marks the open claims `failure` and stops. The summary says how many batches are verified, whether the stopped batch is **FAILED / POSSIBLY PARTIAL** or refused before any write (or that the run stopped after a verified batch), and which batches were not applied. The workflow then refreshes the agent queue and the planning snapshot.
+
+Recovery after a stopped full plan uses the steps of [Multi-batch plans](#multi-batch-plans). Check only the remaining rows as a new full plan and approve its new manifest digest.
+
+**Revocation during a run.** Environment variables do not change inside a running job. To stop a running plan before its next batch, the maintainer writes this status. Any state works:
+
+```bash
+gh api repos/Fooftilly/PRKS/statuses/126d25fb6f50ef9bd00cfad52065461eca993c7e \
+  -f state=failure -f context='prks/project3-order-revoke/<manifest digest>'
+```
+
+The job reads it before each batch. Every later apply of that manifest, by full plan or by step command, is refused. A revocation status can only stop work. To stop at once, cancel the workflow run. The step runs `exec python3`, so Python itself gets SIGINT, then SIGTERM. It marks the running batch `failure` and the refresh step still runs. A write in flight can land, so treat that batch as possibly partial.
+
+**Limits.** These numbers come from the code and GitHub's documented limits.
+
+| Limit | Value |
+| --- | --- |
+| Batches and rows | 1–30 batches of 1–10 rows: 300 issues |
+| Request file (full plan) | 131,072 bytes. 300 rows with 60-character reasons: about 54 KB for check and 61 KB for apply |
+| Owner dispatch input | 60,000 bytes (GitHub allows 65,535 characters for all inputs). Use the request branch for a larger plan |
+| Other commands | 12,000 bytes, unchanged |
+| Actions-token REST requests | About 2 per row for a check, 10 per row and 8 per batch for an apply, plus 200 for the claim history scan. A 300-row apply needs about 3,440 |
+| Actions-token rate | 1,000 requests per hour, shared by every workflow in the repository |
+| Job time | 360 minutes. A full plan stops at a batch boundary after 300 minutes |
+
+Before the first claim, the apply reads `GET /rate_limit`, which does not count against the limit. It refuses a plan whose estimate does not fit before the 300-minute deadline. No batch starts after that deadline. Before each batch it waits for the next reset when fewer requests remain than the batch needs. A 300-row apply can take more than three hours when other workflows use the same token budget. Project reads use `PROJECT_SYNC_TOKEN` (about 4 GraphQL queries and 1 mutation per changed row). The claim history grows by 4 statuses per batch; at 200 pages the claim reader refuses to prove non-replay.
 
 ## Safety and audit
 

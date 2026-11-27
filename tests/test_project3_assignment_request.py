@@ -470,7 +470,7 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertNotIn(forbidden, text)
         self.assertNotIn("github.event.workflow_run.head_sha }}", text)
         self.assertIn("group: project3-assignment-mutations", text)
-        self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", text)
+        self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')", text)
 
     def test_mergify_required_protection_rejects_project3_data_branches(self):
         config = (ROOT / ".mergify.yml").read_text()

@@ -13,6 +13,10 @@ Each approved digest is applied at most once: a commit status claims it.
 A plan command (``"kind": "implementation-order-plan"``) carries one batch
 and the manifest of all checked batch digests. The maintainer approves the
 manifest digest once; its batches apply in order and stop at a failure.
+
+A full-plan command (``"kind": "implementation-order-full-plan"``) carries
+every batch. Its check prints the manifest; its apply runs every batch of the
+approved manifest in one job, with the same per-batch guards and claims.
 """
 from __future__ import annotations
 
@@ -21,10 +25,13 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import sys
+import time
 import urllib.error
 import urllib.request
-from typing import Any, Collection, Mapping, Protocol
+from typing import Any, Callable, Collection, Iterator, Mapping, Protocol
+from contextlib import contextmanager
 
 import project3_migrate as pm
 import project3_triage as triage
@@ -32,11 +39,15 @@ import project3_triage as triage
 REPOSITORY = "Fooftilly/PRKS"
 OWNER_ID = 46610174
 MAX_BYTES = 12000
+# workflow_dispatch inputs share one 65,535-character payload limit.
+DISPATCH_MAX_BYTES = 60000
+FULL_MAX_BYTES = 131072
 MAX_ITEMS = 10
 FIELDS = frozenset(("Agent", "Status", "Execution"))
 ORDER_KIND = "implementation-order"
 PLAN_KIND = "implementation-order-plan"
-ORDER_KINDS = frozenset((ORDER_KIND, PLAN_KIND))
+FULL_KIND = "implementation-order-full-plan"
+ORDER_KINDS = frozenset((ORDER_KIND, PLAN_KIND, FULL_KIND))
 MANIFEST_SCHEMA = "prks-project3-order-manifest/v1"
 # 30 full batches keep a plan command under MAX_BYTES with short reasons.
 MAX_BATCHES = 30
@@ -46,11 +57,19 @@ ORDER_ROW_KEYS = frozenset(("number", "order", "expected_before", "reason",
 ORDER_CLAIM_SHA = "126d25fb6f50ef9bd00cfad52065461eca993c7e"
 ORDER_CLAIM_PREFIX = "prks/project3-order-approval/"
 PLAN_CLAIM_PREFIX = "prks/project3-order-plan/"
+REVOKE_PREFIX = "prks/project3-order-revoke/"
 CLAIM_STATES = frozenset(("pending", "success", "failure"))
 HEX64 = re.compile(r"[0-9a-f]{64}")
 # About 10,000 applies at two statuses each, and far below the Actions
 # token's hourly REST limit of 1,000 requests.
 ORDER_CLAIM_PAGES = 200
+# REST requests of the Actions token: two per issue snapshot (issue and
+# blockers), and claim, revocation and rate reads around each batch.
+CHECK_COST_PER_ROW = 2
+APPLY_COST_PER_ROW = 8
+BATCH_OVERHEAD = 8
+# The workflow job stops at 360 minutes; stop between batches well before.
+FULL_PLAN_SECONDS = 5 * 3600
 
 
 class DispatchError(Exception):
@@ -73,7 +92,7 @@ def authenticate(event: Any, env: Mapping[str, str]) -> str:
         raise DispatchError("dispatch event ref is not master")
     inputs = event.get("inputs")
     command = inputs.get("command") if isinstance(inputs, dict) else None
-    if not isinstance(command, str) or len(command.encode("utf-8")) > MAX_BYTES:
+    if not isinstance(command, str) or len(command.encode("utf-8")) > DISPATCH_MAX_BYTES:
         raise DispatchError("missing or oversized command input")
     return command
 
@@ -88,6 +107,13 @@ def _load(command: str) -> Any:
 def command_kind(command: str) -> tuple[str, str]:
     """Return (kind, operation) after full validation of any command type."""
     payload = _load(command)
+    size = len(command.encode("utf-8"))
+    if isinstance(payload, dict) and payload.get("kind") == FULL_KIND:
+        if size > FULL_MAX_BYTES:
+            raise DispatchError("oversized full-plan command")
+        return FULL_KIND, parse_full(command)[0]
+    if size > MAX_BYTES:
+        raise DispatchError("oversized command")
     if isinstance(payload, dict) and payload.get("kind") == PLAN_KIND:
         return PLAN_KIND, parse_plan(command)[0]
     if isinstance(payload, dict) and "kind" in payload:
@@ -181,7 +207,7 @@ def _manifest(value: Any) -> dict:
             or not isinstance(value["batches"], list)
             or not 1 <= len(value["batches"]) <= MAX_BATCHES):
         raise DispatchError(f"invalid order manifest schema, field or size (1–{MAX_BATCHES} batches)")
-    numbers, ranks, digests = set(), set(), set()
+    digests = set()
     for entry in value["batches"]:
         if (not isinstance(entry, dict) or set(entry) != {"digest", "items"}
                 or not isinstance(entry["digest"], str) or not HEX64.fullmatch(entry["digest"])
@@ -199,13 +225,48 @@ def _manifest(value: Any) -> dict:
                 triage.order_value(pair[1], f"#{pair[0]}: manifest order", nullable=False)
             except triage.TriageError as error:
                 raise DispatchError(str(error)) from None
-            if pair[0] in numbers:
-                raise DispatchError(f"#{pair[0]}: issue appears in more than one manifest row")
-            if pair[1] in ranks:
-                raise DispatchError(f"rank {pair[1]} appears in more than one manifest row")
-            numbers.add(pair[0])
-            ranks.add(pair[1])
+    _unique_pairs([entry["items"] for entry in value["batches"]])
     return value
+
+
+def _unique_pairs(batches: list[list[list[int]]]) -> None:
+    numbers, ranks = set(), set()
+    for pairs in batches:
+        for number, rank in pairs:
+            if number in numbers:
+                raise DispatchError(f"#{number}: issue appears in more than one manifest row")
+            if rank in ranks:
+                raise DispatchError(f"rank {rank} appears in more than one manifest row")
+            numbers.add(number)
+            ranks.add(rank)
+
+
+def _pairs(rows: list[dict]) -> list[list[int]]:
+    return [[row["number"], row["order"]] for row in rows]
+
+
+def parse_full(command: str) -> tuple[str, list[list[dict]], dict | None]:
+    """Validate every batch of a full plan; apply also carries the checked manifest."""
+    payload = _load(command)
+    keys = {"version", "kind", "operation", "batches"}
+    if (not isinstance(payload, dict) or payload.get("operation") not in ("check", "apply")
+            or set(payload) != (keys | {"manifest"} if payload["operation"] == "apply" else keys)
+            or type(payload["version"]) is not int or payload["version"] != 1
+            or payload["kind"] != FULL_KIND
+            or not isinstance(payload["batches"], list)
+            or not 1 <= len(payload["batches"]) <= MAX_BATCHES
+            or any(not isinstance(rows, list) or not 1 <= len(rows) <= MAX_ITEMS
+                   for rows in payload["batches"])):
+        raise DispatchError(f"invalid full-plan command schema or size (1–{MAX_BATCHES} "
+                            f"batches of 1–{MAX_ITEMS} rows; apply needs the checked manifest)")
+    batches = [_order_rows(rows) for rows in payload["batches"]]
+    _unique_pairs([_pairs(rows) for rows in batches])
+    manifest = None
+    if payload["operation"] == "apply":
+        manifest = _manifest(payload["manifest"])
+        if [entry["items"] for entry in manifest["batches"]] != [_pairs(rows) for rows in batches]:
+            raise DispatchError("full-plan batches differ from the manifest")
+    return payload["operation"], batches, manifest
 
 
 def parse_plan(command: str) -> tuple[str, dict, int, list[dict]]:
@@ -243,6 +304,10 @@ def plan_claim(manifest: str, index: int) -> str:
     return f"{PLAN_CLAIM_PREFIX}{manifest}/{index}"
 
 
+def revoke_claim(manifest: str) -> str:
+    return REVOKE_PREFIX + manifest
+
+
 def order_digest(rows: list[dict], field: dict, live: list[dict]) -> str:
     """Identical for the check and apply of one batch while its field, items and issues are unchanged."""
     canonical = json.dumps({"kind": ORDER_KIND, "items": rows, "field": field, "live": live},
@@ -262,6 +327,7 @@ def order_apply_allowed(digest: str, env: Mapping[str, str]) -> bool:
 class OrderClaims(Protocol):
     def states(self, contexts: Collection[str]) -> dict[str, set[str]]: ...
     def mark(self, context: str, state: str) -> None: ...
+    def recent(self, context: str) -> bool: ...
 
 
 def _valid_claim(context: str) -> bool:
@@ -320,6 +386,13 @@ class GitHubOrderClaims:
                 return found
         raise DispatchError("order approval claim history too large to prove non-replay")
 
+    def recent(self, context: str) -> bool:
+        """Read only the newest 100 statuses; enough between two batches of one run."""
+        history = self._send(f"{self._base}/commits/{ORDER_CLAIM_SHA}/statuses?per_page=100&page=1")
+        if not isinstance(history, list) or any(not isinstance(item, dict) for item in history):
+            raise DispatchError("malformed order approval claim history")
+        return any(item.get("context") == context for item in history)
+
     def mark(self, context: str, state: str) -> None:
         if state not in CLAIM_STATES or not _valid_claim(context):
             raise DispatchError("invalid order approval claim")
@@ -342,20 +415,21 @@ def mutations_allowed(command: str, env: Mapping[str, str]) -> bool:
 
 
 def prepare_order(rows: list[dict], project: pm.Project,
-                  read: triage.Callable[[str], Any]) -> dict:
+                  read: triage.Callable[[str], Any], *, preflight: bool = True) -> dict:
     proposals = [{k: v for k, v in row.items() if k != "expected_before"} for row in rows]
     plan = triage.propose_order(proposals, project, read)
     for planned, row in zip(plan["items"], rows, strict=True):
         if planned["expected_before"] != row["expected_before"]:
             raise DispatchError(f"#{row['number']}: expected_before differs from live Project")
         planned["approved"] = True
-    triage.preflight_order(plan, project, read)
+    if preflight:
+        triage.preflight_order(plan, project, read)
     return plan
 
 
 def _checked_batch(rows: list[dict], project: pm.Project,
-                   read: triage.Callable[[str], Any]) -> tuple[dict, str]:
-    plan = prepare_order(rows, project, read)
+                   read: triage.Callable[[str], Any], *, preflight: bool = True) -> tuple[dict, str]:
+    plan = prepare_order(rows, project, read, preflight=preflight)
     return plan, order_digest(rows, plan["field"],
                               [{"item": row["expected_item"], "issue": row["expected_issue"]}
                                for row in plan["items"]])
@@ -400,8 +474,8 @@ def execute_order(command: str, *, project: pm.Project,
 
 
 def _plan_batch(rows: list[dict], manifest: dict, index: int, project: pm.Project,
-                read: triage.Callable[[str], Any]) -> tuple[dict, str]:
-    plan, digest = _checked_batch(rows, project, read)
+                read: triage.Callable[[str], Any], *, preflight: bool = True) -> tuple[dict, str]:
+    plan, digest = _checked_batch(rows, project, read, preflight=preflight)
     if plan["field"] != manifest["field"]:
         raise DispatchError(f"{triage.ORDER_FIELD} field identity differs from the manifest")
     if digest != manifest["batches"][index - 1]["digest"]:
@@ -410,12 +484,20 @@ def _plan_batch(rows: list[dict], manifest: dict, index: int, project: pm.Projec
     return plan, digest
 
 
+def _fresh_items(plan: dict, project: pm.Project) -> None:
+    """Re-read Project items without repeating the issue reads of this check."""
+    for row in plan["items"]:
+        triage.order_guard(row, project.refresh(row["expected_item"]), row["expected_issue"])
+
+
 def _plan_sequence(claims: OrderClaims, manifest: dict, approval: str, index: int) -> list[str]:
     steps = [plan_claim(approval, n) for n in range(1, len(manifest["batches"]) + 1)]
     # A used digest in a later batch would strand the plan after this batch writes.
     remaining = {n: batch_claim(entry["digest"])
                  for n, entry in enumerate(manifest["batches"], start=1) if n >= index}
-    seen = claims.states([*remaining.values(), *steps])
+    seen = claims.states([*remaining.values(), *steps, revoke_claim(approval)])
+    if seen.get(revoke_claim(approval)):
+        raise DispatchError("order plan refused: the maintainer revoked this manifest")
     for n, context in remaining.items():
         if seen.get(context):
             raise DispatchError(f"batch {n}: order digest was already used; no replay")
@@ -455,15 +537,10 @@ def execute_plan(command: str, *, project: pm.Project,
         held.insert(0, batch_claim(digest))
         changed = triage.apply_order(plan, project, read)
     except BaseException:
-        for context in held:
-            try:
-                claims.mark(context, "failure")
-            except DispatchError:
-                print("order approval claim completion failed; pending claim is durable",
-                      file=sys.stderr)
+        _fail(claims, held)
         later = ("no later batches" if index == total
-                 else f"batch {total} stays blocked" if index + 1 == total
-                 else f"batches {index + 1}–{total} stay blocked")
+                 else f"{_later(index, total)} stays blocked" if index + 1 == total
+                 else f"{_later(index, total)} stay blocked")
         print(f"order plan {where}: FAILED / POSSIBLY PARTIAL; {later} under this manifest",
               file=sys.stderr)
         raise
@@ -473,9 +550,202 @@ def execute_plan(command: str, *, project: pm.Project,
             changed, len(rows))
 
 
+def _later(index: int, total: int) -> str:
+    return f"batch {total}" if index + 1 == total else f"batches {index + 1}–{total}"
+
+
+def _fail(claims: OrderClaims, held: list[str]) -> None:
+    for context in held:
+        try:
+            claims.mark(context, "failure")
+        except DispatchError:
+            print("order approval claim completion failed; pending claim is durable",
+                  file=sys.stderr)
+
+
+class RateBudget(Protocol):
+    def require(self, cost: int) -> None: ...
+    def wait(self, cost: int) -> None: ...
+
+
+class GitHubRateBudget:
+    """Paces Actions-token REST reads; GET /rate_limit does not count against the limit."""
+
+    def __init__(self, token: str, *, seconds: int = FULL_PLAN_SECONDS,
+                 clock: Callable[[], float] = time.time,
+                 sleep: Callable[[float], None] = time.sleep) -> None:
+        if not token:
+            raise DispatchError("rate budget needs the Actions token")
+        self._token = token
+        self._clock = clock
+        self._sleep = sleep
+        self._deadline = clock() + seconds
+        self._opener = pm._https_only_opener()
+
+    def _core(self) -> tuple[int, int, float]:
+        request = urllib.request.Request("https://api.github.com/rate_limit", headers={
+            "Authorization": "Bearer " + self._token,
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "prks-project3-order-budget",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        try:
+            with self._opener.open(request, timeout=30) as response:
+                core = json.loads(response.read().decode("utf-8"))["resources"]["core"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError, TypeError) as error:
+            raise DispatchError("rate limit read failed: " + type(error).__name__) from None
+        if any(type(core.get(key)) is not int for key in ("limit", "remaining", "reset")):
+            raise DispatchError("malformed rate limit response")
+        return core["limit"], core["remaining"], float(core["reset"])
+
+    def require(self, cost: int) -> None:
+        limit, remaining, reset = self._core()
+        windows = max(0, int((self._deadline - reset) // 3600) + 1)
+        if remaining + windows * limit < cost:
+            raise DispatchError(f"plan needs about {cost} Actions-token requests; about "
+                                f"{remaining + windows * limit} fit before the job deadline")
+
+    def _before_deadline(self) -> None:
+        if self._clock() >= self._deadline:
+            raise DispatchError("the full-plan deadline passed; no new batch starts")
+
+    def wait(self, cost: int) -> None:
+        _, remaining, reset = self._core()
+        self._before_deadline()
+        if remaining >= cost:
+            return
+        if reset + 5 >= self._deadline:
+            raise DispatchError("Actions-token requests would run out before the job deadline")
+        print(f"waiting {int(reset + 5 - self._clock())} s for the REST rate limit to reset",
+              flush=True)
+        self._sleep(max(0.0, reset + 5 - self._clock()))
+        if self._core()[1] < cost:
+            raise DispatchError("Actions-token requests still exhausted after the reset")
+        self._before_deadline()
+
+
+@contextmanager
+def _cancellable() -> Iterator[None]:
+    """A cancelled run gets SIGINT, then SIGTERM; both stop at the current call."""
+    def stop(signum: int, frame: Any) -> None:
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    previous = signal.signal(signal.SIGTERM, stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def publish(lines: list[str]) -> None:
+    """Print to the run log and append to the step summary; never print reasons."""
+    for line in lines:
+        print(line, flush=True)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with Path(summary).open("a", encoding="utf-8") as output:
+            output.write("\n".join(lines) + "\n\n")
+
+
+def _rows_table(index: int, rows: list[dict]) -> list[str]:
+    return [f"| {index} | #{row['number']} | {row['expected_before']} | {row['order']} |"
+            for row in rows]
+
+
+def execute_full(command: str, *, project: pm.Project,
+                 read: triage.Callable[[str], Any],
+                 env: Mapping[str, str],
+                 claims: OrderClaims | None,
+                 budget: RateBudget | None) -> tuple[str, int, int]:
+    operation, batches, given = parse_full(command)
+    issues = sum(len(rows) for rows in batches)
+    if budget is None:
+        raise DispatchError("full plan refused: no rate budget")
+    if given is None:
+        budget.require(issues * CHECK_COST_PER_ROW + len(batches) * BATCH_OVERHEAD)
+        entries, field = [], None
+        for rows in batches:
+            budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
+            plan, digest = _checked_batch(rows, project, read, preflight=False)
+            _fresh_items(plan, project)
+            if field not in (None, plan["field"]):
+                raise DispatchError(f"{triage.ORDER_FIELD} field identity changed during the check")
+            field = plan["field"]
+            entries.append({"digest": digest, "items": _pairs(rows)})
+        manifest = {"schema": MANIFEST_SCHEMA, "field": field, "batches": entries}
+        approval = manifest_digest(manifest)
+        publish(["### Implementation Order full plan", "",
+                 "| Batch | Issue | Before | Order |", "| --- | --- | --- | --- |",
+                 *(line for n, rows in enumerate(batches, start=1) for line in _rows_table(n, rows)),
+                 "", "ORDER MANIFEST " + json.dumps(manifest, sort_keys=True, separators=(",", ":"))])
+        return (f"CHECK ONLY — no Project fields changed; {len(batches)} batches; "
+                f"manifest digest {approval}"), 0, issues
+    approval = manifest_digest(given)
+    total = len(batches)
+    if env.get("PROJECT3_ORDER_WRITE_MODE") != "apply":
+        for n, rows in enumerate(batches, start=1):
+            budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
+            _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
+        return f"DRY RUN — order write mode is not enabled; manifest digest {approval}", 0, issues
+    order_apply_allowed(approval, env)
+    if claims is None:
+        raise DispatchError("order apply refused: no approval claim store")
+    budget.require(ORDER_CLAIM_PAGES + issues * (CHECK_COST_PER_ROW + APPLY_COST_PER_ROW)
+                   + total * BATCH_OVERHEAD)
+    budget.wait(ORDER_CLAIM_PAGES + 1)
+    steps = _plan_sequence(claims, given, approval, 1)
+    held: list[str] = []
+    following: list[str] = []
+    done, changed, index, wrote = 0, 0, 1, False
+    with _cancellable():
+        try:
+            # The first step is claimed before the whole-plan preflight, so any refusal ends the manifest.
+            held = [steps[0]]
+            claims.mark(steps[0], "pending")
+            for n, rows in enumerate(batches, start=1):
+                budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
+                _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
+            for index, rows in enumerate(batches, start=1):
+                budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
+                if claims.recent(revoke_claim(approval)):
+                    raise DispatchError("the maintainer revoked this manifest during the run")
+                plan, digest = _plan_batch(rows, given, index, project, read, preflight=False)
+                claims.mark(batch_claim(digest), "pending")
+                held.insert(0, batch_claim(digest))
+                wrote = True
+                changed += triage.apply_order(plan, project, read)
+                # The next step is claimed while this batch's quota is reserved, so a stop
+                # during the next budget wait cannot leave the manifest resumable.
+                following = steps[index:index + 1]
+                for context in following:
+                    claims.mark(context, "pending")
+                for context in held:
+                    claims.mark(context, "success")
+                held, following, wrote, done = following, [], False, index
+                publish([f"batch {index}/{total} verified: "
+                         + ", ".join(f"#{row['number']}={row['order']}" for row in rows)])
+        except BaseException:
+            _fail(claims, held + following)
+            if done == index:
+                state = f"stopped after verified batch {done}"
+            else:
+                state = f"batch {index}: " + ("FAILED / POSSIBLY PARTIAL" if wrote
+                                              else "REFUSED before any write in this batch")
+            rest = f"; {_later(index, total)} not applied" if index < total else ""
+            publish([f"order full plan; manifest digest {approval}: {done} of {total} batches "
+                     f"verified; {state}{rest}"])
+            raise
+    return (f"APPLIED — {triage.ORDER_FIELD} verified; {total} batches; "
+            f"manifest digest {approval}"), changed, issues
+
+
 def run(command: str, *, project: pm.Project, read: triage.Callable[[str], Any],
-        env: Mapping[str, str], claims: OrderClaims | None = None) -> tuple[str, int, int]:
+        env: Mapping[str, str], claims: OrderClaims | None = None,
+        budget: RateBudget | None = None) -> tuple[str, int, int]:
     kind = command_kind(command)[0]
+    if kind == FULL_KIND:
+        return execute_full(command, project=project, read=read, env=env, claims=claims,
+                            budget=budget)
     if kind == PLAN_KIND:
         return execute_plan(command, project=project, read=read, env=env, claims=claims)
     if kind == ORDER_KIND:
@@ -548,14 +818,16 @@ def main() -> int:
         project = pm.Project(pm.GraphQL(pm.http_transport(project_token),
                                         allow_mutations=allow))
         read = triage.rest_client(actions_token)
+        kind = command_kind(command)[0]
         claims = (GitHubOrderClaims(actions_token, os.environ.get("GITHUB_RUN_ID", ""))
-                  if allow and command_kind(command)[0] in ORDER_KINDS else None)
+                  if allow and kind in ORDER_KINDS else None)
+        budget = GitHubRateBudget(actions_token) if kind == FULL_KIND else None
         outcome, changed, issues = run(command, project=project, read=read, env=os.environ,
-                                       claims=claims)
+                                       claims=claims, budget=budget)
         report(outcome, changed, issues)
         return 0
     except (DispatchError, triage.TriageError, pm.MigrationError, OSError,
-            ValueError, TypeError, KeyError) as error:
+            ValueError, TypeError, KeyError, KeyboardInterrupt) as error:
         print(f"assignment dispatch refused or failed: {type(error).__name__}: {error}",
               file=sys.stderr)
         report("FAILED / POSSIBLY PARTIAL", 0, 0, failure=True)
