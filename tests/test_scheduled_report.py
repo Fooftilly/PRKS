@@ -22,7 +22,8 @@ BOT = {"login": "github-actions[bot]", "type": "Bot"}
 # code scanning alerts; the Project #3 jobs sync the board.
 NOT_TEST_RUNS = (
     "codeql.yml", "zizmor.yml",
-    "project3-agent-queue.yml", "project3-readiness.yml", "project3-view-sync.yml",
+    "project3-agent-queue.yml", "project3-planning.yml", "project3-readiness.yml",
+    "project3-view-sync.yml",
 )
 
 

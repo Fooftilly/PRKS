@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       command:
-        description: 'Versioned JSON assignment command with expected_before values'
+        description: 'Versioned JSON assignment or Implementation Order command with expected_before values'
         type: string
         required: true
 
@@ -31,6 +31,7 @@ jobs:
       contents: read
       issues: read
       actions: write
+      statuses: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -45,13 +46,20 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF: ${{ github.ref }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_EVENT_PATH: ${{ github.event_path }}
           PROJECT3_ASSIGN_DISPATCH_MODE: ${{ vars.PROJECT3_ASSIGN_DISPATCH_MODE }}
+          PROJECT3_ORDER_WRITE_MODE: ${{ vars.PROJECT3_ORDER_WRITE_MODE }}
+          PROJECT3_ORDER_APPROVED_SHA256: ${{ vars.PROJECT3_ORDER_APPROVED_SHA256 }}
         run: python3 scripts/project3_assignment_dispatch.py
 
       # Even a failed attempt may have applied some fields before drift stopped it.
-      - name: Refresh read-only queue after writes or possible partial writes
+      - name: Refresh read-only snapshots after writes or possible partial writes
         if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master
+        run: |
+          status=0
+          gh workflow run project3-agent-queue.yml --repo Fooftilly/PRKS --ref master || status=1
+          gh workflow run project3-planning.yml --repo Fooftilly/PRKS --ref master || status=1
+          exit "$status"

@@ -137,6 +137,29 @@ native blockers retain all existing triage protections. Reassigning away
 from an existing Agent requires `"allow_reassignment": true` and explicit
 authorization. One command can contain 1–10 existing issues.
 
+## Implementation Order requests
+
+The request file also accepts the order-only command in
+`project3-assignment-dispatch.md` (`"kind": "implementation-order"`). Submit
+it with the same `update_file` steps. Every check above still applies:
+ruleset pin, owner-attributed single-file commit, live branch tip and the
+one-time claim.
+
+1. Submit the batch with `"operation": "check"`. Read the processor summary
+   for `order digest <sha256>`.
+2. Report the batch and digest to the maintainer. Only the maintainer sets
+   `PROJECT3_ORDER_APPROVED_SHA256` in the `project-automation` environment.
+3. After that, submit the same batch with `"operation": "apply"` in a new
+   commit. The processor writes only when `PROJECT3_ORDER_WRITE_MODE` is
+   `apply` and the digest matches. A mismatch consumes the claim and writes
+   nothing.
+
+Verify each agent's access with read-only calls before relying on a route;
+connectors do not share permissions. Some cloud sessions, such as Claude Code
+cloud, cannot send GitHub GraphQL and can push only their own task branches.
+They read the planning snapshot (`project-3.md` §14.1) and give the batch to
+the maintainer, who runs the same command through the owner dispatch.
+
 ## Security boundary
 
 The signal workflow is an **unprivileged** branch-push notification with no

@@ -147,7 +147,7 @@ def load_command(event: Any, env: Mapping[str, str],
     if len(raw) != source["size"] or len(raw) > MAX_BYTES:
         raise RequestError("request file size mismatch")
     # Full content must parse under the same bounded, reviewed Project writer.
-    dispatch.parse(command)
+    dispatch.command_kind(command)
     return command, sha
 
 
@@ -280,12 +280,12 @@ def main() -> int:
         create_status(actions_token, sha, "pending", run_id)
         claimed_sha, claim_token, claim_run_id = sha, actions_token, run_id
         issue_read = triage.rest_client(actions_token)
-        operation, _, _, _ = dispatch.parse(command)
-        mode = os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", "")
-        gql = pm.GraphQL(pm.http_transport(project_token),
-                         allow_mutations=(operation == "apply" and mode == "apply"))
-        outcome, changed, issues = dispatch.execute(
-            command, project=pm.Project(gql), read=issue_read, mode=mode)
+        allow = dispatch.mutations_allowed(command, os.environ)
+        gql = pm.GraphQL(pm.http_transport(project_token), allow_mutations=allow)
+        claims = (dispatch.GitHubOrderClaims(actions_token, run_id)
+                  if allow and dispatch.command_kind(command)[0] == dispatch.ORDER_KIND else None)
+        outcome, changed, issues = dispatch.run(
+            command, project=pm.Project(gql), read=issue_read, env=os.environ, claims=claims)
         create_status(actions_token, sha, "success", run_id)
         claimed_sha = None
         print("Validated assignment request commit " + sha[:12], flush=True)

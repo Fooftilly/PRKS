@@ -4,14 +4,23 @@
 An explicit workflow_dispatch on protected master executes the existing reviewed
 Project V2 triage guards. A complete expected-before snapshot makes repeated or
 stale commands fail closed. No issue-comment command/receipt is written.
+
+An Implementation Order command (``"kind": "implementation-order"``) changes
+only that NUMBER field. Its apply also needs PROJECT3_ORDER_WRITE_MODE=apply
+and PROJECT3_ORDER_APPROVED_SHA256 set to the digest that its check printed.
+Each approved digest is applied at most once: a commit status claims it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
-from typing import Any, Mapping
+import urllib.error
+import urllib.request
+from typing import Any, Mapping, Protocol
 
 import project3_migrate as pm
 import project3_triage as triage
@@ -21,6 +30,15 @@ OWNER_ID = 46610174
 MAX_BYTES = 12000
 MAX_ITEMS = 10
 FIELDS = frozenset(("Agent", "Status", "Execution"))
+ORDER_KIND = "implementation-order"
+ORDER_ROW_KEYS = frozenset(("number", "order", "expected_before", "reason",
+                            "roadmap_checked", "overlap_checked"))
+# A master commit that is never rewritten; it holds one claim per approval.
+ORDER_CLAIM_SHA = "126d25fb6f50ef9bd00cfad52065461eca993c7e"
+ORDER_CLAIM_PREFIX = "prks/project3-order-approval/"
+# About 10,000 applies at two statuses each, and far below the Actions
+# token's hourly REST limit of 1,000 requests.
+ORDER_CLAIM_PAGES = 200
 
 
 class DispatchError(Exception):
@@ -48,11 +66,25 @@ def authenticate(event: Any, env: Mapping[str, str]) -> str:
     return command
 
 
-def parse(command: str) -> tuple[str, list[dict], list[dict], list[bool]]:
+def _load(command: str) -> Any:
     try:
-        payload = json.loads(command)
+        return json.loads(command)
     except (ValueError, TypeError):
         raise DispatchError("invalid command JSON") from None
+
+
+def command_kind(command: str) -> tuple[str, str]:
+    """Return (kind, operation) after full validation of either command type."""
+    payload = _load(command)
+    if isinstance(payload, dict) and "kind" in payload:
+        operation, _ = parse_order(command)
+        return ORDER_KIND, operation
+    operation, _, _, _ = parse(command)
+    return "assignment", operation
+
+
+def parse(command: str) -> tuple[str, list[dict], list[dict], list[bool]]:
+    payload = _load(command)
     if (not isinstance(payload, dict)
             or set(payload) != {"version", "operation", "items"}
             or type(payload["version"]) is not int or payload["version"] != 1
@@ -89,6 +121,175 @@ def parse(command: str) -> tuple[str, list[dict], list[dict], list[bool]]:
     if len({row["number"] for row in rows}) != len(rows):
         raise DispatchError("duplicate issue number")
     return payload["operation"], rows, expected, reassign
+
+
+def parse_order(command: str) -> tuple[str, list[dict]]:
+    payload = _load(command)
+    if (not isinstance(payload, dict)
+            or set(payload) != {"version", "kind", "operation", "items"}
+            or type(payload["version"]) is not int or payload["version"] != 1
+            or payload["kind"] != ORDER_KIND
+            or payload["operation"] not in ("check", "apply")
+            or not isinstance(payload["items"], list)
+            or not 1 <= len(payload["items"]) <= MAX_ITEMS):
+        raise DispatchError("invalid order command schema or batch size")
+    rows = []
+    for original in payload["items"]:
+        if not isinstance(original, dict) or set(original) != ORDER_ROW_KEYS:
+            raise DispatchError("order rows need exactly: " + ", ".join(sorted(ORDER_ROW_KEYS)))
+        if original["number"] == 982:
+            raise DispatchError("legacy command inbox is not an order target")
+        row = {k: v for k, v in original.items() if k != "expected_before"}
+        try:
+            triage.validate_order_row(row, plan=False)
+            triage.order_value(original["expected_before"],
+                               f"#{original['number']}: expected_before", nullable=True)
+        except triage.TriageError as error:
+            raise DispatchError(str(error)) from None
+        rows.append(original)
+    try:
+        triage._check_order_batch(rows)
+    except triage.TriageError as error:
+        raise DispatchError(str(error)) from None
+    return payload["operation"], rows
+
+
+def order_digest(rows: list[dict], field: dict, live: list[dict]) -> str:
+    """Identical for the check and apply of one batch while its field, items and issues are unchanged."""
+    canonical = json.dumps({"kind": ORDER_KIND, "items": rows, "field": field, "live": live},
+                           sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def order_apply_allowed(digest: str, env: Mapping[str, str]) -> bool:
+    if env.get("PROJECT3_ORDER_WRITE_MODE") != "apply":
+        return False
+    if env.get("PROJECT3_ORDER_APPROVED_SHA256", "") != digest:
+        raise DispatchError("order apply refused: digest is not the maintainer-approved "
+                            "PROJECT3_ORDER_APPROVED_SHA256")
+    return True
+
+
+class OrderClaims(Protocol):
+    def used(self, digest: str) -> bool: ...
+    def mark(self, digest: str, state: str) -> None: ...
+
+
+class GitHubOrderClaims:
+    """Append-only commit statuses on ORDER_CLAIM_SHA, one context per digest.
+
+    Both writers share the project3-assignment-mutations concurrency group,
+    so the read-then-claim sequence cannot race another writer.
+    """
+
+    def __init__(self, token: str, run_id: str) -> None:
+        if not token or not run_id.isdecimal():
+            raise DispatchError("order approval claim needs the Actions token and run ID")
+        self._token = token
+        self._run_id = run_id
+        self._opener = pm._https_only_opener()
+        self._base = f"https://api.github.com/repos/{REPOSITORY}"
+
+    def _send(self, url: str, payload: bytes | None = None) -> Any:
+        request = urllib.request.Request(url, data=payload, method="POST" if payload else "GET", headers={
+            "Authorization": "Bearer " + self._token,
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "User-Agent": "prks-project3-order-claim",
+            "X-GitHub-Api-Version": "2022-11-28",
+        })
+        try:
+            with self._opener.open(request, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            raise DispatchError("order approval claim request failed: "
+                                + type(error).__name__) from None
+
+    def used(self, digest: str) -> bool:
+        context = ORDER_CLAIM_PREFIX + digest
+        for page in range(1, ORDER_CLAIM_PAGES + 1):
+            history = self._send(f"{self._base}/commits/{ORDER_CLAIM_SHA}/statuses"
+                                 f"?per_page=100&page={page}")
+            if not isinstance(history, list) or len(history) > 100:
+                raise DispatchError("malformed order approval claim history")
+            if any(not isinstance(item, dict) for item in history):
+                raise DispatchError("malformed order approval claim")
+            if any(item.get("context") == context for item in history):
+                return True
+            if len(history) < 100:
+                return False
+        raise DispatchError("order approval claim history too large to prove non-replay")
+
+    def mark(self, digest: str, state: str) -> None:
+        if state not in ("pending", "success", "failure") or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise DispatchError("invalid order approval claim")
+        context = ORDER_CLAIM_PREFIX + digest
+        result = self._send(f"{self._base}/statuses/{ORDER_CLAIM_SHA}", json.dumps({
+            "state": state, "context": context,
+            "description": f"Implementation Order approval {state} (run {self._run_id})",
+            "target_url": f"https://github.com/{REPOSITORY}/actions/runs/{self._run_id}",
+        }).encode("utf-8"))
+        if not isinstance(result, dict) or (result.get("context"), result.get("state")) != (context, state):
+            raise DispatchError("order approval claim write was not verified")
+
+
+def mutations_allowed(command: str, env: Mapping[str, str]) -> bool:
+    kind, operation = command_kind(command)
+    if operation != "apply":
+        return False
+    if kind == ORDER_KIND:
+        return env.get("PROJECT3_ORDER_WRITE_MODE") == "apply"
+    return env.get("PROJECT3_ASSIGN_DISPATCH_MODE") == "apply"
+
+
+def prepare_order(rows: list[dict], project: pm.Project,
+                  read: triage.Callable[[str], Any]) -> dict:
+    proposals = [{k: v for k, v in row.items() if k != "expected_before"} for row in rows]
+    plan = triage.propose_order(proposals, project, read)
+    for planned, row in zip(plan["items"], rows, strict=True):
+        if planned["expected_before"] != row["expected_before"]:
+            raise DispatchError(f"#{row['number']}: expected_before differs from live Project")
+        planned["approved"] = True
+    triage.preflight_order(plan, project, read)
+    return plan
+
+
+def execute_order(command: str, *, project: pm.Project,
+                  read: triage.Callable[[str], Any],
+                  env: Mapping[str, str],
+                  claims: OrderClaims | None) -> tuple[str, int, int]:
+    operation, rows = parse_order(command)
+    plan = prepare_order(rows, project, read)
+    digest = order_digest(rows, plan["field"],
+                          [{"item": row["expected_item"], "issue": row["expected_issue"]}
+                           for row in plan["items"]])
+    if operation == "check":
+        return f"CHECK ONLY — no Project fields changed; order digest {digest}", 0, len(rows)
+    if not order_apply_allowed(digest, env):
+        return f"DRY RUN — order write mode is not enabled; order digest {digest}", 0, len(rows)
+    if claims is None:
+        raise DispatchError("order apply refused: no approval claim store")
+    if claims.used(digest):
+        raise DispatchError("order apply refused: this approval was already used; no replay")
+    claims.mark(digest, "pending")
+    try:
+        changed = triage.apply_order(plan, project, read)
+    except BaseException:
+        try:
+            claims.mark(digest, "failure")
+        except DispatchError:
+            print("order approval claim completion failed; pending claim is durable", file=sys.stderr)
+        raise
+    claims.mark(digest, "success")
+    return f"APPLIED — {triage.ORDER_FIELD} verified; order digest {digest}", changed, len(rows)
+
+
+def run(command: str, *, project: pm.Project, read: triage.Callable[[str], Any],
+        env: Mapping[str, str], claims: OrderClaims | None = None) -> tuple[str, int, int]:
+    if command_kind(command)[0] == ORDER_KIND:
+        return execute_order(command, project=project, read=read, env=env, claims=claims)
+    return execute(command, project=project, read=read,
+                   mode=env.get("PROJECT3_ASSIGN_DISPATCH_MODE", ""))
 
 
 def prepare(rows: list[dict], expected: list[dict], reassign: list[bool],
@@ -145,21 +346,20 @@ def main() -> int:
             raise DispatchError("missing workflow event")
         event = json.loads(Path(event_path).read_text(encoding="utf-8"))
         command = authenticate(event, os.environ)
-        operation, _, _, _ = parse(command)
+        allow = mutations_allowed(command, os.environ)
         project_token = os.environ.get("PROJECT_SYNC_TOKEN")
         if not project_token:
             raise DispatchError("protected Project token missing")
         actions_token = os.environ.get("GITHUB_TOKEN")
         if not actions_token:
             raise DispatchError("scoped Actions token missing")
-        allow = (operation == "apply"
-                 and os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE") == "apply")
         project = pm.Project(pm.GraphQL(pm.http_transport(project_token),
                                         allow_mutations=allow))
         read = triage.rest_client(actions_token)
-        outcome, changed, issues = execute(
-            command, project=project, read=read,
-            mode=os.environ.get("PROJECT3_ASSIGN_DISPATCH_MODE", ""))
+        claims = (GitHubOrderClaims(actions_token, os.environ.get("GITHUB_RUN_ID", ""))
+                  if allow and command_kind(command)[0] == ORDER_KIND else None)
+        outcome, changed, issues = run(command, project=project, read=read, env=os.environ,
+                                       claims=claims)
         report(outcome, changed, issues)
         return 0
     except (DispatchError, triage.TriageError, pm.MigrationError, OSError,
