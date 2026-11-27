@@ -20,7 +20,7 @@ and [dependency-inventory.json](dependency-inventory.json).
 | idb | [ISC license](frontend/vendor/idb/LICENSE) |
 | Inter typeface | [SIL Open Font License 1.1](frontend/vendor/inter/LICENSE) |
 | Lucide icons | [ISC license](frontend/vendor/lucide/LICENSE) |
-| Swagger UI | [Apache 2.0 license](frontend/vendor/swagger-ui/LICENSE) and [NOTICE](frontend/vendor/swagger-ui/NOTICE) |
+| Swagger UI | [Apache 2.0 license](frontend/vendor/swagger-ui/LICENSE), [NOTICE](frontend/vendor/swagger-ui/NOTICE) and the [notices of its bundled components](frontend/vendor/swagger-ui/swagger-ui-bundle.js.LICENSE.txt) |
 
 The PRKS PDF viewer includes several upstream components, including EmbedPDF,
 React, React DOM and PDFium. See its [dependency list](frontend/vendor/prks-pdf-viewer/THIRD_PARTY.md)

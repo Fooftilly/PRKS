@@ -393,6 +393,7 @@
       "lockfile": "tools/frontend-vendor/package-lock.json",
       "generated_assets": [
         "frontend/vendor/swagger-ui/swagger-ui-bundle.js",
+        "frontend/vendor/swagger-ui/swagger-ui-bundle.js.LICENSE.txt",
         "frontend/vendor/swagger-ui/swagger-ui.css",
         "frontend/vendor/swagger-ui/VERSION"
       ],

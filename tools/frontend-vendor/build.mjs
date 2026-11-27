@@ -165,6 +165,7 @@ function tryCopyLicense(pkgName, destDir) {
   const dest = join(vendorRoot, "swagger-ui");
   const dist = join(root, "node_modules", "swagger-ui-dist");
   copyOne(join(dist, "swagger-ui-bundle.js"), join(dest, "swagger-ui-bundle.js"));
+  copyOne(join(dist, "swagger-ui-bundle.js.LICENSE.txt"), join(dest, "swagger-ui-bundle.js.LICENSE.txt"));
   copyOne(join(dist, "swagger-ui.css"), join(dest, "swagger-ui.css"));
   copyOne(join(dist, "NOTICE"), join(dest, "NOTICE"));
   tryCopyLicense("swagger-ui-dist", dest);

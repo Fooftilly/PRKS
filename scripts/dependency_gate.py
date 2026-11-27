@@ -460,7 +460,12 @@ def validate_frontend_vendor_island(repo_root: Path | None = None) -> GateResult
         ("codemirror", "codemirror", ["codemirror.js", "show-hint.js", "show-hint.css"], None),
         ("lucide", "lucide", ["lucide.min.js"], "sha256"),
         ("citeproc", "citeproc", ["citeproc.js"], "sha256"),
-        ("swagger-ui-dist", "swagger-ui", ["swagger-ui-bundle.js", "swagger-ui.css"], None),
+        (
+            "swagger-ui-dist",
+            "swagger-ui",
+            ["swagger-ui-bundle.js", "swagger-ui-bundle.js.LICENSE.txt", "swagger-ui.css"],
+            None,
+        ),
     ]
     for dep_name, folder, files, primary_sha_key in checks:
         want = deps.get(dep_name)
