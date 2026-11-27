@@ -611,7 +611,8 @@ ROUTES = (
         "getWorkMetadataState", "A Work's synchronized field revisions", WorkMetadataState,
         "Each synchronized field's revision, with the value of the small ones.", {404: _MISSING})),
     route("GET", COLLECTION + "/{work_id}/source-state", source_state, contract=_revalidated(
-        "getWorkSourceState", "A Work's stored source and its revision", WorkSourceState, "The stored source and its revision, from one read.",
+        "getWorkSourceState", "A Work's stored source and its revision", WorkSourceState,
+        "The stored source and its revision, from one read.",
         {404: _MISSING,
          409: error("The video source cannot be read: its link is not a supported video URL "
                     "(INVALID_SOURCE_STATE).")})),
