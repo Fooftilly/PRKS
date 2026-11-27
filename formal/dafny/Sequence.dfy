@@ -21,9 +21,12 @@ module Sequence {
   datatype Model = M0 | M1
   datatype Val = A | B | C | SpacedB
 
-  function Canonical(v: Val): Val { if v == SpacedB then B else v }
+  // Trimmed stores SpacedB as B (Person Group name and description); Exact stores every value as sent.
+  datatype Kind = Trimmed | Exact
 
-  function Stamp(m: Model, v: Val): Val { if m == M0 then v else Canonical(v) }
+  function Canonical(k: Kind, v: Val): Val { if k == Trimmed && v == SpacedB then B else v }
+
+  function Stamp(m: Model, k: Kind, v: Val): Val { if m == M0 then v else Canonical(k, v) }
 
   // origin: the value the user saw at `base` when this intent was first formed.
   // curAtCreate: the server's revision when the operation was created.
@@ -40,7 +43,8 @@ module Sequence {
     op: Option<Op>,
     ops: map<nat, Op>,
     ledger: map<nat, nat>,
-    nextId: nat)
+    nextId: nat,
+    kind: Kind)
 
   datatype Event =
     | Read(r: nat, stored: bool)
@@ -55,8 +59,8 @@ module Sequence {
     | ClockStep(to: int)
     | Reload
 
-  function Init(): State {
-    State([A], 0, None, None, Broken, None, map[], map[], 0)
+  function Init(k: Kind): State {
+    State([A], 0, None, None, Broken, None, map[], map[], 0, k)
   }
 
   predicate Wf(s: State) { |s.history| >= 1 }
@@ -80,7 +84,7 @@ module Sequence {
   }
 
   function EditBaseAfterAck(m: Model, s: State, o: Op, a: nat): Entry<Val> {
-    match AcknowledgeEditBase(s.editBase, Stamp(m, o.value), Valid(o.base), a)
+    match AcknowledgeEditBase(s.editBase, Stamp(m, s.kind, o.value), Valid(o.base), a)
     case Keep => s.editBase
     case Clear => Broken
     case Pair(v, r) => Ok(v, r, None, Some("ack"))
@@ -90,8 +94,8 @@ module Sequence {
     match s.cache
     case None => None
     case Some(c) =>
-      var plan := PlanAck(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(o.value)));
-      if plan == Return(Apply) then Some(Cached(Canonical(o.value), c.observed, a))
+      var plan := PlanAck(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(s.kind, o.value)));
+      if plan == Return(Apply) then Some(Cached(Canonical(s.kind, o.value), c.observed, a))
       else if plan == Return(Unchanged) then s.cache
       else None
   }
@@ -114,8 +118,8 @@ module Sequence {
   function Received(s: State): State requires Wf(s) && s.op.Some? {
     var o := s.op.value;
     if o.base != Cur(s) then s.(op := None)
-    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])
-    else s.(history := s.history + [Canonical(o.value)], ledger := s.ledger[o.id := Cur(s) + 1])
+    else if Canonical(s.kind, o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])
+    else s.(history := s.history + [Canonical(s.kind, o.value)], ledger := s.ledger[o.id := Cur(s) + 1])
   }
 
   function Apply1(m: Model, s: State, e: Event): State requires Enabled(m, s, e) {
@@ -127,7 +131,7 @@ module Sequence {
     case Save(v) => Created(s, v, s.editBase.revision, s.editBase.value)
     case Resave(v) => Created(s, v, s.op.value.base, s.op.value.origin)
     case Send => Received(s)
-    case OtherWrite(v) => s.(history := s.history + [Canonical(v)])
+    case OtherWrite(v) => s.(history := s.history + [Canonical(s.kind, v)])
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
     case Replay(id) => Reconciled(m, s, s.ops[id], s.ledger[id])
     case ClockStep(_) => s
@@ -153,7 +157,7 @@ module Sequence {
 
   predicate OpInv(m: Model, s: State, o: Op) {
     o.id in s.ops && s.ops[o.id] == o &&
-    o.base < |s.history| && Canonical(o.origin) == s.history[o.base] &&
+    o.base < |s.history| && Canonical(s.kind, o.origin) == s.history[o.base] &&
     o.curAtCreate < |s.history| &&
     (o.id in s.ledger ==> s.ledger[o.id] >= o.curAtCreate) &&
     (m == M1 ==> o.created < s.now) &&
@@ -162,44 +166,44 @@ module Sequence {
 
   predicate Inv(m: Model, s: State) {
     Wf(s) &&
-    (forall r :: 0 <= r < |s.history| ==> Canonical(s.history[r]) == s.history[r]) &&
+    (forall r :: 0 <= r < |s.history| ==> Canonical(s.kind, s.history[r]) == s.history[r]) &&
     (s.cache.Some? ==> s.cache.value.rev < |s.history| && s.cache.value.value == s.history[s.cache.value.rev]) &&
-    (s.editBase.Ok? ==> s.editBase.revision < |s.history| && Canonical(s.editBase.value) == s.history[s.editBase.revision]) &&
+    (s.editBase.Ok? ==> s.editBase.revision < |s.history| && Canonical(s.kind, s.editBase.value) == s.history[s.editBase.revision]) &&
     (m == M1 ==> Provenance(s)) &&
-    (forall id :: id in s.ledger ==> id in s.ops && s.ledger[id] < |s.history| && s.history[s.ledger[id]] == Canonical(s.ops[id].value)) &&
+    (forall id :: id in s.ledger ==> id in s.ops && s.ledger[id] < |s.history| && s.history[s.ledger[id]] == Canonical(s.kind, s.ops[id].value)) &&
     (forall id :: id in s.ops ==> id < s.nextId) &&
     (s.op.Some? ==> OpInv(m, s, s.op.value))
   }
 
-  lemma CanonicalIdempotent(v: Val)
-    ensures Canonical(Canonical(v)) == Canonical(v)
+  lemma CanonicalIdempotent(k: Kind, v: Val)
+    ensures Canonical(k, Canonical(k, v)) == Canonical(k, v)
   {}
 
   lemma InvInit(m: Model)
-    ensures Inv(m, Init())
+    ensures forall k :: Inv(m, Init(k))
   {}
 
-  lemma AppendKeeps(h: seq<Val>, v: Val)
-    requires forall r :: 0 <= r < |h| ==> Canonical(h[r]) == h[r]
-    ensures forall r :: 0 <= r < |h + [Canonical(v)]| ==> Canonical((h + [Canonical(v)])[r]) == (h + [Canonical(v)])[r]
+  lemma AppendKeeps(k: Kind, h: seq<Val>, v: Val)
+    requires forall r :: 0 <= r < |h| ==> Canonical(k, h[r]) == h[r]
+    ensures forall r :: 0 <= r < |h + [Canonical(k, v)]| ==> Canonical(k, (h + [Canonical(k, v)])[r]) == (h + [Canonical(k, v)])[r]
   {
-    CanonicalIdempotent(v);
-    forall r | 0 <= r < |h + [Canonical(v)]|
-      ensures Canonical((h + [Canonical(v)])[r]) == (h + [Canonical(v)])[r]
+    CanonicalIdempotent(k, v);
+    forall r | 0 <= r < |h + [Canonical(k, v)]|
+      ensures Canonical(k, (h + [Canonical(k, v)])[r]) == (h + [Canonical(k, v)])[r]
     {
-      if r < |h| { assert (h + [Canonical(v)])[r] == h[r]; }
+      if r < |h| { assert (h + [Canonical(k, v)])[r] == h[r]; }
     }
   }
 
   lemma ReconciledKeepsInv(m: Model, s: State, o: Op, a: nat)
-    requires Inv(m, s) && a < |s.history| && s.history[a] == Canonical(o.value)
+    requires Inv(m, s) && a < |s.history| && s.history[a] == Canonical(s.kind, o.value)
     ensures var t := Reconciled(m, s, o, a);
       Wf(t) && t.history == s.history && t.ops == s.ops && t.ledger == s.ledger && t.nextId == s.nextId && t.now == s.now &&
       (t.cache.Some? ==> t.cache.value.rev < |t.history| && t.cache.value.value == t.history[t.cache.value.rev]) &&
-      (t.editBase.Ok? ==> t.editBase.revision < |t.history| && Canonical(t.editBase.value) == t.history[t.editBase.revision]) &&
+      (t.editBase.Ok? ==> t.editBase.revision < |t.history| && Canonical(t.kind, t.editBase.value) == t.history[t.editBase.revision]) &&
       (m == M1 ==> Provenance(t))
   {
-    CanonicalIdempotent(o.value);
+    CanonicalIdempotent(s.kind, o.value);
   }
 
   lemma InvStep(m: Model, s: State, e: Event)
@@ -215,12 +219,12 @@ module Sequence {
     case Resave(v) => {}
     case Send => {
       var o := s.op.value;
-      if o.base == Cur(s) && Canonical(o.value) != s.history[Cur(s)] {
-        AppendKeeps(s.history, o.value);
-        CanonicalIdempotent(o.value);
+      if o.base == Cur(s) && Canonical(s.kind, o.value) != s.history[Cur(s)] {
+        AppendKeeps(s.kind, s.history, o.value);
+        CanonicalIdempotent(s.kind, o.value);
       }
     }
-    case OtherWrite(v) => { AppendKeeps(s.history, v); }
+    case OtherWrite(v) => { AppendKeeps(s.kind, s.history, v); }
     case Deliver => {
       var o := s.op.value;
       assert s.ops[o.id] == o;
@@ -235,17 +239,17 @@ module Sequence {
 
   // A trace: states ss and events es, each event enabled in the state before it.
   predicate Trace(m: Model, ss: seq<State>, es: seq<Event>) {
-    |ss| == |es| + 1 && ss[0] == Init() &&
+    |ss| == |es| + 1 && ss[0] == Init(ss[0].kind) &&
     forall i :: 0 <= i < |es| ==> Enabled(m, ss[i], es[i]) && ss[i + 1] == Step(m, ss[i], es[i])
   }
 
   predicate NoClock(es: seq<Event>) { forall i :: 0 <= i < |es| ==> !es[i].ClockStep? }
   predicate NoReplay(es: seq<Event>) { forall i :: 0 <= i < |es| ==> !es[i].Replay? }
 
-  lemma Start(m: Model) returns (ss: seq<State>, es: seq<Event>)
-    ensures ss == [Init()] && es == [] && Trace(m, ss, es) && NoClock(es) && NoReplay(es)
+  lemma Start(m: Model, k: Kind) returns (ss: seq<State>, es: seq<Event>)
+    ensures ss == [Init(k)] && es == [] && Trace(m, ss, es) && NoClock(es) && NoReplay(es)
   {
-    ss, es := [Init()], [];
+    ss, es := [Init(k)], [];
   }
 
   lemma Push(m: Model, ss: seq<State>, es: seq<Event>, e: Event) returns (ss2: seq<State>, es2: seq<Event>)
@@ -276,6 +280,7 @@ module Sequence {
     ensures forall i :: 0 <= i < |ss| ==> Inv(m, ss[i])
   {
     InvInit(m);
+    assert ss[0] == Init(ss[0].kind);
     var k := 0;
     while k < |es|
       invariant 0 <= k <= |es|
@@ -290,7 +295,7 @@ module Sequence {
   // is, canonically, the one the user saw when the intent was formed.
   lemma Intent(m: Model, s: State)
     requires Inv(m, s) && s.op.Some? && s.op.value.base == Cur(s)
-    ensures Canonical(s.op.value.origin) == s.history[Cur(s)]
+    ensures Canonical(s.kind, s.op.value.origin) == s.history[Cur(s)]
   {}
 
   // S2 (M1): every edit base is a pair the server stored.
@@ -306,6 +311,12 @@ module Sequence {
     if e.Deliver? then s.ledger[s.op.value.id] else s.ledger[e.id]
   }
 
+  // S2 holds in M0 too for a field the server stores exactly as sent.
+  lemma ProvenanceM0Exact(s: State)
+    requires Inv(M0, s) && s.kind == Exact
+    ensures Provenance(s)
+  {}
+
   // S3 (M1): with O1 and O2, no event that reconciles an ACK regresses the cache.
   lemma NoRegressionM1(s: State, e: Event)
     requires Inv(M1, s) && Enabled(M1, s, e) && (e.Deliver? || e.Replay?)
@@ -316,8 +327,8 @@ module Sequence {
       var a := s.ledger[o.id];
       if s.cache.Some? && !(s.proj.Some? && a < s.proj.value) {
         var c := s.cache.value;
-        NoProofNoApply(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(o.value)));
-        PlanAckTable(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(o.value)));
+        NoProofNoApply(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(s.kind, o.value)));
+        PlanAckTable(Evidence(Valid(a), Absent, At(c.observed), At(o.created), c.value == Canonical(s.kind, o.value)));
       }
     }
   }
@@ -333,7 +344,7 @@ module Sequence {
       es[|es| - 1] == Deliver && Inv(M1, s) && Enabled(M1, s, Deliver) && s.cache.Some? &&
       ss[|es|].cache.Some? && ss[|es|].cache != s.cache
   {
-    ss, es := Start(M1);
+    ss, es := Start(M1, Trimmed);
     ss, es := Push(M1, ss, es, Read(0, true));
     assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M1, ss, es, ReadEditBase(0, true));
@@ -352,7 +363,7 @@ module Sequence {
     ensures Trace(M0, ss, es) && NoClock(es) && NoReplay(es)
     ensures !Provenance(ss[|es|])
   {
-    ss, es := Start(M0);
+    ss, es := Start(M0, Trimmed);
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
     ss, es := Push(M0, ss, es, Save(SpacedB));
@@ -370,7 +381,7 @@ module Sequence {
       es[|es| - 1] == Deliver && s.op.Some? && s.op.value.id in s.ledger &&
       !NoRegression(s, ss[|es|], s.ledger[s.op.value.id])
   {
-    ss, es := Start(M0);
+    ss, es := Start(M0, Trimmed);
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));
     assert Last(ss).editBase == Ok(A, 0, None, None);
     ss, es := Push(M0, ss, es, Save(B));
@@ -394,7 +405,7 @@ module Sequence {
     ensures var s := ss[|es| - 1];
       es[|es| - 1] == Replay(0) && 0 in s.ledger && !NoRegression(s, ss[|es|], s.ledger[0])
   {
-    ss, es := Start(M0);
+    ss, es := Start(M0, Trimmed);
     ss, es := Push(M0, ss, es, Read(0, true));
     assert Last(ss).cache == Some(Cached(A, 0, 0));
     ss, es := Push(M0, ss, es, ReadEditBase(0, true));

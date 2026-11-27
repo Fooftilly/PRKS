@@ -50,7 +50,7 @@
     },
     "InvInit": {
       "file": "Sequence.dfy",
-      "sha256": "bf7854cee3337264f396fb61c3c40fa93ed3f96676cdb5ec3066f93da70113a9"
+      "sha256": "d956a086bb817db5fe8883ac3f89de141e85a7cc7235efc4d71443d468c9415a"
     },
     "InvStep": {
       "file": "Sequence.dfy",
@@ -62,7 +62,7 @@
     },
     "Intent": {
       "file": "Sequence.dfy",
-      "sha256": "3f67ac02243b9f4e089e26fd4f7d5add3363f7882691afc57ba5b5a52928aaf2"
+      "sha256": "a39871d3687c6761126c4b475d1fa7d5db78e0bde5aeeeea04afccda648948b0"
     },
     "ProvenanceM1": {
       "file": "Sequence.dfy",
@@ -87,6 +87,10 @@
     "SecondSenderViolatesNoRegressionM0": {
       "file": "Sequence.dfy",
       "sha256": "3781d27fa641ffebaa2f9cf046f8543239d49b7e6358d795604648c2c3ca1112"
+    },
+    "ProvenanceM0Exact": {
+      "file": "Sequence.dfy",
+      "sha256": "f95d0ab889bffaa52f556462b321b8976e6d5195523e93ad652e4231d3a4f65e"
     }
   },
   "witnesses": {
@@ -94,6 +98,7 @@
     "TraceInv": "NoRegressionM1Witness",
     "Intent": "NoRegressionM1Witness",
     "ProvenanceM1": "NoRegressionM1Witness",
-    "NoRegressionM1": "NoRegressionM1Witness"
+    "NoRegressionM1": "NoRegressionM1Witness",
+    "ProvenanceM0Exact": "NoRegressionM1Witness"
   }
 }
