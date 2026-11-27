@@ -406,7 +406,7 @@ class AccessTests(ProcessingHttpTestCase):
         self.assertEqual(self.ok(self.get(path))["status"], "ready")
 
     def test_the_openapi_document_is_served(self) -> None:
-        doc = self.ok(self.get("/api/openapi/processing-items.json"))
+        doc = self.ok(self.get("/api/openapi.json"))
         self.assertIn("/api/processing-items/{item_id}/import", doc["paths"])
 
 
@@ -414,7 +414,7 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
     """The served OpenAPI document and the live routes accept and refuse the same write bodies.
 
     Each payload is validated with openapi-core against
-    ``/api/openapi/processing-items.json`` as served, then sent to the live
+    ``/api/openapi.json`` as served, then sent to the live
     route. Where the domain refuses a value the schema leaves open
     (``status_draft``), the case says so.
     """
@@ -423,14 +423,14 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         super().setUp()
         from openapi_core import OpenAPI
 
-        self.api = OpenAPI.from_dict(self.ok(self.get("/api/openapi/processing-items.json")))
+        self.api = OpenAPI.from_dict(self.ok(self.get("/api/openapi.json")))
 
     def schema_accepts(self, method: str, path: str, body: Any, *, raw: Optional[bytes] = None) -> bool:
         from openapi_core.testing import MockRequest
 
         data = raw if raw is not None else (None if body is None else json.dumps(body).encode("utf-8"))
-        request = MockRequest(host_url=self.origin, method=method.lower(), path=path, data=data,
-                              content_type="application/json")
+        request = MockRequest(cookies={"prks_session": "token"}, host_url=self.origin, method=method.lower(), path=path, data=data,
+                              headers={"PRKS-Library-Epoch": "1"}, content_type="application/json")
         try:
             self.api.validate_request(request)
         except Exception:  # noqa: BLE001 - any validation failure means "refused"
@@ -519,13 +519,28 @@ class RequestSchemaParityTests(ProcessingHttpTestCase):
         path = f"/api/processing-items/{item['id']}"
         for method, write_path in (("PATCH", path), ("POST", f"{path}/import"),
                                    ("POST", "/api/processing-items/import")):
+            # The single import reads no body, so its contract marks the body optional;
+            # the others require one. Every write still needs the JSON Content-Type.
+            optional = write_path == f"{path}/import"
             for raw in (None, b""):
                 with self.subTest(method=method, path=write_path, raw=raw):
-                    self.assertFalse(self.schema_accepts(method, write_path, None, raw=raw))
+                    self.assertEqual(self.schema_accepts(method, write_path, None, raw=raw), optional)
             with self.subTest(method=method, path=write_path, live=True):
                 res = self.call(method, write_path, cookies=self.cookies, epoch=self.library_epoch())
                 self.assertEqual(res.status, 415, res.raw)
         self.assertEqual(self.ok(self.get(path))["status"], "ready")
+        # With the JSON Content-Type, the single import's empty body reaches the route.
+        def empty_import() -> Any:
+            return self.call("POST", f"{path}/import", cookies=self.cookies, epoch=self.library_epoch(),
+                             headers=[("Content-Type", "application/json")])
+        first = empty_import()
+        self.assertEqual(first.status, 201, first.raw)
+        self.assertTrue(first.body["created"])
+        # A retry with the same empty body answers 200 with the same Work.
+        again = empty_import()
+        self.assertEqual(again.status, 200, again.raw)
+        self.assertFalse(again.body["created"])
+        self.assertEqual(again.body["work_id"], first.body["work_id"])
 
 
 class ServerWithoutAuthTests(HttpAuthTestCase):

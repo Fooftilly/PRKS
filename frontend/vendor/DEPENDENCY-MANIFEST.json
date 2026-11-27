@@ -207,6 +207,17 @@
       "version": "1"
     },
     {
+      "name": "prks-sync-reconcile",
+      "runtime_files": [
+        {
+          "path": "/js/sync-reconcile.js",
+          "sha256": "fd24090ef361fd831a87f27b9f086af17c9873b8aa99fe63434a37d671987acc"
+        }
+      ],
+      "source_category": "frontend-app:sync-reconcile",
+      "version": "1"
+    },
+    {
       "name": "prks-tab-leave",
       "runtime_files": [
         {
@@ -222,7 +233,7 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "f7283ac617d9abb86490ddc2a473546d3b1d8f358bfc86539a4ed2b4c6ca0336"
+          "sha256": "99cbbfdd90743528733fadca244fbb3f81526a059ed261c45762d3128bed43f6"
         }
       ],
       "source_category": "npm:frontend-app",

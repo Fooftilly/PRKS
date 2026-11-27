@@ -11,11 +11,12 @@ from typing import Any, Dict
 
 
 class SavedViewError(ValueError):
-    """Controlled Saved View failure. http_status is 400, 404, or 409."""
+    """Controlled Saved View failure. http_status is 400, 404, or 409; ``code`` is stable when set."""
 
-    def __init__(self, message: str, http_status: int = 400):
+    def __init__(self, message: str, http_status: int = 400, code: str | None = None):
         super().__init__(message)
         self.http_status = http_status
+        self.code = code
 
 
 PRKS_SAVED_VIEW_MAX = 100
@@ -112,6 +113,7 @@ def saved_view_api_row(row: dict) -> Dict[str, Any]:
             "author": row["search_author"],
             "publisher": row["search_publisher"],
         },
+        "revision": int(row["revision"]),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

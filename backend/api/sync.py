@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 
+from backend.api_contract.operation import Operation, body, error, ok
+from backend.api_contract.sync import SyncOperation, SyncResult
 from backend.domain.works import note_rules
 from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.web.http import Request, Response, json_response
@@ -47,5 +49,12 @@ def post_operation(req: Request) -> Response:
 
 
 ROUTES = (
-    route("POST", "/api/sync/operations", post_operation),
+    route("POST", "/api/sync/operations", post_operation, contract=Operation(
+        "postSyncOperation", "Apply one durable operation, exactly once", "sync",
+        {200: ok(SyncResult, "Acknowledged, or the ledgered answer to the same operation sent before."),
+         400: error("A malformed envelope or payload (its `code`).", SyncResult),
+         404: error("The entity does not exist (its `code`).", SyncResult),
+         409: error("A revision conflict, a reused op_id or another family refusal (its `code`).", SyncResult)},
+        request=body(SyncOperation),
+        description="The operation, its effects and its ledger row commit in one transaction.")),
 )

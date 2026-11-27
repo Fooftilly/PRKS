@@ -293,6 +293,14 @@ class EpochTests(AdmissionTestCase):
                 session = self.call("GET", "/api/session", cookies=self.cookies)
                 self.assertEqual(session.body["library"]["epoch"], epoch)
 
+    def test_an_optional_json_body_may_be_left_out(self) -> None:
+        """The contract marks these bodies optional: an empty JSON body is a 200, under the live check."""
+        empty = [("Content-Type", "application/json")]
+        settings = self.call("PATCH", "/api/settings", cookies=self.cookies, epoch=1, headers=empty)
+        self.assertEqual(settings.status, 200, settings.raw)
+        report = self.call("POST", "/api/client-errors", cookies=self.cookies, headers=empty)
+        self.assertEqual(report.status, 200, report.raw)
+
     def test_reads_and_non_library_mutations_take_no_epoch(self) -> None:
         res = self.call("GET", "/api/tags", cookies=self.cookies)
         self.assertEqual(res.status, 200)

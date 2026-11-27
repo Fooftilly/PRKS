@@ -37,6 +37,25 @@ from urllib.request import urlopen
 from backend.domain.objects.content_url import parse_content_url
 from backend.domain.works import source_rules
 from backend.api.common import objects, revalidated, text_field
+from backend.api_contract.citations import CitationsRequest, CitationsResult
+from backend.api_contract.errors import NotPortedEnvelope
+from backend.api_contract.operation import Operation, Param, Reply, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.works import (
+    BulkWorkRequest,
+    BulkWorkResult,
+    RecentlyAddedWork,
+    RecentWork,
+    WorkCatalog,
+    WorkCreated,
+    WorkCreateRequest,
+    WorkDetail,
+    WorkMetadataState,
+    WorkNotesState,
+    WorkPatch,
+    WorkSourceState,
+    WorkStatus,
+)
 from backend.domain.people.errors import MissingPersonError
 from backend.domain.works.rules import effective_source_kind
 from backend.runtime.log_safety import safe_error_type, safe_log_id, safe_log_label
@@ -83,9 +102,8 @@ def metadata_state(req: Request) -> Response:
 def source_state(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    # A REVISION ONLY. The Work record already carries every canonical
-    # source value, so a URL here would double what this endpoint sends
-    # and what IndexedDB stores for values the client already holds.
+    # The revision and the stored source, from one snapshot: the editor's
+    # base is this pair, never a revision beside a separately read Work.
     data = work_commands.source_state(*req.actor, req.params["work_id"])
     if data == source_rules.INVALID_SOURCE_STATE:
         # The product reads this row as a video, but its identity cannot
@@ -540,20 +558,89 @@ def linearize_existing(req: Request) -> Response:
     return not_ported(req, "Linearizing existing PDFs is not ported to PostgreSQL yet.")
 
 
+_TAG = "works"
+_MISSING = error("No Work with that id in this Library.")
+_MISSING_TEXT = plain("No Work with that id in this Library.")
+_NOT_PORTED = error("Not ported to PostgreSQL yet (not_ported).", NotPortedEnvelope)
+
+
+def _revalidated(op_id: str, summary: str, schema: Any, description: str,
+                 more: Optional[dict[int, Reply]] = None, params: tuple[Param, ...] = ()) -> Operation:
+    return revalidated_read(op_id, summary, _TAG, schema, description, more, params)
+
+
+_PROJECTION = Param("projection", schema={"type": "string", "enum": ["browse"]},
+                    description="``browse``: the compact card rows, by title. Left out: every summary, newest first.")
+
 ROUTES = (
-    route("GET", COLLECTION, catalog),
-    route("POST", COLLECTION, create),
-    route("POST", COLLECTION + "/bulk", bulk),
-    route("POST", COLLECTION + "/linearize-existing-pdfs", linearize_existing),
-    route("GET", COLLECTION + "/{work_id}", detail),
-    route("PATCH", COLLECTION + "/{work_id}", update),
-    route("DELETE", COLLECTION + "/{work_id}", delete),
-    route("GET", COLLECTION + "/{work_id}/metadata-state", metadata_state),
-    route("GET", COLLECTION + "/{work_id}/source-state", source_state),
-    route("GET", COLLECTION + "/{work_id}/notes-state", notes_state),
-    route("POST", COLLECTION + "/{work_id}/opened", opened),
-    route("GET", "/api/recent", recent),
-    route("GET", "/api/recently-added", recently_added),
-    route("GET", "/api/bibtex/{work_id}", bibtex),
-    route("POST", "/api/citations", citations),
+    route("GET", COLLECTION, catalog, contract=_revalidated(
+        "listWorks", "Every Work, as summaries or browse rows", WorkCatalog,
+        "Summaries newest first, or with ``projection=browse`` browse rows by title.",
+        params=(_PROJECTION,))),
+    route("POST", COLLECTION, create, contract=Operation(
+        "createWork", "Create a Work from an upload, a managed PDF, a video URL or no file", _TAG,
+        {200: ok(WorkCreated, "Created, filed and credited."),
+         400: error("An invalid YouTube URL, file_b64, upload or field value."),
+         404: error("The named Folder does not exist (FOLDER_NOT_FOUND)."),
+         409: error("A credited Person is missing or not saved yet (PERSON_NOT_FOUND), or the file "
+                    "cannot be filed.")},
+        request=body(WorkCreateRequest, "Left out: an Untitled Work with no file.", required=False))),
+    route("POST", COLLECTION + "/bulk", bulk, contract=Operation(
+        "bulkUpdateWorks", "One action on many Works, all or nothing", _TAG,
+        {200: ok(BulkWorkResult, "Applied."),
+         400: error("Unknown action, a bad status or Folder, or an empty, malformed or too large selection."),
+         404: error("A selected Work, the Folder or a Tag does not exist; nothing changed.")},
+        request=body(BulkWorkRequest))),
+    route("POST", COLLECTION + "/linearize-existing-pdfs", linearize_existing, contract=Operation(
+        "linearizeExistingPdfs", "Rewrite the managed PDFs for fast web view (not ported)", _TAG,
+        {501: _NOT_PORTED}, request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False))),
+    route("GET", COLLECTION + "/{work_id}", detail, contract=Operation(
+        "getWork", "A Work with its notes, credits, Tags, annotations and Research refs", _TAG,
+        {200: ok(WorkDetail, "The Work."), 404: _MISSING_TEXT})),
+    route("PATCH", COLLECTION + "/{work_id}", update, contract=Operation(
+        "updateWork", "Change a Work's metadata, notes or Folder", _TAG,
+        {200: ok(WorkStatus, "Updated."),
+         400: error("A refused value, length, Folder or note. The Folder move, the note and the metadata "
+                    "commit in that order, so a later refusal leaves the earlier steps applied: read the "
+                    "Work again. A changed file_path is refused (501) before any step."),
+         404: error("No Work with that id (not_found)."),
+         409: error("The Research Note was refused."),
+         501: _NOT_PORTED},
+        request=body(WorkPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", COLLECTION + "/{work_id}", delete, contract=Operation(
+        "deleteWork", "Delete a Work", _TAG,
+        {200: ok(WorkStatus, "Deleted, or there was no such Work.")})),
+    route("GET", COLLECTION + "/{work_id}/metadata-state", metadata_state, contract=_revalidated(
+        "getWorkMetadataState", "A Work's synchronized field revisions", WorkMetadataState,
+        "Each synchronized field's revision, with the value of the small ones.", {404: _MISSING})),
+    route("GET", COLLECTION + "/{work_id}/source-state", source_state, contract=_revalidated(
+        "getWorkSourceState", "A Work's stored source and its revision", WorkSourceState,
+        "The stored source and its revision, from one read.",
+        {404: _MISSING,
+         409: error("The video source cannot be read: its link is not a supported video URL "
+                    "(INVALID_SOURCE_STATE).")})),
+    route("GET", COLLECTION + "/{work_id}/notes-state", notes_state, contract=_revalidated(
+        "getWorkNotesState", "A Work's note revisions", WorkNotesState, "The two revisions.",
+        {404: _MISSING})),
+    route("POST", COLLECTION + "/{work_id}/opened", opened, contract=Operation(
+        "markWorkOpened", "Record an open of a Work now", _TAG,
+        {200: ok(WorkStatus, "Recorded."), 400: error("The id cannot name a Work."), 404: _MISSING_TEXT},
+        request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False))),
+    route("GET", "/api/recent", recent, contract=_revalidated(
+        "listRecentWorks", "The most recently opened Works", list[RecentWork], "Newest open first.")),
+    route("GET", "/api/recently-added", recently_added, contract=_revalidated(
+        "listRecentlyAddedWorks", "The most recently created Works", list[RecentlyAddedWork],
+        "Newest first.")),
+    route("GET", "/api/bibtex/{work_id}", bibtex, contract=Operation(
+        "getWorkBibtex", "A Work's BibTeX entry", "citations",
+        {200: ok({"type": "string"}, "The entry; empty for a Work not in this Library.",
+                 media_type="text/plain")})),
+    route("POST", "/api/citations", citations, contract=Operation(
+        "exportCitations", "Read the selected Works' citations as CSL-JSON or BibTeX", "citations",
+        {200: ok(CitationsResult, "The found Works' citations, in request order."),
+         400: error("Domain refusal: not an object, unknown format, or an empty, malformed or too "
+                    "large selection.")},
+        request=body(CitationsRequest),
+        description="Changes nothing. Each Work is cited from its citation Manifestation. Ids this "
+                    "Library has no Work for are listed in `missing` and left out.")),
 )

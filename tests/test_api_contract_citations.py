@@ -9,22 +9,16 @@ from openapi_core import OpenAPI
 from pydantic import ValidationError
 
 from backend.api_contract.citations import CitationsBibtex, CitationsCslJson, CitationsRequest
-from backend.api_contract.openapi import CITATIONS_CONTRACT_VERSION, citations_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.domain.works.csl_format import format_csl
 
-_ARTIFACT = Path(__file__).resolve().parents[1] / "docs" / "api" / "openapi-citations.json"
 
 
 class CitationsContractTests(unittest.TestCase):
-    def test_checked_in_openapi_artifact_matches_generator(self):
-        self.assertTrue(_ARTIFACT.is_file(), "commit docs/api/openapi-citations.json")
-        self.assertEqual(json.loads(_ARTIFACT.read_text(encoding="utf-8")), citations_openapi_document())
-
     def test_openapi_core_accepts_the_document(self):
-        document = citations_openapi_document()
+        document = openapi_document()
         OpenAPI.from_dict(document)
-        self.assertEqual(set(document["paths"]), {"/api/citations"})
-        self.assertEqual(document["info"]["version"], CITATIONS_CONTRACT_VERSION)
+        self.assertLessEqual({"/api/citations"}, set(document["paths"]))
 
     def test_a_full_csl_item_fits_the_response_model(self):
         work = {"title": "T", "doc_type": "phdthesis", "author_text": "Doe, Jane", "published_date": "2020-05-02",

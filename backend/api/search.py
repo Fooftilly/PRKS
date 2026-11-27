@@ -16,6 +16,8 @@ current row).
 
 from __future__ import annotations
 
+from backend.api_contract.operation import Operation, Param, body, ok
+from backend.api_contract.works import TextRebuildQueued, TextRebuildRequest, WorkSummary
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -45,7 +47,22 @@ def reindex_pdf_text(req: Request) -> Response:
     return json_response(req, 200, {"status": "ok", **summary})
 
 
+def _filter(name: str, description: str) -> Param:
+    return Param(name, description=description)
+
+
 ROUTES = (
-    route("GET", PATH, search),
-    route("POST", "/api/works/reindex-pdf-text", reindex_pdf_text),
+    route("GET", PATH, search, contract=Operation(
+        "searchWorks", "Search the Works by keywords, Tag, author or publisher", "works",
+        {200: ok(list[WorkSummary], "The matching Work summaries (no ETag).")},
+        params=(_filter("q", "Keywords."), _filter("tag", "A Tag name."),
+                _filter("author", "An author name."), _filter("publisher", "A publisher name."),
+                Param("any", schema={"type": "string"},
+                      description="``1``, ``true`` or ``yes``: OR one term across the filters and add "
+                                  "the Works whose PDF text matches ``q`` and the author and publisher "
+                                  "filters. Ignored with ``tag``: the Tag filter wins.")))),
+    route("POST", "/api/works/reindex-pdf-text", reindex_pdf_text, contract=Operation(
+        "queuePdfTextRebuild", "Queue the rebuild of the PDF text index", "works",
+        {200: ok(TextRebuildQueued, "Queued, or one already was; the counters are zero.")},
+        request=body(TextRebuildRequest, required=False))),
 )

@@ -16,6 +16,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from backend.api_contract.operation import BINARY, Header, Operation, Param, ok, plain
 from backend.media.derived_cache_publish import publish_derived_cache_bytes
 from backend.media.derived_caches import (
     prks_delete_pdf_thumbnails_for_work_id,
@@ -346,5 +347,13 @@ def _image(body: bytes, mime: str) -> Response:
 
 
 ROUTES = (
-    route("GET", "/api/works/{work_id}/thumbnail", thumbnail),
+    route("GET", "/api/works/{work_id}/thumbnail", thumbnail, contract=Operation(
+        "getWorkThumbnail", "A card-sized render of a page of the Work's PDF", "works",
+        {200: ok(BINARY, "The page as WebP (JPEG or PNG when WebP encoding is unavailable).",
+                 media_type=("image/webp", "image/jpeg", "image/png"),
+                 headers={"Cache-Control": Header("public, max-age=86400")}),
+         404: plain("No such Work, no managed PDF, or the page cannot be rendered.")},
+        params=(Param("page", schema={"type": "string"},
+                      description="1-based page; else the Work's thumbnail page, else 1. "
+                                  "Not a number: the default. Past the last page: page 1."),))),
 )

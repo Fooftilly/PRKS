@@ -109,13 +109,13 @@ class SavedViewTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest, MockResponse
 
-        from backend.api_contract.openapi import saved_views_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         res = self.get(path) if method == "GET" else self.send(method, path, payload)
         data = None if payload is None else json.dumps(payload).encode()
-        api = OpenAPI.from_dict(saved_views_openapi_document())
-        request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
-                              data=data)
+        api = OpenAPI.from_dict(openapi_document())
+        request = MockRequest(cookies={"prks_session": "token"}, host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
+                              headers={"PRKS-Library-Epoch": "1"}, data=data)
         if schema_valid:
             api.validate_request(request)
         api.validate_response(request, MockResponse(data=res.raw, status_code=res.status,
@@ -140,7 +140,7 @@ class SavedViewTests(ServerApiTestCase):
         status, dup = self.views("POST", "/api/saved-views", {"name": "adorno — culture industry",
                                                               "search": created["search"]})
         self.assertEqual((status, dup["error"]), (409, "A Saved View with that name already exists."))
-        status, patched = self.views("PATCH", f"/api/saved-views/{view_id}", {"name": "Critical Theory"})
+        status, patched = self.views("PATCH", f"/api/saved-views/{view_id}", {"base_revision": 0, "name": "Critical Theory"})
         self.assertEqual((status, patched["id"], patched["name"]), (200, view_id, "Critical Theory"))
         self.assertEqual(self.views("GET", "/api/saved-views/SV-missing")[0], 404)
         self.assertEqual(self.views("DELETE", f"/api/saved-views/{view_id}")[0], 200)
@@ -151,7 +151,7 @@ class SavedViewTests(ServerApiTestCase):
         self.assertEqual(self.views("POST", "/api/saved-views", {"name": "Bad", "search": {
             "mode": "advanced", "author": "Adorno"}}, schema_valid=False), incomplete)
         created = self.create("Valid View", q="critical theory")
-        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {"search": {"author": "Adorno"}},
+        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {"base_revision": 0, "search": {"author": "Adorno"}},
                                     schema_valid=False), incomplete)
         self.assertEqual(self.views("GET", f"/api/saved-views/{created['id']}")[1]["search"]["q"], "critical theory")
 
@@ -168,9 +168,9 @@ class SavedViewTests(ServerApiTestCase):
                 self.assertEqual(self.views("POST", "/api/saved-views", payload, schema_valid=False),
                                  (400, {"error": message}))
         created = self.create("Typed", q="typed")
-        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {"name": 7}, schema_valid=False),
+        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {"base_revision": 0, "name": 7}, schema_valid=False),
                          (400, {"error": "Name must be a string."}))
-        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {}),
+        self.assertEqual(self.views("PATCH", f"/api/saved-views/{created['id']}", {"base_revision": 0}),
                          (400, {"error": "Nothing to update."}))
         self.assertEqual(self.views("DELETE", "/api/saved-views/SV-missing"), (404, {"error": "Saved View not found."}))
 
@@ -179,7 +179,7 @@ class SavedViewTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest
 
-        from backend.api_contract.openapi import saved_views_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         search = {**SEARCH, "q": "parity"}
         status, created = self.views("POST", "/api/saved-views", {"name": "Parity", "search": {**search, "extra": 1},
@@ -192,17 +192,34 @@ class SavedViewTests(ServerApiTestCase):
                                                                                              "mode": "regex"}}),
                          (400, {"error": "Invalid search mode."}))
         view_id = created["id"]
-        self.assertEqual(self.views("PATCH", f"/api/saved-views/{view_id}", {"name": None, "search": None}),
+        self.assertEqual(self.views("PATCH", f"/api/saved-views/{view_id}", {"base_revision": 0, "name": None, "search": None}),
                          (400, {"error": "Nothing to update."}))
-        status, renamed = self.views("PATCH", f"/api/saved-views/{view_id}", {"name": "Parity 2", "search": None})
+        status, renamed = self.views("PATCH", f"/api/saved-views/{view_id}", {"base_revision": 0, "name": "Parity 2", "search": None})
         self.assertEqual((status, renamed["name"], renamed["search"]), (200, "Parity 2", search))
         short = {"name": "Short", "search": {"mode": "all", "q": "x"}}
         self.assertEqual(self.views("POST", "/api/saved-views", short, schema_valid=False),
                          (400, {"error": "Search definition is incomplete."}))
-        api = OpenAPI.from_dict(saved_views_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         with self.assertRaises(Exception):
-            api.validate_request(MockRequest(host_url="http://127.0.0.1", method="post", path="/api/saved-views",
-                                             data=json.dumps(short).encode()))
+            api.validate_request(MockRequest(cookies={"prks_session": "token"}, host_url="http://127.0.0.1", method="post", path="/api/saved-views",
+                                             headers={"PRKS-Library-Epoch": "1"}, data=json.dumps(short).encode()))
+
+    def test_a_stale_edit_answers_409_revision_conflict(self) -> None:
+        """#873: tab A changes the search, then tab B (still at revision 0) renames."""
+        created = self.create("Reading", q="history")
+        path = f"/api/saved-views/{created['id']}"
+        self.assertEqual(created["revision"], 0)
+        status, a = self.views("PATCH", path, {"base_revision": 0, "search": {**SEARCH, "q": "history AND archives"}})
+        self.assertEqual((status, a["revision"]), (200, 1))
+        stale = self.views("PATCH", path, {"base_revision": 0, "name": "Reading list",
+                                           "search": {**SEARCH, "q": "history"}})
+        self.assertEqual(stale, (409, {
+            "error": "This Saved View changed in another tab or on another device after you started editing.",
+            "code": "revision_conflict",
+        }))
+        self.assertEqual(self.views("GET", path), (200, a))
+        self.assertEqual(self.views("PATCH", path, {"name": "Reading list"}, schema_valid=False),
+                         (400, {"error": "base_revision must be a non-negative integer."}))
 
     def test_an_author_view_stores_the_search_and_its_results_stay_live(self) -> None:
         a = self.create_work("Work A", author_text="Adorno")["id"]
@@ -240,7 +257,7 @@ class SavedViewTests(ServerApiTestCase):
         self.assertNotIn("Trust View", [view["name"] for view in self.views("GET", "/api/saved-views")[1]])
         created = self.create("Trust Keep", q="keep")
         path = f"/api/saved-views/{created['id']}"
-        self.assertEqual(self.send_as("PATCH", path, {"name": "Hijacked"}, origin=EVIL).status, 403)
+        self.assertEqual(self.send_as("PATCH", path, {"base_revision": 0, "name": "Hijacked"}, origin=EVIL).status, 403)
         self.assertEqual(self.send_as("DELETE", path, origin=EVIL).status, 403)
         self.assertEqual(self.views("GET", path), (200, created))
 
@@ -250,7 +267,7 @@ class SavedViewTests(ServerApiTestCase):
         with captured("prks.server", "prks.api.saved_views", "prks.db", "prks.performance") as records:
             created = self.create(sentinel, q=sentinel)
             self.views("GET", f"/api/saved-views/{created['id']}")
-            self.views("PATCH", f"/api/saved-views/{created['id']}", {"search": search})
+            self.views("PATCH", f"/api/saved-views/{created['id']}", {"base_revision": 0, "search": search})
             snapshot = performance.snapshot()
         self.assertNotIn(sentinel, "\n".join(records) + json.dumps(snapshot))
         self.assertNotIn(sentinel, self.logs.getvalue())

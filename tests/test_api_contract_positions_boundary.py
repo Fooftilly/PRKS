@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import ApiErrorEnvelope, validation_error_envelope
-from backend.api_contract.openapi import positions_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.api_contract.positions import (
     PositionArgumentSummary,
     PositionCreateRequest,
@@ -36,7 +36,7 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def _openapi_api() -> OpenAPI:
     """openapi-core is a required test dep for this module (CI installs it)."""
-    return OpenAPI.from_dict(positions_openapi_document())
+    return OpenAPI.from_dict(openapi_document())
 
 
 def _validate_http_against_openapi(
@@ -59,7 +59,10 @@ def _validate_http_against_openapi(
     correctly refuses those requests against the request schema.
     """
     api = _openapi_api()
+    if method.upper() not in ("GET", "HEAD"):  # a Library mutation names the epoch it acted on
+        request_headers = {"PRKS-Library-Epoch": "1", **(request_headers or {})}
     req = MockRequest(
+        cookies={"prks_session": "token"},
         host_url="http://127.0.0.1",
         method=method.lower(),
         path=path,
@@ -341,7 +344,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             PositionSyncState.model_validate(only_unexpected)
 
     def test_openapi_response_schemas_require_established_keys(self):
-        schemas = positions_openapi_document()["components"]["schemas"]
+        schemas = openapi_document()["components"]["schemas"]
         summary_required = set(schemas["PositionSummary"]["required"])
         self.assertTrue(
             {"id", "name", "description", "created_at", "updated_at"}
@@ -399,7 +402,7 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         self.assertEqual(body["code"], "invalid_request")
 
     def test_openapi_document_covers_positions_family(self):
-        doc = positions_openapi_document()
+        doc = openapi_document()
         self.assertEqual(doc["openapi"], "3.1.0")
         self.assertIn("/api/positions", doc["paths"])
         self.assertIn("/api/positions/{position_id}", doc["paths"])
@@ -422,7 +425,8 @@ class PositionBoundaryUnitTests(unittest.TestCase):
             "responses"
         ]
         self.assertIn("409", delete_responses)
-        self.assertNotIn("400", delete_responses)
+        # DELETE has no body: its only 400 is admission's missing epoch.
+        self.assertEqual(delete_responses["400"], {"$ref": "#/components/responses/EpochRequired"})
         self.assertIn("position_in_use", delete_responses["409"]["description"])
         sync_responses = doc["paths"]["/api/positions/{position_id}/sync-state"]["get"][
             "responses"
@@ -441,12 +445,6 @@ class PositionBoundaryUnitTests(unittest.TestCase):
         for responses in (post_responses, patch_responses):
             self.assertIn("413", responses)
             self.assertIn("415", responses)
-
-    def test_checked_in_openapi_artifact_matches_generator(self):
-        artifact = Path(_PROJECT_DIR) / "docs" / "api" / "openapi-positions.json"
-        self.assertTrue(artifact.is_file(), "commit docs/api/openapi-positions.json")
-        on_disk = json.loads(artifact.read_text(encoding="utf-8"))
-        self.assertEqual(on_disk, positions_openapi_document())
 
     def test_openapi_core_accepts_positions_document(self):
         api = _openapi_api()

@@ -312,7 +312,9 @@ class SourceDecisionTests(MutationTestCase):
         self.assertEqual(self.set_source(work_id, _VIDEO, 2)[1]["code"], "FUTURE_REVISION")
         self.assertEqual(require(work_commands.detail(self.db, self.ctx, work_id))["source_url"], _OTHER_VIDEO)
         state = self.run_command(lambda scope: source.source_state(scope, work_id))
-        self.assertEqual(state, {"work_id": work_id, "revision": 1})
+        assert isinstance(state, dict)
+        self.assertEqual((state["work_id"], state["revision"], state["provider_id"], state["source_url"]),
+                         (work_id, 1, "9bZkp7q19f0", _OTHER_VIDEO))
 
     def test_only_a_video_may_be_replaced(self) -> None:
         pdf = works_fixtures.add_work(self.db, self.ctx, self.storage, "Paper", file_path=self.store_pdf("p.pdf", b"%PDF-1.4\n"))
@@ -580,8 +582,19 @@ class AnswerTests(WorksAnswerTestCase):
     def test_the_source_state(self) -> None:
         plain = self.add("plain", title="Plain")
         video = self.add("video", title="Video", source_url=_VIDEO)
-        self.answer(work_commands.source_state(self.db, self.ctx, plain), {"revision": 0, "work_id": "<W plain>"})
-        self.answer(work_commands.source_state(self.db, self.ctx, video), {"revision": 0, "work_id": "<W video>"})
+        # The revision and the source it belongs to, from one snapshot.
+        plain_state = work_commands.source_state(self.db, self.ctx, plain)
+        assert isinstance(plain_state, dict)
+        self.assertEqual({key: plain_state[key] for key in ("work_id", "revision", "source_kind", "provider",
+                                                            "provider_id", "source_url")},
+                         {"work_id": plain, "revision": 0, "source_kind": "", "provider": "", "provider_id": "",
+                          "source_url": ""})
+        video_state = work_commands.source_state(self.db, self.ctx, video)
+        assert isinstance(video_state, dict)
+        self.assertEqual({key: video_state[key] for key in ("work_id", "revision", "source_kind", "provider",
+                                                            "provider_id", "source_url")},
+                         {"work_id": video, "revision": 0, "source_kind": "video", "provider": "youtube",
+                          "provider_id": "dQw4w9WgXcQ", "source_url": _VIDEO})
         self.assertIsNone(work_commands.source_state(self.db, self.ctx, _MISSING))
 
     def test_a_private_note_through_patch(self) -> None:

@@ -1497,6 +1497,44 @@ async function testApiWarningOwnership() {
     record('A warning consumed once', sandbox.prksConsumeApiError(ownerA) === null, '');
 }
 
+async function testSettingsReadRetry() {
+    const apiSrc = fs.readFileSync(path.join(rootDir, 'frontend/js/api.js'), 'utf8');
+    const answers = [500, 500, 200]; // the first is the load-time prefetch
+    const reads = [];
+    const sandbox = {
+        window: null,
+        globalThis: null,
+        console: console,
+        URL: URL,
+        URLSearchParams: URLSearchParams,
+        Response: Response,
+        Map: Map,
+        WeakMap: WeakMap,
+        Date: Date,
+        setTimeout: setTimeout,
+        clearTimeout: clearTimeout,
+        localStorage: { getItem: function () { return null; }, removeItem: function () {} },
+        fetch: function () { return Promise.resolve(jsonResponse({ ok: true })); },
+        prksRequest: function (url) {
+            reads.push(url);
+            const status = answers.length ? answers.shift() : 200;
+            return Promise.resolve(jsonResponse({ bibtex_export_fields: { doi: false } }, status));
+        },
+        prksIsAbortError: function () { return false; },
+    };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.runInNewContext(apiSrc, sandbox);
+    await flush();
+    const failed = await sandbox.prksLoadAppSettings();
+    record('a failed settings read answers no profile', !failed.bibtex_export_fields, JSON.stringify(failed));
+    const read = await sandbox.prksLoadAppSettings();
+    record('the next caller reads the settings again', reads.length === 3 && !!read.bibtex_export_fields,
+        JSON.stringify(reads));
+    await sandbox.prksLoadAppSettings();
+    record('a successful read is kept', reads.length === 3, JSON.stringify(reads));
+}
+
 async function testLibraryEpoch() {
     // No answer has carried an epoch yet: the session is read once, before the first mutation.
     const calls = [];
@@ -1629,6 +1667,7 @@ async function main() {
     await testWorkHintStalePublication();
     await testReachabilitySignalling();
     await testApiWarningOwnership();
+    await testSettingsReadRetry();
     await testLibraryEpoch();
     console.log(passed + ' passed, ' + failed + ' failed');
     process.exit(failed ? 1 : 0);

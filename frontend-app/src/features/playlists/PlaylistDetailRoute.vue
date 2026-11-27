@@ -85,6 +85,7 @@ watch(
     const session = { ...shown.value }
     draft.value = { ...session }
     fieldBaseline.value = { ...session }
+    intents?.pinEditBase(playlist.value.id, session)
     status.value = ''
     addStatus.value = ''
     addQuery.value = ''
@@ -408,17 +409,19 @@ function onAddBlur(): void {
           id="prks-playlist-edit-title"
           v-model="draft.title"
           type="text"
+          :readonly="actionBusy('save')"
           autocomplete="off"
          :aria-labelledby="labelledBy" :aria-describedby="describedBy">
         </PrksField>
         <PrksField v-slot="{ labelledBy, describedBy }" label="Description" for-id="prks-playlist-edit-desc">
-        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
+        <textarea id="prks-playlist-edit-desc" v-model="draft.description" class="textarea-sm" :readonly="actionBusy('save')" :aria-labelledby="labelledBy" :aria-describedby="describedBy"></textarea>
         </PrksField>
         <PrksField v-slot="{ labelledBy, describedBy }" label="Original playlist URL" for-id="prks-playlist-edit-original-url">
         <input
           id="prks-playlist-edit-original-url"
           v-model="draft.original_url"
           type="url"
+          :readonly="actionBusy('save')"
           placeholder="https://..."
           autocomplete="off"
          :aria-labelledby="labelledBy" :aria-describedby="describedBy">
@@ -506,6 +509,7 @@ function onAddBlur(): void {
                   :id="`prks-pl-rename-input-${item.id}`"
                   v-model="renaming[item.id]"
                   type="text"
+                  :readonly="actionBusy(`rename:${item.id}`)"
                   class="prks-playlist-item__rename-input"
                   autocomplete="off"
                   aria-label="Video title"
@@ -570,6 +574,7 @@ function onAddBlur(): void {
                     type="button"
                     class="prks-btn prks-btn--secondary prks-btn--sm"
                     :data-pl-rename-cancel="item.id"
+                    :disabled="actionBusy(`rename:${item.id}`)"
                     title="Cancel rename"
                     aria-label="Cancel rename"
                     @click="onCancelRename(item.id)"

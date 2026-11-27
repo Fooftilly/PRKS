@@ -25,6 +25,21 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.api.common import revalidated
+from backend.api_contract.operation import Operation, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.organization import (
+    Created,
+    Done,
+    PlaylistCard,
+    PlaylistCreateRequest,
+    PlaylistDetail,
+    PlaylistItemRequest,
+    PlaylistPatch,
+    PlaylistReorderRequest,
+    PlaylistState,
+    WorkPlaylistState,
+)
+from backend.domain.organization.playlist_rules import PlaylistRuleError
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -73,7 +88,12 @@ def work_state(req: Request) -> Response:
 def update(req: Request) -> Response:
     from backend.domain.organization import playlist_commands
 
-    playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
+    try:
+        playlist_commands.update(*req.actor, req.params["playlist_id"], req.data)
+    except PlaylistRuleError as e:  # a refused value
+        return json_response(req, 400, {"error": str(e)})
+    except ValueError as e:  # no such Playlist
+        return json_response(req, 404, {"error": str(e)})
     return json_response(req, 200, {"status": "updated"})
 
 
@@ -89,12 +109,15 @@ def create(req: Request) -> Response:
     from backend.domain.organization import playlist_commands
 
     data = req.data
-    pl_id = playlist_commands.create(
-        *req.actor,
-        title=data.get("title", "") or "",
-        description=data.get("description", "") or "",
-        original_url=data.get("original_url", "") or "",
-    )
+    try:
+        pl_id = playlist_commands.create(
+            *req.actor,
+            title=data.get("title", "") or "",
+            description=data.get("description", "") or "",
+            original_url=data.get("original_url", "") or "",
+        )
+    except ValueError as e:
+        return json_response(req, 400, {"error": str(e)})
     return json_response(req, 200, {"id": pl_id})
 
 
@@ -138,15 +161,46 @@ def remove_item(req: Request) -> Response:
     return json_response(req, 200, {"status": "removed"})
 
 
+_TAG = "playlists"
+_LIMITS = "title 300 bytes, the others 4000"
+_REFUSED_NEW = error(f"A value that is not a string, or past its limit ({_LIMITS}).")
+_TOO_LONG = error(f"A value past its limit ({_LIMITS}).")
+
+
 ROUTES = (
-    route("GET", "/api/playlists", catalog),
-    route("POST", "/api/playlists", create),
-    route("GET", "/api/playlists/{playlist_id}", detail),
-    route("PATCH", "/api/playlists/{playlist_id}", update),
-    route("DELETE", "/api/playlists/{playlist_id}", delete),
-    route("GET", "/api/playlists/{playlist_id}/sync-state", sync_state),
-    route("POST", "/api/playlists/{playlist_id}/items", post_item),
-    route("DELETE", "/api/playlists/{playlist_id}/items/{work_id}", remove_item),
-    route("POST", "/api/playlists/{playlist_id}/reorder", reorder),
-    route("GET", "/api/works/{work_id}/playlist-state", work_state),
+    route("GET", "/api/playlists", catalog, contract=revalidated_read(
+        "listPlaylists", "Every Playlist with its item count", _TAG, list[PlaylistCard],
+        "Every Playlist, last changed first.")),
+    route("POST", "/api/playlists", create, contract=Operation(
+        "createPlaylist", "Create a Playlist", _TAG, {200: ok(Created, "Created."), 400: _REFUSED_NEW},
+        request=body(PlaylistCreateRequest, "Left out: an empty Playlist.", required=False))),
+    route("GET", "/api/playlists/{playlist_id}", detail, contract=Operation(
+        "getPlaylist", "A Playlist with its Works in order", _TAG,
+        {200: ok(PlaylistDetail, "The Playlist."), 404: plain("No Playlist with that id.")})),
+    route("PATCH", "/api/playlists/{playlist_id}", update, contract=Operation(
+        "updatePlaylist", "Change a Playlist's fields", _TAG,
+        {200: ok(Done, "Updated."), 400: _TOO_LONG, 404: error("No Playlist with that id (a change was sent).")},
+        request=body(PlaylistPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", "/api/playlists/{playlist_id}", delete, contract=Operation(
+        "deletePlaylist", "Delete a Playlist and release its Works", _TAG, {200: ok(Done, "Deleted.")})),
+    route("GET", "/api/playlists/{playlist_id}/sync-state", sync_state, contract=revalidated_read(
+        "getPlaylistSyncState", "A Playlist's field and order revisions", _TAG, PlaylistState,
+        "The revisions only.", {404: error("No Playlist with that id.")})),
+    route("POST", "/api/playlists/{playlist_id}/items", post_item, contract=Operation(
+        "addPlaylistItem", "Put a Work in a Playlist, optionally at a position", _TAG,
+        {200: ok(Done, "Added."), 400: error("No ``work_id``, or no such Playlist or Work.")},
+        request=body(PlaylistItemRequest))),
+    route("DELETE", "/api/playlists/{playlist_id}/items/{work_id}", remove_item, contract=Operation(
+        "removePlaylistItem", "Take a Work out of a Playlist", _TAG,
+        {200: ok(Done, "Removed (or was not in it).")})),
+    route("POST", "/api/playlists/{playlist_id}/reorder", reorder, contract=Operation(
+        "reorderPlaylist", "Rewrite a Playlist's order", _TAG,
+        {200: ok(Done, "Reordered."),
+         400: error("``work_ids`` is not an array, or no such Playlist.")},
+        request=body(PlaylistReorderRequest, "Left out: an empty order.", required=False),
+        description=("Unknown and repeated ids are ignored; the members left out follow the named ones "
+                     "in their current order."))),
+    route("GET", "/api/works/{work_id}/playlist-state", work_state, contract=revalidated_read(
+        "getWorkPlaylistState", "Which Playlist a Work is in, and its revision", _TAG, WorkPlaylistState,
+        "The Work's Playlist (empty for none) and the revision.", {404: error("No Work with that id.")})),
 )

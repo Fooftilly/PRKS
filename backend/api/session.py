@@ -110,7 +110,7 @@ _LEDGERED_MUTATIONS = frozenset({"/api/sync/operations"})
 # fill is a Library command, so it needs an acted-on epoch, and a browser
 # ``<img>`` sends none: admission gives the context the epoch it just read. A restore since then refuses the
 # fill (``LIBRARY_EPOCH_CHANGED``), and the route serves the image uncached.
-def _fills_derived_cache(method: str, path: str) -> bool:
+def fills_derived_cache(method: str, path: str) -> bool:
     if method == "GET" and path == "/api/remote-images":
         return True  # a saved copy of a remote image (#1351)
     parts = path.split("/")
@@ -123,6 +123,16 @@ _NON_LIBRARY_MUTATIONS = {
     "/api/citations": Capability.READ_LIBRARY,  # a read sent as POST: a selection does not fit a URL
     "/api/diagnostics/performance/reset": Capability.ADMIN_LIBRARY,  # process counters
 }
+
+
+def epoch_fenced(method: str, path: str) -> bool:
+    """Whether admission holds this ``/api/`` request to the Library epoch (400/409)."""
+    return method in _MUTATING_METHODS and path not in _NON_LIBRARY_MUTATIONS
+
+
+def ledgered(path: str) -> bool:
+    """Whether a replay of this mutation answers from its ledger, whatever the epoch."""
+    return path in _LEDGERED_MUTATIONS
 
 
 @dataclass(frozen=True)
@@ -461,9 +471,8 @@ def _identity_route(auth: WebAuth, request: HttpRequest) -> Optional[Outcome]:
 
 def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
     method, path = request.method, request.path
-    mutation = method in _MUTATING_METHODS
     capability = route_capability(method, path)
-    fenced = mutation and path not in _NON_LIBRARY_MUTATIONS
+    fenced = epoch_fenced(method, path)
     epoch = _epoch_claim(request) if fenced else None
     try:
         session = _principal(auth, request)
@@ -472,7 +481,7 @@ def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
         if not fenced:
             ctx = RequestContext.for_session(session)
             current = library_query(auth.db, ctx, _current_epoch, capability=capability)
-            if _fills_derived_cache(method, path):
+            if fills_derived_cache(method, path):
                 ctx = RequestContext.for_session(session, epoch=current)
             return Admitted(current, ctx)
         if request.route_fences_epoch and path in _LEDGERED_MUTATIONS:

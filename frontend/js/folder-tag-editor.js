@@ -1,6 +1,9 @@
 /* Folder Tags UI. The TabContext owns the observed base and editor lifetime. */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
     const unavailable = 'Tag editing not available offline for this Folder yet. Connect once and open the Tags panel to prepare it.';
     function live(ctx, state) {
         return ctx && !ctx.destroyed && ctx.generation === state.generation &&
@@ -108,28 +111,117 @@
             input.placeholder = input.disabled ? 'Tags unavailable' : 'Search tags or add…';
         }
     }
-    function acceptAck(ctx, state, ack) {
+    /* One Tag-link ACK into this owner's Folder, under the shared ordering
+     * rule (`prksSyncReconcile.applyOwnerAck`, #1088): an older ACK never
+     * replaces a newer link, and a Folder this tab cannot prove older than the
+     * ACK (by `op`'s creation time) is patched, then re-read from the server. */
+    function acceptAck(ctx, state, ack, op) {
         if (!live(ctx, state) || ack.folder_id !== state.folderId) return;
         state.readVersion = (state.readVersion || 0) + 1;
-        if (state.options && root.prksFolderTagBase(state.options, ack.tag_id).revision > ack.server_revision) return;
-        const work = ctx.getEntity('folder');
-        const tags = work.tags.filter(t => t.id !== ack.tag_id);
-        if (ack.present) tags.push(ack.tag);
-        ctx.setEntity('folder', { ...work, tags });
+        const plan = reconcileCore.applyOwnerAck({
+            ackRevision: ack.server_revision,
+            heldRevision: state.options ? root.prksFolderTagBase(state.options, ack.tag_id).revision : null,
+            operationCreatedAt: op && op.created_at,
+        }, {
+            get: () => {
+                const folder = ctx.getEntity('folder');
+                return folder && folder.id === ack.folder_id && Array.isArray(folder.tags) ? folder : null;
+            },
+            set: value => ctx.setEntity('folder', value),
+            agrees: folder => folder.tags.some(t => t.id === ack.tag_id) === !!ack.present,
+            patch: folder => {
+                const tags = folder.tags.filter(t => t.id !== ack.tag_id);
+                if (ack.present) tags.push(ack.tag);
+                return { ...folder, tags };
+            },
+            // A corrective read must start after the ACK, never join an older flight.
+            read: () => root.prksOfflineReadEntity('folder', ack.folder_id,
+                '/api/folders/' + encodeURIComponent(ack.folder_id), {
+                    validate: v => !!(v && typeof v === 'object' && v.id === ack.folder_id),
+                    domain: 'folders',
+                    requestPolicy: { dedupe: false },
+                }),
+            // Only the links come from the re-read: the held Folder also
+            // carries pending edits and ACKs of other families.
+            merge: (held, fresh) => ({ ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags }),
+            // The editor mounted when the re-read lands, not the one that started it.
+            adopted: () => {
+                const current = ctx.getResource('folderTagEditor');
+                if (current && current.folderId === ack.folder_id) refreshOptions(ctx, current);
+            },
+        });
+        if (plan === 'superseded') return;
         if (state.options) {
             state.options.assigned = state.options.assigned.filter(t => t.tag_id !== ack.tag_id);
             delete state.options.known_absent[ack.tag_id];
             if (ack.present) state.options.assigned.push({ tag_id: ack.tag_id, relation_revision: ack.server_revision });
             else if (ack.server_revision) state.options.known_absent[ack.tag_id] = ack.server_revision;
         }
+        // An ACK during a refresh cancelled its read (readVersion): read again.
+        if (state.refreshing) refreshOptions(ctx, state);
     }
-    async function prepare(ctx, state) {
+    /* A re-read moved the Folder past the options base (another device's link
+     * change), so an edit made against the old base could be a no-op or the
+     * wrong direction. Editing waits for options read after it. */
+    function refreshOptions(ctx, state) {
+        if (!live(ctx, state)) return;
+        state.options = null;
+        state.refreshing = true;
+        state.refreshTries = 0;
+        state.preparing = prepare(ctx, state, { dedupe: false });
+    }
+    /* The links of the held Folder, read again from the server. Only the links
+     * are taken, and only while this tab still holds the value it read past. */
+    async function rereadLinks(ctx, state, readVersion) {
+        const id = state.folderId;
+        const held = ctx.getEntity('folder');
+        if (!held || held.id !== id) return;
+        await reconcileCore.adoptFresh(
+            () => root.prksOfflineReadEntity('folder', id, '/api/folders/' + encodeURIComponent(id), { validate: v => !!(v && typeof v === 'object' && v.id === id), domain: 'folders', requestPolicy: { dedupe: false } }),
+            // A parked or superseded editor no longer owns the held links.
+            () => (live(ctx, state) && readVersion === state.readVersion ? ctx.getEntity('folder') : null), held,
+            fresh => ctx.setEntity('folder', reconcileCore.carryObservation(fresh,
+                { ...held, tags: Array.isArray(fresh.tags) ? fresh.tags : held.tags })));
+    }
+    /* A corrective refresh takes only a server answer that agrees with the
+     * adopted links. A cached fallback still holds the delayed ACK's base, and
+     * two server reads can straddle another device's change: either would let
+     * an edit coalesce against the wrong base, so editing stays off. */
+    function consistentOptions(ctx, state, read) {
+        if (!read || read.source !== 'server' || !read.value) return false;
+        const owner = ctx.getEntity('folder');
+        if (!owner || owner.id !== state.folderId || !Array.isArray(owner.tags)) return false;
+        const shown = new Set(owner.tags.map(t => t.id));
+        const based = new Set(read.value.assigned.map(t => t.tag_id));
+        return shown.size === based.size && [...shown].every(id => based.has(id));
+    }
+    async function prepare(ctx, state, requestPolicy) {
         const readVersion = state.readVersion = (state.readVersion || 0) + 1;
         try {
             const [options, catalog] = await Promise.allSettled([
-                root.prksReadFolderTagOptions(state.folderId), root.prksReadTagsIndex(),
+                root.prksReadFolderTagOptions(state.folderId, requestPolicy ? { requestPolicy } : undefined),
+                root.prksReadTagsIndex(),
             ]);
             if (!live(ctx, state) || readVersion !== state.readVersion) return;
+            if (state.refreshing) {
+                const read = options.status === 'fulfilled' ? options.value : null;
+                if (!consistentOptions(ctx, state, read)) {
+                    state.options = null;
+                    // Another device may have moved a link between the reads: read again, a bounded number of times.
+                    if (read && read.source === 'server' && (state.refreshTries = (state.refreshTries || 0) + 1) < 3) {
+                        // Either read may be the older one, so both are read again.
+                        await rereadLinks(ctx, state, readVersion);
+                        if (!live(ctx, state) || readVersion !== state.readVersion) return;
+                        await (state.preparing = prepare(ctx, state, { dedupe: false }));
+                        return;
+                    }
+                    state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
+                    state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
+                    await paint(ctx, state);
+                    return;
+                }
+            }
+            state.refreshing = false;
             state.options = options.status === 'fulfilled' ? options.value.value : null;
             state.catalog = catalog.status === 'fulfilled' ? catalog.value.value : null;
             state.catalogGeneration = root.prksOfflineDomainGeneration('tags');
@@ -234,7 +326,7 @@
                  * an in-flight prepare() and leaves the picker disabled with no
                  * catalog and nothing to retry it. */
                 if (event.acknowledged && ['ADD_FOLDER_TAG', 'REMOVE_FOLDER_TAG'].includes(event.operation)) {
-                    acceptAck(ctx, next, event.acknowledged);
+                    acceptAck(ctx, next, event.acknowledged, event.op);
                 }
                 void paint(ctx, next).catch(() => {});
             });

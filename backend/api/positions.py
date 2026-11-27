@@ -23,6 +23,7 @@ from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.errors import research_error_envelope
+from backend.api_contract.operation import IF_NONE_MATCH, Header, Operation, Reply, body, error, ok
 from backend.api_contract.positions import (
     PositionCreateRequest,
     PositionDeleted,
@@ -114,11 +115,37 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, dump_response(PositionDeleted, {"status": "deleted"}))
 
 
+_TAG = "positions"
+_NOT_FOUND = error("Not found.")
+_ID = "/api/positions/{position_id}"
+
 ROUTES = (
-    route("GET", "/api/positions", catalog),
-    route("POST", "/api/positions", create),
-    route("GET", "/api/positions/{position_id}", detail),
-    route("PATCH", "/api/positions/{position_id}", update),
-    route("DELETE", "/api/positions/{position_id}", delete),
-    route("GET", "/api/positions/{position_id}/sync-state", sync_state),
+    route("GET", "/api/positions", catalog, contract=Operation(
+        "listPositions", "List Positions", _TAG,
+        {200: ok(list[PositionSummary], "Position index (no embedded arguments).")})),
+    route("POST", "/api/positions", create, contract=Operation(
+        "createPosition", "Create a Position", _TAG,
+        {201: ok(PositionDetail, "Created Position detail."),
+         400: error("Validation or domain refusal.")},
+        request=body(PositionCreateRequest))),
+    route("GET", _ID, detail, contract=Operation(
+        "getPosition", "Get Position detail", _TAG,
+        {200: ok(PositionDetail, "Position detail with targeting Arguments."), 404: _NOT_FOUND})),
+    route("PATCH", _ID, update, contract=Operation(
+        "updatePosition", "Update Position fields", _TAG,
+        {200: ok(PositionDetail, "Updated Position detail."),
+         400: error("Validation or domain refusal."), 404: _NOT_FOUND},
+        request=body(PositionUpdateRequest))),
+    route("DELETE", _ID, delete, contract=Operation(
+        "deletePosition", "Delete a Position", _TAG,
+        {200: ok(PositionDeleted, "Deleted."), 404: _NOT_FOUND,
+         409: error("Position is still targeted by an Argument or Stance (position_in_use).")})),
+    route("GET", _ID + "/sync-state", sync_state, contract=Operation(
+        "getPositionSyncState", "Position field revisions (sync-state)", _TAG,
+        {200: ok(PositionSyncState, "Revisions only.",
+                 headers={"ETag": Header("Opaque revision token for conditional GETs.")}),
+         304: Reply("Not modified: If-None-Match matched the current ETag. Bodyless.",
+                    headers={"ETag": Header("Current revision token (same as a matching 200).")}),
+         404: _NOT_FOUND},
+        params=(IF_NONE_MATCH,))),
 )

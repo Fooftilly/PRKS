@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from backend.api_contract.openapi import publishers_openapi_document
+from backend.api_contract.openapi import openapi_document
 from scripts.ci.schemathesis_pilot import (
-    CLI_TIMEOUT, FRAGMENT, MAX_EXAMPLES, METHOD, OPERATION, ROUTE,
+    CLI_TIMEOUT, DOCUMENT, MAX_EXAMPLES, METHOD, OPERATION, ROUTE,
     command, read_json, scoped_contract,
 )
 
@@ -17,15 +17,15 @@ from scripts.ci.schemathesis_pilot import (
 class SchemathesisPilotContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.generated = publishers_openapi_document()
-        cls.checked = json.loads(FRAGMENT.read_text(encoding="utf-8"))
+        cls.generated = openapi_document()
+        cls.checked = json.loads(DOCUMENT.read_text(encoding="utf-8"))
 
     def test_checked_in_published_contract_can_be_narrowed_without_mutations(self):
         selected = scoped_contract(self.checked, self.generated)
         self.assertEqual(set(selected["paths"]), {ROUTE})
         self.assertEqual(set(selected["paths"][ROUTE]), {"get"})
         self.assertEqual(selected["paths"][ROUTE]["get"]["operationId"], OPERATION)
-        self.assertEqual(self.generated, publishers_openapi_document())
+        self.assertEqual(self.generated, openapi_document())
         self.assertIn("post", self.generated["paths"][ROUTE])
         self.assertIn("/api/publishers/{publisher_id}", self.generated["paths"])
 

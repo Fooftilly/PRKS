@@ -36,6 +36,14 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 
+from backend.api_contract.maintenance import (
+    BackupProgressLine,
+    BackupRefusal,
+    BackupStaged,
+    Restored,
+    RestoreRequest,
+)
+from backend.api_contract.operation import BINARY, EPOCH_SCHEMA, NO_STORE, Header, Operation, Param, body, error, ok
 from backend.domain.maintenance.upload import RestoreError, backup_max_upload_bytes, stream_upload_to_file
 from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.web.hosts import octet_stream_content_type_allowed
@@ -190,7 +198,8 @@ def progress(req: Request) -> Response:
 
     def stream(write: Write) -> None:
         def write_line(payload: dict[str, Any]) -> None:
-            write(ndjson(payload))
+            # Each line is held to the published per-line shape.
+            write(ndjson(BackupProgressLine.model_validate(payload).model_dump()))
 
         try:
             stream_backup(library, ctx, write_line)
@@ -298,9 +307,41 @@ def download(req: Request) -> Response:
     ], stream=stream, cleanup=handle.close)
 
 
+_TAG = "backups"
+_NO_STORE = {"Cache-Control": NO_STORE}
+
 ROUTES = (
-    route("POST", "/api/backups/progress", progress),
-    route("POST", "/api/backups/stage", stage, Body.STREAM),
-    route("POST", "/api/backups/restore", restore),
-    route("GET", "/api/backups/download", download),
+    route("POST", "/api/backups/progress", progress, contract=Operation(
+        "backupProgress", "Make a backup and stream its progress", _TAG,
+        {200: ok({"type": "string", "description": "Newline-delimited JSON: each line is one "
+                                                   "BackupProgressLine object."},
+                 "One JSON object per line until `ready` (with the download token) or `failed`.",
+                 media_type="application/x-ndjson", headers=_NO_STORE, line_schema=BackupProgressLine)},
+        request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False),
+        description="Queues the Library's backup job, or follows the one already queued or running.")),
+    route("POST", "/api/backups/stage", stage, Body.STREAM, contract=Operation(
+        "stageBackup", "Upload a backup archive and verify it for a restore", _TAG,
+        {200: ok(BackupStaged, "Verified; the token names it to the restore."),
+         400: error("A bad Content-Length (invalid_request), or an archive that failed verification "
+                    "(`reason`).", BackupRefusal),
+         408: error("The upload stalled (upload_timeout).", BackupRefusal),
+         413: error("Larger than the upload limit (request_too_large).", BackupRefusal),
+         415: error("Not sent as application/octet-stream (unsupported_media_type).", BackupRefusal)},
+        request=body(BINARY, media_type="application/octet-stream"),
+        params=(Param("Content-Length", "header", {"type": "integer", "minimum": 0}, required=True),))),
+    route("POST", "/api/backups/restore", restore, contract=Operation(
+        "restoreBackup", "Restore a staged archive over the Library", _TAG,
+        {200: ok(Restored, "Restored.",
+                 headers={"PRKS-Library-Epoch": Header("The Library's new epoch.", EPOCH_SCHEMA, required=True)}),
+         400: error("No `confirm: RESTORE` (confirmation_required) or an unknown token (unknown_token).",
+                    BackupRefusal),
+         409: error("The restore failed and nothing changed (`reason`).", BackupRefusal),
+         507: error("The archive could not be copied for the restore; nothing changed.", BackupRefusal)},
+        request=body(RestoreRequest))),
+    route("GET", "/api/backups/download", download, contract=Operation(
+        "downloadBackup", "Download a published backup archive", _TAG,
+        {200: ok(BINARY, "The archive.", media_type="application/octet-stream",
+                 headers={**_NO_STORE, "Content-Disposition": Header("attachment; filename=...")}),
+         404: error("No published archive with that token (unknown_token).", BackupRefusal)},
+        params=(Param("token", required=True, description="The `ready` line's token."),))),
 )

@@ -55,6 +55,8 @@ class SessionFlowTests(HttpAuthTestCase):
         self.assertEqual(current.status, 200)
         self.assertEqual(current.body["library"]["epoch"], 1)
         self.assertEqual(current.header("PRKS-Library-Epoch"), ["1"])
+        head = self.call("HEAD", "/api/session", cookies=cookies)
+        self.assertEqual((head.status, head.raw, head.header("PRKS-Library-Epoch")), (200, b"", ["1"]))
 
         out = self.call("POST", "/api/logout", cookies=cookies)
         self.assertEqual(out.status, 200)

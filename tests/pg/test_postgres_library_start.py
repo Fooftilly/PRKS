@@ -23,6 +23,7 @@ import time
 import uuid
 from typing import Any, Iterator, Optional
 
+from backend.api_contract.operation import EPOCH_SCHEMA
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
 from tests.pg.test_readiness import _free_port, _wait_for
@@ -221,7 +222,8 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
             self.assertEqual(status, 200, people)
             status, source, _headers = self.call(port, "GET", f"/api/works/{work_id}/source-state")
-            self.assertEqual((status, source), (200, {"work_id": work_id, "revision": 0}))
+            self.assertEqual((status, source["work_id"], source["revision"], source["source_url"]),
+                             (200, work_id, 0, ""))
             # An echoed file_path is dropped; the rest of the patch applies.
             status, _body, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
                                                 {"title": "Patched", "file_path": ""}, headers)
@@ -355,6 +357,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                 port, "POST", "/api/backups/restore", {"token": staged["token"], "confirm": "RESTORE"}, headers)
             self.assertEqual((status, restored["status"]), (200, "restored"), restored)
             self.assertEqual(response_headers.get("prks-library-epoch"), str(restored["epoch"]))
+            self.assertRegex(response_headers["prks-library-epoch"], EPOCH_SCHEMA["pattern"])
             self.assertNotEqual(str(restored["epoch"]), old_epoch)
             _status, works, _headers = self.call(port, "GET", "/api/works")
             self.assertEqual([w["id"] for w in works], [kept["id"]])

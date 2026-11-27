@@ -27,6 +27,12 @@ const cache = {
         entities.set(entityKey(kind, id), {value, cachedAt: 1, sourceRevision: revision});
         return true;
     },
+    updateEntity: async (kind, id, merge) => {
+        const held = entities.get(entityKey(kind, id));
+        const next = merge(held ? held.value : null);
+        if (next != null) entities.set(entityKey(kind, id), {value: next, cachedAt: 1, sourceRevision: ""});
+        return true;
+    },
     deleteEntity: async (kind, id) => { entities.delete(entityKey(kind, id)); return true; },
     getEntitiesByKind: async kind => [...entities.entries()]
         .filter(([k]) => k.startsWith(kind + ":"))
@@ -94,6 +100,12 @@ async function seed() {
     await cache.putEntity("playlist", ID, detail, "");
     await cache.putEntity("playlist", control.id, {...control, items: []}, "");
     await cache.putEntity("playlist-state", ID, globalThis.prksNewPlaylistState(ID), "");
+    // The pair an online Edit read together, which an offline Edit pins.
+    await cache.putEntity("playlist-edit-base", ID, {playlist_id: ID, fields: {
+        title: {value: "Original title", revision: 0},
+        description: {value: "Old description", revision: 0},
+        original_url: {value: "", revision: 0},
+    }}, "");
     for (const id of [W1, W2, OTHER]) {
         await cache.putEntity("work", id, {id, playlist_id: id === OTHER ? null : ID}, "");
     }
@@ -179,14 +191,27 @@ async function scenario(name, write, expectedOperations = 1) {
         globalThis.prksOfflineReconcilePlaylistOrder = originalOrder;
     }
 }
+/* What an edit session pins when it opens on the cached detail (#894). */
+async function editBase(id) {
+    const detail = (await cache.getEntity("playlist", id)).value;
+    const base = await globalThis.prksPinPlaylistEdit(id, {
+        title: detail.title || "", description: detail.description || "",
+        original_url: detail.original_url || "",
+    });
+    assert(base, "the edit session pins a base");
+    return base;
+}
 async function main() {
     await scenario("description", async () => {
-        await updatePlaylist(ID, {description: "New description"});
+        await updatePlaylist(ID, {description: "New description"}, {base: await editBase(ID)});
     }).then(async ({before, state, detail, envelope}) => {
         assert.equal(envelope.operation, "SET_PLAYLIST_FIELD");
         assert.deepEqual(envelope.payload, {field: "description", value: "New description"});
         assert.equal(detail.description, "New description");
         assert.equal(state.fields.description.revision, 1);
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", ID)).value.fields.description,
+            {value: "New description", revision: 1, ackOp: envelope.op_id},
+            "the offline edit base moves along its own ACK, stamped with it");
         const list = (await cache.getList("playlists:index")).value;
         assert(validation.prksIsPlaylistsIndexShape(list));
         assert.equal(list[0].description, "New description");
@@ -199,7 +224,7 @@ async function main() {
         // wrapper call. Keep the two independent durable operations, ACKs and
         // revision fences; testing only title would silently lose coverage.
         await updatePlaylist(ID,
-            {title: "Renamed title", description: ""});
+            {title: "Renamed title", description: ""}, {base: await editBase(ID)});
     }, 2).then(async ({state, detail, envelopes}) => {
         assert.deepEqual(envelopes.map(e => e.operation),
             ["SET_PLAYLIST_FIELD", "SET_PLAYLIST_FIELD"]);
@@ -232,6 +257,129 @@ async function main() {
         assert(await cache.getEntity("work", W2), "reorder keeps second member Work");
         assert(await cache.getEntity("work", OTHER), "reorder keeps outside Work");
     });
+    /* An ACK older than the held revisions must not pair its value with
+     * them: the body is dropped for the next read, the revisions kept. */
+    await seed();
+    {
+        const state = globalThis.prksNewPlaylistState(ID);
+        state.fields.description = {revision: 5};
+        await cache.putEntity("playlist-state", ID, state, "");
+        const ok = await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "description", server_revision: 1, changed: true},
+            {payload: {field: "description", value: "Late"}, created_at: new Date().toISOString()});
+        assert.equal(ok, true, "the stale ACK still retires");
+        assert.equal((await cache.getEntity("playlist-state", ID)).value.fields.description.revision, 5,
+            "the newer revision stays");
+        assert.equal(await cache.getEntity("playlist", ID), null,
+            "the body is dropped rather than given the older value");
+        assert.equal((await cache.getList("playlists:index")).value[0].description, "Old description",
+            "the catalogue row is not given the older value either");
+    }
+    /* A body write that fails still evicts the member Works: the retry has no body to name them. */
+    await seed();
+    {
+        const put = cache.putEntity;
+        cache.putEntity = async (kind, ...rest) => kind === "playlist" ? false : put(kind, ...rest);
+        let ok;
+        try {
+            ok = await globalThis.prksOfflineReconcilePlaylistField(
+                {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+                {base_revision: 0, payload: {field: "title", value: "Renamed"}, created_at: new Date().toISOString()});
+        } finally {
+            cache.putEntity = put;
+        }
+        assert.equal(ok, false, "the ACK is retried");
+        assert.equal(await cache.getEntity("playlist", ID), null, "the unpatched body is dropped");
+        assert.equal(await cache.getEntity("work", W1), null, "and the member Works are evicted first");
+        assert.equal(await cache.getEntity("work", W2), null);
+    }
+    /* A Work that could not be evicted keeps the body: the retry needs its member list. */
+    await seed();
+    {
+        const put = cache.putEntity, remove = cache.deleteEntity;
+        cache.putEntity = async (kind, ...rest) => kind === "playlist" ? false : put(kind, ...rest);
+        cache.deleteEntity = async (kind, id) => kind === "work" && id === W1 ? false : remove(kind, id);
+        const ack = () => globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+            {base_revision: 0, payload: {field: "title", value: "Renamed"}, created_at: new Date().toISOString()});
+        let first;
+        try {
+            first = await ack();
+        } finally {
+            cache.putEntity = put;
+            cache.deleteEntity = remove;
+        }
+        assert.equal(first, false, "the ACK is retried");
+        assert(await cache.getEntity("playlist", ID), "the body that names the members is kept");
+        assert(await cache.getEntity("work", W1), "the Work that could not be evicted is still cached");
+        assert.equal(await ack(), true, "the retry finishes");
+        assert.equal(await cache.getEntity("work", W1), null, "and evicts it");
+    }
+    /* Behind newer revisions too, the body is dropped only after its Works are evicted. */
+    await seed();
+    {
+        const state = globalThis.prksNewPlaylistState(ID);
+        state.fields.title = {revision: 5};
+        await cache.putEntity("playlist-state", ID, state, "");
+        const remove = cache.deleteEntity;
+        cache.deleteEntity = async (kind, id) => kind === "work" && id === W1 ? false : remove(kind, id);
+        const ack = () => globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: ID, field: "title", server_revision: 1, changed: true},
+            {base_revision: 0, payload: {field: "title", value: "Late"}, created_at: new Date().toISOString()});
+        let first;
+        try {
+            first = await ack();
+        } finally {
+            cache.deleteEntity = remove;
+        }
+        assert.equal(first, false, "the ACK is retried");
+        assert(await cache.getEntity("playlist", ID), "the body that names the members is kept");
+        assert.equal(await ack(), true, "the retry finishes");
+        assert.equal(await cache.getEntity("work", W1), null, "and evicts the Work");
+        assert.equal(await cache.getEntity("playlist", ID), null, "before it drops the older body");
+    }
+    /* A Playlist created here is known at revision 0, so the open editor's
+     * next Save is measured from its first field ACK. */
+    {
+        const NEW = "PL-NEW";
+        assert(await globalThis.prksOfflineReconcileCreatedPlaylist({playlist_id: NEW, changed: true,
+            playlist: {id: NEW, title: "Talks", description: "", original_url: null, item_count: 0}}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
+            {value: "Talks", revision: 0}, "the create seeds the pair");
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "title", server_revision: 1, changed: true},
+            {op_id: "op-seminars", base_revision: 0, payload: {field: "title", value: "Seminars"},
+                created_at: new Date().toISOString()}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.title,
+            {value: "Seminars", revision: 1, ackOp: "op-seminars"}, "the first field ACK moves it");
+        /* An online read published the ACK revision before the ACK landed. */
+        await cache.putEntity("playlist-edit-base", NEW, {playlist_id: NEW, fields: Object.assign(
+            {}, (await cache.getEntity("playlist-edit-base", NEW)).value.fields,
+            {description: {value: "Read", revision: 1}})});
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "description", server_revision: 1, changed: true},
+            {op_id: "op-desc", base_revision: 0, payload: {field: "description", value: "Read"},
+                created_at: new Date().toISOString()}));
+        assert.deepEqual((await cache.getEntity("playlist-edit-base", NEW)).value.fields.description,
+            {value: "Read", revision: 1, ackOp: "op-desc"}, "an ACK at the read revision stamps that entry");
+        /* A whitespace-only save is a no-op: the server keeps revision 1. */
+        assert(await globalThis.prksOfflineReconcilePlaylistField(
+            {playlist_id: NEW, field: "description", server_revision: 1, changed: false},
+            {op_id: "op-noop", base_revision: 1, payload: {field: "description", value: "Read "},
+                created_at: new Date().toISOString()}));
+        assert.equal((await cache.getEntity("playlist-edit-base", NEW)).value.fields.description.ackOp, "op-desc",
+            "a no-op ACK at that revision keeps the stamp of the write that produced it");
+        const remove = cache.deleteEntity;
+        cache.deleteEntity = async (kind, id) => kind === "playlist-edit-base" ? false : remove(kind, id);
+        try {
+            assert.equal(await globalThis.prksOfflineReconcileDeletedPlaylist({playlist_id: NEW}), false,
+                "a pair that could not be dropped keeps the delete ACK for a retry");
+        } finally {
+            cache.deleteEntity = remove;
+        }
+        assert(await globalThis.prksOfflineReconcileDeletedPlaylist({playlist_id: NEW}));
+        assert.equal(await cache.getEntity("playlist-edit-base", NEW), null, "a delete drops the pair");
+    }
     console.log("All " + checks + " Playlist ACK-through-sync checks passed");
 }
 main().catch(e => {console.error(e); process.exitCode = 1;});

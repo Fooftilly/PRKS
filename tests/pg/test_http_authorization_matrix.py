@@ -133,9 +133,10 @@ ROWS: tuple[Row, ...] = (
 # Modules that are not a route family of their own. ``setup`` serves only a
 # first run's setup phase, before any session or Library exists (#612); its
 # token, origin and rate-limit rules are in tests/pg/test_web_setup.py.
-# ``session`` is admission itself, ``common`` holds shared helpers, and
+# ``session`` is admission itself, ``identity`` only declares the contracts of the paths
+# admission answers, ``common`` holds shared helpers, and
 # ``health`` serves the unauthenticated probes (tests/test_health_probes.py).
-_NOT_FAMILIES = frozenset({"__init__", "setup", "session", "common", "health"})
+_NOT_FAMILIES = frozenset({"__init__", "setup", "session", "common", "health", "identity"})
 # Families with no mutating route. A saved remote image is written only by a
 # read (``GET /api/remote-images`` fills it, as the portrait route does).
 _READ_ONLY = frozenset({"search", "remote_images", "deployment", "pdfs", "thumbnails", "research_graph"})

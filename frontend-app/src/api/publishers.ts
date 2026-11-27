@@ -4,11 +4,9 @@
  * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { PublisherCreated, PublisherInUse } from './generated/publishers'
+import type { PublisherCreated, PublisherInUse } from './generated/openapi'
 
 export type { PublisherCreated, PublisherInUse }
-
-export const PUBLISHERS_CONTRACT_VERSION = '0.1.0'
 
 export const PUBLISHER_IN_USE_KEYS = ['id', 'name', 'aliases', 'work_count'] as const
 export const PUBLISHER_CREATED_KEYS = ['id', 'name', 'existed'] as const

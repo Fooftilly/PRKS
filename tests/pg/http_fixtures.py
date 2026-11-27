@@ -21,6 +21,7 @@ from typing import Any, Optional
 
 from backend.domain.identity.login_limiter import LoginLimits, TrustedProxies
 from backend.domain.identity.web_start import AuthMode, WebAuth, WebAuthSettings
+from tests.contract_check import ContractCheck
 from tests.pg.identity_fixtures import PASSWORD, IdentityTestCase
 from tests.tls_certificate import client_context, temporary_pair
 
@@ -62,7 +63,11 @@ _SENTINEL: Any = object()
 
 
 class HttpAuthTestCase(IdentityTestCase):
-    """Fresh PostgreSQL identity + a PRKS server on its Library per test."""
+    """Fresh PostgreSQL identity + a PRKS server on its Library per test.
+
+    The server holds each typed route's answers to its OpenAPI contract
+    (:mod:`tests.contract_check`); a test that saw an answer outside it fails.
+    """
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -95,6 +100,8 @@ class HttpAuthTestCase(IdentityTestCase):
         self.instance_id = "IN-" + uuid.uuid4().hex.upper()
         self.port = 0
         self.tls_cert: Optional[str] = None
+        self._contract_app: Any = None
+        self._contract_check: Optional[ContractCheck] = None
 
     # -- the server --------------------------------------------------------------------
 
@@ -132,6 +139,12 @@ class HttpAuthTestCase(IdentityTestCase):
             http = HttpServerSettings(tls_cert_file=cert, tls_key_file=key)
             self.tls_cert = cert
         app = self.app
+        if self._contract_app is not app:
+            check = ContractCheck()
+            app.routes = check.wrap(app.routes)
+            self._contract_app = app
+            self._contract_check = check
+            self.addCleanup(self._assert_contract_kept, check)
         app.bind_host = "127.0.0.1"
         app.trusted_hosts = frozenset()
         app.auth = auth
@@ -147,6 +160,11 @@ class HttpAuthTestCase(IdentityTestCase):
         self.port = httpd.server_address[1]
         self.httpd = httpd
         return auth
+
+    def _assert_contract_kept(self, check: ContractCheck) -> None:
+        report = check.report()
+        if report is not None:
+            self.fail(report)
 
     @property
     def origin(self) -> str:
@@ -191,6 +209,10 @@ class HttpAuthTestCase(IdentityTestCase):
             response = Response(res.status, list(res.getheaders()), raw)
         finally:
             conn.close()
+        if self._contract_check is not None:
+            # Sign-in, session and setup never reach a route.
+            self._contract_check.check_admission(method, path, response.status, response.headers, raw, body)
+            self._contract_check.check_sent(method, path, response.status, response.headers)
         for name, value in response.headers:
             if name.lower() == "set-cookie":
                 cookie_name, parsed = _parse_set_cookie(value)

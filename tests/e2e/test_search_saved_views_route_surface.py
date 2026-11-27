@@ -147,10 +147,10 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
         # are Main-only, so the other surface writes through the bridge.)
         view_id = view_hash.rsplit("/", 1)[1]
         page.evaluate(
-            """(id) => window.prksSavedViewRecords.update(id, {
+            """async (id) => window.prksSavedViewRecords.update(id, {
                 name: 'E2E Cross-Surface Search',
                 search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
-            })""",
+            }, (await window.prksSavedViewRecords.get(id)).revision)""",
             view_id,
         )
         page.wait_for_function(
@@ -190,10 +190,10 @@ class SearchSavedViewsRouteSurfaceTests(unittest.TestCase):
                 "(id) => { void prksNavigate('#/views/' + encodeURIComponent(id)); }", second_id
             )
         page.evaluate(
-            """(id) => window.prksSavedViewRecords.update(id, {
+            """async (id) => window.prksSavedViewRecords.update(id, {
                 name: 'E2E Second Renamed',
                 search: { mode: 'all', q: 'Related Work', tag: '', author: '', publisher: '' },
-            })""",
+            }, (await window.prksSavedViewRecords.get(id)).revision)""",
             second_id,
         )
         self.assertEqual(len(held), 1)

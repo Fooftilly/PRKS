@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded read-only Schemathesis pilot on the REAL Publishers OpenAPI fragment.
+"""Bounded read-only Schemathesis pilot on GET /api/publishers of the REAL OpenAPI document.
 
 Only a fresh AppServer --testing instance on loopback is ever targeted.
 No mutating operations, production tokens, live library files or arbitrary URL.
@@ -24,12 +24,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.api_contract.openapi import publishers_openapi_document  # noqa: E402
+from backend.api_contract.openapi import openapi_document  # noqa: E402
 from backend.api_contract.publishers import PublisherInUse  # noqa: E402
 from tests.e2e.harness import AppServer  # noqa: E402
 from tests.ux_tour.fixtures import seed_ux_tour_library  # noqa: E402
 
-FRAGMENT = ROOT / "docs" / "api" / "openapi-publishers.json"
+DOCUMENT = ROOT / "docs" / "api" / "openapi.json"
 METHOD = "GET"
 ROUTE = "/api/publishers"
 OPERATION = "listPublishersInUse"
@@ -49,7 +49,6 @@ def read_json(origin: str, path: str, *, host: str | None = None):
     ):
         raise ValueError("Schemathesis pilot requires isolated loopback origin")
     if path not in (
-        "/api/openapi/publishers.json",
         "/api/openapi.json",
         "/api/publishers?used=1",
     ):
@@ -67,9 +66,9 @@ def read_json(origin: str, path: str, *, host: str | None = None):
 
 def scoped_contract(checked_in: dict, live: dict) -> dict:
     """Reject drift/partial contracts and retain only the read-only route."""
-    generated = publishers_openapi_document()
+    generated = openapi_document()
     if checked_in != generated or live != generated:
-        raise ValueError("published Publishers OpenAPI fragment differs from runtime or builder")
+        raise ValueError("published OpenAPI document differs from runtime or builder")
     family = generated.get("paths", {}).get(ROUTE)
     if not isinstance(family, dict) or set(family) != {"get", "post"}:
         raise ValueError("Publishers operation inventory changed; review allowlist")
@@ -106,13 +105,10 @@ def command(schema: Path, origin: str, binary: str) -> list[str]:
 
 
 def verify_live_readonly_contract(server: AppServer, checked_in: dict) -> dict:
-    status, live = read_json(server.origin, "/api/openapi/publishers.json")
+    status, live = read_json(server.origin, "/api/openapi.json")
     if status != 200:
-        raise AssertionError("live Publishers OpenAPI returned non-200")
+        raise AssertionError("live OpenAPI document returned non-200")
     scoped = scoped_contract(checked_in, live)
-    _, default_openapi = read_json(server.origin, "/api/openapi.json")
-    if default_openapi == checked_in:
-        raise AssertionError("default OpenAPI alias unexpectedly includes Publishers")
     status, rows = read_json(server.origin, "/api/publishers?used=1")
     if status != 200 or not isinstance(rows, list) or not rows:
         raise AssertionError("seeded Publishers catalog is empty or malformed")
@@ -189,7 +185,7 @@ def scan(*, debug_local: bool = False) -> int:
     binary = shutil.which("st")
     if not binary:
         raise RuntimeError("Pinned Schemathesis CLI not installed")
-    checked_in = json.loads(FRAGMENT.read_text(encoding="utf-8"))
+    checked_in = json.loads(DOCUMENT.read_text(encoding="utf-8"))
     server = AppServer(seed_fn=seed_ux_tour_library)
     started = time.monotonic()
     try:

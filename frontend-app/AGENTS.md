@@ -31,12 +31,14 @@ These rules apply to `frontend-app/` on top of the root `AGENTS.md`.
 - `src/lifecycle/tab-leave.ts` is the serialized leave decision and knows nothing about drafts, PDF sync, dialogs or DOM; feature probes answer those. `src/lifecycle/owner-resource.ts` is the external resource lifetime TabContext hosts (rules in `frontend/AGENTS.md` "TabContext owns route runtime").
 - `src/lifecycle/editor-recovery/` is browser-local draft recovery (built to `frontend/js/editor-recovery.js`). Its storage is scoped per signed-in user (`recoveryNames(scopeKey)`) and nothing is stored without a confirmed scope. It never writes the operation queue (`prks-local-v2:<scope>`) and never decides that a body was saved. It restores automatically only a complete draft on a server-verified base with no live owner; a closed tab is proven by its lock disappearing or its pagehide record, never by silence. Every Review action goes through `frontend/js/work-note-recovery.js`, which re-plans and adopts by compare-and-swap; add a Work note kind there, not a copy. Deleted-Work cleanup arrives only through `work-lifecycle-state.js` and removes only lineages whose owner is this page or proven gone. The module docstrings hold the details.
 
+- `src/sync/reconcile.ts` is the one ACK ordering rule and pending overlay for every browser sync family (built to `frontend/js/sync-reconcile.js`, `prksSyncReconcile`). Families call it; they never compare revisions or read times themselves. Rules: `docs/local-first-sync.md` "ACK ordering: one shared core".
+
 For changes to the classic coordinator, offline runtime, service worker, durable families or shared browser lifecycle, also load `frontend/AGENTS.md`; for offline/sync work, `docs/agent-context/sync-map.md` and `docs/agent-rules/offline-pwa.md`.
 
 ## API and state boundaries
 
 - Components call `src/api/` and the typed service layer, never raw transport. Keep transport DTOs separate from PRKS domain types.
-- OpenAPI owns wire schema. `src/api/generated/` has one module per `docs/api/openapi-*.json` (`npm run openapi:types`, checked by `npm run openapi:check`). Never generate clients, hooks, cache logic or domain services from OpenAPI, and generated types never replace runtime response parsers. Feature view models (for example `src/features/positions/types.ts`) are not aliases of generated types.
+- OpenAPI owns wire schema. `src/api/generated/openapi.ts` is generated from `docs/api/openapi.json`, the one document built from the route table (`npm run openapi:types`, checked by `npm run openapi:check`). Never generate clients, hooks, cache logic or domain services from OpenAPI, and generated types never replace runtime response parsers. Feature view models (for example `src/features/positions/types.ts`) are not aliases of generated types.
 - #310/#311: do not assume PRKS stays single-owner, tied to one host path, or one process, but do not build future account or storage behavior in an unrelated slice; consume API contracts as they land.
 
 ## Toolchain and validation

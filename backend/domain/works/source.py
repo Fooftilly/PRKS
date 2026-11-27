@@ -135,11 +135,18 @@ def apply_source_operation(scope: LibraryScope, work_id: str, payload_source: ob
 
 
 def source_state(scope: LibraryScope, work_id: str) -> Optional[dict[str, Any] | str]:
-    """``source_rules.get_source_state``: the revision only, or the refusal."""
+    """``source_rules.get_source_state``: the revision WITH the source it
+    belongs to, or the refusal.
+
+    Both come from this query's one snapshot, so they are a pair the server
+    held. A client pairing a revision with a separately read Work cannot
+    prove which read came first; this answer needs no such proof.
+    """
     row = _target(scope, work_id, for_update=False)
     if row is None:
         return None
     if current_source(row) == INVALID_SOURCE_STATE:
         return INVALID_SOURCE_STATE
     key = rules.scope_key(work_id)
-    return {"work_id": work_id, "revision": revisions.read(scope, SCOPE_TYPE, [key])[key]}
+    return {"work_id": work_id, "revision": revisions.read(scope, SCOPE_TYPE, [key])[key],
+            **stored_source(row)}

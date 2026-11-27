@@ -5,7 +5,7 @@
  * there is no write here. Runtime parsing still checks the response shape.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { DeploymentSetting, DeploymentSettings } from './generated/deployment-settings'
+import type { DeploymentSetting, DeploymentSettings } from './generated/openapi'
 
 export type { DeploymentSetting, DeploymentSettings }
 

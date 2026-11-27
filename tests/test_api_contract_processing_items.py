@@ -8,12 +8,11 @@ from pathlib import Path
 from openapi_core import OpenAPI
 from pydantic import ValidationError
 
-from backend.api_contract.openapi import processing_items_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.api_contract.processing_items import ProcessingImportRequest, ProcessingItem, ProcessingItemRefusal
 from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ARTIFACT = _ROOT / "docs" / "api" / "openapi-processing-items.json"
 _ID = "PI-" + "0" * 32
 
 
@@ -28,20 +27,16 @@ def _item(**overrides):
 
 
 class ProcessingItemsContractTests(unittest.TestCase):
-    def test_checked_in_openapi_artifact_matches_generator(self):
-        self.assertTrue(_ARTIFACT.is_file(), "commit docs/api/openapi-processing-items.json")
-        self.assertEqual(json.loads(_ARTIFACT.read_text(encoding="utf-8")), processing_items_openapi_document())
-
     def test_openapi_core_accepts_the_document(self):
-        document = processing_items_openapi_document()
+        document = openapi_document()
         OpenAPI.from_dict(document)
-        self.assertEqual(set(document["paths"]), {
+        self.assertLessEqual({
             "/api/processing-items",
             "/api/processing-items/{item_id}",
             "/api/processing-items/{item_id}/pdf",
             "/api/processing-items/{item_id}/import",
             "/api/processing-items/import",
-        })
+        }, set(document["paths"]))
 
     def test_models_refuse_unknown_keys_and_bad_values(self):
         ProcessingItem.model_validate(_item())
@@ -66,7 +61,7 @@ class ProcessingItemsContractTests(unittest.TestCase):
             (f"/api/processing-items/{_ID}", "/api/processing-items/:id"),
             (f"/api/processing-items/{_ID}/pdf", "/api/processing-items/:id/pdf"),
             (f"/api/processing-items/{_ID}/import", "/api/processing-items/:id/import"),
-            ("/api/openapi/processing-items.json", "/api/openapi/processing-items.json"),
+            ("/api/openapi.json", "/api/openapi.json"),
         ):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), logged)

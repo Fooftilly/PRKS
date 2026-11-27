@@ -15,15 +15,22 @@ the handler runs: ``JSON`` parses one JSON object (``Request.json``) and
 refuses anything else with 400 (:mod:`backend.web.dispatch`), ``NONE``
 reads nothing, and ``STREAM`` leaves the body to the handler (uploads);
 an answer that leaves body unread closes the connection.
+
+A route's ``contract`` (:class:`backend.api_contract.operation.Operation`)
+is its wire contract; :mod:`backend.api_contract.openapi` builds the one
+OpenAPI document from the table (#1431).
 """
 
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Callable, Iterable, Optional, Union
 
 from backend.web.http import Request, Response
+
+if TYPE_CHECKING:
+    from backend.api_contract.operation import Operation
 
 Handler = Callable[[Request], Response]
 
@@ -38,16 +45,17 @@ _BODY_METHODS = frozenset({"POST", "PUT", "PATCH"})
 
 
 @dataclass(frozen=True)
-class _Segment:
+class Segment:
     literal: Optional[str]  # None: a parameter
     name: str = ""
     rest: bool = False  # {name:path}: the rest of the path
 
 
-def _compile(pattern: str) -> tuple[_Segment, ...]:
+def compile_pattern(pattern: str) -> tuple[Segment, ...]:
+    """The segments of ``pattern``; a bad pattern raises ``ValueError``."""
     if not pattern.startswith("/"):
         raise ValueError(f"route pattern must start with '/': {pattern!r}")
-    segments: list[_Segment] = []
+    segments: list[Segment] = []
     parts = pattern.split("/")[1:]
     for index, part in enumerate(parts):
         if part.startswith("{") and part.endswith("}"):
@@ -56,11 +64,11 @@ def _compile(pattern: str) -> tuple[_Segment, ...]:
                 raise ValueError(f"bad route parameter {part!r} in {pattern!r}")
             if kind == "path" and index != len(parts) - 1:
                 raise ValueError(f"{{{name}:path}} must be the last segment of {pattern!r}")
-            segments.append(_Segment(None, name, rest=kind == "path"))
+            segments.append(Segment(None, name, rest=kind == "path"))
         else:
             if "{" in part or "}" in part:
                 raise ValueError(f"bad route segment {part!r} in {pattern!r}")
-            segments.append(_Segment(part))
+            segments.append(Segment(part))
     return tuple(segments)
 
 
@@ -75,11 +83,12 @@ class Route:
     pattern: str
     handler: Handler
     body: Optional[Body] = None
-    segments: tuple[_Segment, ...] = field(init=False, repr=False, compare=False)
+    contract: Optional[Operation] = field(default=None, compare=False)
+    segments: tuple[Segment, ...] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "method", self.method.upper())
-        object.__setattr__(self, "segments", _compile(self.pattern))
+        object.__setattr__(self, "segments", compile_pattern(self.pattern))
         if self.body is None:
             object.__setattr__(self, "body", Body.JSON if self.method in _BODY_METHODS else Body.NONE)
 
@@ -125,8 +134,9 @@ class Route:
         return tuple(0 if s.literal is not None else (2 if s.rest else 1) for s in self.segments)
 
 
-def route(method: str, pattern: str, handler: Handler, body: Optional[Body] = None) -> Route:
-    return Route(method, pattern, handler, body)
+def route(method: str, pattern: str, handler: Handler, body: Optional[Body] = None, *,
+          contract: Optional[Operation] = None) -> Route:
+    return Route(method, pattern, handler, body, contract)
 
 
 @dataclass(frozen=True)

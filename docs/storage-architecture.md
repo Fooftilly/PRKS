@@ -1331,7 +1331,7 @@ managed bytes** goes through the abstraction.
 
 The storage status is shown to the authenticated owner only. It is
 implemented as `GET /api/storage-status` (`backend/api/storage.py`, contract
-`docs/api/openapi-storage-status.json`) and Settings → Storage (#720):
+`docs/api/openapi.json`, `getStorageStatus`) and Settings → Storage (#720):
 
 - the effective root: the configured spelling and the resolved path;
 - the source (`cli`, `env`, `config_file`, `platform_default`,
@@ -1482,7 +1482,7 @@ Each item belongs to the phase named in §13 (mostly D and E).
 - "Open data folder" (it also needs #46 desktop packaging).
 - Relocation progress UI and the failed or retained notices.
 - The OpenAPI entries for storage commands (Phase E). The storage status
-  entry is `docs/api/openapi-storage-status.json`.
+  entry is `getStorageStatus` in `docs/api/openapi.json`.
 
 ---
 

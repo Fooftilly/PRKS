@@ -22,7 +22,13 @@ import logging
 from urllib.parse import unquote
 
 from backend.api_contract.boundary import dump_response
-from backend.api_contract.saved_views import SavedView, SavedViewDeleted
+from backend.api_contract.operation import Operation, body, error, ok
+from backend.api_contract.saved_views import (
+    SavedView,
+    SavedViewCreateRequest,
+    SavedViewDeleted,
+    SavedViewUpdateRequest,
+)
 from backend.domain.saved_views.rules import SavedViewError
 from backend.runtime.log_safety import safe_log_id, safe_log_label
 from backend.web.http import Request, Response, json_response
@@ -36,7 +42,10 @@ def _id(req: Request) -> str:
 
 
 def _refused(req: Request, exc: SavedViewError) -> Response:
-    return json_response(req, int(exc.http_status), {"error": str(exc)})
+    body: dict[str, str] = {"error": str(exc)}
+    if exc.code:
+        body["code"] = exc.code
+    return json_response(req, int(exc.http_status), body)
 
 
 def all_views(req: Request) -> Response:
@@ -81,6 +90,7 @@ def update(req: Request) -> Response:
     try:
         updated = commands.update(
             *req.actor, _id(req),
+            base_revision=data.get("base_revision"),
             name=data.get("name") if has_name else None,
             search=data.get("search") if has_search else None,
         )
@@ -108,10 +118,34 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, dump_response(SavedViewDeleted, {"status": "deleted"}))
 
 
+_TAG = "saved-views"
+_ID = "/api/saved-views/{view_id}"
+_NOT_FOUND = error("No such Saved View.")
+
 ROUTES = (
-    route("GET", "/api/saved-views", all_views),
-    route("POST", "/api/saved-views", create),
-    route("GET", "/api/saved-views/{view_id}", view),
-    route("PATCH", "/api/saved-views/{view_id}", update),
-    route("DELETE", "/api/saved-views/{view_id}", delete),
+    route("GET", "/api/saved-views", all_views, contract=Operation(
+        "listSavedViews", "List Saved Views", _TAG,
+        {200: ok(list[SavedView], "Saved Views ordered by name, case-insensitively.")})),
+    route("POST", "/api/saved-views", create, contract=Operation(
+        "createSavedView", "Save a named search definition", _TAG,
+        {201: ok(SavedView, "Created."),
+         400: error("Domain refusal: wrong type, empty or too long name, or an incomplete or invalid "
+                    "search definition."),
+         409: error("Name already used, or the library has the maximum number of Saved Views.")},
+        request=body(SavedViewCreateRequest))),
+    route("GET", _ID, view, contract=Operation(
+        "getSavedView", "Read one Saved View", _TAG,
+        {200: ok(SavedView, "The Saved View."), 404: _NOT_FOUND})),
+    route("PATCH", _ID, update, contract=Operation(
+        "updateSavedView", "Rename a Saved View or change its search", _TAG,
+        {200: ok(SavedView, "Updated."),
+         400: error("Nothing to update, or a domain refusal of the name or search definition."),
+         404: _NOT_FOUND,
+         409: error("Name already used by another Saved View, or the view changed since `base_revision` "
+                    "(code `revision_conflict`).")},
+        request=body(SavedViewUpdateRequest))),
+    route("DELETE", _ID, delete, contract=Operation(
+        "deleteSavedView", "Delete a Saved View", _TAG,
+        {200: ok(SavedViewDeleted, "Deleted."), 404: _NOT_FOUND},
+        description="Deleting a view never deletes Works or files.")),
 )

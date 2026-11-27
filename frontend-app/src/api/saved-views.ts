@@ -1,21 +1,22 @@
 /**
  * Typed client for the online-only Saved Views HTTP family.
- * Transport types come from docs/api/openapi-saved-views.json. Runtime parsers
+ * Transport types come from docs/api/openapi.json. Runtime parsers
  * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { SavedView, SavedViewSearch } from './generated/saved-views'
+import type { SavedView, SavedViewSearch } from './generated/openapi'
 
 export type { SavedView, SavedViewSearch }
 
-export const SAVED_VIEWS_CONTRACT_VERSION = '0.1.0'
-
-export const SAVED_VIEW_KEYS = ['id', 'name', 'search', 'created_at', 'updated_at'] as const
+export const SAVED_VIEW_KEYS = ['id', 'name', 'search', 'revision', 'created_at', 'updated_at'] as const
 export const SAVED_VIEW_SEARCH_KEYS = ['mode', 'q', 'tag', 'author', 'publisher'] as const
 export const SAVED_VIEW_DELETED_KEYS = ['status'] as const
 
 export const SAVED_VIEW_MODES = ['all', 'advanced', 'tag'] as const
 export type SavedViewMode = SavedViewSearch['mode']
+
+/** The refusal code of an update whose `base_revision` is no longer current (#873). */
+export const SAVED_VIEW_REVISION_CONFLICT = 'revision_conflict'
 
 /**
  * Client write body. Both fields are always sent. `search` is the closed
@@ -51,6 +52,11 @@ function requireString(value: unknown, message: string): string {
   return value
 }
 
+function requireRevision(value: unknown, message: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) throw invalid(message)
+  return value
+}
+
 function optionalString(value: unknown, message: string): string | null {
   if (value === null) return null
   return requireString(value, message)
@@ -77,6 +83,7 @@ export function parseSavedView(payload: unknown, message: string = READ_ERROR): 
     id: requireString(record.id, message),
     name: requireString(record.name, message),
     search: parseSearch(record.search, message),
+    revision: requireRevision(record.revision, message),
     created_at: optionalString(record.created_at, message),
     updated_at: optionalString(record.updated_at, message),
   }
@@ -113,10 +120,15 @@ export async function createSavedView(input: SavedViewInput): Promise<SavedView>
   return parseSavedView(payload, SAVE_ERROR)
 }
 
-export async function updateSavedView(viewId: string, input: SavedViewInput): Promise<SavedView> {
+/**
+ * `baseRevision` is the view's `revision` when the editor opened. When the
+ * view changed since, this rejects with a 409 whose code is
+ * {@link SAVED_VIEW_REVISION_CONFLICT} and nothing is written.
+ */
+export async function updateSavedView(viewId: string, input: SavedViewInput, baseRevision: number): Promise<SavedView> {
   const payload = await prksApiRequest(viewPath(viewId), {
     method: 'PATCH',
-    body: JSON.stringify({ name: input.name, search: input.search }),
+    body: JSON.stringify({ base_revision: baseRevision, name: input.name, search: input.search }),
   })
   return parseSavedView(payload, UPDATE_ERROR)
 }

@@ -37,6 +37,18 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 from urllib.parse import parse_qs, unquote
 
+from backend.api.pdfs import PDF_RANGE_REPLIES, RANGE
+from backend.api_contract.operation import BINARY, PDF, Header, Operation, Param, Reply, body, error, ok
+from backend.api_contract.processing_items import (
+    ProcessingImportRequest,
+    ProcessingImportResults,
+    ProcessingItem,
+    ProcessingItemImported,
+    ProcessingItemPage,
+    ProcessingItemRefusal,
+    ProcessingItemUpdateRequest,
+    ProcessingItemUploaded,
+)
 from backend.runtime.log_safety import safe_log_label
 from backend.web.http import Request, RequestBody, Response, json_response
 from backend.web.routing import Body, route
@@ -332,14 +344,86 @@ def import_batch(req: Request) -> Response:
     ]})
 
 
+_TAG = "processing-items"
+
+
+def _refusal(description: str) -> Reply:
+    """Every refusal here is ``ProcessingItemRefusal``: ``{error[, code, message, item]}``."""
+    return error(description, ProcessingItemRefusal)
+
+
+_NOT_FOUND = _refusal("No such item in this Library (ENTITY_NOT_FOUND).")
+_PDF = Operation(
+    "getProcessingItemPdf", "A ready item's PDF as uploaded, with Range support", _TAG,
+    {**PDF_RANGE_REPLIES, 404: _refusal("No ready item with that id (ENTITY_NOT_FOUND).")},
+    params=(RANGE,))
+
 ROUTES = (
-    route("GET", COLLECTION, queue),
-    route("POST", COLLECTION, upload, Body.STREAM),
-    route("POST", BATCH_IMPORT, import_batch),
-    route("GET", COLLECTION + "/{item_id}", item),
-    route("PATCH", COLLECTION + "/{item_id}", edit),
-    route("DELETE", COLLECTION + "/{item_id}", delete),
-    route("GET", COLLECTION + "/{item_id}/pdf", pdf),
-    route("HEAD", COLLECTION + "/{item_id}/pdf", pdf),
-    route("POST", COLLECTION + "/{item_id}/import", import_one),
+    route("GET", COLLECTION, queue, contract=Operation(
+        "listProcessingItems", "One page of the queue: ready items, oldest upload first", _TAG,
+        {200: ok(ProcessingItemPage, "The page."),
+         400: _refusal("A limit out of range or a malformed cursor (VALIDATION_ERROR).")},
+        params=(Param("limit", schema={"type": "integer", "minimum": 1, "maximum": 500, "default": 100}),
+                Param("cursor", description="The previous page's `next_cursor`.")))),
+    route("POST", COLLECTION, upload, Body.STREAM, contract=Operation(
+        "uploadProcessingItem", "Upload one PDF into the queue", _TAG,
+        {200: ok(ProcessingItemUploaded, "The key was used: its item."),
+         201: ok(ProcessingItemUploaded, "The item was created."),
+         400: _refusal("A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a body "
+                       "shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE)."),
+         408: _refusal("The body stalled for 30 seconds, or did not arrive within 60 seconds plus its "
+                       "length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT)."),
+         409: _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are "
+                       "missing or no longer match the upload's size or version, and no item was registered "
+                       "(PROCESSING_OBJECT_MISSING)."),
+         411: _refusal("No Content-Length (PROCESSING_LENGTH_REQUIRED)."),
+         413: _refusal("Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE)."),
+         415: _refusal("Not sent as application/pdf (unsupported_media_type), or the body does not start "
+                       "with %PDF- (PROCESSING_NOT_A_PDF).")},
+        request=body(BINARY, media_type=PDF),
+        params=(Param("Idempotency-Key", "header", {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"},
+                      required=True,
+                      description="Minted by the client per file: 1-128 of `A-Z a-z 0-9 . _ : -`."),
+                Param("PRKS-Filename", "header",
+                      description="The original filename, percent-encoded UTF-8; display only."),
+                Param("Content-Length", "header", {"type": "integer", "minimum": 5}, required=True)),
+        description="The body is the PDF. A used `Idempotency-Key` answers with its item without reading "
+                    "the body. Any answer sent before the whole body was read carries "
+                    "`Connection: close`. Duplicates by content are a warning only.")),
+    route("POST", BATCH_IMPORT, import_batch, contract=Operation(
+        "importProcessingItems", "Import several items, each in its own transaction", _TAG,
+        {200: ok(ProcessingImportResults, "A result per item, in order."),
+         400: _refusal("item_ids missing, empty, not strings, or more than 500, or another key sent "
+                       "(VALIDATION_ERROR).")},
+        request=body(ProcessingImportRequest),
+        description="One item's failure never affects another's: each has its own result.")),
+    route("GET", COLLECTION + "/{item_id}", item, contract=Operation(
+        "getProcessingItem", "An item, or the marker an import or delete left", _TAG,
+        {200: ok(ProcessingItem, "The item."), 404: _NOT_FOUND})),
+    route("PATCH", COLLECTION + "/{item_id}", edit, contract=Operation(
+        "updateProcessingItem", "Edit a ready item's draft at its revision", _TAG,
+        {200: ok(ProcessingItem, "The item, one revision on."),
+         400: _refusal("No or a bad revision, or a refused draft value, folder, person, tag or role type "
+                       "(VALIDATION_ERROR)."),
+         404: _NOT_FOUND,
+         409: _refusal("A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, "
+                       "PROCESSING_ITEM_DELETED); `item` is the item as it now is.")},
+        request=body(ProcessingItemUpdateRequest))),
+    route("DELETE", COLLECTION + "/{item_id}", delete, contract=Operation(
+        "deleteProcessingItem", "Remove a ready item; deleting it again changes nothing", _TAG,
+        {200: ok(ProcessingItem, "The deleted marker."), 404: _NOT_FOUND,
+         409: _refusal("The item was imported (PROCESSING_ITEM_IMPORTED).")})),
+    route("GET", COLLECTION + "/{item_id}/pdf", pdf, contract=_PDF),
+    route("HEAD", COLLECTION + "/{item_id}/pdf", pdf, contract=_PDF.head()),
+    route("POST", COLLECTION + "/{item_id}/import", import_one, contract=Operation(
+        "importProcessingItem", "Turn a ready item into a Work, in one transaction", _TAG,
+        {200: ok(ProcessingItemImported, "Imported before: its Work."),
+         201: ok(ProcessingItemImported, "Imported."),
+         400: _refusal("A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object "
+                       "(invalid_request)."),
+         404: _NOT_FOUND,
+         409: _refusal("A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was deleted "
+                       "(IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING).")},
+        request=body({"type": "object"}, "A JSON object, ignored; may be left out.", required=False),
+        description="A retry of a finished import answers with the same Work and creates nothing.")),
 )

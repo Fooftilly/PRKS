@@ -82,6 +82,7 @@ function load(rel) {
 }
 
 global.prksOwnerResource = require(path.join(rootDir, 'frontend/js/owner-resource.js'));
+global.prksSyncReconcile = require(path.join(rootDir, 'frontend/js/sync-reconcile.js'));
 load('frontend/js/tab-context.js');
 load('frontend/js/work-notes-state.js');
 load('frontend/js/ui.js');

@@ -100,6 +100,19 @@ class MaintenanceApiTests(unittest.TestCase):
         summary = staged.summarize(archive)  # pyright: ignore[reportArgumentType]  # a stand-in archive
         self.assertEqual((summary["works"], summary["pdf_files"], summary["persons"]), (2, 2, None))
 
+    def test_a_timestamp_that_is_not_a_string_is_unknown(self) -> None:
+        from types import SimpleNamespace
+
+        from backend.api_contract.maintenance import StagedSummary
+
+        for created_at in (123, None, ["2026"], {"at": 1}):
+            archive = SimpleNamespace(manifest={"created_at": created_at},
+                                      tables={"prks.works": SimpleNamespace(rows=0)}, objects={})
+            summary = staged.summarize(archive)  # pyright: ignore[reportArgumentType]  # a stand-in archive
+            with self.subTest(created_at=created_at):
+                self.assertIsNone(summary["created_at"])
+                StagedSummary.model_validate(summary)
+
     def test_progress_follows_a_long_backup_until_it_publishes(self) -> None:
         # The token exists only in the ``ready`` line: the stream must not give
         # up on a backup that runs long, however many polls it takes.

@@ -5,6 +5,7 @@ import {
   openingFromSearchHash,
   openingFromView,
   saveSavedView,
+  SAVED_VIEW_CHANGED_ELSEWHERE,
   SAVED_VIEW_CREATE_FAILURE,
   SAVED_VIEW_UPDATE_FAILURE,
   stateFromOpening,
@@ -14,6 +15,7 @@ import { savedViewActionMessage } from './records'
 const deps = (over: Partial<Parameters<typeof saveSavedView>[1]> = {}) => ({
   create: vi.fn(async () => ({ id: 'SV-NEW' })),
   update: vi.fn(async () => ({})),
+  read: vi.fn(async () => ({ revision: 5 })),
   actionMessage: savedViewActionMessage,
   ...over,
 })
@@ -22,6 +24,7 @@ describe('Saved View dialog rules', () => {
   it('opens blank as an Advanced search', () => {
     expect(stateFromOpening(undefined)).toEqual({
       viewId: '',
+      baseRevision: null,
       draft: { name: '', mode: 'advanced', q: '', tag: '', author: '', publisher: '' },
     })
   })
@@ -85,9 +88,10 @@ describe('Saved View dialog rules', () => {
     expect(openingFromView(null)).toBeNull()
     expect(openingFromView({ name: 'x' })).toBeNull()
     expect(
-      openingFromView({ id: 'SV-M', name: 'Main', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' } }),
+      openingFromView({ id: 'SV-M', name: 'Main', search: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' }, revision: 7 }),
     ).toEqual({
       viewId: 'SV-M',
+      baseRevision: 7,
       name: 'Main',
       definition: { mode: 'tag', q: '', tag: 'T', author: '', publisher: '' },
     })
@@ -115,9 +119,9 @@ describe('Saved View dialog rules', () => {
 
   it('updates the same view', async () => {
     const d = deps()
-    const outcome = await saveSavedView(stateFromOpening({ viewId: 'SV-1', name: 'Renamed' }), d)
+    const outcome = await saveSavedView(stateFromOpening({ viewId: 'SV-1', baseRevision: 2, name: 'Renamed' }), d)
     expect(outcome).toEqual({ status: 'updated' })
-    expect(d.update).toHaveBeenCalledWith('SV-1', expect.objectContaining({ name: 'Renamed' }))
+    expect(d.update).toHaveBeenCalledWith('SV-1', expect.objectContaining({ name: 'Renamed' }), 2)
     expect(d.create).not.toHaveBeenCalled()
   })
 
@@ -143,7 +147,30 @@ describe('Saved View dialog rules', () => {
       status: 'failed',
       message: SAVED_VIEW_CREATE_FAILURE,
     })
-    expect(await saveSavedView(stateFromOpening({ viewId: 'SV-1', name: 'X' }), lost)).toEqual({
+    expect(await saveSavedView(stateFromOpening({ viewId: 'SV-1', baseRevision: 0, name: 'X' }), lost)).toEqual({
+      status: 'failed',
+      message: SAVED_VIEW_UPDATE_FAILURE,
+    })
+  })
+
+  it('turns a stale edit into a decision and measures the next Save against the current view (#873)', async () => {
+    const d = deps({
+      update: vi.fn(async () => {
+        throw new PrksApiError('This Saved View changed elsewhere.', 409, 'revision_conflict')
+      }),
+      read: vi.fn(async () => ({ revision: 6 })),
+    })
+    const outcome = await saveSavedView(stateFromOpening({ viewId: 'SV-1', baseRevision: 4, name: 'Mine' }), d)
+    expect(outcome).toEqual({ status: 'conflict', message: SAVED_VIEW_CHANGED_ELSEWHERE, baseRevision: 6 })
+    expect(d.update).toHaveBeenCalledWith('SV-1', expect.objectContaining({ name: 'Mine' }), 4)
+    expect(d.read).toHaveBeenCalledWith('SV-1')
+
+    const gone = deps({ update: d.update, read: vi.fn(async () => null) })
+    expect(await saveSavedView(stateFromOpening({ viewId: 'SV-1', baseRevision: 4, name: 'Mine' }), gone)).toEqual({
+      status: 'failed',
+      message: 'This Saved View changed elsewhere.',
+    })
+    expect(await saveSavedView(stateFromOpening({ viewId: 'SV-1', name: 'No base' }), deps())).toEqual({
       status: 'failed',
       message: SAVED_VIEW_UPDATE_FAILURE,
     })

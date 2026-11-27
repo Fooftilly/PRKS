@@ -119,7 +119,9 @@ def summarize(archive: Archive) -> dict[str, Any]:
         member = archive.tables.get("prks." + table)
         return member.rows if member is not None else None
 
-    return {"created_at": archive.manifest.get("created_at"), "works": rows("works"),
+    created_at = archive.manifest.get("created_at")
+    # Optional manifest metadata that R0 does not check: anything but a string is unknown.
+    return {"created_at": created_at if isinstance(created_at, str) else None, "works": rows("works"),
             # Only Asset bytes count as files; portraits and other objects do not.
             "pdf_files": sum(1 for key in archive.objects if key.namespace == NAMESPACE_ASSET_OBJECTS),
             "persons": rows("persons"),

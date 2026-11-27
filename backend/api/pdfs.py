@@ -19,6 +19,7 @@ import io
 import logging
 from typing import BinaryIO
 
+from backend.api_contract.operation import BINARY, PDF, Header, Operation, Param, Reply, ok, plain
 from backend.web.byte_range import parse_byte_range
 from backend.storage.objects import (
     NAMESPACE_ASSET_OBJECTS,
@@ -141,7 +142,33 @@ def asset_content(req: Request) -> Response:
     return pdf_response(req, file_size, stream)
 
 
+_LENGTH = Header("The bytes in this answer.", {"type": "integer", "minimum": 0}, required=True)
+_ACCEPT_RANGES = Header("Always `bytes`.", {"type": "string", "enum": ["bytes"]}, required=True)
+_NO_STORE_HEADER = Header("Always no-store.", {"type": "string", "const": _NO_STORE[0][1]}, required=True)
+#: The answers of :func:`pdf_response`, shared by every route that streams a PDF through it.
+PDF_RANGE_REPLIES: dict[int, Reply] = {
+    200: ok(BINARY, "The whole file.", media_type=PDF, headers={
+        "Accept-Ranges": _ACCEPT_RANGES, "Cache-Control": _NO_STORE_HEADER, "Content-Length": _LENGTH}),
+    206: ok(BINARY, "The requested range.", media_type=PDF, headers={
+        "Accept-Ranges": _ACCEPT_RANGES, "Cache-Control": _NO_STORE_HEADER, "Content-Length": _LENGTH,
+        "Content-Range": Header("The range sent, as `bytes <first>-<last>/<size>`.", required=True)}),
+    416: Reply("The range is outside the file.", headers={
+        "Content-Range": Header("The file size, as `bytes */<size>`.", required=True)}),
+}
+RANGE = Param("Range", "header", description=(
+    "One byte range: `bytes=<first>-[<last>]`, or `bytes=-<suffix length>` for the last bytes."))
+
+VERSION = Param("v", description=(
+    "The content version a Work's `file_path` names: the first 16 hex digits of the bytes' SHA-256. "
+    "A version that no longer names the Asset's bytes is 404."))
+
+_PDF = Operation(
+    "getAssetContent", "A managed Asset's bytes in this Library, with Range support", "works",
+    {**PDF_RANGE_REPLIES, 404: plain(
+        "No managed Asset of this Library by that id, or `v` no longer names its bytes.")},
+    params=(RANGE, VERSION))
+
 ROUTES = (
-    route("GET", "/api/assets/{asset_id}/content", asset_content),
-    route("HEAD", "/api/assets/{asset_id}/content", asset_content),
+    route("GET", "/api/assets/{asset_id}/content", asset_content, contract=_PDF),
+    route("HEAD", "/api/assets/{asset_id}/content", asset_content, contract=_PDF.head()),
 )
