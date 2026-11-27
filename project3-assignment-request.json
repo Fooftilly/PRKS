@@ -1,13 +1,77 @@
 {
   "version": 1,
   "kind": "implementation-order",
-  "operation": "apply",
+  "operation": "check",
   "items": [
     {
-      "number": 1473,
-      "order": 20,
+      "number": 1466,
+      "order": 40,
       "expected_before": null,
-      "reason": "First live order-only acceptance probe for #1478; confirmed open stale ACK correctness issue #1473, reviewed #1461 and current open PRs; no native blockers. Provisional first rank, not execution authorization.",
+      "reason": "Plan cross-Library schema and route isolation checks first; #1461 and #310; prerequisite PRs #1458 and #1455 merged. No current native blocker.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1464,
+      "order": 60,
+      "expected_before": null,
+      "reason": "Establish PostgreSQL ledger outcome and replay invariants before browser fault injection; #1461 and #391. Pin current device behavior pending #1175.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1465,
+      "order": 80,
+      "expected_before": null,
+      "reason": "Exercise real browser queue and pending intent using ledger answers from #1464; sequence after that test foundation. Related #1425 and #391.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1462,
+      "order": 100,
+      "expected_before": null,
+      "reason": "Make existing engineering allowlists fail on stale paths before extending storage rules; #1461 and #651. Asset transition PR #1448 merged.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1463,
+      "order": 120,
+      "expected_before": null,
+      "reason": "Retarget managed-file invariants to the merged Asset storage model; #1461 and #311. Sequence after #1462; #1448 merged.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1175,
+      "order": 140,
+      "expected_before": null,
+      "reason": "Review device ownership before multi-user Libraries under #310. Separate design/approval gate; not a claim of a current production exploit.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1371,
+      "order": 160,
+      "expected_before": null,
+      "reason": "Named saved workspaces explicitly required by v0.9 tracker #615 and roadmap #58; preserve dirty-editor guard and typed workspace model.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1467,
+      "order": 180,
+      "expected_before": null,
+      "reason": "Enforce canonical frontend network, storage and bridge owners under #1461 and #179 after correctness work; #1454 merged. Avoid dependency-artifact overlap.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1468,
+      "order": 200,
+      "expected_before": null,
+      "reason": "Incrementally type-check sync, Library scope and object lifecycle after core invariant work; #1461 and #651; prerequisite PRs #1448 and #1455 merged.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
