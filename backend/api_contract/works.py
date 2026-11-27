@@ -278,12 +278,18 @@ class WorkMetadataState(BaseModel):
 
 
 class WorkSourceState(BaseModel):
-    """``GET /api/works/:id/source-state``: the source identity's revision only."""
+    """``GET /api/works/:id/source-state``: the stored source and its revision, from one read."""
 
     model_config = _FORBID
 
     work_id: str
     revision: int
+    source_kind: Literal["pdf", "video", ""] = Field(description="Empty: the Work has no Asset.")
+    provider: str = Field(description="Empty unless a video.")
+    provider_id: str = Field(description="Empty unless a video.")
+    source_url: str = Field(description="Empty when unset.")
+    thumb_url: Optional[str] = Field(description="Null when the Work has no Asset.")
+    urldate: Optional[str]
 
 
 class WorkNotesState(BaseModel):
@@ -342,7 +348,7 @@ class WorkCreateRequest(BaseModel):
     provider: str = omittable()
     provider_id: str = omittable()
     thumb_url: str = omittable()
-    thumb_page: Optional[int] = omittable()
+    thumb_page: Optional[Union[int, str]] = omittable("Not a positive integer: no preferred page.")
     urldate: str = omittable()
     folder_id: Optional[str] = Field(default=None, description="Left out or null: Uncategorized.")
     playlist_id: str = omittable("A Playlist to add the Work to (best effort).")
@@ -372,7 +378,7 @@ class WorkPatch(BaseModel):
     private_notes: Optional[str] = omittable()
     author_text: Optional[str] = omittable()
     doc_type: Optional[str] = omittable()
-    year: Optional[Union[str, int]] = omittable("A number is stored as its decimal text.")
+    year: Optional[Union[str, float]] = omittable("A number is stored as its text.")
     published_date: Optional[str] = omittable()
     publisher: Optional[str] = omittable()
     location: Optional[str] = omittable()

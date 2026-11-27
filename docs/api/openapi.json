@@ -3377,7 +3377,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q``."
+            "description": "``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q`` and the author and publisher filters. Ignored with ``tag``: the Tag filter wins."
           }
         ],
         "responses": {
@@ -4191,7 +4191,7 @@
             }
           },
           "400": {
-            "description": "A refused value, length, Folder or note. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+            "description": "A refused value, length, Folder or note. The Folder move, the note and the metadata commit in that order, so a later refusal leaves the earlier steps applied: read the Work again. A changed file_path is refused (501) before any step. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4622,7 +4622,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "1-based page; else the Work's thumbnail page, else 1. Not a number: the default."
+            "description": "1-based page; else the Work's thumbnail page, else 1. Not a number: the default. Past the last page: page 1."
           }
         ],
         "responses": {
@@ -10116,9 +10116,13 @@
                 "type": "integer"
               },
               {
+                "type": "string"
+              },
+              {
                 "type": "null"
               }
             ],
+            "description": "Not a positive integer: no preferred page.",
             "title": "Thumb Page"
           },
           "urldate": {
@@ -10846,13 +10850,13 @@
                 "type": "string"
               },
               {
-                "type": "integer"
+                "type": "number"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "A number is stored as its decimal text.",
+            "description": "A number is stored as its text.",
             "title": "Year"
           },
           "published_date": {
@@ -10979,10 +10983,10 @@
           "thumb_page": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "integer"
               },
               {
-                "type": "integer"
+                "type": "string"
               },
               {
                 "type": "null"
@@ -11253,7 +11257,7 @@
       },
       "WorkSourceState": {
         "additionalProperties": false,
-        "description": "``GET /api/works/:id/source-state``: the source identity's revision only.",
+        "description": "``GET /api/works/:id/source-state``: the stored source and its revision, from one read.",
         "properties": {
           "work_id": {
             "title": "Work Id",
@@ -11262,11 +11266,65 @@
           "revision": {
             "title": "Revision",
             "type": "integer"
+          },
+          "source_kind": {
+            "description": "Empty: the Work has no Asset.",
+            "enum": [
+              "pdf",
+              "video",
+              ""
+            ],
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "provider": {
+            "description": "Empty unless a video.",
+            "title": "Provider",
+            "type": "string"
+          },
+          "provider_id": {
+            "description": "Empty unless a video.",
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "source_url": {
+            "description": "Empty when unset.",
+            "title": "Source Url",
+            "type": "string"
+          },
+          "thumb_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the Work has no Asset.",
+            "title": "Thumb Url"
+          },
+          "urldate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urldate"
           }
         },
         "required": [
           "work_id",
-          "revision"
+          "revision",
+          "source_kind",
+          "provider",
+          "provider_id",
+          "source_url",
+          "thumb_url",
+          "urldate"
         ],
         "type": "object"
       },

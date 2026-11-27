@@ -2898,8 +2898,11 @@ export interface components {
             status?: string;
             /** Text Content */
             text_content?: string;
-            /** Thumb Page */
-            thumb_page?: number | null;
+            /**
+             * Thumb Page
+             * @description Not a positive integer: no preferred page.
+             */
+            thumb_page?: number | string | null;
             /** Thumb Url */
             thumb_url?: string;
             /** Title */
@@ -3138,7 +3141,7 @@ export interface components {
              */
             text_content?: string;
             /** Thumb Page */
-            thumb_page?: string | number | null;
+            thumb_page?: number | string | null;
             /** Title */
             title?: string;
             /** Urldate */
@@ -3147,7 +3150,7 @@ export interface components {
             volume?: string | null;
             /**
              * Year
-             * @description A number is stored as its decimal text.
+             * @description A number is stored as its text.
              */
             year?: string | number | null;
         };
@@ -3190,10 +3193,38 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
-        /** @description ``GET /api/works/:id/source-state``: the source identity's revision only. */
+        /** @description ``GET /api/works/:id/source-state``: the stored source and its revision, from one read. */
         WorkSourceState: {
+            /**
+             * Provider
+             * @description Empty unless a video.
+             */
+            provider: string;
+            /**
+             * Provider Id
+             * @description Empty unless a video.
+             */
+            provider_id: string;
             /** Revision */
             revision: number;
+            /**
+             * Source Kind
+             * @description Empty: the Work has no Asset.
+             * @enum {string}
+             */
+            source_kind: "pdf" | "video" | "";
+            /**
+             * Source Url
+             * @description Empty when unset.
+             */
+            source_url: string;
+            /**
+             * Thumb Url
+             * @description Null when the Work has no Asset.
+             */
+            thumb_url: string | null;
+            /** Urldate */
+            urldate: string | null;
             /** Work Id */
             work_id: string;
         };
@@ -5590,7 +5621,7 @@ export interface operations {
     searchWorks: {
         parameters: {
             query?: {
-                /** @description ``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q``. */
+                /** @description ``1``, ``true`` or ``yes``: OR one term across the filters and add the Works whose PDF text matches ``q`` and the author and publisher filters. Ignored with ``tag``: the Tag filter wins. */
                 any?: string;
                 /** @description An author name. */
                 author?: string;
@@ -5971,7 +6002,7 @@ export interface operations {
                     "application/json": components["schemas"]["WorkStatus"];
                 };
             };
-            /** @description A refused value, length, Folder or note. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            /** @description A refused value, length, Folder or note. The Folder move, the note and the metadata commit in that order, so a later refusal leaves the earlier steps applied: read the Work again. A changed file_path is refused (501) before any step. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -6224,7 +6255,7 @@ export interface operations {
     getWorkThumbnail: {
         parameters: {
             query?: {
-                /** @description 1-based page; else the Work's thumbnail page, else 1. Not a number: the default. */
+                /** @description 1-based page; else the Work's thumbnail page, else 1. Not a number: the default. Past the last page: page 1. */
                 page?: string;
             };
             header?: never;

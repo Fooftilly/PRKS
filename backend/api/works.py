@@ -601,7 +601,9 @@ ROUTES = (
     route("PATCH", COLLECTION + "/{work_id}", update, contract=Operation(
         "updateWork", "Change a Work's metadata, notes or Folder", _TAG,
         {200: ok(WorkStatus, "Updated."),
-         400: error("A refused value, length, Folder or note."),
+         400: error("A refused value, length, Folder or note. The Folder move, the note and the metadata "
+                    "commit in that order, so a later refusal leaves the earlier steps applied: read the "
+                    "Work again. A changed file_path is refused (501) before any step."),
          404: error("No Work with that id (not_found)."),
          409: error("The Research Note was refused."),
          501: _NOT_PORTED},
