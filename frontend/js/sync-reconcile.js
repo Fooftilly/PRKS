@@ -204,7 +204,7 @@ var prksSyncReconcile = (function(exports) {
 	function acknowledgeEditBase(entry, write) {
 		if (!isFieldBase(entry)) return null;
 		if (entry.revision > write.ackRevision) return void 0;
-		if (entry.revision === write.ackRevision) return typeof entry.ackOp === "string" ? void 0 : {
+		if (entry.revision === write.ackRevision) return {
 			value: entry.value,
 			revision: entry.revision
 		};

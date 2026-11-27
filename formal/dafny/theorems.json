@@ -46,7 +46,7 @@
     },
     "AcknowledgedPairIsTheWriteAtTheAck": {
       "file": "Reconcile.dfy",
-      "sha256": "b694db7bb83fd9205aa8f4b33160b8a0dcba74b05b2ec34a7d5fa1857fc73d7f"
+      "sha256": "0dc034671f2baab2c8654fb660817b52c3e19695569badc9849ed0f077dab656"
     },
     "InvInit": {
       "file": "Sequence.dfy",

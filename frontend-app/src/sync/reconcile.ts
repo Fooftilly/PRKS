@@ -387,9 +387,7 @@ export function acknowledgeEditBase(
   if (!isFieldBase(entry)) return null
   if (entry.revision > write.ackRevision) return undefined
   /* A no-op write is acknowledged at the revision an earlier write produced: that write keeps the stamp. */
-  if (entry.revision === write.ackRevision) {
-    return typeof entry.ackOp === 'string' ? undefined : { value: entry.value, revision: entry.revision }
-  }
+  if (entry.revision === write.ackRevision) return { value: entry.value, revision: entry.revision }
   return entry.revision === write.baseRevision ? { value: write.value, revision: write.ackRevision } : null
 }
 
