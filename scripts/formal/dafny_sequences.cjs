@@ -38,6 +38,7 @@ function toEvent(e) {
     case 'Open': return S.Event.create_Open();
     case 'Save': return S.Event.create_Save(toVal(e.v));
     case 'Send': return S.Event.create_Send();
+    case 'Discard': return S.Event.create_Discard();
     case 'OtherWrite': return S.Event.create_OtherWrite(toVal(e.v));
     case 'Deliver': return S.Event.create_Deliver();
     case 'Replay': return S.Event.create_Replay(nat(e.id));
@@ -64,6 +65,7 @@ function modelView(s) {
             ackOp: some(s.dtor_editBase.dtor_ackOp, text),
         },
         op: some(s.dtor_op, o => ({ id: num(o.dtor_id), value: ofVal(o.dtor_value), base: num(o.dtor_base), created: num(o.dtor_created) })),
+        refused: s.dtor_refused,
         ledger: mapEntries(s.dtor_ledger).map(([k, v]) => [k, num(v)]),
         form: some(s.dtor_form, f => ({
             shown: ofVal(f.dtor_shown),
@@ -80,7 +82,7 @@ const canonical = v => v.trim();
 const opId = id => String(id);
 
 function initial() {
-    return { history: ['A'], now: 0, cache: null, proj: null, editBase: null, op: null, ops: {}, ledger: {}, form: null, nextId: 0 };
+    return { history: ['A'], now: 0, cache: null, proj: null, editBase: null, op: null, refused: false, ops: {}, ledger: {}, form: null, nextId: 0 };
 }
 const cur = s => s.history.length - 1;
 const inLedger = (s, id) => Object.prototype.hasOwnProperty.call(s.ledger, id);
@@ -89,8 +91,10 @@ function implEnabled(mode, s, e) {
     switch (e.kind) {
     case 'Read': case 'ReadProjection': case 'ReadEditBase': return e.r <= cur(s);
     case 'Open': return s.op !== null || s.cache !== null;
-    case 'Save': return s.form !== null && (s.op === null || !inLedger(s, s.op.id));
-    case 'Send': return s.op !== null && !inLedger(s, s.op.id) && s.op.base <= cur(s);
+    /* A queued edit that is in flight or in conflict makes a Save scope_busy. */
+    case 'Save': return s.form !== null && (s.op === null || (!inLedger(s, s.op.id) && !s.refused));
+    case 'Send': return s.op !== null && !inLedger(s, s.op.id) && !s.refused && s.op.base <= cur(s);
+    case 'Discard': return s.refused;
     case 'OtherWrite': case 'Reload': return true;
     case 'Deliver': return s.op !== null && inLedger(s, s.op.id);
     case 'Replay': return mode === 'M0' && inLedger(s, e.id) && Object.prototype.hasOwnProperty.call(s.ops, e.id);
@@ -191,10 +195,11 @@ function implStep(mode, s0, e, C, stats) {
     case 'Send': {
         const answer = serve(s, s.op);
         stats.hit('server:' + (answer.code === 'REVISION_CONFLICT' ? 'conflict' : answer.changed ? 'apply' : 'no-op'));
-        if (answer.code === 'REVISION_CONFLICT') s.op = null;
+        if (answer.code === 'REVISION_CONFLICT') s.refused = true;
         else s.ledger[s.op.id] = answer.revision;
         break;
     }
+    case 'Discard': s.op = null; s.refused = false; break;
     case 'OtherWrite': s.history.push(canonical(e.v)); break;
     case 'Deliver': reconcile(mode, s, s.op, s.ledger[s.op.id], C, stats); s.op = null; break;
     case 'Replay': reconcile(mode, s, s.ops[e.id], s.ledger[e.id], C, stats); break;
@@ -216,6 +221,7 @@ function implView(s) {
         proj: s.proj,
         editBase: s.editBase && { value: s.editBase.value, revision: s.editBase.revision, ackOp: stringOr(s.editBase.ackOp) },
         op: s.op && { id: s.op.id, value: s.op.value, base: s.op.base, created: s.op.created },
+        refused: s.refused,
         ledger: Object.keys(s.ledger).map(Number).sort((a, b) => a - b).map(k => [k, s.ledger[k]]),
         form: s.form && {
             shown: s.form.shown,
@@ -237,7 +243,7 @@ function candidates(s, budget) {
         out.push({ kind: 'ReadProjection', r });
         out.push({ kind: 'ReadEditBase', r, stored: true }, { kind: 'ReadEditBase', r, stored: false });
     }
-    out.push({ kind: 'Open' }, { kind: 'Send' }, { kind: 'Deliver' });
+    out.push({ kind: 'Open' }, { kind: 'Send' }, { kind: 'Discard' }, { kind: 'Deliver' });
     for (const v of VALUES) out.push({ kind: 'Save', v });
     if (budget.other > 0) for (const v of VALUES) out.push({ kind: 'OtherWrite', v });
     if (budget.reload > 0) out.push({ kind: 'Reload' });
@@ -300,10 +306,10 @@ function explore(mode, C) {
 
 const REQUIRED = [
     'event:Read', 'event:ReadProjection', 'event:ReadEditBase', 'event:Open', 'event:Save', 'event:Send',
-    'event:OtherWrite', 'event:Deliver', 'event:Reload',
+    'event:OtherWrite', 'event:Deliver', 'event:Discard', 'event:Reload',
     'save:queued', 'save:refused', 'save:unchanged', 'save:cancelled', 'save:revert-queued', 'server:apply', 'server:no-op', 'server:conflict',
     'reconcile:superseded', 'cache:apply', 'cache:unchanged', 'cache:unproven',
-    'editBase:keep', 'editBase:clear', 'editBase:pair',
+    'editBase:keep', 'editBase:pair',
 ];
 const REQUIRED_M0 = ['event:Replay', 'event:ClockStep'];
 

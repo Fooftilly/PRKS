@@ -13,7 +13,8 @@
 //
 // The server is an oracle: it stores Canonical(value), applies a write only on
 // its current revision, and acknowledges a write whose value it already holds,
-// at any base, with a no-op ACK at the current revision. A read holds a real server state. The cache
+// at any base, with a no-op ACK at the current revision. Any other stale write
+// is a conflict: it stays queued and blocks the field's saves until discarded. A read holds a real server state. The cache
 // write after a read may fail. Each event advances the clock by one, except
 // ClockStep. Fields are independent in production, so one field is modelled;
 // a list row shares its snapshot's read time, which is the case modelled here.
@@ -47,6 +48,7 @@ module Sequence {
     proj: Option<nat>,
     editBase: Entry<Val>,
     op: Option<Op>,
+    refused: bool,
     form: Option<Form>,
     ops: map<nat, Op>,
     ledger: map<nat, nat>,
@@ -59,6 +61,7 @@ module Sequence {
     | Open
     | Save(v: Val)
     | Send
+    | Discard
     | OtherWrite(v: Val)
     | Deliver
     | Replay(id: nat)
@@ -66,7 +69,7 @@ module Sequence {
     | Reload
 
   function Init(): State {
-    State([A], 0, None, None, Broken, None, None, map[], map[], 0)
+    State([A], 0, None, None, Broken, None, false, None, map[], map[], 0)
   }
 
   predicate Wf(s: State) { |s.history| >= 1 }
@@ -80,8 +83,9 @@ module Sequence {
     case ReadProjection(r) => r <= Cur(s)
     case ReadEditBase(r, _) => r <= Cur(s)
     case Open => s.op.Some? || s.cache.Some?
-    case Save(_) => s.form.Some? && (s.op.None? || s.op.value.id !in s.ledger)
-    case Send => s.op.Some? && s.op.value.id !in s.ledger && s.op.value.base <= Cur(s)
+    case Save(_) => s.form.Some? && (s.op.None? || (s.op.value.id !in s.ledger && !s.refused))
+    case Send => s.op.Some? && s.op.value.id !in s.ledger && !s.refused && s.op.value.base <= Cur(s)
+    case Discard => s.refused
     case OtherWrite(_) => true
     case Deliver => s.op.Some? && s.op.value.id in s.ledger && s.ledger[s.op.value.id] <= Cur(s)
     case Replay(id) => m == M0 && id in s.ledger && id in s.ops && s.ledger[id] <= Cur(s)
@@ -130,7 +134,7 @@ module Sequence {
   function Received(s: State): State requires Wf(s) && s.op.Some? {
     var o := s.op.value;
     if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])
-    else if o.base != Cur(s) then s.(op := None)
+    else if o.base != Cur(s) then s.(refused := true)
     else s.(history := s.history + [Canonical(o.value)], ledger := s.ledger[o.id := Cur(s) + 1])
   }
 
@@ -176,6 +180,7 @@ module Sequence {
     case Open => Opened(s)
     case Save(v) => Saved(s, v)
     case Send => Received(s)
+    case Discard => s.(op := None, refused := false)
     case OtherWrite(v) => s.(history := s.history + [Canonical(v)])
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
     case Replay(id) => Reconciled(m, s, s.ops[id], s.ledger[id])
@@ -273,6 +278,7 @@ module Sequence {
       PinKinds(shown, s.editBase, own);
     }
     case Save(v) => {}
+    case Discard => {}
     case Send => {
       var o := s.op.value;
       if o.base == Cur(s) && Canonical(o.value) != s.history[Cur(s)] {
@@ -509,7 +515,7 @@ module Sequence {
   lemma PinnedBaseRefusesAnInterveningWrite() returns (ss: seq<State>, es: seq<Event>)
     ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
     ensures es[|es| - 1] == Send && ss[|es| - 1].op == Some(Op(0, C, 0, 5, 1, A))
-    ensures ss[|es|].history == [A, B] && ss[|es|].op.None?
+    ensures ss[|es|].history == [A, B] && ss[|es|].refused
   {
     ss, es := Start(M1);
     ss, es := Push(M1, ss, es, Read(0, true));

@@ -101,8 +101,8 @@
     "group": "model",
     "file": "Sequence.dfy",
     "name": "stale convergent write refused",
-    "from": "    if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])\n    else if o.base != Cur(s) then s.(op := None)",
-    "to": "    if o.base != Cur(s) then s.(op := None)\n    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])"
+    "from": "    if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])\n    else if o.base != Cur(s) then s.(refused := true)",
+    "to": "    if o.base != Cur(s) then s.(refused := true)\n    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])"
   },
   {
     "group": "model",

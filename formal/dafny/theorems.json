@@ -94,7 +94,7 @@
     },
     "PinnedBaseRefusesAnInterveningWrite": {
       "file": "Sequence.dfy",
-      "sha256": "1d2f3097dda3ba83477eae19edbb599daa29ce76837efbae04a41d6cf14e359e"
+      "sha256": "e4d78adc745a49028b3e2869a4405e8b4bb1da2cae1201c91dce99f8b8db208e"
     },
     "ConvergentStaleWriteIsAcknowledged": {
       "file": "Sequence.dfy",
