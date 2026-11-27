@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
+import { setBibtexProfileFlush, trackBibtexProfileWrite } from '../citations/bibtex-profile'
 import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
 import ImportedCitationStyles from './ImportedCitationStyles.vue'
 import { bibtexExportSummary } from './bibtex-summary'
@@ -113,17 +114,20 @@ function idle(): boolean {
  * after the one before it, so an older patch can never land after a newer
  * one. Once nothing of ours is waiting, the switches show what PRKS holds:
  * our toggles merged with any another session saved. */
-function send(patch: Record<string, boolean>): Promise<void> {
+function send(patch: Record<string, boolean>): Promise<unknown> {
   inFlight += 1
   waiting.push(patch)
   const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
     .then(() => {
       confirmed = storedMap()
+      return true
     }, (error: unknown) => {
       failed = true
       console.warn(error)
+      return false
     })
-  queue = run
+  queue = run.then(() => undefined)
+  trackBibtexProfileWrite(run)
   return run.finally(() => {
     inFlight -= 1
     waiting.splice(waiting.indexOf(patch), 1)
@@ -185,7 +189,14 @@ async function restoreDefaults(): Promise<void> {
   await send(allTrue)
 }
 
+function flushDebounced(): void {
+  window.clearTimeout(timer)
+  timer = 0
+  flush()
+}
+
 onMounted(async () => {
+  setBibtexProfileFlush(flushDebounced)
   applyMap({})
   try {
     await window.prksLoadAppSettings?.()
@@ -203,10 +214,9 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.clearTimeout(timer)
-  timer = 0
+  setBibtexProfileFlush(null)
   // A toggle still waiting for its debounce is sent, not dropped.
-  flush()
+  flushDebounced()
 })
 </script>
 

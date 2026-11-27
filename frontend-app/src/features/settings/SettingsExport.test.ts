@@ -1,5 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CitationExportError, exportCitations } from '../citations/export'
 import { CITATION_STYLE_EVENT, resetImportedStylesForTests } from '../citations/styles'
 import { settingsActiveCategory } from './navigation'
 import SettingsExport from './SettingsExport.vue'
@@ -220,6 +221,66 @@ describe('SettingsExport BibTeX toggles', () => {
     held[1]()
     await flushPromises()
     expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: false, url: false })
+    wrapper.unmount()
+  })
+
+  /* PRKS builds BibTeX from the profile it saved, never from this tab's cache. */
+  function serveCitations(): { posts: number } {
+    const seen = { posts: 0 }
+    const fallback = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (path !== '/api/citations') return fallback(path, init)
+      seen.posts += 1
+      const doi = server.doi ? '  doi = {10.1/x},\n' : ''
+      return new Response(JSON.stringify({ format: 'bibtex', text: `@book{w1,\n${doi}}`, missing: [] }))
+    }))
+    return seen
+  }
+
+  it('exports BibTeX only after a held toggle patch is saved', async () => {
+    const copied: string[] = []
+    vi.stubGlobal('prksCopyTextToClipboard', async (text: string) => { copied.push(text) })
+    const seen = serveCitations()
+    const held = holdPatches()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    vi.advanceTimersByTime(450)
+    await flushPromises()
+    expect(held).toHaveLength(1)
+    const exported = exportCitations(['W-1'], 'bibtex')
+    await flushPromises()
+    expect(seen.posts).toBe(0)
+    held[0]()
+    await exported
+    expect(seen.posts).toBe(1)
+    expect(copied).toEqual(['@book{w1,\n}'])
+    wrapper.unmount()
+  })
+
+  it('sends a toggle still in its debounce before a BibTeX export', async () => {
+    const copied: string[] = []
+    vi.stubGlobal('prksCopyTextToClipboard', async (text: string) => { copied.push(text) })
+    serveCitations()
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    await exportCitations(['W-1'], 'bibtex')
+    expect(patches).toEqual([{ doi: false }])
+    expect(copied).toEqual(['@book{w1,\n}'])
+    wrapper.unmount()
+  })
+
+  it('refuses a BibTeX export when a pending toggle patch fails', async () => {
+    const seen = serveCitations()
+    win.prksPatchAppSettings = vi.fn(async () => { throw new Error('offline') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const wrapper = mount(SettingsExport)
+    await flushPromises()
+    await wrapper.get('[data-bibtex-field="doi"]').trigger('click')
+    await expect(exportCitations(['W-1'], 'bibtex')).rejects.toBeInstanceOf(CitationExportError)
+    expect(seen.posts).toBe(0)
+    warn.mockRestore()
     wrapper.unmount()
   })
 
