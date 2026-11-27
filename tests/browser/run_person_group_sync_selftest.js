@@ -1052,6 +1052,71 @@ async function aGroupDeletedElsewhereSaysSo() {
     }
 }
 
+/* #894: tab Y opened Edit before tab X queued a rename. Y's Save is refused,
+ * and Cancel shows X's queued name from the effective record, with no server. */
+async function aRefusedSaveReopensOnTheOtherTabsEdit() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+        record: globalThis.prksPersonGroupRecordFor,
+    };
+    const alerts = [];
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "person-group-state") {
+            const fields = {};
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        return { value: { id, name: "Group O", description: "", parent: null }, source: "server" };
+    };
+    const tab = (tabId) => {
+        let entity = { id: "PG-O", name: "Group O", description: "", parent: null };
+        return {
+            tabId, destroyed: false, generation: 1,
+            ui: { personGroupEditing: false, personGroupEditSession: 0 },
+            lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-O" } },
+            getEntity: () => entity,
+            setEntity: (_kind, value) => { entity = value; },
+        };
+    };
+    const x = tab("tab-x");
+    const y = tab("tab-y");
+    const rename = name => ({ name, description: "", parent_id: "", parent_name: "" });
+    try {
+        globalThis.openPersonGroupEdit(y);
+        await y.ui.personGroupEditPin.base;
+        globalThis.openPersonGroupEdit(x);
+        const saved = await globalThis.savePersonGroupEditor(x, "PG-O", rename("From X"),
+            x.ui.personGroupFieldBaseline, x.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true, "tab X queues its rename");
+        const refused = await globalThis.savePersonGroupEditor(y, "PG-O", rename("From Y"),
+            y.ui.personGroupFieldBaseline, y.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "tab Y's Save is refused");
+        assert.ok(alerts.some(m => m.indexOf("unsent change") !== -1), "and says another tab has an unsent change");
+        assert.equal(y.ui.personGroupStale, undefined, "the refusal needs no server reread");
+        assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["From X"]);
+
+        globalThis.prksOfflineReadEntity = async () => { throw new Error("offline"); };
+        globalThis.prksPersonGroupRecordFor = async id => ({ id, name: "From X", description: "", parent: null });
+        globalThis.closePersonGroupEdit(y);
+        await settle();
+        assert.equal(y.getEntity().name, "From X", "Cancel shows the queued name offline");
+        globalThis.openPersonGroupEdit(y);
+        assert.equal(y.ui.personGroupEditing, true, "Edit reopens");
+        assert.equal(y.ui.personGroupFieldBaseline.name, "From X", "on the other tab's edit");
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+        globalThis.prksPersonGroupRecordFor = previous.record;
+    }
+}
+
 async function aSaveUsesTheRevisionsPinnedWhenEditOpened() {
     const store = newStore();
     runtimeForStore(store);
@@ -1723,6 +1788,7 @@ async function main() {
     await aSaveUsesTheRevisionsPinnedWhenEditOpened();
     await aFailedPinIsTakenAgainOnTheNextSave();
     await aGroupDeletedElsewhereSaysSo();
+    await aRefusedSaveReopensOnTheOtherTabsEdit();
     await serverRevisionsNeverPairWithCachedValues();
     await aMembershipAckNamesItsGroupAsAPairOrNotAtAll();
     console.log("All " + checks + " person group checks passed");
