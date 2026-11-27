@@ -792,7 +792,7 @@
             }
           },
           "409": {
-            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are missing and no item was registered (PROCESSING_OBJECT_MISSING). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1247,7 +1247,16 @@
             }
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -1297,7 +1306,16 @@
             "description": "No ready item with that id (ENTITY_NOT_FOUND)."
           },
           "416": {
-            "description": "The range is outside the file."
+            "description": "The range is outside the file.",
+            "headers": {
+              "Content-Range": {
+                "description": "The file size, as `bytes */<size>`.",
+                "schema": {
+                  "type": "string"
+                },
+                "required": true
+              }
+            }
           },
           "503": {
             "description": "The Library is unavailable (unavailable)."

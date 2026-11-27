@@ -92,7 +92,7 @@ class ContractCheck:
         self._check_headers(where, self._reply(reply), response.header)
         content = self._reply(reply).get("content") or {}
         media = (response.header("Content-Type") or "").split(";", 1)[0].strip().lower()
-        if response.stream is not None and route.method != "HEAD" and content and media not in content:
+        if response.stream is not None and route.method != "HEAD" and media not in content:
             # A streamed answer is not read here, but its media type is still the documented one.
             self.violations.append(f"{where}: streamed {media or 'answer without Content-Type'} not documented")
         if response.stream is None and route.method != "HEAD":

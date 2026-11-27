@@ -34,7 +34,8 @@ from backend.api_contract.operation import JSON, Operation, Reply, RequestBody, 
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
-_PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
+# The router takes any identifier as a parameter name.
+_PATH_PARAMETER = re.compile(r"\{([^\W\d]\w*)(?::path)?\}")
 
 # The answers every route of a kind can send: components.responses.
 _SHARED: dict[str, str] = {
