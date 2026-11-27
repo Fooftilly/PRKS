@@ -182,14 +182,14 @@ module Reconcile {
     if entry.Broken? then Clear
     else if entry.revision > ackRevision then Keep
     else if entry.revision == ackRevision then
-      Pair(entry.value, entry.revision)
+      if entry.ackOp.Some? then Keep else Pair(entry.value, entry.revision)
     else if baseRevision.Valid? && entry.revision == baseRevision.n then Pair(value, ackRevision)
     else Clear
   }
 
   lemma AcknowledgedPairIsTheWriteAtTheAck<V>(entry: Entry<V>, value: V, baseRevision: Rev, ackRevision: nat)
     ensures var got := AcknowledgeEditBase(entry, value, baseRevision, ackRevision);
-      (got.Keep? <==> entry.Ok? && entry.revision > ackRevision) &&
+      (got.Keep? <==> entry.Ok? && (entry.revision > ackRevision || (entry.revision == ackRevision && entry.ackOp.Some?))) &&
       (got.Pair? ==> (entry.Ok? && got.revision == ackRevision &&
         (entry.revision == ackRevision ==> got.value == entry.value) &&
         (entry.revision < ackRevision ==> got.value == value && baseRevision == Valid(entry.revision)))) &&

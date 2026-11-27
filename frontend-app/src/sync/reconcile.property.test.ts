@@ -163,7 +163,11 @@ const spec = {
       return { result: null, branch: 'invalid' }
     }
     if (e.revision > write.ackRevision) return { result: undefined, branch: 'past' }
-    if (e.revision === write.ackRevision) return { result: { value: e.value, revision: e.revision }, branch: 'at-ack:unstamped' }
+    if (e.revision === write.ackRevision) {
+      return typeof e.ackOp === 'string'
+        ? { result: undefined, branch: 'at-ack:stamped' }
+        : { result: { value: e.value, revision: e.revision }, branch: 'at-ack:unstamped' }
+    }
     return e.revision === write.baseRevision
       ? { result: { value: write.value, revision: write.ackRevision }, branch: 'at-base' }
       : { result: null, branch: 'between' }
@@ -338,7 +342,7 @@ const PROPERTIES: Property[] = [
   property('C1 the acknowledged pair is the write value at the ACK revision', (core) =>
     fc.property(fieldBase, write, (e, w) => {
       const got = core.acknowledgeEditBase(e, w)
-      if (got === undefined) return e.revision > w.ackRevision
+      if (got === undefined) return e.revision > w.ackRevision || (e.revision === w.ackRevision && typeof e.ackOp === 'string')
       if (got === null) return e.revision < w.ackRevision && e.revision !== w.baseRevision
       return got.revision === w.ackRevision && got.value === (e.revision === w.ackRevision ? e.value : w.value)
     }) as never),
@@ -357,6 +361,7 @@ const MUTANTS: Array<{ name: string; edits: Array<[string, string]> }> = [
   { name: 'pinEditBase drops pendingOp', edits: [["value: entry.value, revision: Math.max(entry.revision, own.revision),\n          ...(typeof own.pendingOp === 'string' ? { pendingOp: own.pendingOp } : {}),",
     'value: entry.value, revision: Math.max(entry.revision, own.revision),']] },
   { name: 'stamp replaced at equal revisions', edits: [["if (held.revision === read.revision && typeof held.ackOp === 'string') return { ...read, ackOp: held.ackOp }", '']] },
+  { name: 'acknowledged stamp replaced', edits: [["return typeof entry.ackOp === 'string' ? undefined : { value: entry.value, revision: entry.revision }", 'return { value: entry.value, revision: entry.revision }']] },
 ]
 
 function mutate(edits: Array<[string, string]>): Core {
@@ -392,7 +397,7 @@ describe('reconcile properties (#1472)', () => {
       'pinEditBase:unknown:other-revision',
       'newerEditBase:invalid', 'newerEditBase:held-newer', 'newerEditBase:equal-stamped', 'newerEditBase:equal',
       'newerEditBase:read-newer',
-      'acknowledgeEditBase:invalid', 'acknowledgeEditBase:past',
+      'acknowledgeEditBase:invalid', 'acknowledgeEditBase:past', 'acknowledgeEditBase:at-ack:stamped',
       'acknowledgeEditBase:at-ack:unstamped', 'acknowledgeEditBase:at-base', 'acknowledgeEditBase:between',
     ]
     const low = want.filter((b) => (branches.get(b) ?? 0) < BRANCH_FLOOR)
