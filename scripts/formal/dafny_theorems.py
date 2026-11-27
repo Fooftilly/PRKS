@@ -1,6 +1,6 @@
 """Check the required-theorem manifest for the Dafny pilot (#1472).
 
-Fails when a listed lemma is missing, its statement (signature, requires and
+Fails when a listed lemma is missing or (with --verified) did not pass, its statement (signature, requires and
 ensures) changed, a lemma with preconditions has no witness lemma, or a model
 file uses an escape hatch. `--write` records the current statements.
 """
@@ -8,6 +8,7 @@ file uses an escape hatch. `--write` records the current statements.
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
 import re
@@ -50,6 +51,7 @@ def digest(statement: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", action="store_true", help="record the current statements")
+    parser.add_argument("--verified", type=Path, help="a Dafny CSV log: every required lemma MUST have passed in it")
     args = parser.parse_args()
 
     current: dict[str, tuple[str, str]] = {}
@@ -84,6 +86,16 @@ def main() -> int:
                 problems.append(f"{name}: has preconditions and no witness lemma")
             elif witness not in current:
                 problems.append(f"{name}: witness {witness} is missing")
+    if args.verified:
+        with args.verified.open(encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        name_col = next(c for c in rows[0] if "displayname" in c.lower())
+        outcome_col = next(c for c in rows[0] if "outcome" in c.lower())
+        passed = {row[name_col].split(" ")[0].rsplit(".", 1)[-1] for row in rows if row[outcome_col] == "Passed"}
+        failed = {row[name_col].split(" ")[0].rsplit(".", 1)[-1] for row in rows if row[outcome_col] != "Passed"}
+        for name in theorems:
+            if name not in passed or name in failed:
+                problems.append(f"{name}: not verified in {args.verified.name}")
     for problem in problems:
         print(problem, file=sys.stderr)
     print(f"{len(theorems)} required lemmas, {len(problems)} problems")

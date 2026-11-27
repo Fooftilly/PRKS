@@ -51,24 +51,30 @@ jobs:
         run: |
           start=$(date +%s)
           "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
-            --log-format "csv;LogFileName=$RUNNER_TEMP/verify.csv" formal/dafny/Sequence.dfy
+            --log-format "csv;LogFileName=$RUNNER_TEMP/verify.csv" formal/dafny/Reconcile.dfy formal/dafny/Sequence.dfy
           elapsed=$(( $(date +%s) - start ))
           echo "Verification took ${elapsed} s"
           echo "Verification took ${elapsed} s" >> "$GITHUB_STEP_SUMMARY"
           test "$elapsed" -lt 60
 
+      - name: Every required lemma verified
+        run: python3 scripts/formal/dafny_theorems.py --verified "$RUNNER_TEMP/verify.csv"
+
       - name: Resource use per proof
         if: always()
         run: |
           test -f "$RUNNER_TEMP/verify.csv" || exit 0
+          set -o pipefail
           python3 scripts/formal/dafny_resources.py "$RUNNER_TEMP/verify.csv" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Stable across 3 solver seeds
         run: |
           for seed in 1 2 3; do
             "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
-              --boogie "-randomSeed:${seed}" formal/dafny/Sequence.dfy
+              --boogie "-randomSeed:${seed}" formal/dafny/Reconcile.dfy formal/dafny/Sequence.dfy
           done
 
       - name: Mutants
-        run: python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"

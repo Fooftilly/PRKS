@@ -16,12 +16,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / "formal" / "dafny"
-ENTRY = "Sequence.dfy"
+FILES = ("Reconcile.dfy", "Sequence.dfy")
 
 
 def verify(dafny: str, directory: Path) -> subprocess.CompletedProcess[str]:
     args = [dafny, "verify", "--allow-warnings", "--resource-limit", os.environ.get("PRKS_DAFNY_RLIMIT", "20000"),
-            str(directory / ENTRY)]
+            *(str(directory / name) for name in FILES)]
     return subprocess.run(args, capture_output=True, text=True, timeout=600, check=False)  # nosec B603
 
 
