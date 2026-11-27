@@ -14190,6 +14190,14 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         self.assertEqual(info.value.status, 200)
         page.locator("#prks-api-docs h3.opblock-tag", has_text="annotations").wait_for()
         self.assertEqual(page.title(), "PRKS API reference")
+        # Try it out is offered on reads only: a mutation needs the Library epoch header.
+        read = page.locator("#prks-api-docs .opblock-get").first
+        read.locator(".opblock-summary").click()
+        read.locator(".try-out__btn").wait_for()
+        write = page.locator("#prks-api-docs .opblock-post").first
+        write.locator(".opblock-summary").click()
+        write.locator(".opblock-section-header").first.wait_for()
+        self.assertEqual(write.locator(".try-out__btn").count(), 0)
 
     def test_storage_status_is_shown_read_only(self):
         server, page, _collector = self._start_app()

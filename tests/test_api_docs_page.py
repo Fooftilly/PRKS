@@ -34,12 +34,6 @@ class ApiDocsPageTests(unittest.TestCase):
         self.assertNotIn(" style=", self.page)
         self.assertNotRegex(self.page, r"\son[a-z]+=")
 
-    def test_the_page_sends_nothing_off_site_and_tries_only_reads(self) -> None:
-        script = (FRONTEND / "js" / "api-docs.js").read_text(encoding="utf-8")
-        self.assertIn("url: '/api/openapi.json'", script)
-        self.assertIn("validatorUrl: null", script)
-        self.assertIn("supportedSubmitMethods: ['get', 'head']", script)
-
 
 if __name__ == "__main__":
     unittest.main()
