@@ -23,6 +23,7 @@ import time
 import uuid
 from typing import Any, Iterator, Optional
 
+from backend.api_contract.operation import EPOCH_SCHEMA
 from backend.storage import root_binding
 from backend.storage.config import StorageConfig
 from tests.pg.test_readiness import _free_port, _wait_for
@@ -355,6 +356,7 @@ class PostgresLibraryStartTests(RootPairingTestCase):
                 port, "POST", "/api/backups/restore", {"token": staged["token"], "confirm": "RESTORE"}, headers)
             self.assertEqual((status, restored["status"]), (200, "restored"), restored)
             self.assertEqual(response_headers.get("prks-library-epoch"), str(restored["epoch"]))
+            self.assertRegex(response_headers["prks-library-epoch"], EPOCH_SCHEMA["pattern"])
             self.assertNotEqual(str(restored["epoch"]), old_epoch)
             _status, works, _headers = self.call(port, "GET", "/api/works")
             self.assertEqual([w["id"] for w in works], [kept["id"]])
