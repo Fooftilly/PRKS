@@ -2360,7 +2360,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Always no-store. */
-                    "Cache-Control"?: string;
+                    "Cache-Control": "no-store";
                     /** @description attachment; filename=... */
                     "Content-Disposition"?: string;
                     [name: string]: unknown;
@@ -2404,7 +2404,7 @@ export interface operations {
             200: {
                 headers: {
                     /** @description Always no-store. */
-                    "Cache-Control"?: string;
+                    "Cache-Control": "no-store";
                     [name: string]: unknown;
                 };
                 content: {
@@ -2436,9 +2436,11 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Restored. The answer carries the new PRKS-Library-Epoch. */
+            /** @description Restored. */
             200: {
                 headers: {
+                    /** @description The Library's new epoch. */
+                    "PRKS-Library-Epoch": string;
                     [name: string]: unknown;
                 };
                 content: {

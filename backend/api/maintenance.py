@@ -43,7 +43,7 @@ from backend.api_contract.maintenance import (
     Restored,
     RestoreRequest,
 )
-from backend.api_contract.operation import BINARY, Header, Operation, Param, body, error, ok
+from backend.api_contract.operation import BINARY, EPOCH_SCHEMA, NO_STORE, Header, Operation, Param, body, error, ok
 from backend.domain.maintenance.upload import RestoreError, backup_max_upload_bytes, stream_upload_to_file
 from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.web.hosts import octet_stream_content_type_allowed
@@ -308,7 +308,7 @@ def download(req: Request) -> Response:
 
 
 _TAG = "backups"
-_NO_STORE = {"Cache-Control": Header("Always no-store.")}
+_NO_STORE = {"Cache-Control": NO_STORE}
 
 ROUTES = (
     route("POST", "/api/backups/progress", progress, contract=Operation(
@@ -331,7 +331,8 @@ ROUTES = (
         params=(Param("Content-Length", "header", {"type": "integer", "minimum": 0}, required=True),))),
     route("POST", "/api/backups/restore", restore, contract=Operation(
         "restoreBackup", "Restore a staged archive over the Library", _TAG,
-        {200: ok(Restored, "Restored. The answer carries the new PRKS-Library-Epoch."),
+        {200: ok(Restored, "Restored.",
+                 headers={"PRKS-Library-Epoch": Header("The Library's new epoch.", EPOCH_SCHEMA, required=True)}),
          400: error("No `confirm: RESTORE` (confirmation_required) or an unknown token (unknown_token).",
                     BackupRefusal),
          409: error("The restore failed and nothing changed (`reason`).", BackupRefusal),
