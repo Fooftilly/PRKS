@@ -61,7 +61,7 @@ jobs:
         if: always()
         run: |
           test -f "$RUNNER_TEMP/verify.csv" || exit 0
-          python3 -c "import csv,sys; rows=list(csv.DictReader(open(sys.argv[1]))); rows.sort(key=lambda r: -int(r.get('Resource') or 0)); [print(r['Resource'], r['Outcome'], r['TestResult.DisplayName']) for r in rows[:25]]" "$RUNNER_TEMP/verify.csv"
+          python3 scripts/formal/dafny_resources.py "$RUNNER_TEMP/verify.csv" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Stable across 3 solver seeds
         run: |
