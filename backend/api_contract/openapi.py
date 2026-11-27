@@ -35,7 +35,8 @@ from backend.domain.identity.secret_tokens import SESSION_COOKIE
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
-_PATH_PARAMETER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)(?::path)?\}")
+# The router takes any identifier as a parameter name.
+_PATH_PARAMETER = re.compile(r"\{([^\W\d]\w*)(?::path)?\}")
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
 SESSION_SCHEME = "session"
