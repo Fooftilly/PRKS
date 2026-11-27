@@ -341,21 +341,28 @@ class FullPlanTests(unittest.TestCase):
                          env=armed_for(approval), claims=self.claims)
         self.assertIsNone(self.order_of(509))
 
-    def test_failed_success_mark_also_fails_the_claimed_next_step(self):
+    def test_a_failed_handoff_write_fails_both_steps(self):
         _, manifest, _ = self.check()
         approval = dispatch.manifest_digest(manifest)
         mark = self.claims.mark
+        for broken in ((dispatch.plan_claim(approval, 1), "success"),
+                       (dispatch.plan_claim(approval, 2), "pending")):
+            with self.subTest(broken=broken[1]):
+                self.claims.log.clear()
+                self.fx.api.items["I815"]["values"].pop(ORDER, None)
 
-        def flaky(context, state):
-            if state == "success" and context == dispatch.plan_claim(approval, 1):
-                raise dispatch.DispatchError("order approval claim request failed: HTTPError")
-            mark(context, state)
+                def flaky(context, state, broken=broken):
+                    if (context, state) == broken:
+                        raise dispatch.DispatchError("order approval claim request failed: HTTPError")
+                    mark(context, state)
 
-        self.claims.mark = flaky
-        with self.assertRaisesRegex(dispatch.DispatchError, "HTTPError"):
-            self.apply(manifest)
-        self.assertIn((dispatch.plan_claim(approval, 2), "failure"), self.claims.log)
-        self.assertIn((dispatch.plan_claim(approval, 1), "failure"), self.claims.log)
+                self.claims.mark = flaky
+                with self.assertRaisesRegex(dispatch.DispatchError, "HTTPError"):
+                    self.apply(manifest)
+                self.claims.mark = mark
+                self.assertIn((dispatch.plan_claim(approval, 1), "failure"), self.claims.log)
+                self.assertIn((dispatch.plan_claim(approval, 2), "failure"), self.claims.log)
+                self.assertIsNone(self.order_of(509))
 
     def test_writer_steps_exec_python_so_cancellation_signals_reach_it(self):
         for name, script in (("project3-assignment-dispatch.yml", "project3_assignment_dispatch.py"),
