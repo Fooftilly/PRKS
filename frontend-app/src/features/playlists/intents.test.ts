@@ -154,6 +154,51 @@ describe('Playlist intents', () => {
     expect(window.prksReloadPlaylistDetail).toHaveBeenCalledOnce()
   })
 
+  it('reloads the Playlist when Cancel follows a refusal over another tab\'s unsent edit', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => {
+      throw Object.assign(new Error('Another tab on this device has an unsent change here.'),
+        { prksLocalStoreCode: 'pending_elsewhere' })
+    })
+    window.prksReloadPlaylistDetail = vi.fn(async () => ({ id: 'PL-1' }))
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve(pinAll(shown)),
+    }
+    const refused = await intents.saveFields('PL-1', { ...shown, title: 'Workshops' }, shown)
+    expect(refused).toEqual({ ok: false, message: 'Another tab on this device has an unsent change here.' })
+    expect(pane.ui!.playlistStale).toBe('PL-1')
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
+  })
+
+  it('leaves no stale mark when the refusal arrives after Cancel', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let refuse: (err: unknown) => void = () => undefined
+    window.updatePlaylist = vi.fn(() => new Promise<Record<string, never>>((_resolve, reject) => { refuse = reject }))
+    window.prksReloadPlaylistDetail = vi.fn(async () => ({ id: 'PL-1' }))
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve(pinAll(shown)),
+    }
+    const saving = intents.saveFields('PL-1', { ...shown, title: 'Workshops' }, shown)
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+    intents.cancelEdit('PL-1')
+    refuse(Object.assign(new Error('refused'), { prksLocalStoreCode: 'pending_elsewhere' }))
+    await saving
+    expect(pane.ui!.playlistStale ?? null).toBeNull()
+  })
+
   it('refuses a changed field whose pinned base is unknown and keeps the draft', async () => {
     window.prksTabContextOwnsEntityRoute = () => true
     window.updatePlaylist = vi.fn(async () => ({}))

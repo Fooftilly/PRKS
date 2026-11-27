@@ -258,6 +258,8 @@ function prksPlaylistSaveMessage(error, action) {
             return 'Part of this playlist is syncing or needs a decision. Try again shortly.';
         case 'entity_deleted':
             return 'This playlist is being deleted, so it cannot be changed.';
+        case 'pending_elsewhere':
+            return 'Another tab on this device has an unsent change here. Finish or cancel that edit first, then edit again.';
         case 'dependency_failed':
             return String(error.message || 'A change this one depends on could not be saved.');
         case 'invalid_envelope':
@@ -351,7 +353,9 @@ async function updatePlaylist(playlistId, fields, options) {
     try {
         await prksSavePlaylistFieldsDurably(playlistId, changes, settled, still);
     } catch (error) {
-        throw new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
+        const refused = new Error(prksPlaylistSaveMessage(error, 'save this playlist'));
+        refused.prksLocalStoreCode = error && error.prksLocalStoreCode;
+        throw refused;
     }
     return {};
 }

@@ -164,7 +164,8 @@ var prksSyncReconcile = (function(exports) {
 				if (!isFieldBase(own) || own.value !== value) pinned[field] = null;
 				else if (own.value === entry.value) pinned[field] = {
 					value: entry.value,
-					revision: Math.max(entry.revision, own.revision)
+					revision: Math.max(entry.revision, own.revision),
+					...typeof own.pendingOp === "string" ? { pendingOp: own.pendingOp } : {}
 				};
 				else pinned[field] = entry.revision === own.revision ? {
 					value: entry.value,

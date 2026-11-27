@@ -427,6 +427,9 @@
      * that exists only as a pending creation takes that creation's payload at
      * revision 0 -- known rather than assumed.
      */
+    /* The edit base of a group PRKS no longer has. */
+    const DELETED_GROUP = Object.freeze({ prksDeleted: true });
+
     async function acknowledgedGroupBase(groupId, operations) {
         if (typeof groupId !== 'string' || !groupId) return null;
         const creating = pendingCreates(operations).find(op => op.entity_id === groupId);
@@ -440,7 +443,8 @@
             state = result && result.value;
             stateSource = result && result.source;
         } catch (_e) { state = null; }
-        if (!state) return stateSource === 'server' ? null : cachedEditBase(groupId);
+        /* PRKS answered that the group is not there. */
+        if (!state) return stateSource === 'server' ? DELETED_GROUP : cachedEditBase(groupId);
         /* Offline, two cached reads are not one snapshot: a revisions read can
          * reach the server while the record read does not, or refresh without
          * it, and pair newer revisions with older values. The base offline is
@@ -454,6 +458,7 @@
                  * revisions while still answering from the server. */
                 { requestPolicy: { dedupe: false } });
             /* Values from the cache may be older than the revisions, so they form no base. */
+            if (cached && cached.source === 'server' && cached.value === null) return DELETED_GROUP;
             group = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { group = null; }
         if (!group) return null;
@@ -462,6 +467,7 @@
         try {
             after = await readPersonGroupState(groupId, { requestPolicy: { dedupe: false } });
         } catch (_e) { after = null; }
+        if (after && after.source === 'server' && after.value === null) return DELETED_GROUP;
         if (!after || after.source !== 'server' || !after.value || !after.value.fields) return null;
         const base = observedGroupFields(group, state);
         /* A field whose revision moved during the record read has no known pair. */
@@ -540,6 +546,7 @@
      */
     async function pinGroupEditBase(groupId, shown, operations) {
         const read = await acknowledgedGroupBase(groupId, operations);
+        if (read === DELETED_GROUP) return read;
         const pending = pendingFieldBases(operations, groupId);
         const move = pending.parent_id;
         const shownParent = String(shown && shown.parent_id != null ? shown.parent_id : '');
@@ -559,6 +566,13 @@
             const own = Array.isArray(rows) ? rows.find(g => g && String(g.id) === String(groupId)) : null;
             if (own && String(own.parent_id || '') === shownParent) {
                 pending.parent_id = Object.assign({}, move, { value: shownParent });
+                const pinned = reconcileCore.pinEditBase(shown, read, pending);
+                /* The pin may equal the acknowledged parent and drop the op
+                 * id, yet this form showed the move: it may replace it. */
+                if (pinned && pinned.parent_id) {
+                    pinned.parent_id = Object.assign({}, pinned.parent_id, { pendingOp: move.pendingOp });
+                }
+                return pinned;
             }
         }
         return reconcileCore.pinEditBase(shown, read, pending);

@@ -117,18 +117,28 @@ async function aGroupNeedsAName() {
 
 /* ---- fields ---- */
 
+/* The base of an Edit reopened on this device's unsent edit of `field`. */
+async function reopenedOn(store, base, field) {
+    const row = (await rowsFor(store, "SET_PERSON_GROUP_FIELD")).find(r => r.payload.field === field);
+    return Object.assign({}, base, { [field]: Object.assign({}, base[field],
+        { pending: row.payload.value, pendingOp: row.op_id }) });
+}
+
 async function fieldEditsCoalesceAndCancel() {
     const store = newStore();
     const base = baseAt({ name: 4 }, { name: "Analysts" });
     await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
-    await store.savePersonGroupFields("PG-1", { name: "Mathematicians" }, base);
+    /* #894: an edit session that never showed that unsent edit cannot replace it. */
+    await assert.rejects(() => store.savePersonGroupFields("PG-1", { name: "Mathematicians" }, base),
+        e => e.prksLocalStoreCode === "pending_elsewhere");
+    await store.savePersonGroupFields("PG-1", { name: "Mathematicians" }, await reopenedOn(store, base, "name"));
     let rows = await rowsFor(store, "SET_PERSON_GROUP_FIELD");
     assert.equal(rows.length, 1, "a never-sent row is rewritten, not stacked");
     assert.equal(rows[0].payload.value, "Mathematicians");
     assert.equal(rows[0].base_revision, 4, "measured against the acknowledged revision");
 
     // A -> B -> A is not two changes, it is none.
-    await store.savePersonGroupFields("PG-1", { name: "Analysts" }, base);
+    await store.savePersonGroupFields("PG-1", { name: "Analysts" }, await reopenedOn(store, base, "name"));
     assert.equal((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).length, 0);
 
     // Two fields are two decisions, each with its own base.
@@ -148,8 +158,18 @@ async function fieldEditsCoalesceAndCancel() {
         () => store.savePersonGroupFields("PG-1", { name: "Again" }, baseAt({ name: 4 })),
         e => e.prksLocalStoreCode === "scope_busy");
     await store.savePersonGroupFields("PG-1", { description: "Changed" },
-        baseAt({ description: 9 }));
+        await reopenedOn(store, baseAt({ description: 9 }), "description"));
     assert.equal((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).length, 2);
+}
+
+/* #1471 review: equal text at another base is another session's edit. */
+async function equalTextAtAnotherBaseIsNotTheShownEdit() {
+    const store = newStore();
+    const [queued] = await store.savePersonGroupFields("PG-E", { name: "A" }, baseAt({ name: 1 }, { name: "B" }));
+    await assert.rejects(() => store.savePersonGroupFields("PG-E", { name: "C" }, baseAt({ name: 0 }, { name: "A" })),
+        e => e.prksLocalStoreCode === "pending_elsewhere");
+    assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => [r.op_id, r.payload.value, r.base_revision]),
+        [[queued.op_id, "A", 1]], "the other session's unsent edit is kept");
 }
 
 async function movingIntoALocalGroupWaitsForIt() {
@@ -657,11 +677,12 @@ async function anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement() {
     runtimeForStore(store);
     const base = baseAt({ name: 1 }, { name: "Analysts" });
     await store.savePersonGroupFields("PG-1", { name: "Engineers" }, base);
+    const shown = await reopenedOn(store, base, "name");
     const before = operationFingerprint(await store.listOperations());
     const duringDelete = { owned: true };
     loseOwnershipOnNextOperationsDelete(idb, duringDelete);
     const removed = await globalThis.prksSavePersonGroupFieldsDurably(
-        "PG-1", { name: "Mathematicians" }, base, () => duringDelete.owned);
+        "PG-1", { name: "Mathematicians" }, shown, () => duringDelete.owned);
     assert.deepEqual(removed, []);
     assert.equal(duringDelete.owned, false, "ownership changed during the field delete");
     let after = await store.listOperations();
@@ -672,7 +693,7 @@ async function anOlderSessionCannotCommitAHalfAppliedGroupFieldReplacement() {
     const duringInsert = { owned: true };
     loseOwnershipOnNextOperationsPut(idb, duringInsert);
     const replaced = await globalThis.prksSavePersonGroupFieldsDurably(
-        "PG-1", { name: "Mathematicians" }, base, () => duringInsert.owned);
+        "PG-1", { name: "Mathematicians" }, shown, () => duringInsert.owned);
     assert.deepEqual(replaced, []);
     assert.equal(duringInsert.owned, false, "ownership changed during the field insert");
     after = await store.listOperations();
@@ -977,6 +998,136 @@ async function aFailedPinIsTakenAgainOnTheNextSave() {
         globalThis.prksAlertMessage = previous.alert;
         globalThis.prksDurableOperationsOrNone = previous.ops;
         globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
+/* #783: PRKS answers that the group is gone. The Save says it was deleted,
+ * not that it cannot be edited offline, and queues nothing. */
+async function aGroupDeletedElsewhereSaysSo() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+    };
+    const alerts = [];
+    let gone = "state";
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "person-group-state") {
+            if (gone === "state") return { value: null, source: "server", cachedAt: null };
+            const fields = {};
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        if (gone === "record") return { value: null, source: "server", cachedAt: null };
+        return { value: { id, name: "Group D", description: "", parent: null }, source: "server" };
+    };
+    const d = {
+        tabId: "tab-d", destroyed: false,
+        ui: { personGroupEditing: false, personGroupEditSession: 0 },
+        lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-D" } },
+        getEntity: () => ({ id: "PG-D", name: "Group D", description: "", parent: null }),
+    };
+    const next = { name: "Group D renamed", description: "", parent_id: "", parent_name: "" };
+    try {
+        for (const where of ["state", "record"]) {
+            gone = where;
+            alerts.length = 0;
+            globalThis.closePersonGroupEdit(d);
+            globalThis.openPersonGroupEdit(d);
+            const shown = d.ui.personGroupFieldBaseline;
+            const refused = await globalThis.savePersonGroupEditor(d, "PG-D", next, shown, d.ui.personGroupEditSession);
+            assert.equal(refused && refused.ok, false, where + ": the Save is refused");
+            assert.ok(alerts.some(m => m.indexOf("was deleted") !== -1), where + ": it says the group was deleted");
+            assert.ok(!alerts.some(m => m.indexOf("offline") !== -1), where + ": not that it is offline");
+            assert.deepEqual(await store.listOperations(), [], where + ": nothing is queued");
+        }
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+    }
+}
+
+/* #894: tab Y opened Edit before tab X queued a rename. Y's Save is refused.
+ * Cancel and an immediate Edit wait for the local reread, then open on X's
+ * queued name, with no server. */
+async function aRefusedSaveReopensOnTheOtherTabsEdit() {
+    const store = newStore();
+    runtimeForStore(store);
+    const previous = {
+        alert: globalThis.prksAlertMessage,
+        ops: globalThis.prksDurableOperationsOrNone,
+        read: globalThis.prksOfflineReadEntity,
+        record: globalThis.prksPersonGroupRecordFor,
+    };
+    const alerts = [];
+    globalThis.prksAlertMessage = async (message) => { alerts.push(String(message || "")); };
+    globalThis.prksDurableOperationsOrNone = async () => store.listOperations();
+    globalThis.prksOfflineReadEntity = async (kind, id) => {
+        if (kind === "person-group-state") {
+            const fields = {};
+            globalThis.PRKS_PERSON_GROUP_FIELDS.forEach((name) => { fields[name] = { revision: 1 }; });
+            return { value: { group_id: id, fields, members: [] }, source: "server" };
+        }
+        return { value: { id, name: "Group O", description: "", parent: null }, source: "server" };
+    };
+    const tab = (tabId) => {
+        let entity = { id: "PG-O", name: "Group O", description: "", parent: null };
+        return {
+            tabId, destroyed: false, generation: 1,
+            ui: { personGroupEditing: false, personGroupEditSession: 0 },
+            lastResolvedRoute: { name: "person-group-detail", params: { groupId: "PG-O" } },
+            getEntity: () => entity,
+            setEntity: (_kind, value) => { entity = value; },
+        };
+    };
+    const x = tab("tab-x");
+    const y = tab("tab-y");
+    const rename = name => ({ name, description: "", parent_id: "", parent_name: "" });
+    try {
+        globalThis.openPersonGroupEdit(y);
+        await y.ui.personGroupEditPin.base;
+        globalThis.openPersonGroupEdit(x);
+        const saved = await globalThis.savePersonGroupEditor(x, "PG-O", rename("From X"),
+            x.ui.personGroupFieldBaseline, x.ui.personGroupEditSession);
+        assert.equal(saved && saved.ok, true, "tab X queues its rename");
+        const refused = await globalThis.savePersonGroupEditor(y, "PG-O", rename("From Y"),
+            y.ui.personGroupFieldBaseline, y.ui.personGroupEditSession);
+        assert.equal(refused && refused.ok, false, "tab Y's Save is refused");
+        assert.ok(alerts.some(m => m.indexOf("unsent change") !== -1), "and says another tab has an unsent change");
+        assert.equal(y.ui.personGroupStale, undefined, "the refusal needs no server reread");
+        assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["From X"]);
+
+        globalThis.prksOfflineReadEntity = async () => { throw new Error("offline"); };
+        let release;
+        const held = new Promise((resolve) => { release = resolve; });
+        let reads = 0;
+        globalThis.prksPersonGroupRecordFor = async (id) => {
+            reads += 1;
+            await held;
+            return globalThis.prksEffectivePersonGroupDetail(
+                { id, name: "Group O", description: "", parent: null, members: [] },
+                await store.listOperations(), []);
+        };
+        globalThis.closePersonGroupEdit(y);
+        globalThis.openPersonGroupEdit(y);
+        assert.equal(y.ui.personGroupEditing, false, "Edit waits while the local reread is held");
+        release();
+        await settle();
+        assert.equal(reads, 1, "Cancel and Edit share one local reread");
+        assert.equal(y.getEntity().name, "From X", "Cancel shows the queued name offline");
+        assert.equal(y.ui.personGroupEditing, true, "Edit opens after the reread paints");
+        assert.equal(y.ui.personGroupFieldBaseline.name, "From X", "on the other tab's edit");
+        assert.equal(y.ui.personGroupStale, undefined, "and no server reread is asked for");
+    } finally {
+        globalThis.prksAlertMessage = previous.alert;
+        globalThis.prksDurableOperationsOrNone = previous.ops;
+        globalThis.prksOfflineReadEntity = previous.read;
+        globalThis.prksPersonGroupRecordFor = previous.record;
     }
 }
 
@@ -1375,7 +1526,7 @@ async function deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts() {
             { parent_id: parent }, moveBase);
         await store.deletePersonGroup(parent);
         const cancelled = await store.savePersonGroupFields(child,
-            { parent_id: originalParent }, moveBase);
+            { parent_id: originalParent }, await reopenedOn(store, moveBase, 'parent_id'));
         assert.deepEqual(cancelled, [], 'moving back to the base cancels the edit');
         const rows = await store.listOperations();
         assert.equal(rows.length, 1, 'only the pending parent deletion survives');
@@ -1408,7 +1559,7 @@ async function deletionOrdersChildrenWithoutStrandingOnCoalescingOrConflicts() {
             { parent_id: parent }, moveBase);
         await store.deletePersonGroup(parent);
         const [replacement] = await store.savePersonGroupFields(child,
-            { parent_id: 'PG-OTHER' }, moveBase);
+            { parent_id: 'PG-OTHER' }, await reopenedOn(store, moveBase, 'parent_id'));
         assert.notEqual(old.op_id, replacement.op_id);
         const queued = await store.listOperations();
         assert.equal(queued.some(r => r.op_id === old.op_id), false);
@@ -1575,6 +1726,23 @@ async function aPendingMoveShowsTheNewParent() {
         const unseen = await globalThis.prksPinPersonGroupEditBase("PG-C",
             { name: "Child", description: "", parent_id: "PG-OLD" }, both);
         assert.equal(unseen.parent_id, null, "a form that never showed the move cannot replace it");
+
+        /* #1471 review: the destination was a subgroup of the old parent, so
+         * the deletion shows the acknowledged parent again. That form showed
+         * the move, so a new move replaces it. */
+        const store = newStore();
+        const [move] = await store.savePersonGroupFields("PG-C", { parent_id: "PG-NEW" },
+            baseAt({ parent_id: 2 }, { parent_id: "PG-OLD" }));
+        await store.deletePersonGroup("PG-NEW");
+        const underOld = rows.map(r => (r.id === "PG-NEW" ? Object.assign({}, r, { parent_id: "PG-OLD" }) : r));
+        globalThis.prksEffectivePersonGroupCatalogue = async opsNow => globalThis.prksEffectivePersonGroups(underOld, opsNow);
+        const queued = await store.listOperations();
+        const back = await globalThis.prksPinPersonGroupEditBase("PG-C",
+            { name: "Child", description: "", parent_id: "PG-OLD" }, queued);
+        assert.equal(back.parent_id.pendingOp, move.op_id, "the pin names the move the form showed");
+        await store.savePersonGroupFields("PG-C", { parent_id: "PG-ANC" }, { parent_id: back.parent_id });
+        assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["PG-ANC"],
+            "the new move replaces the shown one");
     } finally {
         globalThis.prksEffectivePersonGroupCatalogue = previousCatalogue;
         globalThis.prksOfflineReadEntity = previousRead;
@@ -1602,6 +1770,7 @@ async function main() {
     await fieldEditsCoalesceAndCancel();
     await aRevertAfterTheShownRenameSyncedIsSaved();
     await aPendingMoveShowsTheNewParent();
+    await equalTextAtAnotherBaseIsNotTheShownEdit();
     await movingIntoALocalGroupWaitsForIt();
     await editsFollowTheGroupsOwnCreation();
     await aRefusedCreationTakesItsEditsDownVisibly();
@@ -1632,6 +1801,8 @@ async function main() {
     await aRefusedGroupUpdateDoesNotLeaveTheTypedParent();
     await aSaveUsesTheRevisionsPinnedWhenEditOpened();
     await aFailedPinIsTakenAgainOnTheNextSave();
+    await aGroupDeletedElsewhereSaysSo();
+    await aRefusedSaveReopensOnTheOtherTabsEdit();
     await serverRevisionsNeverPairWithCachedValues();
     await aMembershipAckNamesItsGroupAsAPairOrNotAtAll();
     console.log("All " + checks + " person group checks passed");

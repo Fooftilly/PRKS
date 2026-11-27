@@ -164,9 +164,16 @@ async function fieldEditsCoalesceAndCancel() {
     await store.savePlaylistFields(id, { title: "Seminars" }, base);
     assert.equal((await rowsFor(store, "SET_PLAYLIST_FIELD")).length, 1);
 
+    /* Edit reopened on that unsent edit pins it as shown. */
+    const reopened = async () => {
+        const [row] = await rowsFor(store, "SET_PLAYLIST_FIELD");
+        return Object.assign({}, base, { title: Object.assign({}, base.title,
+            { pending: row.payload.value, pendingOp: row.op_id }) });
+    };
+
     /* A -> B -> C is still ONE operation, now carrying C: the user made one
      * decision about this field and has not sent any of it. */
-    await store.savePlaylistFields(id, { title: "Workshops" }, base);
+    await store.savePlaylistFields(id, { title: "Workshops" }, await reopened());
     const after = await rowsFor(store, "SET_PLAYLIST_FIELD");
     assert.equal(after.length, 1);
     assert.equal(after[0].payload.value, "Workshops");
@@ -174,8 +181,29 @@ async function fieldEditsCoalesceAndCancel() {
 
     /* B -> A, never sent, is ZERO operations: nothing about this field should
      * ever reach the server. */
-    await store.savePlaylistFields(id, { title: "Lectures" }, base);
+    await store.savePlaylistFields(id, { title: "Lectures" }, await reopened());
     assert.equal((await rowsFor(store, "SET_PLAYLIST_FIELD")).length, 0);
+
+    /* #894: a second edit session on this device, opened before that unsent
+     * edit, never showed it. Its Save is refused, not a silent replacement. */
+    await store.savePlaylistFields(id, { title: "Seminars" }, base);
+    await assert.rejects(() => store.savePlaylistFields(id, { title: "Workshops" }, base),
+        error => error.prksLocalStoreCode === "pending_elsewhere");
+    assert.deepEqual((await rowsFor(store, "SET_PLAYLIST_FIELD")).map(r => r.payload.value), ["Seminars"],
+        "the other session's unsent edit is kept");
+}
+
+/* #1471 review: tab A shows A at revision 0. Tab B read B at revision 1 and
+ * queued A offline at base 1. Tab A's Save of C must not take that row for
+ * its own because the text matches. */
+async function equalTextAtAnotherBaseIsNotTheShownEdit() {
+    const store = newStore();
+    const id = "PL-" + "E".repeat(32);
+    const [queued] = await store.savePlaylistFields(id, { title: "A" }, baseAt({ title: 1 }, { title: "B" }));
+    await assert.rejects(() => store.savePlaylistFields(id, { title: "C" }, baseAt({ title: 0 }, { title: "A" })),
+        error => error.prksLocalStoreCode === "pending_elsewhere");
+    assert.deepEqual((await rowsFor(store, "SET_PLAYLIST_FIELD")).map(r => [r.op_id, r.payload.value, r.base_revision]),
+        [[queued.op_id, "A", 1]], "tab B's unsent edit is kept");
 }
 
 async function oneSyncingFieldDoesNotBlockAnother() {
@@ -353,7 +381,6 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         const pinnedFirst = await pinFor(wrapper);
         await wrapper.updateOperationSyncState(first.op_id, { status: "acknowledged", server_revision: 4 });
         await wrapper.deleteAcknowledgedOperation(first.op_id);
-        await wrapper.savePlaylistFields(id, { title: "Seminars" }, read);
         heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
             fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
                 name === "title" ? { value: "Seminars", revision: 4, ackOp: first.op_id } : { value: "", revision: 0 }])) });
@@ -367,10 +394,33 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         }
         assert.deepEqual((await rowsFor(wrapper, "SET_PLAYLIST_FIELD")).map(r => [r.payload.value, r.base_revision]),
             [["Lectures", 4]], "updatePlaylist settles from the snapshot and writes the revert at its ACK");
+
+        /* #1471 review: a stale pane queued the same text at the older base.
+         * The settled form shows that text at revision 4, so equal text is
+         * not the shown edit: the revert is refused and that row is kept. */
+        const later = newStore();
+        const [shownEdit] = await later.savePlaylistFields(id, { title: "Seminars" }, read);
+        const pinnedLater = await pinFor(later);
+        await later.updateOperationSyncState(shownEdit.op_id, { status: "acknowledged", server_revision: 4 });
+        await later.deleteAcknowledgedOperation(shownEdit.op_id);
+        const [other] = await later.savePlaylistFields(id, { title: "Seminars" }, read);
+        heldEntities.set("playlist-edit-base:" + id, { playlist_id: id,
+            fields: Object.fromEntries(globalThis.PRKS_PLAYLIST_FIELDS.map(name => [name,
+                name === "title" ? { value: "Seminars", revision: 4, ackOp: shownEdit.op_id } : { value: "", revision: 0 }])) });
+        globalThis.prksSync = { store: later };
+        try {
+            await assert.rejects(globalThis.updatePlaylist(id, { title: "Lectures" }, { base: pinnedLater }),
+                err => err.prksLocalStoreCode === "pending_elsewhere");
+        } finally {
+            globalThis.prksSync = sync;
+            heldEntities.delete("playlist-edit-base:" + id);
+        }
+        assert.deepEqual((await rowsFor(later, "SET_PLAYLIST_FIELD")).map(r => r.op_id), [other.op_id],
+            "the other pane's row is kept");
     }
-    /* Another pane replaced the synced edit (Seminars -> Talks) before this
-     * form, opened on the unsent edit, returned to Lectures: the revert is a
-     * write measured from the ACK, not a silent cancellation. */
+    /* #894: another pane replaced the synced edit (Seminars -> Talks) before
+     * this form, opened on the unsent edit, returned to Lectures. This form
+     * never showed Talks, so the revert is refused and Talks stays queued. */
     {
         const store = newStore();
         const [sent] = await store.savePlaylistFields(id, { title: "Seminars" }, read);
@@ -378,11 +428,11 @@ async function aRevertAfterTheShownEditSyncedIsSaved() {
         await store.updateOperationSyncState(sent.op_id, { status: "acknowledged", server_revision: 4 });
         await store.savePlaylistFields(id, { title: "Talks" }, baseAt({ title: 4 }, { title: "Seminars" }));
         const edits = core.pinnedEdits(shown, Object.assign({}, shown, { title: "Lectures" }), pinned);
-        await store.savePlaylistFields(id, edits.changes, edits.base);
+        await assert.rejects(() => store.savePlaylistFields(id, edits.changes, edits.base),
+            error => error.prksLocalStoreCode === "pending_elsewhere");
         const rows = (await rowsFor(store, "SET_PLAYLIST_FIELD")).filter(r => r.status !== "acknowledged");
-        assert.equal(rows.length, 1, "the revert replaces the other pane's edit");
-        assert.equal(rows[0].payload.value, "Lectures");
-        assert.equal(rows[0].base_revision, 4, "measured against the shown edit's ACK");
+        assert.deepEqual(rows.map(r => [r.payload.value, r.base_revision]), [["Talks", 4]],
+            "the other pane's unsent edit is kept");
     }
     /* A title cleared offline shows as the default name: reopening Edit pins
      * it, so a new title replaces the unsent edit. */
@@ -799,6 +849,8 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     assert.equal(rows[0].payload.field, "title");
     assert.equal(rows[0].payload.value, "Temporary");
     assert.equal(rows[0].base_revision, 3);
+    const reopened = await globalThis.prksPinPlaylistEdit(existing, Object.assign({}, shown, { title: "Temporary" }));
+    assert.equal(reopened.title.pendingOp, rows[0].op_id, "Edit reopened on the unsent edit pins it");
 
     // Mutation negative-control: disable the actual durable writer. The
     // contract must detect that a nominally successful wrapper call failed
@@ -806,13 +858,13 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     const write = globalThis.prksSavePlaylistFieldsDurably;
     try {
         globalThis.prksSavePlaylistFieldsDurably = async () => null;
-        await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
+        await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base: reopened });
         rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
         assert.throws(() => assert.deepEqual(rows, []), /AssertionError|Expected values/);
     } finally {
         globalThis.prksSavePlaylistFieldsDurably = write;
     }
-    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
+    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base: reopened });
     assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), [],
         "real updatePlaylist A→B→A leaves no intent");
 
@@ -842,13 +894,15 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
 
     /* A session that ends after its replacement deleted the queued row aborts the write. */
     {
-        await store.savePlaylistFields(existing, { title: "Queued" }, base);
+        const [queued] = await store.savePlaylistFields(existing, { title: "Queued" }, base);
+        const shownQueued = Object.assign({}, base, { title: Object.assign({}, base.title,
+            { pending: "Queued", pendingOp: queued.op_id }) });
         let checks = 0;
-        await assert.rejects(store.savePlaylistFields(existing, { title: "Replaced" }, base, () => ++checks < 2),
+        await assert.rejects(store.savePlaylistFields(existing, { title: "Replaced" }, shownQueued, () => ++checks < 2),
             err => err.prksLocalStoreCode === "ownership_lost");
         assert.deepEqual((await rowsFor(store, "SET_PLAYLIST_FIELD")).map(r => r.payload.value), ["Queued"],
             "the queued row comes back");
-        await store.savePlaylistFields(existing, { title: base.title.value }, base);
+        await store.savePlaylistFields(existing, { title: base.title.value }, shownQueued);
     }
 
     /* #894: another tab saves the title after this editor opened. This
@@ -859,7 +913,8 @@ async function playlistApiCancellationOrderMembershipAndDeleteContract() {
     rows = await rowsFor(store, "SET_PLAYLIST_FIELD");
     assert.equal(rows.length, 1);
     assert.equal(rows[0].base_revision, 3, "a stale editor never adopts the newer revision");
-    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base });
+    await globalThis.updatePlaylist(existing, { title: "Lectures" }, { base: Object.assign({}, base,
+        { title: Object.assign({}, base.title, { pending: "From a stale tab", pendingOp: rows[0].op_id }) }) });
     assert.deepEqual(await rowsFor(store, "SET_PLAYLIST_FIELD"), []);
     state.fields.title.revision = 3;
 
@@ -910,6 +965,7 @@ async function main() {
     await anEmptyTitleBecomesThePlaceholder();
     await fieldEditsCoalesceAndCancel();
     await aRevertAfterTheShownEditSyncedIsSaved();
+    await equalTextAtAnotherBaseIsNotTheShownEdit();
     await oneSyncingFieldDoesNotBlockAnother();
     await aVideosPlaylistIsAScalarThatCancels();
     await aPendingMembershipShowsOnBothEnds();
