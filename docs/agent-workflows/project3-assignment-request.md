@@ -154,6 +154,11 @@ one-time claim.
    `apply` and the digest matches. A mismatch consumes the claim and writes
    nothing.
 
+A multi-batch plan (`"kind": "implementation-order-plan"`) uses the same file.
+Follow the steps in `project3-assignment-dispatch.md`: check each batch, give
+the manifest and its digest to the maintainer, then submit each batch apply in
+manifest order, one commit per batch. Each commit is claimed once, as above.
+
 Verify each agent's access with read-only calls before relying on a route;
 connectors do not share permissions. Some cloud sessions, such as Claude Code
 cloud, cannot send GitHub GraphQL and can push only their own task branches.
