@@ -121,7 +121,7 @@ An approved digest is applied at most once. Before the first write, the job read
 
 One approval can cover up to 30 checked batches. Each batch still has 1–10 rows and runs in its own command.
 
-1. Check each batch alone with the single-batch command above. Record each `order digest`.
+1. Check each batch alone with the single-batch command above. Record each `order digest` and the `field` node ID from the summary.
 2. Write a manifest. It lists the batches in run order. Each entry has the batch digest and its `[number, order]` pairs, in row order:
 
    ```json
@@ -151,7 +151,7 @@ Each plan apply:
 
 - recomputes the batch digest from live evidence and refuses the batch when it differs from the manifest entry. A changed rank, item ID, field ID, label, update time or open blocker after the check stops the batch before any claim;
 - refuses a manifest that is not the approved one;
-- reads the claims once and refuses the batch when its batch digest was already used on either path, when an earlier batch has no `success` under this manifest, or when this or a later batch already started under it;
+- reads the claims once and refuses the batch when the digest of this or a later batch was already used on either path, when an earlier batch has no `success` under this manifest, or when this or a later batch already started under it. So a plan with a used digest stops before its first write;
 - claims `prks/project3-order-approval/<batch digest>` and `prks/project3-order-plan/<manifest digest>/<batch>` on the claim commit, then marks both `success` or `failure`.
 
 So batches cannot be substituted, skipped, reordered or replayed. A single-batch approval cannot apply a batch of a plan, and the reverse. After a failed or possibly partial batch, every later batch of that manifest is refused. The run log names the failed batch and the blocked batches.
@@ -159,7 +159,7 @@ So batches cannot be substituted, skipped, reordered or replayed. A single-batch
 To recover after a failure:
 
 1. Read the refreshed planning snapshot and compare it with the manifest. Batches before the failed one are done. The failed batch is possibly partial. Later batches are pending.
-2. Check the remaining rows again as new batches. Use the live `expected_before` values. The failed batch digest is used: change its `reason`, for example by adding the date, to get a new digest.
+2. Check the remaining rows again as new batches. Use the live `expected_before` values. When the failed batch reached its claim, its digest is used: change its `reason`, for example by adding the date, to get a new digest. A batch refused before its claim, for example for stale evidence, has no used digest.
 3. Write a new manifest for the remaining batches and get a new approval.
 
 To revoke a plan, delete `PROJECT3_ORDER_WRITE_MODE` or change `PROJECT3_ORDER_APPROVED_SHA256`. Batches that already ran stay applied.

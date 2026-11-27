@@ -318,6 +318,7 @@ class OrderDispatchTests(unittest.TestCase):
         raw = order_command(request_row())
         outcome, changed, issues = self.run_command(raw, self.armed(raw))
         self.assertIn("CHECK ONLY", outcome)
+        self.assertIn(f"field {t.order_field(self.fx.project())['id']}; ", outcome)
         self.assertRegex(outcome, r"order digest [0-9a-f]{64}$")
         self.assertEqual((changed, issues, self.fx.api.mutations), (0, 1, []))
 
@@ -561,6 +562,12 @@ class OrderPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(dispatch.DispatchError, "already used; no replay"):
             self.run_plan(1, env)
         self.assertEqual(len(self.fx.api.mutations), count)
+
+    def test_used_later_digest_stops_the_plan_before_any_write(self):
+        self.claims.mark(dispatch.batch_claim(self.manifest["batches"][2]["digest"]), "success")
+        with self.assertRaisesRegex(dispatch.DispatchError, "batch 3: order digest was already used"):
+            self.run_plan(1, armed_for(self.approval))
+        self.assertEqual((self.fx.api.mutations, len(self.claims.log)), ([], 1))
 
     def test_batch_claims_are_shared_with_the_single_batch_path(self):
         first, second = (entry["digest"] for entry in self.manifest["batches"][:2])

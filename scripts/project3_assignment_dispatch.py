@@ -387,7 +387,8 @@ def execute_order(command: str, *, project: pm.Project,
     operation, rows = parse_order(command)
     plan, digest = _checked_batch(rows, project, read)
     if operation == "check":
-        return f"CHECK ONLY — no Project fields changed; order digest {digest}", 0, len(rows)
+        return (f"CHECK ONLY — no Project fields changed; field {plan['field']['id']}; "
+                f"order digest {digest}"), 0, len(rows)
     if not order_apply_allowed(digest, env):
         return f"DRY RUN — order write mode is not enabled; order digest {digest}", 0, len(rows)
     if claims is None:
@@ -419,9 +420,13 @@ def execute_plan(command: str, *, project: pm.Project,
     if claims is None:
         raise DispatchError("order apply refused: no approval claim store")
     steps = [plan_claim(approval, n) for n in range(1, total + 1)]
-    seen = claims.states([batch_claim(digest), *steps])
-    if seen.get(batch_claim(digest)):
-        raise DispatchError(f"batch {index}: order digest was already used; no replay")
+    # A used digest in a later batch would strand the plan after this batch writes.
+    remaining = {n: batch_claim(entry["digest"])
+                 for n, entry in enumerate(manifest["batches"], start=1) if n >= index}
+    seen = claims.states([*remaining.values(), *steps])
+    for n, context in remaining.items():
+        if seen.get(context):
+            raise DispatchError(f"batch {n}: order digest was already used; no replay")
     for n, context in enumerate(steps, start=1):
         states = seen.get(context, set())
         if n < index and ("success" not in states or "failure" in states):
