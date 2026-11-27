@@ -9,6 +9,10 @@ An Implementation Order command (``"kind": "implementation-order"``) changes
 only that NUMBER field. Its apply also needs PROJECT3_ORDER_WRITE_MODE=apply
 and PROJECT3_ORDER_APPROVED_SHA256 set to the digest that its check printed.
 Each approved digest is applied at most once: a commit status claims it.
+
+A plan command (``"kind": "implementation-order-plan"``) carries one batch
+and the manifest of all checked batch digests. The maintainer approves the
+manifest digest once; its batches apply in order and stop at a failure.
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
-from typing import Any, Mapping, Protocol
+from typing import Any, Collection, Mapping, Protocol
 
 import project3_migrate as pm
 import project3_triage as triage
@@ -31,11 +35,19 @@ MAX_BYTES = 12000
 MAX_ITEMS = 10
 FIELDS = frozenset(("Agent", "Status", "Execution"))
 ORDER_KIND = "implementation-order"
+PLAN_KIND = "implementation-order-plan"
+ORDER_KINDS = frozenset((ORDER_KIND, PLAN_KIND))
+MANIFEST_SCHEMA = "prks-project3-order-manifest/v1"
+# 30 full batches keep a plan command under MAX_BYTES with short reasons.
+MAX_BATCHES = 30
 ORDER_ROW_KEYS = frozenset(("number", "order", "expected_before", "reason",
                             "roadmap_checked", "overlap_checked"))
 # A master commit that is never rewritten; it holds one claim per approval.
 ORDER_CLAIM_SHA = "126d25fb6f50ef9bd00cfad52065461eca993c7e"
 ORDER_CLAIM_PREFIX = "prks/project3-order-approval/"
+PLAN_CLAIM_PREFIX = "prks/project3-order-plan/"
+CLAIM_STATES = frozenset(("pending", "success", "failure"))
+HEX64 = re.compile(r"[0-9a-f]{64}")
 # About 10,000 applies at two statuses each, and far below the Actions
 # token's hourly REST limit of 1,000 requests.
 ORDER_CLAIM_PAGES = 200
@@ -74,8 +86,10 @@ def _load(command: str) -> Any:
 
 
 def command_kind(command: str) -> tuple[str, str]:
-    """Return (kind, operation) after full validation of either command type."""
+    """Return (kind, operation) after full validation of any command type."""
     payload = _load(command)
+    if isinstance(payload, dict) and payload.get("kind") == PLAN_KIND:
+        return PLAN_KIND, parse_plan(command)[0]
     if isinstance(payload, dict) and "kind" in payload:
         operation, _ = parse_order(command)
         return ORDER_KIND, operation
@@ -133,8 +147,12 @@ def parse_order(command: str) -> tuple[str, list[dict]]:
             or not isinstance(payload["items"], list)
             or not 1 <= len(payload["items"]) <= MAX_ITEMS):
         raise DispatchError("invalid order command schema or batch size")
+    return payload["operation"], _order_rows(payload["items"])
+
+
+def _order_rows(items: list) -> list[dict]:
     rows = []
-    for original in payload["items"]:
+    for original in items:
         if not isinstance(original, dict) or set(original) != ORDER_ROW_KEYS:
             raise DispatchError("order rows need exactly: " + ", ".join(sorted(ORDER_ROW_KEYS)))
         if original["number"] == 982:
@@ -151,7 +169,78 @@ def parse_order(command: str) -> tuple[str, list[dict]]:
         triage._check_order_batch(rows)
     except triage.TriageError as error:
         raise DispatchError(str(error)) from None
-    return payload["operation"], rows
+    return rows
+
+
+def _manifest(value: Any) -> dict:
+    if (not isinstance(value, dict) or set(value) != {"schema", "field", "batches"}
+            or value["schema"] != MANIFEST_SCHEMA
+            or not isinstance(value["field"], dict) or set(value["field"]) != {"name", "id"}
+            or value["field"]["name"] != triage.ORDER_FIELD
+            or not isinstance(value["field"]["id"], str) or not value["field"]["id"]
+            or not isinstance(value["batches"], list)
+            or not 1 <= len(value["batches"]) <= MAX_BATCHES):
+        raise DispatchError(f"invalid order manifest schema, field or size (1–{MAX_BATCHES} batches)")
+    numbers, ranks, digests = set(), set(), set()
+    for entry in value["batches"]:
+        if (not isinstance(entry, dict) or set(entry) != {"digest", "items"}
+                or not isinstance(entry["digest"], str) or not HEX64.fullmatch(entry["digest"])
+                or not isinstance(entry["items"], list)
+                or not 1 <= len(entry["items"]) <= MAX_ITEMS):
+            raise DispatchError("manifest batches need a digest and 1–10 [number, order] pairs")
+        if entry["digest"] in digests:
+            raise DispatchError("manifest lists one batch digest twice")
+        digests.add(entry["digest"])
+        for pair in entry["items"]:
+            if (not isinstance(pair, list) or len(pair) != 2
+                    or type(pair[0]) is not int or pair[0] < 1):
+                raise DispatchError("manifest items must be [number, order] pairs")
+            try:
+                triage.order_value(pair[1], f"#{pair[0]}: manifest order", nullable=False)
+            except triage.TriageError as error:
+                raise DispatchError(str(error)) from None
+            if pair[0] in numbers:
+                raise DispatchError(f"#{pair[0]}: issue appears in more than one manifest row")
+            if pair[1] in ranks:
+                raise DispatchError(f"rank {pair[1]} appears in more than one manifest row")
+            numbers.add(pair[0])
+            ranks.add(pair[1])
+    return value
+
+
+def parse_plan(command: str) -> tuple[str, dict, int, list[dict]]:
+    payload = _load(command)
+    if (not isinstance(payload, dict)
+            or set(payload) != {"version", "kind", "operation", "manifest", "batch", "items"}
+            or type(payload["version"]) is not int or payload["version"] != 1
+            or payload["kind"] != PLAN_KIND
+            or payload["operation"] not in ("check", "apply")
+            or type(payload["batch"]) is not int
+            or not isinstance(payload["items"], list)
+            or not 1 <= len(payload["items"]) <= MAX_ITEMS):
+        raise DispatchError("invalid order plan command schema or batch size")
+    manifest = _manifest(payload["manifest"])
+    index = payload["batch"]
+    if not 1 <= index <= len(manifest["batches"]):
+        raise DispatchError("batch is not a position in the manifest")
+    rows = _order_rows(payload["items"])
+    if [[row["number"], row["order"]] for row in rows] != manifest["batches"][index - 1]["items"]:
+        raise DispatchError(f"batch {index}: rows differ from its manifest entry")
+    return payload["operation"], manifest, index, rows
+
+
+def manifest_digest(manifest: dict) -> str:
+    """The schema key keeps this digest disjoint from batch digests."""
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def batch_claim(digest: str) -> str:
+    return ORDER_CLAIM_PREFIX + digest
+
+
+def plan_claim(manifest: str, index: int) -> str:
+    return f"{PLAN_CLAIM_PREFIX}{manifest}/{index}"
 
 
 def order_digest(rows: list[dict], field: dict, live: list[dict]) -> str:
@@ -171,12 +260,20 @@ def order_apply_allowed(digest: str, env: Mapping[str, str]) -> bool:
 
 
 class OrderClaims(Protocol):
-    def used(self, digest: str) -> bool: ...
-    def mark(self, digest: str, state: str) -> None: ...
+    def states(self, contexts: Collection[str]) -> dict[str, set[str]]: ...
+    def mark(self, context: str, state: str) -> None: ...
+
+
+def _valid_claim(context: str) -> bool:
+    if context.startswith(ORDER_CLAIM_PREFIX):
+        return bool(HEX64.fullmatch(context[len(ORDER_CLAIM_PREFIX):]))
+    manifest, _, index = context.removeprefix(PLAN_CLAIM_PREFIX).partition("/")
+    return (context.startswith(PLAN_CLAIM_PREFIX) and bool(HEX64.fullmatch(manifest))
+            and index.isdecimal() and 1 <= int(index) <= MAX_BATCHES)
 
 
 class GitHubOrderClaims:
-    """Append-only commit statuses on ORDER_CLAIM_SHA, one context per digest.
+    """Append-only commit statuses on ORDER_CLAIM_SHA, one context per claim.
 
     Both writers share the project3-assignment-mutations concurrency group,
     so the read-then-claim sequence cannot race another writer.
@@ -205,8 +302,10 @@ class GitHubOrderClaims:
             raise DispatchError("order approval claim request failed: "
                                 + type(error).__name__) from None
 
-    def used(self, digest: str) -> bool:
-        context = ORDER_CLAIM_PREFIX + digest
+    def states(self, contexts: Collection[str]) -> dict[str, set[str]]:
+        """Every state ever written for each context, from one full history scan."""
+        wanted = set(contexts)
+        found: dict[str, set[str]] = {}
         for page in range(1, ORDER_CLAIM_PAGES + 1):
             history = self._send(f"{self._base}/commits/{ORDER_CLAIM_SHA}/statuses"
                                  f"?per_page=100&page={page}")
@@ -214,16 +313,16 @@ class GitHubOrderClaims:
                 raise DispatchError("malformed order approval claim history")
             if any(not isinstance(item, dict) for item in history):
                 raise DispatchError("malformed order approval claim")
-            if any(item.get("context") == context for item in history):
-                return True
+            for item in history:
+                if item.get("context") in wanted:
+                    found.setdefault(item["context"], set()).add(str(item.get("state")))
             if len(history) < 100:
-                return False
+                return found
         raise DispatchError("order approval claim history too large to prove non-replay")
 
-    def mark(self, digest: str, state: str) -> None:
-        if state not in ("pending", "success", "failure") or not re.fullmatch(r"[0-9a-f]{64}", digest):
+    def mark(self, context: str, state: str) -> None:
+        if state not in CLAIM_STATES or not _valid_claim(context):
             raise DispatchError("invalid order approval claim")
-        context = ORDER_CLAIM_PREFIX + digest
         result = self._send(f"{self._base}/statuses/{ORDER_CLAIM_SHA}", json.dumps({
             "state": state, "context": context,
             "description": f"Implementation Order approval {state} (run {self._run_id})",
@@ -237,7 +336,7 @@ def mutations_allowed(command: str, env: Mapping[str, str]) -> bool:
     kind, operation = command_kind(command)
     if operation != "apply":
         return False
-    if kind == ORDER_KIND:
+    if kind in ORDER_KINDS:
         return env.get("PROJECT3_ORDER_WRITE_MODE") == "apply"
     return env.get("PROJECT3_ASSIGN_DISPATCH_MODE") == "apply"
 
@@ -254,39 +353,99 @@ def prepare_order(rows: list[dict], project: pm.Project,
     return plan
 
 
+def _checked_batch(rows: list[dict], project: pm.Project,
+                   read: triage.Callable[[str], Any]) -> tuple[dict, str]:
+    plan = prepare_order(rows, project, read)
+    return plan, order_digest(rows, plan["field"],
+                              [{"item": row["expected_item"], "issue": row["expected_issue"]}
+                               for row in plan["items"]])
+
+
+def _claimed_apply(plan: dict, project: pm.Project, read: triage.Callable[[str], Any],
+                   claims: OrderClaims, contexts: list[str]) -> int:
+    for context in contexts:
+        claims.mark(context, "pending")
+    try:
+        changed = triage.apply_order(plan, project, read)
+    except BaseException:
+        for context in contexts:
+            try:
+                claims.mark(context, "failure")
+            except DispatchError:
+                print("order approval claim completion failed; pending claim is durable",
+                      file=sys.stderr)
+        raise
+    for context in contexts:
+        claims.mark(context, "success")
+    return changed
+
+
 def execute_order(command: str, *, project: pm.Project,
                   read: triage.Callable[[str], Any],
                   env: Mapping[str, str],
                   claims: OrderClaims | None) -> tuple[str, int, int]:
     operation, rows = parse_order(command)
-    plan = prepare_order(rows, project, read)
-    digest = order_digest(rows, plan["field"],
-                          [{"item": row["expected_item"], "issue": row["expected_issue"]}
-                           for row in plan["items"]])
+    plan, digest = _checked_batch(rows, project, read)
     if operation == "check":
         return f"CHECK ONLY — no Project fields changed; order digest {digest}", 0, len(rows)
     if not order_apply_allowed(digest, env):
         return f"DRY RUN — order write mode is not enabled; order digest {digest}", 0, len(rows)
     if claims is None:
         raise DispatchError("order apply refused: no approval claim store")
-    if claims.used(digest):
+    if claims.states([batch_claim(digest)]):
         raise DispatchError("order apply refused: this approval was already used; no replay")
-    claims.mark(digest, "pending")
-    try:
-        changed = triage.apply_order(plan, project, read)
-    except BaseException:
-        try:
-            claims.mark(digest, "failure")
-        except DispatchError:
-            print("order approval claim completion failed; pending claim is durable", file=sys.stderr)
-        raise
-    claims.mark(digest, "success")
+    changed = _claimed_apply(plan, project, read, claims, [batch_claim(digest)])
     return f"APPLIED — {triage.ORDER_FIELD} verified; order digest {digest}", changed, len(rows)
+
+
+def execute_plan(command: str, *, project: pm.Project,
+                 read: triage.Callable[[str], Any],
+                 env: Mapping[str, str],
+                 claims: OrderClaims | None) -> tuple[str, int, int]:
+    operation, manifest, index, rows = parse_plan(command)
+    total = len(manifest["batches"])
+    plan, digest = _checked_batch(rows, project, read)
+    if plan["field"] != manifest["field"]:
+        raise DispatchError(f"{triage.ORDER_FIELD} field identity differs from the manifest")
+    if digest != manifest["batches"][index - 1]["digest"]:
+        raise DispatchError(f"batch {index}: live evidence differs from its checked order digest; "
+                            "check the remaining work again")
+    approval = manifest_digest(manifest)
+    where = f"batch {index}/{total}; manifest digest {approval}"
+    if operation == "check":
+        return f"CHECK ONLY — no Project fields changed; order digest {digest}; {where}", 0, len(rows)
+    if not order_apply_allowed(approval, env):
+        return f"DRY RUN — order write mode is not enabled; {where}", 0, len(rows)
+    if claims is None:
+        raise DispatchError("order apply refused: no approval claim store")
+    steps = [plan_claim(approval, n) for n in range(1, total + 1)]
+    seen = claims.states([batch_claim(digest), *steps])
+    if seen.get(batch_claim(digest)):
+        raise DispatchError(f"batch {index}: order digest was already used; no replay")
+    for n, context in enumerate(steps, start=1):
+        states = seen.get(context, set())
+        if n < index and ("success" not in states or "failure" in states):
+            raise DispatchError(f"batch {n} has not succeeded under this manifest; batches "
+                                "run in order and stop after a failure")
+        if n >= index and states:
+            raise DispatchError(f"batch {n} already started under this manifest; no replay")
+    try:
+        changed = _claimed_apply(plan, project, read, claims,
+                                 [batch_claim(digest), steps[index - 1]])
+    except BaseException:
+        print(f"order plan {where}: FAILED / POSSIBLY PARTIAL; batches {index + 1}–{total} "
+              "stay blocked under this manifest", file=sys.stderr)
+        raise
+    return (f"APPLIED — {triage.ORDER_FIELD} verified; {total - index} batches pending; {where}",
+            changed, len(rows))
 
 
 def run(command: str, *, project: pm.Project, read: triage.Callable[[str], Any],
         env: Mapping[str, str], claims: OrderClaims | None = None) -> tuple[str, int, int]:
-    if command_kind(command)[0] == ORDER_KIND:
+    kind = command_kind(command)[0]
+    if kind == PLAN_KIND:
+        return execute_plan(command, project=project, read=read, env=env, claims=claims)
+    if kind == ORDER_KIND:
         return execute_order(command, project=project, read=read, env=env, claims=claims)
     return execute(command, project=project, read=read,
                    mode=env.get("PROJECT3_ASSIGN_DISPATCH_MODE", ""))
@@ -357,7 +516,7 @@ def main() -> int:
                                         allow_mutations=allow))
         read = triage.rest_client(actions_token)
         claims = (GitHubOrderClaims(actions_token, os.environ.get("GITHUB_RUN_ID", ""))
-                  if allow and command_kind(command)[0] == ORDER_KIND else None)
+                  if allow and command_kind(command)[0] in ORDER_KINDS else None)
         outcome, changed, issues = run(command, project=project, read=read, env=os.environ,
                                        claims=claims)
         report(outcome, changed, issues)

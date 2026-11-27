@@ -439,7 +439,7 @@ A triage that reads GitHub only through REST (such as the ChatGPT PRKS Daily Tri
 - Validate a download with `python scripts/project3_readiness.py check-planning --snapshot - < <file>`. The 30-hour freshness rule applies. Retrieve it as in §14, with `path` `.github/workflows/project3-planning.yml` and the artifact named `project3-planning.json`.
 - A rank is planning data only. It never makes an issue Ready, accepted, assigned or authorized for an agent.
 
-To change ranks, use the order-only operation of the reviewed editor (`project3-triage.md`), of the dispatch (`project3-assignment-dispatch.md`) or of the request branch (`project3-assignment-request.md`). These writers change only Implementation Order.
+To change ranks, use the order-only operation of the reviewed editor (`project3-triage.md`), of the dispatch (`project3-assignment-dispatch.md`) or of the request branch (`project3-assignment-request.md`). These writers change only Implementation Order. One approval can cover a multi-batch plan (`project3-assignment-dispatch.md`).
 
 ## 15. Cloud agent assignment queue (read-only; Project #3 remains authoritative)
 

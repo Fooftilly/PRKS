@@ -283,7 +283,7 @@ def main() -> int:
         allow = dispatch.mutations_allowed(command, os.environ)
         gql = pm.GraphQL(pm.http_transport(project_token), allow_mutations=allow)
         claims = (dispatch.GitHubOrderClaims(actions_token, run_id)
-                  if allow and dispatch.command_kind(command)[0] == dispatch.ORDER_KIND else None)
+                  if allow and dispatch.command_kind(command)[0] in dispatch.ORDER_KINDS else None)
         outcome, changed, issues = dispatch.run(
             command, project=pm.Project(gql), read=issue_read, env=os.environ, claims=claims)
         create_status(actions_token, sha, "success", run_id)
