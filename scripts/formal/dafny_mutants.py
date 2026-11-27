@@ -20,9 +20,17 @@ FILES = ("Reconcile.dfy", "Sequence.dfy")
 
 
 def verify(dafny: str, directory: Path) -> subprocess.CompletedProcess[str]:
-    args = [dafny, "verify", "--allow-warnings", "--resource-limit", os.environ.get("PRKS_DAFNY_RLIMIT", "20000"),
-            *(str(directory / name) for name in FILES)]
-    return subprocess.run(args, capture_output=True, text=True, timeout=600, check=False)  # nosec B603
+    args = [
+        dafny,
+        "verify",
+        "--allow-warnings",
+        "--resource-limit",
+        os.environ.get("PRKS_DAFNY_RLIMIT", "20000"),
+        *(str(directory / name) for name in FILES),
+    ]
+    return subprocess.run(
+        args, capture_output=True, text=True, timeout=600, check=False
+    )  # nosec B603
 
 
 def main() -> int:
@@ -37,12 +45,19 @@ def main() -> int:
             target = directory / mutant["file"]
             text = target.read_text(encoding="utf-8")
             if text.count(mutant["from"]) != 1:
-                print(f"ERROR {mutant['name']}: edit does not match exactly once", file=sys.stderr)
+                print(
+                    f"ERROR {mutant['name']}: edit does not match exactly once",
+                    file=sys.stderr,
+                )
                 return 2
-            target.write_text(text.replace(mutant["from"], mutant["to"]), encoding="utf-8")
+            target.write_text(
+                text.replace(mutant["from"], mutant["to"]), encoding="utf-8"
+            )
             result = verify(dafny, directory)
             killed = result.returncode != 0
-            print(f"{'killed  ' if killed else 'SURVIVED'} [{mutant['group']}] {mutant['name']}")
+            print(
+                f"{'killed  ' if killed else 'SURVIVED'} [{mutant['group']}] {mutant['name']}"
+            )
             if not killed:
                 survivors.append(mutant["name"])
     print(f"{len(mutants) - len(survivors)} of {len(mutants)} mutants killed")

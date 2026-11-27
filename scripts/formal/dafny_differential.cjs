@@ -24,8 +24,9 @@ const { _dafny, Reconcile: D } = loaded.exports;
 const M = D.__default;
 
 const root = path.resolve(__dirname, '..', '..');
-const classic = new Function(fs.readFileSync(path.join(root, 'frontend/js/sync-reconcile.js'), 'utf8') +
-    '\nreturn prksSyncReconcile;')();
+const classicSource = fs.readFileSync(path.join(root, 'frontend/js/sync-reconcile.js'), 'utf8');
+const load = source => new Function(source + '\nreturn prksSyncReconcile;')();
+let classic = load(classicSource);
 
 const RUNS = Number.parseInt(process.env.PRKS_FC_RUNS || '', 10) || 5000;
 const SEED = Number.parseInt(process.env.PRKS_FC_SEED || '', 10);
@@ -128,6 +129,16 @@ const checks = [
         same(ackResult(classic.acknowledgeEditBase(e, w)),
             M.AcknowledgeEditBase(entry(e), str(w.value), rev(w.baseRevision), nat(w.ackRevision))))],
 ];
+
+/* Control: the same check MUST fail against a known-wrong build. */
+const strictTime = 'read !== null && created !== null && read < created';
+if (classicSource.split(strictTime).length !== 2) throw new Error('control mutation does not match exactly once');
+classic = load(classicSource.replace(strictTime, 'read !== null && created !== null && read <= created'));
+if (!fc.check(checks[0][1], PARAMS).failed) {
+    console.log('FAIL control: a <= mutant of sync-reconcile.js passed the planAck check');
+    process.exit(1);
+}
+classic = load(classicSource);
 
 let failed = 0;
 for (const [name, property] of checks) {

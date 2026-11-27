@@ -17,8 +17,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL = ROOT / "formal" / "dafny"
-MANIFEST = MODEL / "theorems.json"
-FORBIDDEN = re.compile(r"\bassume\b|\{:axiom\}|\{:verify\s+false\}|\{:only\}|\bexpect\b")
+FORBIDDEN = re.compile(
+    r"\bassume\b|\{:axiom\}|\{:verify\s+false\}|\{:only\}|\bexpect\b"
+)
 LEMMA = re.compile(r"^\s*lemma\s+(\w+)")
 
 
@@ -50,26 +51,36 @@ def digest(statement: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--write", action="store_true", help="record the current statements")
-    parser.add_argument("--verified", type=Path, help="a Dafny CSV log: every required lemma MUST have passed in it")
+    parser.add_argument(
+        "--write", action="store_true", help="record the current statements"
+    )
+    parser.add_argument(
+        "--verified",
+        type=Path,
+        help="a Dafny CSV log: every required lemma MUST have passed in it",
+    )
+    parser.add_argument("--model", type=Path, default=MODEL, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    manifest_path = args.model / "theorems.json"
 
     current: dict[str, tuple[str, str]] = {}
     problems: list[str] = []
-    for path in sorted(MODEL.glob("*.dfy")):
+    for path in sorted(args.model.glob("*.dfy")):
         text = strip_comments(path.read_text(encoding="utf-8"))
         for hit in FORBIDDEN.finditer(text):
             problems.append(f"{path.name}: forbidden construct {hit.group(0)!r}")
         for name, body in statements(path).items():
             current[name] = (path.name, body)
 
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     theorems = manifest["theorems"]
     if args.write:
         for name in theorems:
             file, body = current[name]
             theorems[name] = {"file": file, "sha256": digest(body)}
-        MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
         return 0
 
     witnesses = manifest.get("witnesses", {})
@@ -79,7 +90,9 @@ def main() -> int:
             continue
         file, body = current[name]
         if file != entry["file"] or digest(body) != entry["sha256"]:
-            problems.append(f"{name}: statement changed (spec changes need their own reviewed PR)")
+            problems.append(
+                f"{name}: statement changed (spec changes need their own reviewed PR)"
+            )
         if " requires " in f" {body} ":
             witness = witnesses.get(name)
             if witness is None:
@@ -91,8 +104,16 @@ def main() -> int:
             rows = list(csv.DictReader(handle))
         name_col = next(c for c in rows[0] if "displayname" in c.lower())
         outcome_col = next(c for c in rows[0] if "outcome" in c.lower())
-        passed = {row[name_col].split(" ")[0].rsplit(".", 1)[-1] for row in rows if row[outcome_col] == "Passed"}
-        failed = {row[name_col].split(" ")[0].rsplit(".", 1)[-1] for row in rows if row[outcome_col] != "Passed"}
+        passed = {
+            row[name_col].split(" ")[0].rsplit(".", 1)[-1]
+            for row in rows
+            if row[outcome_col] == "Passed"
+        }
+        failed = {
+            row[name_col].split(" ")[0].rsplit(".", 1)[-1]
+            for row in rows
+            if row[outcome_col] != "Passed"
+        }
         for name in theorems:
             if name not in passed or name in failed:
                 problems.append(f"{name}: not verified in {args.verified.name}")
