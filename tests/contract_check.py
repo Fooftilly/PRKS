@@ -4,11 +4,13 @@
 that, while a test server serves it:
 
 - the answer's status is one the route's operation documents (its own or a
-  shared refusal of ``backend.api_contract.openapi``), with every header
-  that status documents as required;
+  shared refusal of ``backend.api_contract.openapi``), with every header that
+  status documents as required, and each documented header it sends valid
+  against its schema (on HEAD too);
 - a JSON answer validates against the documented schema for that status
   (a ``gzip`` Content-Encoding is undone first), and an answer with no body
-  is one whose status documents none;
+  is one whose status documents none; a streamed answer is not read, but its
+  Content-Type is one the status documents;
 - the JSON body of a request answered with ``2xx`` validates against the
   route's request schema, and a request answered with ``2xx`` without a
   body is one whose body the contract marks optional, so a request model is
@@ -27,7 +29,7 @@ from __future__ import annotations
 import dataclasses
 import gzip
 import json
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -80,11 +82,12 @@ class ContractCheck:
         if reply is None:
             self.violations.append(f"{where}: status not documented")
             return
-        for name, header in (self._reply(reply).get("headers") or {}).items():
-            if header.get("required") and response.header(name) is None:
-                self.violations.append(f"{where}: required header {name} missing")
+        self._check_headers(where, self._reply(reply), response.header)
         content = self._reply(reply).get("content") or {}
         media = (response.header("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if response.stream is not None and route.method != "HEAD" and content and media not in content:
+            # A streamed answer is not read here, but its media type is still the documented one.
+            self.violations.append(f"{where}: streamed {media or 'answer without Content-Type'} not documented")
         if response.stream is None and route.method != "HEAD":
             payload = _decoded(response)
             if payload:
@@ -107,6 +110,19 @@ class ContractCheck:
             if schema is not None:
                 for err in self._schema_errors(schema, request.json):
                     self.violations.append(f"{where}: request {err}")
+
+    def _check_headers(self, where: str, reply: dict[str, Any], header: Callable[[str], Optional[str]]) -> None:
+        """Each documented header: present when required, and its value valid against its schema."""
+        for name, documented in (reply.get("headers") or {}).items():
+            value = header(name)
+            if value is None:
+                if documented.get("required"):
+                    self.violations.append(f"{where}: required header {name} missing")
+                continue
+            schema = documented.get("schema")
+            if schema is not None:
+                for err in self._schema_errors(schema, value):
+                    self.violations.append(f"{where}: header {name} {err}")
 
     def wrap(self, table: RouteTable) -> RouteTable:
         return RouteTable(self._wrap(one) for one in table.routes)
