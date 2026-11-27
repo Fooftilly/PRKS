@@ -26,6 +26,10 @@ from typing import Optional
 from urllib.parse import unquote
 
 from backend.api.common import objects, optional_pdfs_dir, revalidated
+from backend.api_contract.operation import BINARY, Header, Operation, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.organization import Created, Done
+from backend.api_contract.people import PersonCard, PersonCreateRequest, PersonDetail, PersonMetadataState, PersonPatch
 from backend.media.derived_caches import prks_delete_person_image_cache
 from backend.runtime.log_safety import safe_error_type, safe_log_id
 from backend.media.person_image import (
@@ -199,12 +203,40 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, {"status": "deleted"})
 
 
+_TAG = "persons"
+
+
 ROUTES = (
-    route("GET", "/api/persons", catalog),
-    route("POST", "/api/persons", create),
-    route("GET", "/api/persons/{person_id}", detail),
-    route("PATCH", "/api/persons/{person_id}", update),
-    route("DELETE", "/api/persons/{person_id}", delete),
-    route("GET", "/api/persons/{person_id}/metadata-state", metadata_state),
-    route("GET", "/api/persons/{person_id}/profile-image", profile_image),
+    route("GET", "/api/persons", catalog, contract=revalidated_read(
+        "listPersons", "Every Person with role types and groups", _TAG, list[PersonCard],
+        "Every Person, by last name.")),
+    route("POST", "/api/persons", create, contract=Operation(
+        "createPerson", "Create a Person", _TAG,
+        {200: ok(Created, "Created."), 400: error("An image_url that is not a public http(s) URL.")},
+        request=body(PersonCreateRequest, "Left out: an empty profile.", required=False))),
+    route("GET", "/api/persons/{person_id}", detail, contract=Operation(
+        "getPerson", "A Person with one Work row per credit and its groups", _TAG,
+        {200: ok(PersonDetail, "The Person."), 404: plain("No Person with that id.")})),
+    route("PATCH", "/api/persons/{person_id}", update, contract=Operation(
+        "updatePerson", "Change a Person's profile and, with group_ids, its groups, together", _TAG,
+        {200: ok(Done, "Updated."),
+         400: error("A bad image_url or group_ids, an unknown group, a refused value, or no such Person.")},
+        request=body(PersonPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", "/api/persons/{person_id}", delete, contract=Operation(
+        "deletePerson", "Delete a Person no role names", _TAG,
+        {200: ok(Done, "Deleted."), 400: error("A domain refusal."), 404: error("No Person with that id."),
+         409: error("The Person is credited on Works.")})),
+    route("GET", "/api/persons/{person_id}/metadata-state", metadata_state, contract=revalidated_read(
+        "getPersonMetadataState", "A Person's field revisions", _TAG, PersonMetadataState,
+        "The revisions only.", {404: error("No Person with that id.")})),
+    route("GET", "/api/persons/{person_id}/profile-image", profile_image, contract=Operation(
+        "getPersonProfileImage", "A Person's cached portrait, fetched and cached on a miss", _TAG,
+        {200: ok(BINARY, "The portrait.", media_type=("image/webp", "image/jpeg"),
+                 headers={"Cache-Control": Header("Private: a day from the cache, an hour when just fetched.",
+                                                  {"type": "string",
+                                                   "enum": ["private, max-age=86400", "private, max-age=3600"]},
+                                                  required=True)}),
+         404: plain("No such Person, no image_url, or the image could not be fetched."),
+         503: error("The Library is unavailable, or in maintenance when an editor's miss caches the portrait "
+                    "(unavailable, MAINTENANCE).")})),
 )

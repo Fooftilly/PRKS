@@ -249,6 +249,141 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Folder with its counts */
+        get: operations["listFolders"];
+        put?: never;
+        /** Create a Folder */
+        post: operations["createFolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folders/{folder_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Folder with its children, parent, Works and Tags */
+        get: operations["getFolder"];
+        put?: never;
+        post?: never;
+        /** Delete an empty Folder */
+        delete: operations["deleteFolder"];
+        options?: never;
+        head?: never;
+        /** Change a Folder's fields */
+        patch: operations["updateFolder"];
+        trace?: never;
+    };
+    "/api/folders/{folder_id}/sync-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Folder's field revisions */
+        get: operations["getFolderSyncState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folders/{folder_id}/works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** File an unfiled Work in a Folder */
+        post: operations["fileWorkInFolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folders/{owner_id}/tag-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Folder's Tags and known link revisions */
+        get: operations["getFolderTagOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folders/{owner_id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a Tag to a Folder */
+        post: operations["tagFolder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/folders/{owner_id}/tags/{tag_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unlink a Tag from a Folder */
+        delete: operations["untagFolder"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/openapi.json": {
         parameters: {
             query?: never;
@@ -283,6 +418,318 @@ export interface paths {
         options?: never;
         /** A managed PDF of this Library, with Range support (headers only) */
         head: operations["getManagedPdfHead"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/person-groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Person group with its counts */
+        get: operations["listPersonGroups"];
+        put?: never;
+        /** Create a Person group */
+        post: operations["createPersonGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/person-groups/{group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        /** A group with its children, members and parent */
+        get: operations["getPersonGroup"];
+        put?: never;
+        post?: never;
+        /** Delete a group */
+        delete: operations["deletePersonGroup"];
+        options?: never;
+        head?: never;
+        /** Change a group's fields */
+        patch: operations["updatePersonGroup"];
+        trace?: never;
+    };
+    "/api/person-groups/{group_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put a Person in a group */
+        post: operations["addPersonGroupMember"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/person-groups/{group_id}/members/{person_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take a Person out of a group */
+        delete: operations["removePersonGroupMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/person-groups/{group_id}/sync-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        /** A group's field and membership revisions */
+        get: operations["getPersonGroupSyncState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/persons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Person with role types and groups */
+        get: operations["listPersons"];
+        put?: never;
+        /** Create a Person */
+        post: operations["createPerson"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/persons/{person_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Person with one Work row per credit and its groups */
+        get: operations["getPerson"];
+        put?: never;
+        post?: never;
+        /** Delete a Person no role names */
+        delete: operations["deletePerson"];
+        options?: never;
+        head?: never;
+        /** Change a Person's profile and, with group_ids, its groups, together */
+        patch: operations["updatePerson"];
+        trace?: never;
+    };
+    "/api/persons/{person_id}/group-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Person's group membership revisions */
+        get: operations["getPersonGroupState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/persons/{person_id}/metadata-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Person's field revisions */
+        get: operations["getPersonMetadataState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/persons/{person_id}/profile-image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Person's cached portrait, fetched and cached on a miss */
+        get: operations["getPersonProfileImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/playlists": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Playlist with its item count */
+        get: operations["listPlaylists"];
+        put?: never;
+        /** Create a Playlist */
+        post: operations["createPlaylist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/playlists/{playlist_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Playlist with its Works in order */
+        get: operations["getPlaylist"];
+        put?: never;
+        post?: never;
+        /** Delete a Playlist and release its Works */
+        delete: operations["deletePlaylist"];
+        options?: never;
+        head?: never;
+        /** Change a Playlist's fields */
+        patch: operations["updatePlaylist"];
+        trace?: never;
+    };
+    "/api/playlists/{playlist_id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put a Work in a Playlist, optionally at a position */
+        post: operations["addPlaylistItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/playlists/{playlist_id}/items/{work_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Take a Work out of a Playlist */
+        delete: operations["removePlaylistItem"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/playlists/{playlist_id}/reorder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rewrite a Playlist's order
+         * @description Unknown and repeated ids are ignored; the members left out follow the named ones in their current order.
+         */
+        post: operations["reorderPlaylist"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/playlists/{playlist_id}/sync-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Playlist's field and order revisions */
+        get: operations["getPlaylistSyncState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
         patch?: never;
         trace?: never;
     };
@@ -562,6 +1009,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Credit a Person on an existing Work, appended */
+        post: operations["addRole"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/saved-views": {
         parameters: {
             query?: never;
@@ -679,6 +1143,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every Tag with its aliases, by name */
+        get: operations["listTags"];
+        put?: never;
+        /** Create a Tag, or recolour the one holding the name */
+        post: operations["createTag"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tags/{tag_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete a Tag with its links and aliases */
+        delete: operations["deleteTag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tags/{tag_id}/aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add an alias to a Tag */
+        post: operations["addTagAlias"];
+        /** Remove a Tag's alias */
+        delete: operations["deleteTagAlias"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tags/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a Tag's links to another and keep its name as an alias */
+        post: operations["mergeTags"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/works": {
         parameters: {
             query?: never;
@@ -692,6 +1230,64 @@ export interface paths {
         /** Create a Work from an upload, a managed PDF, a video URL or no file */
         post: operations["createWork"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{owner_id}/tag-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's Tags and known link revisions */
+        get: operations["getWorkTagOptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{owner_id}/tags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Link a Tag to a Work */
+        post: operations["tagWork"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{owner_id}/tags/{tag_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                owner_id: string;
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unlink a Tag from a Work */
+        delete: operations["untagWork"];
         options?: never;
         head?: never;
         patch?: never;
@@ -716,6 +1312,25 @@ export interface paths {
         head?: never;
         /** Change a Work's metadata, notes or Folder */
         patch: operations["updateWork"];
+        trace?: never;
+    };
+    "/api/works/{work_id}/folder-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** Which Folder a Work is in, and its revision */
+        get: operations["getWorkFolderState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/works/{work_id}/metadata-state": {
@@ -773,6 +1388,83 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/people-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** A Work's role revisions */
+        get: operations["getWorkPeopleState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/playlist-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** Which Playlist a Work is in, and its revision */
+        get: operations["getWorkPlaylistState"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/related_folders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        /** Folders holding a Work that shares a Person with this one */
+        get: operations["listRelatedFolders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/works/{work_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove a Person's role from a Work */
+        delete: operations["removeRole"];
+        options?: never;
+        head?: never;
+        /** Change how a Person is credited on a Work */
+        patch: operations["updateRoleCredit"];
         trace?: never;
     };
     "/api/works/{work_id}/source-state": {
@@ -970,6 +1662,12 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+        };
+        AssignedTag: {
+            /** Relation Revision */
+            relation_revision: number;
+            /** Tag Id */
+            tag_id: string;
         };
         BackupFailed: {
             /**
@@ -1341,6 +2039,10 @@ export interface components {
             /** Name */
             name: string;
         };
+        Created: {
+            /** Id */
+            id: string;
+        };
         CslDate: {
             /** Date-Parts */
             "date-parts": number[][];
@@ -1434,6 +2136,14 @@ export interface components {
             /** Settings */
             settings: components["schemas"]["DeploymentSetting"][];
         };
+        /** @description ``{"status": ...}``: what the request did. */
+        Done: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "added" | "removed" | "deleted" | "updated" | "reordered";
+        };
         DuplicateItem: {
             /** Id */
             id: string;
@@ -1460,6 +2170,181 @@ export interface components {
              * @enum {string}
              */
             state: "starting" | "waiting" | "running" | "stopping" | "stopped" | "refused";
+        };
+        FileWorkRequest: {
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description A Folder row. */
+        Folder: {
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Private Notes */
+            private_notes: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** @description ``GET /api/folders``: a Folder with its counts (an empty root Uncategorized is left out). */
+        FolderCard: {
+            /** Child Count */
+            child_count: number;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Private Notes */
+            private_notes: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Work Count */
+            work_count: number;
+        };
+        FolderChild: {
+            /** Child Count */
+            child_count: number;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Title */
+            title: string;
+            /** Work Count */
+            work_count: number;
+        };
+        FolderCreateRequest: {
+            /**
+             * Description
+             * @description Left out: empty.
+             */
+            description?: string;
+            /**
+             * Parent Id
+             * @description Left out or null: a root Folder.
+             */
+            parent_id?: string | null;
+            /**
+             * Title
+             * @description Left out: ``Untitled Folder``.
+             */
+            title?: string;
+        };
+        /** @description ``GET /api/folders/{id}``: the Folder with its children, parent, Works and Tags. */
+        FolderDetail: {
+            /** Children */
+            children: components["schemas"]["FolderChild"][];
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            parent: components["schemas"]["FolderParent"] | null;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Private Notes */
+            private_notes: string | null;
+            /** Tags */
+            tags: components["schemas"]["WorkTag"][];
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Works */
+            works: components["schemas"]["WorkSummary"][];
+        };
+        FolderFieldRevisions: {
+            description: components["schemas"]["Revision"];
+            parent_id: components["schemas"]["Revision"];
+            private_notes: components["schemas"]["Revision"];
+            title: components["schemas"]["Revision"];
+        };
+        FolderParent: {
+            /** Id */
+            id: string;
+            /** Title */
+            title: string;
+        };
+        /** @description The fields to change; a field left out stays. */
+        FolderPatch: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Parent Id
+             * @description Null: a root Folder.
+             */
+            parent_id?: string | null;
+            /** Private Notes */
+            private_notes?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** @description ``GET /api/folders/{id}/sync-state``: field revisions only. */
+        FolderState: {
+            fields: components["schemas"]["FolderFieldRevisions"];
+            /** Folder Id */
+            folder_id: string;
+        };
+        FolderTagOptions: {
+            /**
+             * Assigned
+             * @description The owner's Tags with their link revisions.
+             */
+            assigned: components["schemas"]["AssignedTag"][];
+            /** Folder Id */
+            folder_id: string;
+            /**
+             * Known Absent
+             * @description Tags not linked to the owner whose link has a revision: tag id -> revision.
+             */
+            known_absent: {
+                [key: string]: number;
+            };
+        };
+        FolderUpdated: {
+            /**
+             * Member Work Ids
+             * @description The member Works whose cached detail a rename stales; empty without ``title``.
+             */
+            member_work_ids: string[];
+            /**
+             * Status
+             * @constant
+             */
+            status: "updated";
+        };
+        GroupChip: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        GroupMemberRequest: {
+            /** Person Id */
+            person_id: string;
+        };
+        GroupMemberScope: {
+            /** Person Id */
+            person_id: string;
+            /** Present */
+            present: boolean;
+            /** Revision */
+            revision: number;
         };
         /** @description A credit the new Work is born with; one without a known role type is skipped. */
         InitialRole: {
@@ -1666,6 +2551,598 @@ export interface components {
             p50_ms: number | null;
             /** P95 Ms */
             p95_ms: number | null;
+        };
+        /** @description ``GET /api/persons``: a profile with its role types and groups, by last name. */
+        PersonCard: {
+            /** About */
+            about: string | null;
+            /**
+             * Aliases
+             * @description The aliases, comma-separated; empty when none.
+             */
+            aliases: string;
+            /**
+             * Assigned Roles
+             * @description The Person's distinct role types, sorted.
+             */
+            assigned_roles: string[];
+            /** Birth Date */
+            birth_date: string | null;
+            /** Created At */
+            created_at: string;
+            /** Death Date */
+            death_date: string | null;
+            /** First Name */
+            first_name: string | null;
+            /** Groups */
+            groups: components["schemas"]["GroupChip"][];
+            /** Id */
+            id: string;
+            /** Image Url */
+            image_url: string | null;
+            /** Last Name */
+            last_name: string | null;
+            /** Link Iep */
+            link_iep: string | null;
+            /** Link Stanford Encyclopedia */
+            link_stanford_encyclopedia: string | null;
+            /** Link Wikipedia */
+            link_wikipedia: string | null;
+            /** Links Other */
+            links_other: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
+        /** @description The profile; a field left out or null is empty. */
+        PersonCreateRequest: {
+            /** About */
+            about?: string | null;
+            /**
+             * Aliases
+             * @description Comma-separated.
+             */
+            aliases?: string | null;
+            /** Birth Date */
+            birth_date?: string | null;
+            /** Death Date */
+            death_date?: string | null;
+            /** First Name */
+            first_name?: string | null;
+            /**
+             * Image Url
+             * @description A public http(s) URL (else 400).
+             */
+            image_url?: string | null;
+            /** Last Name */
+            last_name?: string | null;
+            /** Link Iep */
+            link_iep?: string | null;
+            /** Link Stanford Encyclopedia */
+            link_stanford_encyclopedia?: string | null;
+            /** Link Wikipedia */
+            link_wikipedia?: string | null;
+            /** Links Other */
+            links_other?: string | null;
+        };
+        /** @description ``GET /api/persons/{id}``: the profile with one Work row per credit and its groups. */
+        PersonDetail: {
+            /** About */
+            about: string | null;
+            /**
+             * Aliases
+             * @description The aliases, comma-separated; empty when none.
+             */
+            aliases: string;
+            /** Birth Date */
+            birth_date: string | null;
+            /** Created At */
+            created_at: string;
+            /** Death Date */
+            death_date: string | null;
+            /** First Name */
+            first_name: string | null;
+            /** Groups */
+            groups: components["schemas"]["PersonGroupRef"][];
+            /** Id */
+            id: string;
+            /** Image Url */
+            image_url: string | null;
+            /** Last Name */
+            last_name: string | null;
+            /** Link Iep */
+            link_iep: string | null;
+            /** Link Stanford Encyclopedia */
+            link_stanford_encyclopedia: string | null;
+            /** Link Wikipedia */
+            link_wikipedia: string | null;
+            /** Links Other */
+            links_other: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** Works */
+            works: components["schemas"]["PersonWork"][];
+        };
+        PersonFieldRevisions: {
+            about: components["schemas"]["Revision"];
+            aliases: components["schemas"]["Revision"];
+            birth_date: components["schemas"]["Revision"];
+            death_date: components["schemas"]["Revision"];
+            first_name: components["schemas"]["Revision"];
+            image_url: components["schemas"]["Revision"];
+            last_name: components["schemas"]["Revision"];
+            link_iep: components["schemas"]["Revision"];
+            link_stanford_encyclopedia: components["schemas"]["Revision"];
+            link_wikipedia: components["schemas"]["Revision"];
+            links_other: components["schemas"]["Revision"];
+        };
+        /** @description ``GET /api/person-groups``: a group with its counts. */
+        PersonGroupCard: {
+            /** Child Count */
+            child_count: number;
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Member Count */
+            member_count: number;
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
+        PersonGroupChild: {
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Member Count */
+            member_count: number;
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id: string | null;
+        };
+        PersonGroupCreateRequest: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Parent Id
+             * @description The parent group; empty or null: none (then ``parent_name``).
+             */
+            parent_id?: string | null;
+            /**
+             * Parent Name
+             * @description A parent by name, found or created, when no ``parent_id``.
+             */
+            parent_name?: string | null;
+        };
+        /** @description ``GET /api/person-groups/{id}``: the group, its children, members and parent. */
+        PersonGroupDetail: {
+            /** Children */
+            children: components["schemas"]["PersonGroupChild"][];
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Member Count */
+            member_count: number;
+            /** Members */
+            members: components["schemas"]["PersonCard"][];
+            /** Name */
+            name: string;
+            parent: components["schemas"]["GroupChip"] | null;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Updated At */
+            updated_at: string;
+        };
+        PersonGroupFieldRevisions: {
+            description: components["schemas"]["Revision"];
+            name: components["schemas"]["Revision"];
+            parent_id: components["schemas"]["Revision"];
+        };
+        /** @description The fields to change; a ``parent_name`` is found or created. */
+        PersonGroupPatch: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name?: string | null;
+            /**
+             * Parent Id
+             * @description Null or empty: a top-level group.
+             */
+            parent_id?: string | null;
+            /**
+             * Parent Name
+             * @description A parent by name, found or created; empty: top level.
+             */
+            parent_name?: string | null;
+        };
+        PersonGroupRef: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Parent Id */
+            parent_id: string | null;
+        };
+        /** @description ``GET /api/person-groups/{id}/sync-state``: field and membership revisions, tombstones included. */
+        PersonGroupState: {
+            fields: components["schemas"]["PersonGroupFieldRevisions"];
+            /** Group Id */
+            group_id: string;
+            /** Members */
+            members: components["schemas"]["GroupMemberScope"][];
+        };
+        PersonMembershipScope: {
+            /** Group Id */
+            group_id: string;
+            /** Present */
+            present: boolean;
+            /** Revision */
+            revision: number;
+        };
+        /** @description ``GET /api/persons/{id}/group-state``: membership revisions, tombstones included. */
+        PersonMembershipState: {
+            /** Groups */
+            groups: components["schemas"]["PersonMembershipScope"][];
+            /** Person Id */
+            person_id: string;
+        };
+        /** @description ``GET /api/persons/{id}/metadata-state``: field revisions only. */
+        PersonMetadataState: {
+            fields: components["schemas"]["PersonFieldRevisions"];
+            /** Person Id */
+            person_id: string;
+        };
+        /** @description The profile fields to change, and with ``group_ids`` the exact group set, together. */
+        PersonPatch: {
+            /** About */
+            about?: string | null;
+            /**
+             * Aliases
+             * @description Comma-separated.
+             */
+            aliases?: string | null;
+            /** Birth Date */
+            birth_date?: string | null;
+            /** Death Date */
+            death_date?: string | null;
+            /** First Name */
+            first_name?: string | null;
+            /**
+             * Group Ids
+             * @description The Person's whole group set; left out or null: unchanged.
+             */
+            group_ids?: string[] | null;
+            /**
+             * Image Url
+             * @description A public http(s) URL (else 400).
+             */
+            image_url?: string | null;
+            /** Last Name */
+            last_name?: string | null;
+            /** Link Iep */
+            link_iep?: string | null;
+            /** Link Stanford Encyclopedia */
+            link_stanford_encyclopedia?: string | null;
+            /** Link Wikipedia */
+            link_wikipedia?: string | null;
+            /** Links Other */
+            links_other?: string | null;
+        };
+        /** @description One credit of the Person: the Work row, its people columns and the role. */
+        PersonWork: {
+            /** Abstract */
+            abstract: string | null;
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Canonical Annotation Set Revision */
+            canonical_annotation_set_revision: number;
+            /** Citation Style */
+            citation_style: string;
+            /** Created At */
+            created_at: string;
+            /** Credit Name */
+            credit_name: string | null;
+            /** Doc Type */
+            doc_type: string | null;
+            /** Doi */
+            doi: string | null;
+            /** Edition */
+            edition: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /**
+             * Folder Id
+             * @description Left out of a Tag filter's rows (``GET /api/search?tag=``).
+             * @default null
+             */
+            folder_id?: string | null;
+            /**
+             * Hide Pdf Link Annotations
+             * @enum {integer}
+             */
+            hide_pdf_link_annotations: 0 | 1;
+            /** Id */
+            id: string;
+            /** Isbn */
+            isbn: string | null;
+            /** Issue */
+            issue: string | null;
+            /** Journal */
+            journal: string | null;
+            /** Last Opened At */
+            last_opened_at: string | null;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Location */
+            location: string | null;
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Materialized Pdf Annotation Revision */
+            materialized_pdf_annotation_revision: number;
+            /** Order Index */
+            order_index: number;
+            /** Pages */
+            pages: string | null;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Private Notes */
+            private_notes: string | null;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Publisher */
+            publisher: string | null;
+            /** Role Type */
+            role_type: string;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Mime */
+            source_mime: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Text Content */
+            text_content: string | null;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Urldate */
+            urldate: string | null;
+            /** Volume */
+            volume: string | null;
+            /** Year */
+            year: string | null;
+        };
+        /** @description ``GET /api/playlists``: a Playlist with its item count, last changed first. */
+        PlaylistCard: {
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Item Count */
+            item_count: number;
+            /**
+             * Original Url
+             * @description Null when empty.
+             */
+            original_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        PlaylistCreateRequest: {
+            /**
+             * Description
+             * @description Left out or null: empty.
+             */
+            description?: string | null;
+            /**
+             * Original Url
+             * @description Left out or null: empty.
+             */
+            original_url?: string | null;
+            /**
+             * Title
+             * @description Left out or null: empty.
+             */
+            title?: string | null;
+        };
+        /** @description ``GET /api/playlists/{id}``: the Playlist with its Works in order. */
+        PlaylistDetail: {
+            /** Created At */
+            created_at: string;
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Items */
+            items: components["schemas"]["PlaylistItem"][];
+            /**
+             * Original Url
+             * @description Null when empty.
+             */
+            original_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+        };
+        PlaylistFieldRevisions: {
+            description: components["schemas"]["Revision"];
+            original_url: components["schemas"]["Revision"];
+            title: components["schemas"]["Revision"];
+        };
+        PlaylistItem: {
+            /** Abstract */
+            abstract: string | null;
+            /** Asset Count */
+            asset_count: number;
+            /** Author Text */
+            author_text: string | null;
+            /** Created At */
+            created_at: string;
+            /** Doc Type */
+            doc_type: string | null;
+            /** Doi */
+            doi: string | null;
+            /** Edition */
+            edition: string | null;
+            /**
+             * File Path
+             * @description ``/api/pdfs/<name>`` for a managed PDF, else empty.
+             */
+            file_path: string;
+            /**
+             * File Size Bytes
+             * @description The managed PDF's size on disk; null without one.
+             */
+            file_size_bytes: number | null;
+            /**
+             * Folder Id
+             * @description Left out of a Tag filter's rows (``GET /api/search?tag=``).
+             * @default null
+             */
+            folder_id?: string | null;
+            /** Id */
+            id: string;
+            /** Isbn */
+            isbn: string | null;
+            /** Issue */
+            issue: string | null;
+            /** Journal */
+            journal: string | null;
+            /** Last Opened At */
+            last_opened_at: string | null;
+            /**
+             * Linked Authors
+             * @description The Authors' display names, comma separated.
+             */
+            linked_authors: string | null;
+            /** Linked People */
+            linked_people: components["schemas"]["LinkedPerson"][];
+            /** Location */
+            location: string | null;
+            /** Manifestation Count */
+            manifestation_count: number;
+            /** Pages */
+            pages: string | null;
+            /** Position */
+            position: number;
+            /** Primary Asset Id */
+            primary_asset_id: string | null;
+            /** Primary Author */
+            primary_author: string | null;
+            /** Primary Editor */
+            primary_editor: string | null;
+            /** Primary Manifestation Id */
+            primary_manifestation_id: string;
+            /** Provider */
+            provider: string | null;
+            /** Provider Id */
+            provider_id: string | null;
+            /** Published Date */
+            published_date: string | null;
+            /** Publisher */
+            publisher: string | null;
+            /** Source Kind */
+            source_kind: ("pdf" | "video") | null;
+            /** Source Mime */
+            source_mime: string | null;
+            /** Source Url */
+            source_url: string | null;
+            /** Status */
+            status: string;
+            /** Thumb Page */
+            thumb_page: number | null;
+            /** Thumb Url */
+            thumb_url: string | null;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at: string;
+            /** Urldate */
+            urldate: string | null;
+            /** Volume */
+            volume: string | null;
+            /** Year */
+            year: string | null;
+        };
+        PlaylistItemRequest: {
+            /**
+             * Position
+             * @description Where the Work goes; left out, null, blank or not a number: the end.
+             */
+            position?: string | number | null;
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description The fields to change; null is empty, a field left out stays. */
+        PlaylistPatch: {
+            /** Description */
+            description?: string | null;
+            /** Original Url */
+            original_url?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        PlaylistReorderRequest: {
+            /**
+             * Work Ids
+             * @description The member Works in their new order.
+             */
+            work_ids?: string[];
+        };
+        /** @description ``GET /api/playlists/{id}/sync-state``: field revisions and the order revision only. */
+        PlaylistState: {
+            fields: components["schemas"]["PlaylistFieldRevisions"];
+            /** Order Revision */
+            order_revision: number;
+            /** Playlist Id */
+            playlist_id: string;
         };
         /** @description Argument/Stance row embedded on Position detail. */
         PositionArgumentSummary: {
@@ -2389,6 +3866,64 @@ export interface components {
              */
             token: string;
         };
+        Revision: {
+            /** Revision */
+            revision: number;
+        };
+        RoleAdded: {
+            /**
+             * Status
+             * @constant
+             */
+            status: "success";
+        };
+        RoleAddRequest: {
+            /**
+             * Credit Name
+             * @description The name as credited on this Work; left out or null: none.
+             */
+            credit_name?: string | null;
+            /** Person Id */
+            person_id: string;
+            /** Role Type */
+            role_type: string;
+            /** Work Id */
+            work_id: string;
+        };
+        RoleCreditRequest: {
+            /**
+             * Credit Name
+             * @description The new credit; left out or null: none.
+             */
+            credit_name?: string | null;
+            /**
+             * Order Index
+             * @description Checked to be an integer, else ignored.
+             */
+            order_index?: number | string | null;
+            /** Person Id */
+            person_id: string;
+            /** Role Type */
+            role_type: string;
+        };
+        RoleDone: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "updated" | "removed";
+        };
+        /** @description One Person-role relationship of the Work: its revision, and whether it is live. */
+        RoleScope: {
+            /** Person Id */
+            person_id: string;
+            /** Present */
+            present: boolean;
+            /** Revision */
+            revision: number;
+            /** Role Type */
+            role_type: string;
+        };
         /** @description One Saved View: GET list rows, GET by id, POST and PATCH bodies. */
         SavedView: {
             /** Created At */
@@ -2702,6 +4237,104 @@ export interface components {
             code: string;
         } & {
             [key: string]: unknown;
+        };
+        /** @description ``GET /api/tags``: a Tag with its aliases, by name. */
+        Tag: {
+            /** Aliases */
+            aliases: string[];
+            /** Color */
+            color: string | null;
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        TagAliasRequest: {
+            /** Alias */
+            alias: string;
+        };
+        /** @description The Tag holding the name: a new one, or an existing one (``existed``) that took the colour. */
+        TagCreated: {
+            /** Color */
+            color: string | null;
+            /** Existed */
+            existed: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        TagCreateRequest: {
+            /**
+             * Color
+             * @description A ``#rrggbb`` colour; left out: the default colour.
+             */
+            color?: string | null;
+            /** Name */
+            name: string;
+        };
+        TagDeleted: {
+            /** Affected Folder Ids */
+            affected_folder_ids: string[];
+            /** Affected Tag Options Folder Ids */
+            affected_tag_options_folder_ids: string[];
+            /** Affected Tag Options Work Ids */
+            affected_tag_options_work_ids: string[];
+            /** Affected Work Ids */
+            affected_work_ids: string[];
+            /**
+             * Status
+             * @constant
+             */
+            status: "deleted";
+        };
+        /** @description ``GET /api/tags?used=1``: a Tag linked to a Work or a Folder, with the counts. */
+        TagInUse: {
+            /** Aliases */
+            aliases: string[];
+            /** Color */
+            color: string | null;
+            /** Created At */
+            created_at: string;
+            /** Folder Count */
+            folder_count: number;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Work Count */
+            work_count: number;
+        };
+        TagLinkRequest: {
+            /** Tag Id */
+            tag_id: string;
+        };
+        TagMerged: {
+            /** Affected Folder Ids */
+            affected_folder_ids: string[];
+            /** Affected Tag Options Folder Ids */
+            affected_tag_options_folder_ids: string[];
+            /** Affected Tag Options Work Ids */
+            affected_tag_options_work_ids: string[];
+            /** Affected Work Ids */
+            affected_work_ids: string[];
+            /** Canonical Name */
+            canonical_name: string;
+            /** Canonical Tag Id */
+            canonical_tag_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "merged";
+        };
+        TagMergeRequest: {
+            /** Source Tag Id */
+            source_tag_id: string;
+            /** Target Tag Id */
+            target_tag_id: string;
         };
         /** @description ``POST /api/works/reindex-pdf-text``: the rebuild is queued; the counters are zero. */
         TextRebuildQueued: {
@@ -3034,6 +4667,18 @@ export interface components {
             /** Year */
             year: string | null;
         };
+        /** @description ``GET /api/works/{id}/folder-state``. */
+        WorkFolderState: {
+            /**
+             * Folder Id
+             * @description The Work's Folder; empty when it is in none.
+             */
+            folder_id: string;
+            /** Revision */
+            revision: number;
+            /** Work Id */
+            work_id: string;
+        };
         /** @description Every synchronized field (``metadata_rules.SYNCED_FIELDS``), each one present. */
         WorkMetadataFields: {
             abstract: components["schemas"]["MetadataFieldRevision"];
@@ -3153,6 +4798,25 @@ export interface components {
              * @description A number is stored as its text.
              */
             year?: string | number | null;
+        };
+        /** @description ``GET /api/works/{id}/people-state``: role revisions, tombstones included. */
+        WorkPeopleState: {
+            /** Scopes */
+            scopes: components["schemas"]["RoleScope"][];
+            /** Work Id */
+            work_id: string;
+        };
+        /** @description ``GET /api/works/{id}/playlist-state``. */
+        WorkPlaylistState: {
+            /**
+             * Playlist Id
+             * @description The Work's Playlist; empty when it is in none.
+             */
+            playlist_id: string;
+            /** Revision */
+            revision: number;
+            /** Work Id */
+            work_id: string;
         };
         /** @description A credit on the Work's primary Manifestation: the Person's row and the role. */
         WorkRole: {
@@ -3340,6 +5004,22 @@ export interface components {
             /** Name */
             name: string;
         };
+        WorkTagOptions: {
+            /**
+             * Assigned
+             * @description The owner's Tags with their link revisions.
+             */
+            assigned: components["schemas"]["AssignedTag"][];
+            /**
+             * Known Absent
+             * @description Tags not linked to the owner whose link has a revision: tag id -> revision.
+             */
+            known_absent: {
+                [key: string]: number;
+            };
+            /** Work Id */
+            work_id: string;
+        };
     };
     responses: {
         /** @description The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
@@ -3442,6 +5122,7 @@ export type ApiErrorEnvelope = components['schemas']['ApiErrorEnvelope'];
 export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
 export type ArgumentRef = components['schemas']['ArgumentRef'];
+export type AssignedTag = components['schemas']['AssignedTag'];
 export type BackupFailed = components['schemas']['BackupFailed'];
 export type BackupProgressLine = components['schemas']['BackupProgressLine'];
 export type BackupReady = components['schemas']['BackupReady'];
@@ -3465,14 +5146,31 @@ export type CitationStyleSummary = components['schemas']['CitationStyleSummary']
 export type ClientErrorLogged = components['schemas']['ClientErrorLogged'];
 export type ClientErrorReport = components['schemas']['ClientErrorReport'];
 export type ConceptRef = components['schemas']['ConceptRef'];
+export type Created = components['schemas']['Created'];
 export type CslDate = components['schemas']['CslDate'];
 export type CslItem = components['schemas']['CslItem'];
 export type CslName = components['schemas']['CslName'];
 export type DeploymentSetting = components['schemas']['DeploymentSetting'];
 export type DeploymentSettings = components['schemas']['DeploymentSettings'];
+export type Done = components['schemas']['Done'];
 export type DuplicateItem = components['schemas']['DuplicateItem'];
 export type DuplicateWork = components['schemas']['DuplicateWork'];
 export type EmbeddedJobWorker = components['schemas']['EmbeddedJobWorker'];
+export type FileWorkRequest = components['schemas']['FileWorkRequest'];
+export type Folder = components['schemas']['Folder'];
+export type FolderCard = components['schemas']['FolderCard'];
+export type FolderChild = components['schemas']['FolderChild'];
+export type FolderCreateRequest = components['schemas']['FolderCreateRequest'];
+export type FolderDetail = components['schemas']['FolderDetail'];
+export type FolderFieldRevisions = components['schemas']['FolderFieldRevisions'];
+export type FolderParent = components['schemas']['FolderParent'];
+export type FolderPatch = components['schemas']['FolderPatch'];
+export type FolderState = components['schemas']['FolderState'];
+export type FolderTagOptions = components['schemas']['FolderTagOptions'];
+export type FolderUpdated = components['schemas']['FolderUpdated'];
+export type GroupChip = components['schemas']['GroupChip'];
+export type GroupMemberRequest = components['schemas']['GroupMemberRequest'];
+export type GroupMemberScope = components['schemas']['GroupMemberScope'];
 export type InitialRole = components['schemas']['InitialRole'];
 export type JobDiagnostics = components['schemas']['JobDiagnostics'];
 export type JobQueueDepth = components['schemas']['JobQueueDepth'];
@@ -3488,6 +5186,32 @@ export type PerformanceRequestTotals = components['schemas']['PerformanceRequest
 export type PerformanceRouteStat = components['schemas']['PerformanceRouteStat'];
 export type PerformanceSnapshot = components['schemas']['PerformanceSnapshot'];
 export type PerformanceSpanStat = components['schemas']['PerformanceSpanStat'];
+export type PersonCard = components['schemas']['PersonCard'];
+export type PersonCreateRequest = components['schemas']['PersonCreateRequest'];
+export type PersonDetail = components['schemas']['PersonDetail'];
+export type PersonFieldRevisions = components['schemas']['PersonFieldRevisions'];
+export type PersonGroupCard = components['schemas']['PersonGroupCard'];
+export type PersonGroupChild = components['schemas']['PersonGroupChild'];
+export type PersonGroupCreateRequest = components['schemas']['PersonGroupCreateRequest'];
+export type PersonGroupDetail = components['schemas']['PersonGroupDetail'];
+export type PersonGroupFieldRevisions = components['schemas']['PersonGroupFieldRevisions'];
+export type PersonGroupPatch = components['schemas']['PersonGroupPatch'];
+export type PersonGroupRef = components['schemas']['PersonGroupRef'];
+export type PersonGroupState = components['schemas']['PersonGroupState'];
+export type PersonMembershipScope = components['schemas']['PersonMembershipScope'];
+export type PersonMembershipState = components['schemas']['PersonMembershipState'];
+export type PersonMetadataState = components['schemas']['PersonMetadataState'];
+export type PersonPatch = components['schemas']['PersonPatch'];
+export type PersonWork = components['schemas']['PersonWork'];
+export type PlaylistCard = components['schemas']['PlaylistCard'];
+export type PlaylistCreateRequest = components['schemas']['PlaylistCreateRequest'];
+export type PlaylistDetail = components['schemas']['PlaylistDetail'];
+export type PlaylistFieldRevisions = components['schemas']['PlaylistFieldRevisions'];
+export type PlaylistItem = components['schemas']['PlaylistItem'];
+export type PlaylistItemRequest = components['schemas']['PlaylistItemRequest'];
+export type PlaylistPatch = components['schemas']['PlaylistPatch'];
+export type PlaylistReorderRequest = components['schemas']['PlaylistReorderRequest'];
+export type PlaylistState = components['schemas']['PlaylistState'];
 export type PositionArgumentSummary = components['schemas']['PositionArgumentSummary'];
 export type PositionCreateRequest = components['schemas']['PositionCreateRequest'];
 export type PositionDeleted = components['schemas']['PositionDeleted'];
@@ -3523,6 +5247,12 @@ export type RecentWork = components['schemas']['RecentWork'];
 export type ResearchRefs = components['schemas']['ResearchRefs'];
 export type Restored = components['schemas']['Restored'];
 export type RestoreRequest = components['schemas']['RestoreRequest'];
+export type Revision = components['schemas']['Revision'];
+export type RoleAdded = components['schemas']['RoleAdded'];
+export type RoleAddRequest = components['schemas']['RoleAddRequest'];
+export type RoleCreditRequest = components['schemas']['RoleCreditRequest'];
+export type RoleDone = components['schemas']['RoleDone'];
+export type RoleScope = components['schemas']['RoleScope'];
 export type SavedView = components['schemas']['SavedView'];
 export type SavedViewCreateRequest = components['schemas']['SavedViewCreateRequest'];
 export type SavedViewDeleted = components['schemas']['SavedViewDeleted'];
@@ -3538,21 +5268,34 @@ export type StorageRoot = components['schemas']['StorageRoot'];
 export type StorageStatus = components['schemas']['StorageStatus'];
 export type SyncOperation = components['schemas']['SyncOperation'];
 export type SyncResult = components['schemas']['SyncResult'];
+export type Tag = components['schemas']['Tag'];
+export type TagAliasRequest = components['schemas']['TagAliasRequest'];
+export type TagCreated = components['schemas']['TagCreated'];
+export type TagCreateRequest = components['schemas']['TagCreateRequest'];
+export type TagDeleted = components['schemas']['TagDeleted'];
+export type TagInUse = components['schemas']['TagInUse'];
+export type TagLinkRequest = components['schemas']['TagLinkRequest'];
+export type TagMerged = components['schemas']['TagMerged'];
+export type TagMergeRequest = components['schemas']['TagMergeRequest'];
 export type TextRebuildQueued = components['schemas']['TextRebuildQueued'];
 export type TextRebuildRequest = components['schemas']['TextRebuildRequest'];
 export type WorkBrowseRow = components['schemas']['WorkBrowseRow'];
 export type WorkCreated = components['schemas']['WorkCreated'];
 export type WorkCreateRequest = components['schemas']['WorkCreateRequest'];
 export type WorkDetail = components['schemas']['WorkDetail'];
+export type WorkFolderState = components['schemas']['WorkFolderState'];
 export type WorkMetadataFields = components['schemas']['WorkMetadataFields'];
 export type WorkMetadataState = components['schemas']['WorkMetadataState'];
 export type WorkNotesState = components['schemas']['WorkNotesState'];
 export type WorkPatch = components['schemas']['WorkPatch'];
+export type WorkPeopleState = components['schemas']['WorkPeopleState'];
+export type WorkPlaylistState = components['schemas']['WorkPlaylistState'];
 export type WorkRole = components['schemas']['WorkRole'];
 export type WorkSourceState = components['schemas']['WorkSourceState'];
 export type WorkStatus = components['schemas']['WorkStatus'];
 export type WorkSummary = components['schemas']['WorkSummary'];
 export type WorkTag = components['schemas']['WorkTag'];
+export type WorkTagOptions = components['schemas']['WorkTagOptions'];
 export type ResponseBadRequest = components['responses']['BadRequest'];
 export type ResponseEpochChanged = components['responses']['EpochChanged'];
 export type ResponseEpochRequired = components['responses']['EpochRequired'];
@@ -4127,6 +5870,436 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    listFolders: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every Folder by title; an empty root Uncategorized is left out. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderCard"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Left out: a root ``Untitled Folder``. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FolderCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description A refused title or parent, or the title is taken under that parent. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getFolder: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Folder. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderDetail"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Folder with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deleteFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The Folder holds Works or Folders, or does not exist. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updateFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["FolderPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated (nothing to change: nothing changes). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderUpdated"];
+                };
+            };
+            /** @description A refused value, a taken title, a cycle, or no such Folder. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getFolderSyncState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revisions only. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Folder with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    fileWorkInFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                folder_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FileWorkRequest"];
+            };
+        };
+        responses: {
+            /** @description Filed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description No ``work_id``. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Folder or Work. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The Work is already in another Folder. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getFolderTagOptions: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Assigned Tags with their link revisions, and the absent ones that have one. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderTagOptions"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Folder with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    tagFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Linked (or already linked). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Folder or Tag, or a blank tag_id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    untagFolder: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                owner_id: string;
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked (or was not linked). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
     getOpenApiDocument: {
         parameters: {
             query?: never;
@@ -4298,6 +6471,1046 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    listPersonGroups: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every group, by name. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonGroupCard"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createPersonGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PersonGroupCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank or taken name, a cycle, no such group). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPersonGroup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The group. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonGroupDetail"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No group with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deletePersonGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank or taken name, a cycle, no such group). Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updatePersonGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PersonGroupPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank or taken name, a cycle, no such group). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    addPersonGroupMember: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank or taken name, a cycle, no such group). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    removePersonGroupMember: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                group_id: string;
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed (or was not a member). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPersonGroupSyncState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revisions only, tombstones included. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonGroupState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No group with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listPersons: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every Person, by last name. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonCard"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createPerson: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Left out: an empty profile. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PersonCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            /** @description An image_url that is not a public http(s) URL. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPerson: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonDetail"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Person with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deletePerson: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A domain refusal. Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Person with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            /** @description The Person is credited on Works. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updatePerson: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PersonPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A bad image_url or group_ids, an unknown group, a refused value, or no such Person. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPersonGroupState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revisions only, tombstones included. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonMembershipState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Person with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getPersonMetadataState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revisions only. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PersonMetadataState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Person with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getPersonProfileImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                person_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The portrait. */
+            200: {
+                headers: {
+                    /** @description Private: a day from the cache, an hour when just fetched. */
+                    "Cache-Control": "private, max-age=86400" | "private, max-age=3600";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                    "image/webp": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Person, no image_url, or the image could not be fetched. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The Library is unavailable, or in maintenance when an editor's miss caches the portrait (unavailable, MAINTENANCE). Also: The Library is unavailable (unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listPlaylists: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every Playlist, last changed first. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistCard"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createPlaylist: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Left out: an empty Playlist. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlaylistCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Created"];
+                };
+            };
+            /** @description A value that is not a string, or past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPlaylist: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Playlist. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistDetail"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Playlist with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    deletePlaylist: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updatePlaylist: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: nothing changes. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlaylistPatch"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A value past its limit (title 300 bytes, the others 4000). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Playlist with that id (a change was sent). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    addPlaylistItem: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlaylistItemRequest"];
+            };
+        };
+        responses: {
+            /** @description Added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description No ``work_id``, or no such Playlist or Work. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    removePlaylistItem: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                playlist_id: string;
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed (or was not in it). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    reorderPlaylist: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        /** @description Left out: an empty order. Left out, the request still sends Content-Type: application/json (else 415). */
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PlaylistReorderRequest"];
+            };
+        };
+        responses: {
+            /** @description Reordered. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description ``work_ids`` is not an array, or no such Playlist. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getPlaylistSyncState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                playlist_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revisions only. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlaylistState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Playlist with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
         };
     };
     listPositions: {
@@ -5411,6 +8624,48 @@ export interface operations {
             };
         };
     };
+    addRole: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleAddRequest"];
+            };
+        };
+        responses: {
+            /** @description Added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleAdded"];
+                };
+            };
+            /** @description A missing field, a credit that is not a string, or a domain refusal. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
     listSavedViews: {
         parameters: {
             query?: never;
@@ -5810,6 +9065,271 @@ export interface operations {
             503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
+    listTags: {
+        parameters: {
+            query?: {
+                /** @description Only the Tags linked to a Work or a Folder, with the counts. */
+                used?: "1" | "true" | "yes";
+            };
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every Tag; with ``used`` the Tags in use and their counts. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagInUse"][] | components["schemas"]["Tag"][];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createTag: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description The Tag holding the name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagCreated"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank, unknown or merged Tag, a taken name). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    deleteTag: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted; the affected owners are listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagDeleted"];
+                };
+            };
+            /** @description A blank tag id. Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Tag with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    addTagAlias: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagAliasRequest"];
+            };
+        };
+        responses: {
+            /** @description Added. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank, unknown or merged Tag, a taken name). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    deleteTagAlias: {
+        parameters: {
+            query: {
+                /** @description The alias to remove, by its identity key. */
+                alias: string;
+            };
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            /** @description No ``alias``. Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The Tag has no such alias. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    mergeTags: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagMergeRequest"];
+            };
+        };
+        responses: {
+            /** @description Merged; the affected owners are listed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TagMerged"];
+                };
+            };
+            /** @description A domain refusal, with its message (a blank, unknown or merged Tag, a taken name). Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
     listWorks: {
         parameters: {
             query?: {
@@ -5907,6 +9427,130 @@ export interface operations {
             };
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getWorkTagOptions: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Assigned Tags with their link revisions, and the absent ones that have one. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkTagOptions"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    tagWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                owner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TagLinkRequest"];
+            };
+        };
+        responses: {
+            /** @description Linked (or already linked). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such Work or Tag, or a blank tag_id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    untagWork: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                owner_id: string;
+                tag_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Unlinked (or was not linked). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Done"];
+                };
+            };
+            400: components["responses"]["EpochRequired"];
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["EpochChanged"];
             503: components["responses"]["UnavailableOrMaintenance"];
         };
     };
@@ -6043,6 +9687,54 @@ export interface operations {
                 };
             };
             503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getWorkFolderState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Work's Folder (empty for none) and the revision. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkFolderState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
         };
     };
     getWorkMetadataState: {
@@ -6187,6 +9879,232 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            413: components["responses"]["RequestTooLarge"];
+            415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    getWorkPeopleState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Each Person-role relationship's revision, tombstones included. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkPeopleState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getWorkPlaylistState: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Conditional read: when equal to the current ETag, responds 304 Not Modified (bodyless). */
+                "If-None-Match"?: string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Work's Playlist (empty for none) and the revision. */
+            200: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkPlaylistState"];
+                };
+            };
+            /** @description Not modified: If-None-Match matched the current ETag. Bodyless. */
+            304: {
+                headers: {
+                    /** @description Opaque representation token for conditional GETs. */
+                    ETag: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No Work with that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listRelatedFolders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The Folders, by id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Folder"][];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    removeRole: {
+        parameters: {
+            query: {
+                /** @description Checked to be an integer, else ignored. */
+                order_index?: string;
+                person_id: string;
+                role_type: string;
+            };
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDone"];
+                };
+            };
+            /** @description A missing person_id or role_type, or a bad order_index. Also: No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such role link on the Work. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            409: components["responses"]["EpochChanged"];
+            503: components["responses"]["UnavailableOrMaintenance"];
+        };
+    };
+    updateRoleCredit: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The Library epoch the client acted on (LIBRARY_EPOCH_REQUIRED, LIBRARY_EPOCH_CHANGED). */
+                "PRKS-Library-Epoch": string;
+            };
+            path: {
+                work_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleCreditRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleDone"];
+                };
+            };
+            /** @description A missing field, a bad order_index or credit, or a domain refusal. Also: The body is not one JSON object, or not JSON (invalid_request), or no or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such role link on the Work. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
             409: components["responses"]["EpochChanged"];

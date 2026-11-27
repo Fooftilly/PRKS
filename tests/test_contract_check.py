@@ -23,7 +23,9 @@ _PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/proces
 _STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
 _METADATA_STATE = next(r for r in ROUTES if r.method == "GET"
                        and r.pattern == "/api/works/{work_id}/metadata-state")
+_PORTRAIT = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/persons/{person_id}/profile-image")
 _PROGRESS = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/backups/progress")
+_FOLDERS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/folders")
 _STORAGE_BODY = {"field": "value"}  # not read: the header checks run before the schema
 
 
@@ -173,6 +175,15 @@ class ContractCheckTests(unittest.TestCase):
         self.check.check_sent("POST", "/api/backups/restore", 200, [("PRKS-Library-Epoch", "07")])
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
 
+    def test_a_conditional_read_needs_its_etag(self) -> None:
+        self.check.check(_FOLDERS, _request(), Response(304, [("ETag", '"v1"')], b""))
+        self.assertEqual(self.check.violations, [])
+        for status in (200, 304):
+            answer = _json(200, []) if status == 200 else Response(304, [], b"")
+            self.check.check(_FOLDERS, _request(), answer)
+        found = [v for v in self.check.violations if "required header ETag missing" in v]
+        self.assertEqual(len(found), 2, self.check.violations)
+
     def test_a_pdf_must_be_sent_no_store(self) -> None:
         cacheable = [("Accept-Ranges", "bytes"), ("Cache-Control", "public, max-age=3600"),
                      ("Content-Length", "10"), ("Content-Type", "application/pdf")]
@@ -203,6 +214,19 @@ class ContractCheckTests(unittest.TestCase):
             self.check.check(_METADATA_STATE, _request(), state(value))
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
         self.assertIn("fields/thumb_page/value", self.check.violations[0])
+
+    def test_a_portrait_must_be_cached_privately(self) -> None:
+        def portrait(cache: str) -> Response:
+            answer = Response(200, [("Content-Type", "image/webp"), ("Cache-Control", cache)], b"")
+            answer.stream = cast(Any, object())
+            return answer
+
+        for cache in ("private, max-age=86400", "private, max-age=3600"):
+            self.check.check(_PORTRAIT, _request(), portrait(cache))
+        self.assertEqual(self.check.violations, [])
+        self.check.check(_PORTRAIT, _request(), portrait("public, max-age=86400"))
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+        self.assertIn("header Cache-Control", self.check.violations[0])
 
 
 if __name__ == "__main__":

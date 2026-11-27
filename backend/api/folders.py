@@ -24,6 +24,21 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from backend.api.common import optional_pdfs_dir, revalidated
+from backend.api_contract.operation import Operation, body, error, ok, plain
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.organization import (
+    Created,
+    Done,
+    FileWorkRequest,
+    Folder,
+    FolderCard,
+    FolderCreateRequest,
+    FolderDetail,
+    FolderPatch,
+    FolderState,
+    FolderUpdated,
+    WorkFolderState,
+)
 from backend.web.http import Request, Response, error_response, json_response
 from backend.web.routing import route
 
@@ -159,14 +174,42 @@ def delete(req: Request) -> Response:
     return json_response(req, 200, {"status": "deleted"})
 
 
+_TAG = "folders"
+_MISSING = error("No Folder with that id.")
+
+
 ROUTES = (
-    route("GET", "/api/folders", catalog),
-    route("POST", "/api/folders", create),
-    route("GET", "/api/folders/{folder_id}", detail),
-    route("PATCH", "/api/folders/{folder_id}", update),
-    route("DELETE", "/api/folders/{folder_id}", delete),
-    route("GET", "/api/folders/{folder_id}/sync-state", sync_state),
-    route("POST", "/api/folders/{folder_id}/works", add_work),
-    route("GET", "/api/works/{work_id}/related_folders", related),
-    route("GET", "/api/works/{work_id}/folder-state", work_state),
+    route("GET", "/api/folders", catalog, contract=revalidated_read(
+        "listFolders", "Every Folder with its counts", _TAG, list[FolderCard],
+        "Every Folder by title; an empty root Uncategorized is left out.")),
+    route("POST", "/api/folders", create, contract=Operation(
+        "createFolder", "Create a Folder", _TAG,
+        {200: ok(Created, "Created."),
+         409: error("A refused title or parent, or the title is taken under that parent.")},
+        request=body(FolderCreateRequest, "Left out: a root ``Untitled Folder``.", required=False))),
+    route("GET", "/api/folders/{folder_id}", detail, contract=Operation(
+        "getFolder", "A Folder with its children, parent, Works and Tags", _TAG,
+        {200: ok(FolderDetail, "The Folder."), 404: plain("No Folder with that id.")})),
+    route("PATCH", "/api/folders/{folder_id}", update, contract=Operation(
+        "updateFolder", "Change a Folder's fields", _TAG,
+        {200: ok(FolderUpdated, "Updated (nothing to change: nothing changes)."),
+         400: error("A refused value, a taken title, a cycle, or no such Folder.")},
+        request=body(FolderPatch, "Left out: nothing changes.", required=False))),
+    route("DELETE", "/api/folders/{folder_id}", delete, contract=Operation(
+        "deleteFolder", "Delete an empty Folder", _TAG,
+        {200: ok(Done, "Deleted."), 409: error("The Folder holds Works or Folders, or does not exist.")})),
+    route("GET", "/api/folders/{folder_id}/sync-state", sync_state, contract=revalidated_read(
+        "getFolderSyncState", "A Folder's field revisions", _TAG, FolderState, "The revisions only.",
+        {404: _MISSING})),
+    route("POST", "/api/folders/{folder_id}/works", add_work, contract=Operation(
+        "fileWorkInFolder", "File an unfiled Work in a Folder", _TAG,
+        {200: ok(Done, "Filed."), 400: error("No ``work_id``."),
+         404: error("No such Folder or Work."), 409: error("The Work is already in another Folder.")},
+        request=body(FileWorkRequest))),
+    route("GET", "/api/works/{work_id}/related_folders", related, contract=Operation(
+        "listRelatedFolders", "Folders holding a Work that shares a Person with this one", _TAG,
+        {200: ok(list[Folder], "The Folders, by id.")})),
+    route("GET", "/api/works/{work_id}/folder-state", work_state, contract=revalidated_read(
+        "getWorkFolderState", "Which Folder a Work is in, and its revision", _TAG, WorkFolderState,
+        "The Work's Folder (empty for none) and the revision.", {404: error("No Work with that id.")})),
 )

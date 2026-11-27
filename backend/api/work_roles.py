@@ -24,6 +24,9 @@ from __future__ import annotations
 from typing import Any
 
 from backend.api.common import revalidated, text_field
+from backend.api_contract.operation import Operation, Param, body, error, ok
+from backend.api_contract.operation import revalidated as revalidated_read
+from backend.api_contract.people import RoleAddRequest, RoleAdded, RoleCreditRequest, RoleDone, WorkPeopleState
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -121,9 +124,29 @@ def add(req: Request) -> Response:
     return json_response(req, 200, {"status": "success"})
 
 
+_TAG = "roles"
+_NO_LINK = error("No such role link on the Work.")
+
+
 ROUTES = (
-    route("POST", "/api/roles", add),
-    route("GET", "/api/works/{work_id}/people-state", people_state),
-    route("PATCH", "/api/works/{work_id}/roles", update_credit),
-    route("DELETE", "/api/works/{work_id}/roles", remove),
+    route("POST", "/api/roles", add, contract=Operation(
+        "addRole", "Credit a Person on an existing Work, appended", _TAG,
+        {200: ok(RoleAdded, "Added."),
+         400: error("A missing field, a credit that is not a string, or a domain refusal.")},
+        request=body(RoleAddRequest))),
+    route("GET", "/api/works/{work_id}/people-state", people_state, contract=revalidated_read(
+        "getWorkPeopleState", "A Work's role revisions", _TAG, WorkPeopleState,
+        "Each Person-role relationship's revision, tombstones included.", {404: error("No Work with that id.")})),
+    route("PATCH", "/api/works/{work_id}/roles", update_credit, contract=Operation(
+        "updateRoleCredit", "Change how a Person is credited on a Work", _TAG,
+        {200: ok(RoleDone, "Updated."),
+         400: error("A missing field, a bad order_index or credit, or a domain refusal."),
+         404: _NO_LINK},
+        request=body(RoleCreditRequest))),
+    route("DELETE", "/api/works/{work_id}/roles", remove, contract=Operation(
+        "removeRole", "Remove a Person's role from a Work", _TAG,
+        {200: ok(RoleDone, "Removed."), 400: error("A missing person_id or role_type, or a bad order_index."),
+         404: _NO_LINK},
+        params=(Param("person_id", required=True), Param("role_type", required=True),
+                Param("order_index", description="Checked to be an integer, else ignored.")))),
 )
