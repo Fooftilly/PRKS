@@ -74,19 +74,19 @@
     },
     "NoRegressionM1Witness": {
       "file": "Sequence.dfy",
-      "sha256": "7b9cfcc1b5d0f4863b1ef98787259d4afa714237e886bfbed7c775a02005fc1b"
+      "sha256": "1426a419e3347d0624ce48dbb528338f49c7b09d72c681a6e941a2e41ce0d25b"
     },
     "StampViolatesProvenanceM0": {
       "file": "Sequence.dfy",
-      "sha256": "3a01c1e6837e3b6e48321a2ed64ce2a00ce0844690ccfcceadf8a2a895d5e559"
+      "sha256": "93c383cfc8894929abc0859d6306582f4ed896f5b30a1c02130aa3370a55ccd8"
     },
     "ClockViolatesNoRegressionM0": {
       "file": "Sequence.dfy",
-      "sha256": "279ae8177af7b77286987da5b1f1270305871914b680ca14f414e9f75d66bdbf"
+      "sha256": "6a6d0ace74499500245995e3dbd1a7538bc2a914f4429724833e1496902289c7"
     },
     "SecondSenderViolatesNoRegressionM0": {
       "file": "Sequence.dfy",
-      "sha256": "3781d27fa641ffebaa2f9cf046f8543239d49b7e6358d795604648c2c3ca1112"
+      "sha256": "316edbcc7046ee2fa0ed6bd3d0c5e35a35c3b7d104e0ddb089ff64def4970d8c"
     },
     "OpenPinsTheForm": {
       "file": "Sequence.dfy",
@@ -94,11 +94,11 @@
     },
     "PinnedBaseRefusesAnInterveningWrite": {
       "file": "Sequence.dfy",
-      "sha256": "1d2f3097dda3ba83477eae19edbb599daa29ce76837efbae04a41d6cf14e359e"
+      "sha256": "627ea6fe3e0dbca0f828fca7589c18ad45a5d1701e7f83a6f960054821d2c03d"
     },
     "ConvergentStaleWriteIsAcknowledged": {
       "file": "Sequence.dfy",
-      "sha256": "9abed9b047b8f60668fc237ad78ab36b3f7949723fad18f504e463e05b2f8128"
+      "sha256": "5e2c2e0d0b57044c375caaa44a03baedb648f0cd67ddd93093259c48fcd294f9"
     }
   },
   "witnesses": {

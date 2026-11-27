@@ -219,7 +219,7 @@ const FIELDS = ['a', 'b', 'c']
 const text = fc.constantFrom('', 'A', 'B', ' A ')
 const opId = fc.constantFrom('op-1', 'op-2')
 const fieldBase = fc.record(
-  { value: text, revision: fc.nat({ max: 3 }), pendingOp: opId, ackOp: opId },
+  { value: text, revision: fc.nat({ max: 3 }), pending: text, pendingOp: opId, ackOp: opId },
   { requiredKeys: ['value', 'revision'] },
 ) as fc.Arbitrary<source.FieldBase>
 const brokenBase = fc.constantFrom<unknown>(null, undefined, {}, { value: 'A' }, { value: 1, revision: 0 },

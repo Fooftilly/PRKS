@@ -20,7 +20,7 @@ MODEL = ROOT / "formal" / "dafny"
 FORBIDDEN = re.compile(
     r"\bassume\b|\{:axiom\}|\{:verify\s+false\}|\{:only\}|\bexpect\b"
 )
-LEMMA = re.compile(r"^\s*lemma\s+(\w+)")
+LEMMA = re.compile(r"^\s*lemma\s+(?:\{:[^}]*\}\s*)*(\w+)")
 
 
 def strip_comments(text: str) -> str:
