@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "implementation-order",
-  "operation": "check",
+  "operation": "apply",
   "items": [
     {
       "number": 1466,
