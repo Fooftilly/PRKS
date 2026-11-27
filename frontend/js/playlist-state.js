@@ -14,6 +14,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const FIELDS = root.PRKS_LOCAL_PLAYLIST_FIELDS ||
         Object.freeze(['title', 'description', 'original_url']);
@@ -409,18 +412,161 @@
                 newPlaylistState(playlistId));
         }
         let state = null;
+        let stateSource = null;
         try {
             const result = await readPlaylistState(playlistId);
             state = result && result.value;
+            stateSource = result && result.source;
         } catch (_e) { state = null; }
-        if (!state) return null;
+        if (!state) return stateSource === 'server' ? null : cachedEditBase(playlistId);
+        /* Offline, two cached reads are not one snapshot: a revisions read can
+         * reach the server while the record read does not, or refresh without
+         * it, and pair newer revisions with older values. The base offline is
+         * the pair this device last read together. */
+        if (stateSource !== 'server') return cachedEditBase(playlistId);
         let playlist = null;
         try {
             const cached = await root.prksOfflineReadEntity('playlist', playlistId,
-                '/api/playlists/' + encodeURIComponent(playlistId), {});
-            playlist = cached && cached.value;
+                '/api/playlists/' + encodeURIComponent(playlistId),
+                /* A record read joined to an older flight would predate the
+                 * revisions while still answering from the server. */
+                { requestPolicy: { dedupe: false } });
+            /* Values from the cache may be older than the revisions, so they form no base. */
+            playlist = cached && cached.source === 'server' ? cached.value : null;
         } catch (_e) { playlist = null; }
-        return playlist ? observedPlaylistFields(playlist, state) : null;
+        if (!playlist) return null;
+        /* Revisions unchanged across the record read prove its values are at them. */
+        let after = null;
+        try {
+            after = await readPlaylistState(playlistId, { requestPolicy: { dedupe: false } });
+        } catch (_e) { after = null; }
+        if (!after || after.source !== 'server' || !after.value || !after.value.fields) return null;
+        const base = observedPlaylistFields(playlist, state);
+        /* A field whose revision moved during the record read has no known pair. */
+        for (const name of FIELDS) {
+            const a = state.fields[name];
+            const b = after.value.fields[name];
+            if (!a || !b || a.revision !== b.revision) base[name] = null;
+        }
+        await cacheEditBase(playlistId, base);
+        return base;
+    }
+
+    /* The kind under which an edit base read as one pair is kept for offline Edit. */
+    const PLAYLIST_EDIT_BASE = 'playlist-edit-base';
+
+
+    async function cachedEditBase(playlistId) {
+        let held = null;
+        try {
+            held = typeof root.prksOfflinePeekEntity === 'function'
+                ? await root.prksOfflinePeekEntity(PLAYLIST_EDIT_BASE, playlistId) : null;
+        } catch (_e) { held = null; }
+        if (!held || held.playlist_id !== playlistId || !held.fields || typeof held.fields !== 'object') return null;
+        const base = {};
+        for (const name of FIELDS) {
+            const entry = held.fields[name];
+            if (entry === null) { base[name] = null; continue; }
+            if (!entry || typeof entry.value !== 'string' || !reconcileCore.isRevision(entry.revision)) return null;
+            base[name] = { value: entry.value, revision: entry.revision };
+            if (typeof entry.ackOp === 'string') base[name].ackOp = entry.ackOp;
+        }
+        return base;
+    }
+
+    /* Merged in one store transaction, so a newer pair another tab
+     * published or acknowledged meanwhile is kept. */
+    async function cacheEditBase(playlistId, base) {
+        if (typeof root.prksOfflineMergeEntity !== 'function') return;
+        try {
+            await root.prksOfflineMergeEntity(PLAYLIST_EDIT_BASE, playlistId, function (held) {
+                const kept = held && held.playlist_id === playlistId && held.fields && typeof held.fields === 'object' ? held.fields : {};
+                const fields = {};
+                for (const name of FIELDS) {
+                    fields[name] = base[name] ? reconcileCore.newerEditBase(kept[name], base[name])
+                        : (kept[name] === undefined ? null : kept[name]);
+                }
+                return { playlist_id: playlistId, fields: fields };
+            });
+        } catch (_e) { /* the next online Edit writes it again */ }
+    }
+
+    /**
+     * This device's newest unsent edit per field: the value an editor shows
+     * and the revision that edit was measured against.
+     */
+    function pendingFieldBases(operations, playlistId) {
+        const out = {};
+        unsettled(operations, 'SET_PLAYLIST_FIELD', playlistId)
+            .slice()
+            .sort((a, b) => (a.sequence || 0) - (b.sequence || 0))
+            .forEach(function (op) {
+                const field = op.payload && op.payload.field;
+                if (!isSupportedField(field)) return;
+                out[field] = {
+                    value: String((op.payload && op.payload.value) || ''),
+                    revision: op.base_revision,
+                    pendingOp: op.op_id,
+                };
+            });
+        return out;
+    }
+
+    /**
+     * The base an edit session saves against, pinned when the editor opens:
+     * each field's revision where the read holds what the form shows (see
+     * `prksSyncReconcile.pinEditBase`). Null when the revisions cannot be read.
+     */
+    async function pinPlaylistEditBase(playlistId, shown, operations) {
+        const read = await acknowledgedPlaylistBase(playlistId, operations);
+        const pending = pendingFieldBases(operations, playlistId);
+        /* The form shows a stored title and URL trimmed, and an empty title
+         * as the default name. A stored value, pending or read, that the form
+         * shows that way is compared as itself, so its raw text and revision
+         * stay the base a replacement or cancellation is measured from. */
+        if (!shown) return reconcileCore.pinEditBase(shown, read, pending);
+        const compared = Object.assign({}, shown);
+        ['title', 'original_url'].forEach(function (field) {
+            if (!(field in shown)) return;
+            const own = pending[field];
+            const stored = own ? own.value : (read && read[field] ? read[field].value : null);
+            if (typeof stored !== 'string') return;
+            const displayed = String(shown[field] == null ? '' : shown[field]).trim();
+            const trimmed = stored.trim();
+            if (trimmed === displayed || (field === 'title' && trimmed === '' && displayed === DEFAULT_TITLE)) {
+                compared[field] = stored;
+            }
+        });
+        return reconcileCore.pinEditBase(compared, read, pending);
+    }
+
+    /**
+     * A pinned base whose unsent edit has synced and left the queue: the form
+     * shows that edit, and the read now holds it at the revision it produced,
+     * so a further write is measured from there. Other fields are kept.
+     */
+    /* Only the snapshot entry the pinned edit's own ACK stamped vouches for the
+     * revision beside it. The stamp stays only at that revision, and its text may
+     * be the server's canonical form of the pending value. */
+    async function settlePinnedPlaylistBase(playlistId, pinned, operations) {
+        if (!pinned) return pinned;
+        const open = pendingFieldBases(operations, playlistId);
+        const settled = Object.keys(pinned).filter(function (field) {
+            const entry = pinned[field];
+            return entry && typeof entry.pending === 'string' &&
+                (!open[field] || open[field].pendingOp !== entry.pendingOp);
+        });
+        if (!settled.length) return pinned;
+        const read = await cachedEditBase(playlistId);
+        const out = Object.assign({}, pinned);
+        settled.forEach(function (field) {
+            const now = read && read[field];
+            if (now && typeof now.ackOp === 'string' && now.ackOp === pinned[field].pendingOp &&
+                now.revision > pinned[field].revision) {
+                out[field] = { value: pinned[field].pending, revision: now.revision };
+            }
+        });
+        return out;
     }
 
     /**
@@ -463,22 +609,6 @@
         } catch (_e) { return null; }
     }
 
-    /** What this editing session changed, measured against what it was showing. */
-    function dirtyPlaylistFields(playlistId, draft, base, operations) {
-        const changes = {};
-        if (!draft || !base) return changes;
-        const pending = pendingFieldValues(operations, playlistId);
-        FIELDS.forEach(function (field) {
-            if (!Object.prototype.hasOwnProperty.call(draft, field)) return;
-            const observed = base[field];
-            if (!observed || typeof observed.value !== 'string') return;
-            const shown = pending.has(field) ? pending.get(field) : observed.value;
-            const desired = String(draft[field] == null ? '' : draft[field]);
-            if (desired !== shown) changes[field] = desired;
-        });
-        return changes;
-    }
-
     /* ---- durable writers ---- */
 
     function sync() {
@@ -494,9 +624,9 @@
         return op;
     }
 
-    async function savePlaylistFieldsDurably(playlistId, changes, base) {
+    async function savePlaylistFieldsDurably(playlistId, changes, base, stillOwns) {
         const runtime = sync();
-        const written = await runtime.store.savePlaylistFields(playlistId, changes, base);
+        const written = await runtime.store.savePlaylistFields(playlistId, changes, base, stillOwns);
         if (typeof runtime.changed === 'function') runtime.changed();
         return written;
     }
@@ -664,9 +794,10 @@
         prksNewPlaylistState: newPlaylistState,
         prksObservedPlaylistFields: observedPlaylistFields,
         prksAcknowledgedPlaylistBase: acknowledgedPlaylistBase,
+        prksPinPlaylistEditBase: pinPlaylistEditBase,
+        prksSettlePinnedPlaylistBase: settlePinnedPlaylistBase,
         prksAcknowledgedPlaylistOrder: acknowledgedPlaylistOrder,
         prksAcknowledgedWorkPlaylist: acknowledgedWorkPlaylist,
-        prksDirtyPlaylistFields: dirtyPlaylistFields,
         prksCreatePlaylistDurably: createPlaylistDurably,
         prksSavePlaylistFieldsDurably: savePlaylistFieldsDurably,
         prksSetWorkPlaylistDurably: setWorkPlaylistDurably,

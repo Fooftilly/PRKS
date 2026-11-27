@@ -142,6 +142,14 @@ if (routeModelBuild.status !== 0) {
   process.exit(routeModelBuild.status || 1);
 }
 
+const syncReconcileBuild = spawnSync(process.execPath, [join(appRoot, "scripts/build-sync-reconcile.mjs")], {
+  cwd: appRoot,
+  stdio: "inherit",
+});
+if (syncReconcileBuild.status !== 0) {
+  process.exit(syncReconcileBuild.status || 1);
+}
+
 const py = resolvePython();
 const gate = spawnSync(
   py.executable,

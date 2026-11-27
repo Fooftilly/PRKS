@@ -2,6 +2,11 @@
  * the disposable cache. No module-level Folder or editor state. */
 (function (root) {
     'use strict';
+    /* Shared ACK ordering and pending overlay (frontend/js/sync-reconcile.js). */
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
+    if (!reconcileCore) throw new Error('folder-tag-state.js requires sync-reconcile.js');
     const id = v => typeof v === 'string' && v.trim().length > 0 && v.length <= 200;
     const revision = v => Number.isSafeInteger(v) && v >= 0;
     function tagShape(t) {
@@ -72,14 +77,16 @@
         const row = options.assigned.find(t => t.tag_id === tagId);
         return { present: !!row, revision: row ? row.relation_revision : (options.known_absent[tagId] || 0) };
     }
+    /** The acknowledged tags with this folder's pending Tag-link operations folded over them. */
     function effectiveTags(folder, operations) {
-        const tags = new Map((folder.tags || []).map(t => [t.id, t]));
-        operations.filter(op => op.entity_id === folder.id && op.entity_type === 'folder' && op.status !== 'acknowledged')
-            .forEach(op => {
-                if (op.operation === 'REMOVE_FOLDER_TAG') tags.delete(op.payload.tag_id);
+        const tags = reconcileCore.overlay(new Map((folder.tags || []).map(t => [t.id, t])), operations,
+            op => op.entity_id === folder.id && op.entity_type === 'folder',
+            (rows, op) => {
+                if (op.operation === 'REMOVE_FOLDER_TAG') rows.delete(op.payload.tag_id);
                 if (op.operation === 'ADD_FOLDER_TAG' && op.local_context && op.local_context.tag) {
-                    tags.set(op.payload.tag_id, op.local_context.tag);
+                    rows.set(op.payload.tag_id, op.local_context.tag);
                 }
+                return rows;
             });
         return Array.from(tags.values());
     }
@@ -112,7 +119,7 @@
     }
     const handler = {
         isResult, terminal,
-        reconcile: data => root.prksOfflineReconcileFolderTag(data),
+        reconcile: (data, op) => root.prksOfflineReconcileFolderTag(data, op),
     };
     Object.assign(root, {
         prksIsTagsIndexShape: tagsShape, prksIsFolderTagOptionsShape: optionsShape,

@@ -121,6 +121,12 @@ No tokens are committed; `.mcp.json` only names the project.
 - Machine-local overrides (`.claude/settings.local.json`, `.codex/`) stay
   gitignored.
 
+Opt-in Claude Code skills (`/architect`, `/blast-radius`, `/encode-constraint`,
+`/no-comments`, `/prks-review`, `/prks-test`, `/root-cause`, `/statechart`,
+`/verify-feature`) and the read-only `prks-change-auditor` subagent live in
+`.claude/skills/` and `.claude/agents/`. They run only when invoked and need no
+Sonar setup; see `.claude/README.md`.
+
 ### E2E tiers (agent-friendly)
 
 PRKS E2E is `tests/e2e/run.py` (Python unittest + Playwright), not npm Playwright.

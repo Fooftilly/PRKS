@@ -1,9 +1,20 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserPlaylistIntents, type PlaylistIntentOwner } from './intents'
 import type { PlaylistFieldDraft } from './types'
 
+/* Every field at revision 1, as Edit pins it when the form shows the read value. */
+function pinAll(fields: PlaylistFieldDraft) {
+  return Object.fromEntries(Object.entries(fields).map(([field, value]) => [field, { value, revision: 1 }]))
+}
+
+beforeEach(() => {
+  window.prksPinPlaylistEdit = vi.fn(async (_id: string, fields: Record<string, string>) =>
+    pinAll(fields as unknown as PlaylistFieldDraft))
+})
+
 afterEach(() => {
   vi.unstubAllGlobals()
+  delete window.prksPinPlaylistEdit
   delete window.prksOpenNewPlaylistModalFromPlaylistsPage
   delete window.updatePlaylist
   delete window.reorderPlaylist
@@ -35,7 +46,11 @@ function owner(overrides: Partial<PlaylistIntentOwner> = {}): PlaylistIntentOwne
     isCurrent: () => true,
     lastResolvedRoute: { name: 'playlist-detail', params: { playlistId: 'PL-1' } },
     root: document.createElement('div'),
-    ui: { playlistEditing: true, playlistRename: {} },
+    ui: {
+      playlistEditing: true,
+      playlistRename: {},
+      playlistEditPin: { playlistId: 'PL-1', session: 0, base: Promise.resolve(pinAll(shown)) },
+    },
     getEntity: () => ({ id: 'PL-1' }),
     ...overrides,
   }
@@ -63,6 +78,7 @@ describe('Playlist intents', () => {
     expect(pane.ui?.playlistEditing).toBe(false)
 
     pane.ui!.playlistEditing = true
+    intents.pinEditBase('PL-1', shown)
     vi.mocked(window.renderPlaylistDetail).mockClear()
     vi.mocked(window.updatePanelContent).mockClear()
     const saved = await intents.saveFields(
@@ -71,10 +87,149 @@ describe('Playlist intents', () => {
       shown,
     )
     expect(saved.ok).toBe(true)
-    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, {})
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'New' }, { base: pinAll(shown), still: expect.any(Function) })
     expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
     expect(window.renderPlaylistDetail).toHaveBeenCalled()
     expect(window.updatePanelContent).toHaveBeenCalledWith('details')
+  })
+
+  it('saves against the revisions pinned when Edit opened, not newer ones (#894)', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    intents.invalidateEditSession()
+    expect(pane.ui?.playlistEditPin).toBeNull()
+    window.prksPinPlaylistEdit = vi.fn(async () => ({
+      title: { value: 'Course', revision: 4 },
+      description: { value: 'Old', revision: 0 },
+      original_url: { value: 'https://example.test/old', revision: 2 },
+    }))
+    intents.pinEditBase('PL-1', shown)
+    expect(window.prksPinPlaylistEdit).toHaveBeenCalledWith('PL-1', shown)
+    /* Another tab saves the description afterwards; this tab's Save keeps revision 0. */
+    const saved = await intents.saveFields('PL-1', { ...shown, description: 'Stale tab' }, shown)
+    expect(saved.ok).toBe(true)
+    expect(window.updatePlaylist).toHaveBeenCalledWith('PL-1', { description: 'Stale tab' }, {
+      still: expect.any(Function),
+      base: {
+        title: { value: 'Course', revision: 4 },
+        description: { value: 'Old', revision: 0 },
+        original_url: { value: 'https://example.test/old', revision: 2 },
+      },
+    })
+  })
+
+  it('reloads the Playlist when Cancel follows a changed-elsewhere refusal', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    window.prksReloadPlaylistDetail = vi.fn(async () => null)
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).not.toHaveBeenCalled()
+
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve({ ...pinAll(shown), description: null }),
+    }
+    const refused = await intents.saveFields('PL-1', { ...shown, description: 'Mine' }, shown)
+    expect(refused.ok).toBe(false)
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
+    expect(pane.ui!.playlistEditing).toBe(false)
+    await Promise.resolve()
+    await Promise.resolve()
+    // A reload that painted nothing keeps the mark, so Edit stays closed and the next Cancel retries.
+    expect(pane.ui!.playlistStale).toBe('PL-1')
+    window.prksReloadPlaylistDetail = vi.fn(async () => ({ id: 'PL-1' }))
+    intents.cancelEdit('PL-1')
+    await vi.waitFor(() => expect(pane.ui!.playlistStale).toBeNull())
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledOnce()
+  })
+
+  it('reloads the Playlist when Cancel follows a refusal over another tab\'s unsent edit', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => {
+      throw Object.assign(new Error('Another tab on this device has an unsent change here.'),
+        { prksLocalStoreCode: 'pending_elsewhere' })
+    })
+    window.prksReloadPlaylistDetail = vi.fn(async () => ({ id: 'PL-1' }))
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve(pinAll(shown)),
+    }
+    const refused = await intents.saveFields('PL-1', { ...shown, title: 'Workshops' }, shown)
+    expect(refused).toEqual({ ok: false, message: 'Another tab on this device has an unsent change here.' })
+    expect(pane.ui!.playlistStale).toBe('PL-1')
+    intents.cancelEdit('PL-1')
+    expect(window.prksReloadPlaylistDetail).toHaveBeenCalledWith(pane, 'PL-1')
+  })
+
+  it('leaves no stale mark when the refusal arrives after Cancel', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    let refuse: (err: unknown) => void = () => undefined
+    window.updatePlaylist = vi.fn(() => new Promise<Record<string, never>>((_resolve, reject) => { refuse = reject }))
+    window.prksReloadPlaylistDetail = vi.fn(async () => ({ id: 'PL-1' }))
+    window.renderPlaylistDetail = vi.fn()
+    const pane = owner()
+    const intents = browserPlaylistIntents(pane, 2)
+    pane.ui!.playlistEditing = true
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: pane.ui!.playlistEditSession ?? 0,
+      base: Promise.resolve(pinAll(shown)),
+    }
+    const saving = intents.saveFields('PL-1', { ...shown, title: 'Workshops' }, shown)
+    await vi.waitFor(() => expect(window.updatePlaylist).toHaveBeenCalled())
+    intents.cancelEdit('PL-1')
+    refuse(Object.assign(new Error('refused'), { prksLocalStoreCode: 'pending_elsewhere' }))
+    await saving
+    expect(pane.ui!.playlistStale ?? null).toBeNull()
+  })
+
+  it('refuses a changed field whose pinned base is unknown and keeps the draft', async () => {
+    window.prksTabContextOwnsEntityRoute = () => true
+    window.updatePlaylist = vi.fn(async () => ({}))
+    const pane = owner()
+    pane.ui!.playlistEditPin = {
+      playlistId: 'PL-1',
+      session: 0,
+      base: Promise.resolve({ ...pinAll(shown), description: null }),
+    }
+    const intents = browserPlaylistIntents(pane, 2)
+    const refused = await intents.saveFields('PL-1', { ...shown, description: 'Mine' }, shown)
+    expect(refused.ok).toBe(false)
+    expect(refused.message).toContain('changed in another tab')
+    expect(window.updatePlaylist).not.toHaveBeenCalled()
+    expect(pane.ui?.playlistEditing).toBe(true)
+
+    // A failed pin does not strand the session: the Save pins again against
+    // the values the form showed, and is refused only when that fails too.
+    const pinPlaylist = window.prksPinPlaylistEdit as ReturnType<typeof vi.fn>
+    pinPlaylist.mockImplementationOnce(async () => null)
+    pane.ui!.playlistEditPin = { playlistId: 'PL-1', session: 0, base: Promise.resolve(null) }
+    const unavailable = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
+    expect(unavailable.ok).toBe(false)
+    expect(unavailable.message).toContain('cannot be changed offline yet')
+    expect(window.prksPinPlaylistEdit).toHaveBeenLastCalledWith('PL-1', shown)
+
+    pane.ui!.playlistEditPin = { playlistId: 'PL-1', session: 0, base: Promise.resolve(null) }
+    const retried = await intents.saveFields('PL-1', { ...shown, title: 'Mine' }, shown)
+    expect(retried.ok).toBe(true)
+    expect(window.prksPinPlaylistEdit).toHaveBeenLastCalledWith('PL-1', shown)
+    expect(window.updatePlaylist).toHaveBeenCalledTimes(1)
   })
 
   it('refreshes the details panel when a save changes nothing', async () => {

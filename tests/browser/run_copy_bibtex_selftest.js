@@ -69,6 +69,35 @@ async function main() {
     await scenario('real clipboard failure', {
         text: '@book{W1}', expectedCopies: [], rejectCopy: true, errorLabel: /Copy failed/,
     });
+    /* Toggles still being saved are sent first: the GET reads the saved profile. */
+    {
+        const order = [];
+        let release;
+        global.prksCitations = { settleBibtexProfile: () => {
+            order.push('settle');
+            return new Promise(resolve => { release = resolve; });
+        } };
+        global.prksRequest = async (path) => {
+            order.push(path);
+            return { ok: true, text: async () => '@book{W1}' };
+        };
+        global.prksCopyTextToClipboard = async () => {};
+        const btn = button();
+        const copying = copyBibTeX('W-1', btn);
+        await new Promise(resolve => savedSetTimeout(resolve, 0));
+        assert.deepEqual(order, ['settle'], 'no export request while a toggle save is pending');
+        release(true);
+        await copying;
+        assert.deepEqual(order, ['settle', '/api/bibtex/W-1'], 'the export follows the saved profile');
+        assert.match(btn.innerHTML, /BibTeX copied!/);
+        global.prksCitations = { settleBibtexProfile: async () => false };
+        order.length = 0;
+        const refused = button();
+        await copyBibTeX('W-1', refused);
+        assert.deepEqual(order, [], 'a failed toggle save sends no export request');
+        assert.match(refused.innerHTML, /Export settings not saved/);
+        delete global.prksCitations;
+    }
     let attempted = 0;
     global.prksCopyTextToClipboard = async () => { attempted++; };
     await assert.rejects(prksCopyBibTeXToClipboard(''), /No BibTeX export available/);
@@ -76,7 +105,7 @@ async function main() {
     assert.equal(attempted, 0, 'empty helper calls never write to clipboard');
     delete global.prksCopyTextToClipboard;
     await assert.rejects(prksCopyBibTeXToClipboard('@book{W1}'), /Clipboard helper unavailable/);
-    console.log('BibTeX clipboard: 8 passed, 0 failed');
+    console.log('BibTeX clipboard: 10 passed, 0 failed');
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });
