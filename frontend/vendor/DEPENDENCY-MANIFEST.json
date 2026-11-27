@@ -137,11 +137,11 @@
       "runtime_files": [
         {
           "path": "/vendor/lucide/lucide.min.js",
-          "sha256": "ed271ffbe31f0905af8a6ef7b45a70831a517a70909795e637135e218a543c5e"
+          "sha256": "ba7d3dceda7534309da9eb5e48ec0b2434b4374431bca9772873e76184f8bf7f"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "1.73.0"
+      "version": "1.77.0"
     },
     {
       "name": "prks-editor-recovery",
@@ -233,11 +233,11 @@
       "runtime_files": [
         {
           "path": "/vue/prks-vue.js",
-          "sha256": "b9bade084a594d3a4fcbd746373f8b315fe0b142c3413af4a6679ec6f62c9ae2"
+          "sha256": "303abb67176d9aa70a839515d4f60bc503a0675ec45e266d731daaf66b18b0fc"
         }
       ],
       "source_category": "npm:frontend-app",
-      "version": "3.5.45"
+      "version": "3.5.46"
     },
     {
       "name": "prks-work-route-projection",
@@ -266,15 +266,15 @@
       "runtime_files": [
         {
           "path": "/vendor/swagger-ui/swagger-ui-bundle.js",
-          "sha256": "36eeb4d5640b9c036b1d0f854499af1cceebbdb260b790a03a18be5e8488fbf5"
+          "sha256": "d0e0bee93732408c91fbad05cb0c2812e9ad37e94d12799c5503a9fe7afa2b82"
         },
         {
           "path": "/vendor/swagger-ui/swagger-ui.css",
-          "sha256": "c3cfe8248c4b0b89673600fb829924eafbac6de4bc4b2b06f5f5243483074d0a"
+          "sha256": "5ed08757e53da3e026d6cbecc61fe5d43585c9560b302d534ad56692519a273d"
         }
       ],
       "source_category": "npm:tools/frontend-vendor",
-      "version": "5.34.1"
+      "version": "5.35.1"
     }
   ],
   "schema_version": 1
