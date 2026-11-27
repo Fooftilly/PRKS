@@ -185,6 +185,14 @@ class LegacyReplaceTests(AnnotationHttpTestCase):
                 self.assertEqual(refused.get("code"), "malformed_annotation_payload")
                 self.assertEqual([item["id"] for item in self.annotations(work_id)], ["kept"])
 
+    def test_a_whole_number_written_as_a_fraction_is_an_integer_base(self) -> None:
+        work_id = self.pdf_work("Ann Base Float")
+        tip = self.save(work_id, [row("kept", "kept")])["canonical_annotation_set_revision"]
+        response = self.send("POST", f"/api/works/{work_id}/annotations", {
+            "annotations_json": "[]", "canonical_annotation_set_revision": float(tip)})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.annotations(work_id), [])
+
     def test_a_refused_save_changes_nothing_and_save_confirm_is_gone(self) -> None:
         """A save's own 200 confirms it (#1331): there is no save-confirm route."""
         work_id = self.pdf_work("Ann Token")

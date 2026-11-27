@@ -160,7 +160,9 @@ def replace_all(req: Request) -> Response:
     # The client must send its acknowledged tip so a stale viewer cannot
     # overwrite newer annotations or delete siblings omitted locally.
     base = data.get("canonical_annotation_set_revision")
-    # bool is an int in Python; null would skip the stale check and replace the list.
+    # JSON Schema counts 1.0 as an integer. bool is an int in Python; null would skip the stale check.
+    if type(base) is float and base.is_integer():
+        base = int(base)
     if type(base) is not int:
         return json_response(req, 400, {"error": "canonical_annotation_set_revision must be an integer",
                                         "code": "malformed_annotation_payload"})
