@@ -16,6 +16,7 @@ interface ExportField {
 }
 
 const fields = ref<ExportField[]>([])
+const bibtexStatus = ref('')
 let dirty = false
 let timer = 0
 const style = ref(libraryCitationStyle())
@@ -120,9 +121,11 @@ function send(patch: Record<string, boolean>): Promise<unknown> {
   const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
     .then(() => {
       confirmed = storedMap()
+      bibtexStatus.value = ''
       return true
     }, (error: unknown) => {
       failed = true
+      bibtexStatus.value = 'The BibTeX export settings could not be saved. Try again when PRKS is reachable.'
       console.warn(error)
       return false
     })
@@ -160,6 +163,7 @@ function flush(): void {
 
 function persist(id: string, on: boolean): void {
   dirty = true
+  bibtexStatus.value = ''
   changed[id] = on
   window.prksSetBibtexExportFieldsCache?.(currentMap())
   window.clearTimeout(timer)
@@ -182,6 +186,7 @@ async function restoreDefaults(): Promise<void> {
   window.prksSetBibtexExportFieldsCache?.(allTrue)
   applyMap(allTrue)
   dirty = true
+  bibtexStatus.value = ''
   window.clearTimeout(timer)
   timer = 0
   changed = {}
@@ -256,6 +261,7 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
+    <p v-if="bibtexStatus" class="prks-settings-hint prks-inline-message--error" role="alert">{{ bibtexStatus }}</p>
     <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" @click="restoreDefaults">
       Restore export defaults
     </PrksButton>

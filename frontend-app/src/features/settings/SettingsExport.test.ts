@@ -317,6 +317,9 @@ describe('SettingsExport BibTeX toggles', () => {
     // The whole map goes back to what PRKS confirmed, Author included.
     expect(bib.__prksBibtexExportFields).toEqual({ author: false, doi: true, url: true })
     expect(['author', 'doi', 'url'].map((id) => isOn(wrapper, id))).toEqual([false, true, true])
+    expect(wrapper.get('[role="alert"]').text()).toContain('BibTeX export settings could not be saved')
+    await wrapper.get('[data-bibtex-field="url"]').trigger('click')
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false) // a new choice clears it
     warn.mockRestore()
     wrapper.unmount()
   })
