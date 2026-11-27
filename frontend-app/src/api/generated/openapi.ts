@@ -4598,7 +4598,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are missing and no item was registered (PROCESSING_OBJECT_MISSING). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -117,12 +117,19 @@ class ContractCheckTests(unittest.TestCase):
                                       {"Content-Length": text}.get)
         self.assertEqual(len(self.check.violations), 2, self.check.violations)
 
+    def test_a_stream_on_a_status_without_a_body_is_a_violation(self) -> None:
+        self.check.check(_PDF, _request(), _streamed(416, [("Content-Range", "bytes */10")]))
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+        self.assertIn("streamed answer without Content-Type not documented", self.check.violations[0])
+
     def test_a_declared_header_holds_its_schema(self) -> None:
         def status(cache: list[tuple[str, str]]) -> Response:
             answer = _json(200, _STORAGE_BODY)
             answer.headers.extend(cache)
             return answer
 
+        self.check.check(_STORAGE, _request(), status([("Cache-Control", "no-store")]))
+        self.assertEqual([v for v in self.check.violations if "Cache-Control" in v], [])
         self.check.check(_STORAGE, _request(), status([]))
         self.check.check(_STORAGE, _request(), status([("Cache-Control", "max-age=60")]))
         found = [v for v in self.check.violations if "Cache-Control" in v]
