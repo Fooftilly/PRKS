@@ -200,7 +200,11 @@ function implStep(mode, s0, e, C, stats) {
         break;
     }
     case 'Discard': s.op = null; s.refused = false; break;
-    case 'OtherWrite': s.history.push(canonical(e.v)); break;
+    /* set_field keeps the revision when the stored value is unchanged. */
+    case 'OtherWrite':
+        if (canonical(e.v) === s.history[cur(s)]) stats.hit('other:unchanged');
+        else s.history.push(canonical(e.v));
+        break;
     case 'Deliver': reconcile(mode, s, s.op, s.ledger[s.op.id], C, stats); s.op = null; break;
     case 'Replay': reconcile(mode, s, s.ops[e.id], s.ledger[e.id], C, stats); break;
     case 'ClockStep': case 'Reload': break;
@@ -307,7 +311,7 @@ function explore(mode, C) {
 const REQUIRED = [
     'event:Read', 'event:ReadProjection', 'event:ReadEditBase', 'event:Open', 'event:Save', 'event:Send',
     'event:OtherWrite', 'event:Deliver', 'event:Discard', 'event:Reload',
-    'save:queued', 'save:refused', 'save:unchanged', 'save:cancelled', 'save:revert-queued', 'server:apply', 'server:no-op', 'server:conflict',
+    'other:unchanged', 'save:queued', 'save:refused', 'save:unchanged', 'save:cancelled', 'save:revert-queued', 'server:apply', 'server:no-op', 'server:conflict',
     'reconcile:superseded', 'cache:apply', 'cache:unchanged', 'cache:unproven',
     'editBase:keep', 'editBase:pair',
 ];

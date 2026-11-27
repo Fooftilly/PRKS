@@ -107,6 +107,10 @@
     "FollowUpSaveAfterAck": {
       "file": "Sequence.dfy",
       "sha256": "380aacc640f0d51ed521e71b25b8f1eff174b50a7fcf5917b2ae18aff0fb5260"
+    },
+    "UnchangedOtherWriteKeepsTheRevision": {
+      "file": "Sequence.dfy",
+      "sha256": "68a1cfdf6d3b99f55171e30c20153f5b5f8f90b53bcc5e67b32a7b87fa4fe32b"
     }
   },
   "witnesses": {

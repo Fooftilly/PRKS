@@ -181,7 +181,7 @@ module Sequence {
     case Save(v) => Saved(s, v)
     case Send => Received(s)
     case Discard => s.(op := None, refused := false)
-    case OtherWrite(v) => s.(history := s.history + [Canonical(v)])
+    case OtherWrite(v) => if Canonical(v) == s.history[Cur(s)] then s else s.(history := s.history + [Canonical(v)])
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
     case Replay(id) => Reconciled(m, s, s.ops[id], s.ledger[id])
     case ClockStep(_) => s
@@ -597,6 +597,25 @@ module Sequence {
     assert Last(ss).editBase == Ok(B, 1, None, Some("0")) && Last(ss).op.None?;
     ss, es := Push(M1, ss, es, Save(C));
     assert Last(ss).op == Some(Op(1, C, 1, 7, 1, B));
+    ss, es := Push(M1, ss, es, Send);
+  }
+
+  // An other-device write of the value the server holds keeps its revision.
+  lemma UnchangedOtherWriteKeepsTheRevision() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Send && ss[|es|].history == [A, B]
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, OtherWrite(A));
+    assert Last(ss).history == [A];
+    ss, es := Push(M1, ss, es, Save(B));
+    assert Last(ss).op == Some(Op(0, B, 0, 4, 0, A));
     ss, es := Push(M1, ss, es, Send);
   }
 }

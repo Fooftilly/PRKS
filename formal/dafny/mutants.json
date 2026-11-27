@@ -117,5 +117,12 @@
     "name": "pin not settled after its edit syncs",
     "from": "    then (Base(p.pending.value, s.editBase.revision, None, None, None), s.editBase.value)\n    else (p, f.origin)",
     "to": "    then (p, f.origin)\n    else (p, f.origin)"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "unchanged other-device write advances the revision",
+    "from": "case OtherWrite(v) => if Canonical(v) == s.history[Cur(s)] then s else",
+    "to": "case OtherWrite(v) => if false then s else"
   }
 ]
