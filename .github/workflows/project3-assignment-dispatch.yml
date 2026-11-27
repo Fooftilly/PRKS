@@ -25,7 +25,7 @@ jobs:
       github.ref == 'refs/heads/master' &&
       github.actor_id == '46610174'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 360
     environment: project-automation
     permissions:
       contents: read
@@ -55,7 +55,7 @@ jobs:
 
       # Even a failed attempt may have applied some fields before drift stopped it.
       - name: Refresh read-only snapshots after writes or possible partial writes
-        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
+        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

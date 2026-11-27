@@ -81,7 +81,7 @@ class DispatchTests(unittest.TestCase):
                 dispatch.authenticate(event_for(raw), current)
 
     def test_missing_oversized_or_nonstring_input_refused(self):
-        event = event_for("x" * (dispatch.MAX_BYTES + 1))
+        event = event_for("x" * (dispatch.DISPATCH_MAX_BYTES + 1))
         with self.assertRaisesRegex(dispatch.DispatchError, "oversized"):
             dispatch.authenticate(event, env())
         event["inputs"] = {}
@@ -217,7 +217,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("PROJECT3_ASSIGN_DISPATCH_MODE", workflow)
         self.assertIn("GITHUB_EVENT_PATH", workflow)
         self.assertNotIn("inputs.command }}", workflow)
-        self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')", workflow)
+        self.assertIn("if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')", workflow)
         self.assertIn("group: project3-assignment-mutations", workflow)
         relay = (ROOT / ".github/workflows/project3-assignment-request-processor.yml").read_text()
         self.assertIn("group: project3-assignment-mutations", relay)

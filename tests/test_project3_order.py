@@ -56,6 +56,9 @@ class FakeClaims:
     def mark(self, context, state):
         self.log.append((context, state))
 
+    def recent(self, context):
+        return any(c == context for c, _ in self.log[-100:])
+
 
 class OrderFixture(Fixture):
     def __init__(self):

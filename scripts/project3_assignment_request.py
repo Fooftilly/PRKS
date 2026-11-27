@@ -29,7 +29,7 @@ API = "https://api.github.com/repos/" + REPO
 BRANCH = "project3-assignment-requests"
 FILE = "project3-assignment-request.json"
 SIGNAL = ".github/workflows/project3-assignment-request-signal.yml"
-MAX_BYTES = 12000
+MAX_BYTES = dispatch.FULL_MAX_BYTES
 SHA = re.compile(r"^[0-9a-f]{40}$")
 STATUS_CONTEXT = "prks/project3-assignment-request-claim"
 MAX_PAGES = 10
@@ -282,17 +282,21 @@ def main() -> int:
         issue_read = triage.rest_client(actions_token)
         allow = dispatch.mutations_allowed(command, os.environ)
         gql = pm.GraphQL(pm.http_transport(project_token), allow_mutations=allow)
+        kind = dispatch.command_kind(command)[0]
         claims = (dispatch.GitHubOrderClaims(actions_token, run_id)
-                  if allow and dispatch.command_kind(command)[0] in dispatch.ORDER_KINDS else None)
+                  if allow and kind in dispatch.ORDER_KINDS else None)
+        budget = dispatch.GitHubRateBudget(actions_token) if kind == dispatch.FULL_KIND else None
         outcome, changed, issues = dispatch.run(
-            command, project=pm.Project(gql), read=issue_read, env=os.environ, claims=claims)
+            command, project=pm.Project(gql), read=issue_read, env=os.environ, claims=claims,
+            budget=budget)
         create_status(actions_token, sha, "success", run_id)
         claimed_sha = None
         print("Validated assignment request commit " + sha[:12], flush=True)
         dispatch.report(outcome, changed, issues)
         return 0
     except (RequestError, dispatch.DispatchError, triage.TriageError,
-            pm.MigrationError, OSError, ValueError, KeyError, TypeError) as error:
+            pm.MigrationError, OSError, ValueError, KeyError, TypeError,
+            KeyboardInterrupt) as error:
         # A failed triage apply might have written some Project fields.
         # The workflow refreshes the read-only queue even on this failure.
         # A consumed SHA remains claimed even when recording the outcome fails.

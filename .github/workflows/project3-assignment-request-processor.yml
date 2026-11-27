@@ -25,7 +25,7 @@ jobs:
       github.event.workflow_run.conclusion == 'success' &&
       github.event.workflow_run.head_branch == 'project3-assignment-requests'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 360
     environment: project-automation
     permissions:
       contents: read
@@ -57,7 +57,7 @@ jobs:
         run: python3 scripts/project3_assignment_request.py
 
       - name: Refresh read-only snapshots after writes or possible partial writes
-        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure')
+        if: always() && (steps.assignment.outputs.changed == 'true' || steps.assignment.outcome == 'failure' || steps.assignment.outcome == 'cancelled')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
