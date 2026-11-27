@@ -3447,8 +3447,11 @@ export interface components {
         MetadataFieldValue: {
             /** Revision */
             revision: number;
-            /** Value */
-            value: string | number | null;
+            /**
+             * Value
+             * @description The sync wire form: always text, empty when unset.
+             */
+            value: string;
         };
         /** @description ``501 not_ported`` (``backend.web.dispatch.not_ported``): a route PostgreSQL does not serve yet. */
         NotPortedEnvelope: {
@@ -8660,8 +8663,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     [name: string]: unknown;
@@ -8675,8 +8678,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
@@ -8729,8 +8732,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     [name: string]: unknown;
@@ -8742,8 +8745,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
@@ -10436,8 +10439,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     [name: string]: unknown;
@@ -10451,8 +10454,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
@@ -10505,8 +10508,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     [name: string]: unknown;
@@ -10518,8 +10521,8 @@ export interface operations {
                 headers: {
                     /** @description Always `bytes`. */
                     "Accept-Ranges": "bytes";
-                    /** @description `no-store, max-age=0, must-revalidate`. */
-                    "Cache-Control": string;
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store, max-age=0, must-revalidate";
                     /** @description The bytes in this answer. */
                     "Content-Length": number;
                     /** @description The range sent, as `bytes <first>-<last>/<size>`. */
