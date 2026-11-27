@@ -726,10 +726,14 @@ def execute_full(command: str, *, project: pm.Project,
                          + ", ".join(f"#{row['number']}={row['order']}" for row in rows)])
         except BaseException:
             _fail(claims, held + following)
-            state = "FAILED / POSSIBLY PARTIAL" if wrote else "REFUSED before any write in this batch"
+            if done == index:
+                state = f"stopped after verified batch {done}"
+            else:
+                state = f"batch {index}: " + ("FAILED / POSSIBLY PARTIAL" if wrote
+                                              else "REFUSED before any write in this batch")
             rest = f"; {_later(index, total)} not applied" if index < total else ""
             publish([f"order full plan; manifest digest {approval}: {done} of {total} batches "
-                     f"verified; batch {index}: {state}{rest}"])
+                     f"verified; {state}{rest}"])
             raise
     return (f"APPLIED — {triage.ORDER_FIELD} verified; {total} batches; "
             f"manifest digest {approval}"), changed, issues

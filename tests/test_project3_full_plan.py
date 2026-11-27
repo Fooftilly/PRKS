@@ -364,6 +364,24 @@ class FullPlanTests(unittest.TestCase):
                 self.assertIn((dispatch.plan_claim(approval, 2), "failure"), self.claims.log)
                 self.assertIsNone(self.order_of(509))
 
+    def test_cancel_while_reporting_a_verified_batch_names_the_right_batch(self):
+        _, manifest, _ = self.check()
+        approval = dispatch.manifest_digest(manifest)
+        lines: list[str] = []
+
+        def publish(batch_lines):
+            lines.extend(batch_lines)
+            if batch_lines[0].startswith("batch "):
+                raise KeyboardInterrupt("signal 2")
+
+        with mock.patch.object(dispatch, "publish", side_effect=publish), self.assertRaises(KeyboardInterrupt):
+            self.run_full(full_command(self.batches, "apply", manifest), armed_for(approval))
+        self.assertEqual(lines[-1], f"order full plan; manifest digest {approval}: 1 of 3 batches "
+                                    "verified; stopped after verified batch 1; batches 2–3 not applied")
+        self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, None, None])
+        self.assertIn((dispatch.plan_claim(approval, 1), "success"), self.claims.log)
+        self.assertEqual(self.claims.log[-1], (dispatch.plan_claim(approval, 2), "failure"))
+
     def test_writer_steps_exec_python_so_cancellation_signals_reach_it(self):
         for name, script in (("project3-assignment-dispatch.yml", "project3_assignment_dispatch.py"),
                              ("project3-assignment-request-processor.yml", "project3_assignment_request.py")):
