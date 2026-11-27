@@ -154,9 +154,9 @@ def parse_order(command: str) -> tuple[str, list[dict]]:
     return payload["operation"], rows
 
 
-def order_digest(rows: list[dict], live: list[dict]) -> str:
-    """Identical for the check and apply of one batch while its items and issues are unchanged."""
-    canonical = json.dumps({"kind": ORDER_KIND, "items": rows, "live": live},
+def order_digest(rows: list[dict], field: dict, live: list[dict]) -> str:
+    """Identical for the check and apply of one batch while its field, items and issues are unchanged."""
+    canonical = json.dumps({"kind": ORDER_KIND, "items": rows, "field": field, "live": live},
                            sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -260,8 +260,9 @@ def execute_order(command: str, *, project: pm.Project,
                   claims: OrderClaims | None) -> tuple[str, int, int]:
     operation, rows = parse_order(command)
     plan = prepare_order(rows, project, read)
-    digest = order_digest(rows, [{"item": row["expected_item"], "issue": row["expected_issue"]}
-                                 for row in plan["items"]])
+    digest = order_digest(rows, plan["field"],
+                          [{"item": row["expected_item"], "issue": row["expected_issue"]}
+                           for row in plan["items"]])
     if operation == "check":
         return f"CHECK ONLY — no Project fields changed; order digest {digest}", 0, len(rows)
     if not order_apply_allowed(digest, env):

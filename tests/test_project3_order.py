@@ -379,6 +379,14 @@ class OrderDispatchTests(unittest.TestCase):
             dispatch.run(raw, project=self.fx.project(apply=True), read=self.fx.read, env=env)
         self.assertEqual(self.fx.api.mutations, [])
 
+    def test_replaced_field_after_check_invalidates_approval_before_claim(self):
+        raw = order_command(request_row(), operation="apply")
+        env = self.armed(raw)
+        self.fx.api._fid = lambda name: "F_new_" + name.replace(" ", "_")
+        with self.assertRaisesRegex(dispatch.DispatchError, "maintainer-approved"):
+            self.run_command(raw, env)
+        self.assertEqual((self.claims.states, self.fx.api.mutations), ([], []))
+
     def test_replaced_item_after_check_invalidates_approval(self):
         raw = order_command(request_row(), operation="apply")
         env = self.armed(raw)

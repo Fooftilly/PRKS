@@ -103,7 +103,7 @@ Each row MUST have exactly these keys. `expected_before` is the live rank or `nu
 
 Approval is bound to the exact batch:
 
-1. Run the command with `"operation": "check"`. The run summary prints `order digest <sha256>`. The digest covers `kind`, `items` (including `expected_before`), each live Project item ID and each issue's labels, update time and open blockers. Check and apply of one batch have the same digest only while those items and issues are unchanged.
+1. Run the command with `"operation": "check"`. The run summary prints `order digest <sha256>`. The digest covers `kind`, `items` (including `expected_before`), the live field node ID, each live Project item ID and each issue's labels, update time and open blockers. Check and apply of one batch have the same digest only while those items and issues are unchanged.
 2. The maintainer reviews the batch and sets the digest in the protected environment:
 
    ```bash
