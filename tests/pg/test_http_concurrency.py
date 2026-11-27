@@ -164,7 +164,7 @@ class ConcurrentHttpTests(ProcessingHttpTestCase):
         def held(_library: Any, _ctx: Any, write_line: Callable[[dict[str, Any]], None]) -> None:
             inside.set()
             self.assertTrue(release.wait(10))
-            write_line({"phase": "ready", "percent": 100})
+            write_line({"phase": "ready", "percent": 100, "token": "t", "filename": "prks-t.prksbackup", "warnings": []})
 
         with mock.patch.object(maintenance_api, "stream_backup", held):
             backup = _Worker(lambda: self.send("POST", "/api/backups/progress", {}))

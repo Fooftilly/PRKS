@@ -4212,7 +4212,7 @@
             }
           },
           "409": {
-            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+            "description": "The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are missing and no item was registered (PROCESSING_OBJECT_MISSING). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8590,17 +8590,61 @@
         ],
         "type": "object"
       },
-      "BackupProgressLine": {
+      "BackupFailed": {
         "additionalProperties": false,
-        "description": "One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last.",
         "properties": {
           "phase": {
-            "enum": [
-              "snapshot",
-              "objects",
-              "ready",
-              "failed"
-            ],
+            "const": "failed",
+            "title": "Phase",
+            "type": "string"
+          },
+          "percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Percent",
+            "type": "integer"
+          },
+          "error": {
+            "description": "What to tell the user.",
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase",
+          "percent",
+          "error"
+        ],
+        "type": "object"
+      },
+      "BackupProgressLine": {
+        "description": "One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last.",
+        "discriminator": {
+          "mapping": {
+            "failed": "#/components/schemas/BackupFailed",
+            "objects": "#/components/schemas/BackupWorking",
+            "ready": "#/components/schemas/BackupReady",
+            "snapshot": "#/components/schemas/BackupWorking"
+          },
+          "propertyName": "phase"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/BackupWorking"
+          },
+          {
+            "$ref": "#/components/schemas/BackupReady"
+          },
+          {
+            "$ref": "#/components/schemas/BackupFailed"
+          }
+        ]
+      },
+      "BackupReady": {
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "const": "ready",
             "title": "Phase",
             "type": "string"
           },
@@ -8611,64 +8655,29 @@
             "type": "integer"
           },
           "token": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "`ready` only: the download token.",
-            "title": "Token"
+            "description": "The download token.",
+            "title": "Token",
+            "type": "string"
           },
           "filename": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "`ready` only: the archive's file name.",
-            "title": "Filename"
+            "description": "The archive's file name.",
+            "title": "Filename",
+            "type": "string"
           },
           "warnings": {
-            "anyOf": [
-              {
-                "items": {
-                  "type": "string"
-                },
-                "type": "array"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "`ready` only.",
-            "title": "Warnings"
-          },
-          "error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "`failed` only: what to tell the user.",
-            "title": "Error"
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
           "phase",
-          "percent"
+          "percent",
+          "token",
+          "filename",
+          "warnings"
         ],
         "type": "object"
       },
@@ -8762,6 +8771,30 @@
           "verified",
           "summary",
           "warnings"
+        ],
+        "type": "object"
+      },
+      "BackupWorking": {
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "enum": [
+              "snapshot",
+              "objects"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "percent": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Percent",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "phase",
+          "percent"
         ],
         "type": "object"
       },

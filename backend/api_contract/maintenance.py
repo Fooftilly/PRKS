@@ -6,22 +6,39 @@ The archive checks (R0), the restore and its refusals stay in
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
-class BackupProgressLine(BaseModel):
-    """One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last."""
-
+class BackupWorking(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    phase: Literal["snapshot", "objects", "ready", "failed"]
+    phase: Literal["snapshot", "objects"]
     percent: int = Field(ge=0, le=100)
-    token: Optional[str] = Field(default=None, description="`ready` only: the download token.")
-    filename: Optional[str] = Field(default=None, description="`ready` only: the archive's file name.")
-    warnings: Optional[list[str]] = Field(default=None, description="`ready` only.")
-    error: Optional[str] = Field(default=None, description="`failed` only: what to tell the user.")
+
+
+class BackupReady(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal["ready"]
+    percent: int = Field(ge=0, le=100)
+    token: str = Field(description="The download token.")
+    filename: str = Field(description="The archive's file name.")
+    warnings: list[str]
+
+
+class BackupFailed(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal["failed"]
+    percent: int = Field(ge=0, le=100)
+    error: str = Field(description="What to tell the user.")
+
+
+class BackupProgressLine(RootModel[Annotated[Union[BackupWorking, BackupReady, BackupFailed],
+                                             Field(discriminator="phase")]]):
+    """One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last."""
 
 
 class BackupRefusal(BaseModel):

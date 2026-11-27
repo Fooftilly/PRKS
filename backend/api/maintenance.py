@@ -199,7 +199,7 @@ def progress(req: Request) -> Response:
     def stream(write: Write) -> None:
         def write_line(payload: dict[str, Any]) -> None:
             # Each line is held to the published per-line shape.
-            write(ndjson(BackupProgressLine.model_validate(payload).model_dump(exclude_none=True)))
+            write(ndjson(BackupProgressLine.model_validate(payload).model_dump()))
 
         try:
             stream_backup(library, ctx, write_line)

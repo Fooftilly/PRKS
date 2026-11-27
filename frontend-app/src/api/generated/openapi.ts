@@ -1669,39 +1669,42 @@ export interface components {
             /** Tag Id */
             tag_id: string;
         };
-        /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
-        BackupProgressLine: {
+        BackupFailed: {
             /**
              * Error
-             * @description `failed` only: what to tell the user.
-             * @default null
+             * @description What to tell the user.
              */
-            error?: string | null;
-            /**
-             * Filename
-             * @description `ready` only: the archive's file name.
-             * @default null
-             */
-            filename?: string | null;
+            error: string;
             /** Percent */
             percent: number;
             /**
-             * Phase
+             * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            phase: "snapshot" | "objects" | "ready" | "failed";
+            phase: "failed";
+        };
+        /** @description One NDJSON line of ``POST /api/backups/progress``; ``ready`` or ``failed`` is the last. */
+        BackupProgressLine: components["schemas"]["BackupWorking"] | components["schemas"]["BackupReady"] | components["schemas"]["BackupFailed"];
+        BackupReady: {
+            /**
+             * Filename
+             * @description The archive's file name.
+             */
+            filename: string;
+            /** Percent */
+            percent: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            phase: "ready";
             /**
              * Token
-             * @description `ready` only: the download token.
-             * @default null
+             * @description The download token.
              */
-            token?: string | null;
-            /**
-             * Warnings
-             * @description `ready` only.
-             * @default null
-             */
-            warnings?: string[] | null;
+            token: string;
+            /** Warnings */
+            warnings: string[];
         };
         /** @description A backup or restore refusal: ``reason`` is the stable code. */
         BackupRefusal: {
@@ -1737,6 +1740,15 @@ export interface components {
             verified: boolean;
             /** Warnings */
             warnings: string[];
+        };
+        BackupWorking: {
+            /** Percent */
+            percent: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            phase: "objects" | "snapshot";
         };
         /** @description Which optional BibTeX lines are exported (the title and entry shell always are). */
         BibtexExportFields: {
@@ -5069,9 +5081,12 @@ export type AppSettings = components['schemas']['AppSettings'];
 export type AppSettingsPatch = components['schemas']['AppSettingsPatch'];
 export type ArgumentRef = components['schemas']['ArgumentRef'];
 export type AssignedTag = components['schemas']['AssignedTag'];
+export type BackupFailed = components['schemas']['BackupFailed'];
 export type BackupProgressLine = components['schemas']['BackupProgressLine'];
+export type BackupReady = components['schemas']['BackupReady'];
 export type BackupRefusal = components['schemas']['BackupRefusal'];
 export type BackupStaged = components['schemas']['BackupStaged'];
+export type BackupWorking = components['schemas']['BackupWorking'];
 export type BibtexExportFields = components['schemas']['BibtexExportFields'];
 export type BibtexExportFieldsPatch = components['schemas']['BibtexExportFieldsPatch'];
 export type BulkMoveFolder = components['schemas']['BulkMoveFolder'];
@@ -7796,7 +7811,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProcessingItemRefusal"];
                 };
             };
-            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            /** @description The key's item was deleted (PROCESSING_ITEM_DELETED), or the uploaded bytes are missing and no item was registered (PROCESSING_OBJECT_MISSING). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;

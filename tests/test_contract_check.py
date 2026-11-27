@@ -15,8 +15,21 @@ _JOBS = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/diagn
 _CREATE_POSITION = next(r for r in ROUTES if r.method == "POST" and r.pattern == "/api/positions")
 _IMPORT_ONE = next(r for r in ROUTES if r.method == "POST" and r.pattern.endswith("/import")
                    and "{item_id}" in r.pattern)
-_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/pdfs/{filename:path}")
+_HEAD_PDF = next(r for r in ROUTES if r.method == "HEAD" and r.pattern == "/api/pdfs/{filename:path}")
 _OPENAPI = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/openapi.json")
+_PDF = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/processing-items/{item_id}/pdf")
+_STORAGE = next(r for r in ROUTES if r.method == "GET" and r.pattern == "/api/storage-status")
+_STORAGE_BODY = {"field": "value"}  # not read: the header checks run before the schema
+
+
+_PDF_HEADERS = [("Accept-Ranges", "bytes"), ("Cache-Control", "no-store, max-age=0, must-revalidate"),
+                ("Content-Length", "10")]
+
+
+def _streamed(status: int, headers: list[tuple[str, str]]) -> Response:
+    answer = Response(status, _PDF_HEADERS + headers, b"")
+    answer.stream = cast(Any, object())  # never read by the checker
+    return answer
 
 
 def _request() -> Request:
@@ -74,12 +87,55 @@ class ContractCheckTests(unittest.TestCase):
         self.assertEqual(len(self.check.violations), 1, self.check.violations)
 
     def test_an_answer_without_a_required_header_is_a_violation(self) -> None:
-        self.check.check(_PDF, _request(), Response(416, [], b""))
+        self.check.check(_HEAD_PDF, _request(), Response(416, [], b""))
         self.assertEqual(self.check.violations, ["HEAD /api/pdfs/{filename:path} -> 416: required header "
                                                  "Content-Range missing"])
         self.check.violations.clear()
-        self.check.check(_PDF, _request(), Response(416, [("Content-Range", "bytes */10")], b""))
+        self.check.check(_HEAD_PDF, _request(), Response(416, [("Content-Range", "bytes */10")], b""))
         self.assertEqual(self.check.violations, [])
+
+    def test_a_streamed_range_needs_its_content_range_and_media_type(self) -> None:
+        self.check.check(_PDF, _request(), _streamed(206, [("Content-Type", "application/pdf"),
+                                                           ("Content-Range", "bytes 0-9/100")]))
+        self.assertEqual(self.check.violations, [])
+        self.check.check(_PDF, _request(), _streamed(206, [("Content-Type", "application/pdf")]))
+        self.assertEqual(self.check.violations, ["GET /api/processing-items/{item_id}/pdf -> 206: "
+                                                 "required header Content-Range missing"])
+
+    def test_a_streamed_answer_of_another_media_type_is_a_violation(self) -> None:
+        self.check.check(_PDF, _request(), _streamed(200, [("Content-Type", "text/plain")]))
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+        self.assertIn("streamed text/plain not documented", self.check.violations[0])
+
+    def test_an_integer_header_is_read_as_its_decimal(self) -> None:
+        self.check._check_headers("x", {"headers": {"Content-Length": {"schema": {"type": "integer", "minimum": 0}}}},
+                                  {"Content-Length": "10"}.get)
+        self.assertEqual(self.check.violations, [])
+        for text in ("-1", "ten"):
+            self.check._check_headers("x", {"headers": {"Content-Length": {"schema": {"type": "integer",
+                                                                                      "minimum": 0}}}},
+                                      {"Content-Length": text}.get)
+        self.assertEqual(len(self.check.violations), 2, self.check.violations)
+
+    def test_a_stream_on_a_status_without_a_body_is_a_violation(self) -> None:
+        self.check.check(_PDF, _request(), _streamed(416, [("Content-Range", "bytes */10")]))
+        self.assertEqual(len(self.check.violations), 1, self.check.violations)
+        self.assertIn("streamed answer without Content-Type not documented", self.check.violations[0])
+
+    def test_a_declared_header_holds_its_schema(self) -> None:
+        def status(cache: list[tuple[str, str]]) -> Response:
+            answer = _json(200, _STORAGE_BODY)
+            answer.headers.extend(cache)
+            return answer
+
+        self.check.check(_STORAGE, _request(), status([("Cache-Control", "no-store")]))
+        self.assertEqual([v for v in self.check.violations if "Cache-Control" in v], [])
+        self.check.check(_STORAGE, _request(), status([]))
+        self.check.check(_STORAGE, _request(), status([("Cache-Control", "max-age=60")]))
+        found = [v for v in self.check.violations if "Cache-Control" in v]
+        self.assertEqual(len(found), 2, self.check.violations)
+        self.assertIn("required header Cache-Control missing", found[0])
+        self.assertIn("header Cache-Control", found[1])
 
 
 if __name__ == "__main__":
