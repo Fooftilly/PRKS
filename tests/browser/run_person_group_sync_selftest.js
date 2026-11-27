@@ -1102,7 +1102,9 @@ async function aRefusedSaveReopensOnTheOtherTabsEdit() {
         assert.deepEqual((await rowsFor(store, "SET_PERSON_GROUP_FIELD")).map(r => r.payload.value), ["From X"]);
 
         globalThis.prksOfflineReadEntity = async () => { throw new Error("offline"); };
-        globalThis.prksPersonGroupRecordFor = async id => ({ id, name: "From X", description: "", parent: null });
+        globalThis.prksPersonGroupRecordFor = async id => globalThis.prksEffectivePersonGroupDetail(
+            { id, name: "Group O", description: "", parent: null, members: [] },
+            await store.listOperations(), []);
         globalThis.closePersonGroupEdit(y);
         await settle();
         assert.equal(y.getEntity().name, "From X", "Cancel shows the queued name offline");
