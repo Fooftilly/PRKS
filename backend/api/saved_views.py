@@ -42,7 +42,10 @@ def _id(req: Request) -> str:
 
 
 def _refused(req: Request, exc: SavedViewError) -> Response:
-    return json_response(req, int(exc.http_status), {"error": str(exc)})
+    body: dict[str, str] = {"error": str(exc)}
+    if exc.code:
+        body["code"] = exc.code
+    return json_response(req, int(exc.http_status), body)
 
 
 def all_views(req: Request) -> Response:
@@ -87,6 +90,7 @@ def update(req: Request) -> Response:
     try:
         updated = commands.update(
             *req.actor, _id(req),
+            base_revision=data.get("base_revision"),
             name=data.get("name") if has_name else None,
             search=data.get("search") if has_search else None,
         )
@@ -136,7 +140,9 @@ ROUTES = (
         "updateSavedView", "Rename a Saved View or change its search", _TAG,
         {200: ok(SavedView, "Updated."),
          400: error("Nothing to update, or a domain refusal of the name or search definition."),
-         404: _NOT_FOUND, 409: error("Name already used by another Saved View.")},
+         404: _NOT_FOUND,
+         409: error("Name already used by another Saved View, or the view changed since `base_revision` "
+                    "(code `revision_conflict`).")},
         request=body(SavedViewUpdateRequest))),
     route("DELETE", _ID, delete, contract=Operation(
         "deleteSavedView", "Delete a Saved View", _TAG,

@@ -2382,6 +2382,11 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Revision
+             * @description Advanced by every update; an edit sends it back as `base_revision`.
+             */
+            revision: number;
             search: components["schemas"]["SavedViewSearch"];
             /** Updated At */
             updated_at: string | null;
@@ -2440,9 +2445,16 @@ export interface components {
          * @description PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.
          *
          *     Sending neither field (or only nulls) is a domain refusal
-         *     (``Nothing to update.``).
+         *     (``Nothing to update.``). ``base_revision`` is the ``revision`` the editor
+         *     opened on; any other current revision is ``409`` with code
+         *     ``revision_conflict`` (#873).
          */
         SavedViewUpdateRequest: {
+            /**
+             * Base Revision
+             * @description The `revision` the edit was opened on.
+             */
+            base_revision: number;
             /**
              * Name
              * @default null
@@ -5533,7 +5545,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorEnvelope"];
                 };
             };
-            /** @description Name already used by another Saved View. Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
+            /** @description Name already used by another Saved View, or the view changed since `base_revision` (code `revision_conflict`). Also: PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED). */
             409: {
                 headers: {
                     [name: string]: unknown;

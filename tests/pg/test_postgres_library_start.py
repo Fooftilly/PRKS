@@ -221,7 +221,8 @@ class PostgresLibraryStartTests(RootPairingTestCase):
             status, people, _headers = self.call(port, "GET", f"/api/works/{work_id}/people-state")
             self.assertEqual(status, 200, people)
             status, source, _headers = self.call(port, "GET", f"/api/works/{work_id}/source-state")
-            self.assertEqual((status, source), (200, {"work_id": work_id, "revision": 0}))
+            self.assertEqual((status, source["work_id"], source["revision"], source["source_url"]),
+                             (200, work_id, 0, ""))
             # An echoed file_path is dropped; the rest of the patch applies.
             status, _body, _headers = self.call(port, "PATCH", f"/api/works/{work_id}",
                                                 {"title": "Patched", "file_path": ""}, headers)

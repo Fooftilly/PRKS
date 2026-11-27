@@ -8,6 +8,7 @@
  */
 import { CITATION_EXPORT_MAX, fetchBibtex, fetchCslItems } from '../../api/citations'
 import { PrksApiError } from '../../api/http'
+import { settleBibtexProfile } from './bibtex-profile'
 import { formatCitations } from './engine'
 import { libraryCitationStyle } from './styles'
 
@@ -93,6 +94,9 @@ export async function exportCitations(
     throw new CitationExportError(`Select at most ${CITATION_EXPORT_MAX} files to cite at once.`)
   }
   if (kind === 'bibtex' || kind === 'bib-file') {
+    if (!await settleBibtexProfile()) {
+      throw new CitationExportError('The BibTeX export settings could not be saved. Try again when PRKS is reachable.')
+    }
     const { text, missing } = await explained(() => fetchBibtex(workIds))
     if (!text.trim()) throw nothingLeft()
     if (kind === 'bibtex') await copyPlainText(text)

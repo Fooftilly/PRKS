@@ -26,7 +26,6 @@ DEV_PROFILES: dict[str, tuple[str, ...]] = {
     "plan": ("playwright",),
     "e2e": ("playwright",),
     "schemathesis": ("schemathesis",),
-    "locust": ("locust",),
     # Mutation testing reruns the targets' unit tests, so it needs what they
     # import (Hypothesis, the docs validator's parser) beside mutmut itself.
     # SonarCloud coverage (#1373) reruns the unit and PostgreSQL suites

@@ -39,6 +39,7 @@ class SavedView(BaseModel):
     id: str
     name: str
     search: SavedViewSearch
+    revision: int = Field(..., ge=0, description="Advanced by every update; an edit sends it back as `base_revision`.")
     # SQLite fills both on insert; the columns themselves are nullable.
     created_at: str | None
     updated_at: str | None
@@ -78,11 +79,14 @@ class SavedViewUpdateRequest(BaseModel):
     """PATCH /api/saved-views/{id}. Omit a field, or send JSON null, to leave it unchanged.
 
     Sending neither field (or only nulls) is a domain refusal
-    (``Nothing to update.``).
+    (``Nothing to update.``). ``base_revision`` is the ``revision`` the editor
+    opened on; any other current revision is ``409`` with code
+    ``revision_conflict`` (#873).
     """
 
     model_config = ConfigDict(extra="ignore")
 
+    base_revision: int = Field(..., ge=0, description="The `revision` the edit was opened on.")
     name: str | None = None
     search: SavedViewSearchInput | None = None
 

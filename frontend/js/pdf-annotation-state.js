@@ -6,6 +6,9 @@
  */
 (function (root) {
     'use strict';
+    const reconcileCore = root.prksSyncReconcile ||
+        (typeof module !== 'undefined' && module.exports && typeof require === 'function'
+            ? require('./sync-reconcile.js') : null);
 
     const OPERATIONS = Object.freeze([
         'CREATE_PDF_ANNOTATION', 'SET_PDF_ANNOTATION', 'DELETE_PDF_ANNOTATION',
@@ -516,10 +519,12 @@
      * never-created id (revision 0) followed by its CREATE (also 0).
      */
     function ackPredatesRuntimeAnnotation(runtime, data) {
-        if (!Number.isSafeInteger(data.server_revision)) return false;
+        if (!reconcileCore.isRevision(data.server_revision)) return false;
         const held = runtimeAnnotationRevision(runtime, String(data.annotation_id));
         if (!held) return false;
-        if (data.server_revision !== held.revision) return data.server_revision < held.revision;
+        if (reconcileCore.decideAck({ ackRevision: data.server_revision, heldRevision: held.revision }) ===
+            'superseded') return true;
+        if (data.server_revision !== held.revision) return false;
         const present = data.present !== false && !!data.annotation;
         return held.present && !present;
     }
@@ -811,7 +816,7 @@
                 return Promise.resolve(true);
             }
             if (typeof root.prksOfflineReconcilePdfAnnotation === 'function') {
-                return root.prksOfflineReconcilePdfAnnotation(data).then(function (ok) {
+                return root.prksOfflineReconcilePdfAnnotation(data, op).then(function (ok) {
                     if (!ok) return false;
                     return afterAck();
                 });

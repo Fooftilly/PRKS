@@ -3,7 +3,7 @@
 FROM python:3.14-slim AS frontend-builder
 WORKDIR /build
 COPY frontend ./frontend
-COPY scripts/benchmark_classic_script_bundle.py scripts/build_classic_distribution.py ./scripts/
+COPY scripts/classic_script_bundle.py scripts/build_classic_distribution.py ./scripts/
 ARG PRKS_CLASSIC_BUNDLES=1
 RUN mkdir -p dist \
     && if [ "$PRKS_CLASSIC_BUNDLES" = "1" ]; then \

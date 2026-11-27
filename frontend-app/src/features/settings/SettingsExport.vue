@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PrksButton from '../../components/PrksButton.vue'
+import PrksInlineMessage from '../../components/PrksInlineMessage.vue'
 import PrksSectionHeader from '../../components/PrksSectionHeader.vue'
+import { setBibtexProfileFlush, setBibtexProfileUnreconciled, trackBibtexProfileWrite } from '../citations/bibtex-profile'
 import { CITATION_STYLES, importedStyles, libraryCitationStyle } from '../citations/styles'
 import ImportedCitationStyles from './ImportedCitationStyles.vue'
 import { bibtexExportSummary } from './bibtex-summary'
+import { settingsOpenCount } from './navigation'
 import { createSerialSave } from './serial-save'
 import SettingsSwitch from './SettingsSwitch.vue'
 
@@ -15,6 +18,9 @@ interface ExportField {
 }
 
 const fields = ref<ExportField[]>([])
+const bibtexStatus = ref('')
+/* Toggles wait for a profile PRKS answered: without one a failed save has nothing to roll back to. */
+const profileKnown = ref(false)
 let dirty = false
 let timer = 0
 const style = ref(libraryCitationStyle())
@@ -87,57 +93,163 @@ function currentMap(): Record<string, boolean> {
   return next
 }
 
-function persist(): void {
+/* Only the toggles this page changed are sent. A full map would carry this
+ * page's stale view of every other toggle and undo what another tab or device
+ * saved meanwhile; PRKS merges a partial map under its row lock (#889). */
+let changed: Record<string, boolean> = {}
+let inFlight = 0
+let queue: Promise<void> = Promise.resolve()
+/* Patches sent or queued whose answer has not come back. */
+const waiting: Array<Record<string, boolean>> = []
+/* What PRKS last answered. A failed patch leaves the cache holding the
+ * toggles it carried, so the switches and Copy BibTeX return to this. */
+let confirmed: Record<string, boolean> | null = null
+let failed = false
+
+function storedMap(): Record<string, boolean> | null {
+  const stored = window.__prksBibtexExportFields
+  return stored && typeof stored === 'object' ? { ...stored } : null
+}
+
+function idle(): boolean {
+  return !inFlight && !timer && !Object.keys(changed).length
+}
+
+/* Every write of the toggles -- a debounced patch or Restore defaults -- runs
+ * after the one before it, so an older patch can never land after a newer
+ * one. Once nothing of ours is waiting, the switches show what PRKS holds:
+ * our toggles merged with any another session saved. */
+function send(patch: Record<string, boolean>): Promise<unknown> {
+  inFlight += 1
+  waiting.push(patch)
+  const run = queue.then(() => Promise.resolve(window.prksPatchAppSettings?.({ bibtex_export_fields: patch })))
+    .then(() => {
+      confirmed = storedMap()
+      return true
+    }, (error: unknown) => {
+      failed = true
+      setBibtexProfileUnreconciled(true)
+      bibtexStatus.value = 'The BibTeX export settings could not be saved. Try again when PRKS is reachable.'
+      console.warn(error)
+      return false
+    })
+  queue = run.then(() => undefined)
+  trackBibtexProfileWrite(run)
+  return run.finally(() => {
+    inFlight -= 1
+    waiting.splice(waiting.indexOf(patch), 1)
+    const stored = window.__prksBibtexExportFields
+    if (!idle()) {
+      /* The answer is PRKS before our later toggles. Copy BibTeX reads this
+       * cache, so it keeps the toggles the page shows until they are saved. */
+      const ours = Object.assign({}, ...waiting, changed)
+      window.prksSetBibtexExportFieldsCache?.({ ...(stored && typeof stored === 'object' ? stored : {}), ...ours })
+      return
+    }
+    if (failed) {
+      failed = false
+      if (confirmed) {
+        window.prksSetBibtexExportFieldsCache?.(confirmed)
+        applyMap(confirmed)
+        setBibtexProfileUnreconciled(false)
+        return
+      }
+    }
+    if (stored && typeof stored === 'object') applyMap(stored)
+  })
+}
+
+function flush(): void {
+  const patch = changed
+  changed = {}
+  if (!Object.keys(patch).length) return
+  void send(patch)
+}
+
+function persist(id: string, on: boolean): void {
   dirty = true
-  const next = currentMap()
-  window.prksSetBibtexExportFieldsCache?.(next)
+  bibtexStatus.value = ''
+  changed[id] = on
+  window.prksSetBibtexExportFieldsCache?.(currentMap())
   window.clearTimeout(timer)
   timer = window.setTimeout(() => {
-    void window.prksPatchAppSettings?.({ bibtex_export_fields: next }).catch((error: unknown) => {
-      console.warn(error)
-    })
+    timer = 0
+    flush()
   }, 450)
 }
 
 function toggle(id: string): void {
+  if (!profileKnown.value) return
   const field = fields.value.find((item) => item.id === id)
   if (!field) return
   field.on = !field.on
-  persist()
+  persist(id, field.on)
 }
 
 async function restoreDefaults(): Promise<void> {
+  if (!profileKnown.value) return
   const allTrue: Record<string, boolean> = {}
   for (const field of fields.value) allTrue[field.id] = true
   window.prksSetBibtexExportFieldsCache?.(allTrue)
   applyMap(allTrue)
   dirty = true
+  bibtexStatus.value = ''
   window.clearTimeout(timer)
-  try {
-    await window.prksPatchAppSettings?.({ bibtex_export_fields: allTrue })
-  } catch (error) {
-    console.warn(error)
-  }
+  timer = 0
+  changed = {}
+  // Restore defaults is an explicit choice about every toggle, so it sends all of them.
+  await send(allTrue)
 }
 
-onMounted(async () => {
-  applyMap({})
+function flushDebounced(): void {
+  window.clearTimeout(timer)
+  timer = 0
+  flush()
+}
+
+let reading = false
+
+async function readProfile(): Promise<void> {
+  if (reading) return
+  reading = true
+  let settings: unknown = null
   try {
-    await window.prksLoadAppSettings?.()
+    settings = await window.prksLoadAppSettings?.()
   } catch {
-    /* Toggles stay at the inclusive default. */
+    settings = null
+  } finally {
+    reading = false
   }
   if (!styleDirty) {
     style.value = libraryCitationStyle()
     styleSave.reset(style.value)
   }
+  const profile = settings && typeof settings === 'object'
+    ? (settings as { bibtex_export_fields?: unknown }).bibtex_export_fields : null
+  profileKnown.value = !!profile && typeof profile === 'object'
+  bibtexStatus.value = profileKnown.value
+    ? '' : 'The BibTeX export settings could not be read. Reopen Settings when PRKS is reachable.'
+  if (profileKnown.value && !confirmed) confirmed = storedMap()
   if (dirty) return
   const stored = window.__prksBibtexExportFields
   applyMap(stored && typeof stored === 'object' ? stored : {})
+}
+
+// Settings stays mounted while closed, so a reopen is the retry for a failed read.
+watch(settingsOpenCount, () => {
+  if (!profileKnown.value) void readProfile()
+})
+
+onMounted(async () => {
+  setBibtexProfileFlush(flushDebounced)
+  applyMap({})
+  await readProfile()
 })
 
 onBeforeUnmount(() => {
-  window.clearTimeout(timer)
+  setBibtexProfileFlush(null)
+  // A toggle still waiting for its debounce is sent, not dropped.
+  flushDebounced()
 })
 </script>
 
@@ -173,11 +285,16 @@ onBeforeUnmount(() => {
           :data-bibtex-field="field.id"
           :on="field.on"
           :labelled-by="`prks-lbl-bibtex-export-${field.id}`"
+          :disabled="!profileKnown"
           @click="toggle(field.id)"
         />
       </div>
     </div>
-    <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" @click="restoreDefaults">
+    <!-- Mounted while empty: a screen reader announces text added to an existing live region. -->
+    <div id="prks-bibtex-export-status" role="alert">
+      <PrksInlineMessage v-if="bibtexStatus" tone="error">{{ bibtexStatus }}</PrksInlineMessage>
+    </div>
+    <PrksButton id="prks-bibtex-export-reset" class="prks-bibtex-export-reset" :disabled="!profileKnown" @click="restoreDefaults">
       Restore export defaults
     </PrksButton>
   </section>

@@ -542,12 +542,15 @@ class FrontendOfflineRuntimeTests(unittest.TestCase):
             start = pl.index(fn)
             end = pl.find("\nasync function ", start + 1)
             self.assertIn("prksSetWorkPlaylist(", pl[start:end], fn)
-        # An edit measures the draft against the ACKNOWLEDGED base, not against
-        # the values the page happens to be showing.
+        # An edit is measured against the ACKNOWLEDGED base pinned when the
+        # editor opened, never one read at Save (#894).
+        pin = pl[pl.index("async function prksPinPlaylistEdit("):
+                 pl.index("async function updatePlaylist(")]
+        self.assertIn("prksPinPlaylistEditBase(playlistId, shown, ops)", pin)
         update = pl[pl.index("async function updatePlaylist("):
                     pl.index("async function prksSetWorkPlaylist(")]
-        self.assertIn("prksAcknowledgedPlaylistBase(playlistId, ops)", update)
-        self.assertIn("prksDirtyPlaylistFields(playlistId, draft, base, ops)", update)
+        self.assertNotIn("prksAcknowledgedPlaylistBase(", update)
+        self.assertIn("const base = options && options.base;", update)
         self.assertIn("if (!base) throw prksPlaylistBaseUnavailable(", update)
         # No other production file may issue a raw Playlist write.
         for name in (

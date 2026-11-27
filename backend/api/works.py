@@ -107,9 +107,8 @@ def metadata_state(req: Request) -> Response:
 def source_state(req: Request) -> Response:
     from backend.domain.works import work_commands
 
-    # A REVISION ONLY. The Work record already carries every canonical
-    # source value, so a URL here would double what this endpoint sends
-    # and what IndexedDB stores for values the client already holds.
+    # The revision and the stored source, from one snapshot: the editor's
+    # base is this pair, never a revision beside a separately read Work.
     data = work_commands.source_state(*req.actor, req.params["work_id"])
     if data == source_rules.INVALID_SOURCE_STATE:
         # The product reads this row as a video, but its identity cannot

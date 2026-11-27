@@ -71,6 +71,20 @@ PDF annotations on an already-available managed PDF are local-first
 (metadata durable ops; PDF bytes stay in Cache Storage `prks-pdf-v3:<scope>:<epoch>`).
 New PDF binary ingestion remains connection-required.
 
+**ACK ordering goes through one core.** Every family merges an
+acknowledgement into what the page holds through `prksSyncReconcile`
+(`frontend-app/src/sync/reconcile.ts`, built to `frontend/js/sync-reconcile.js`).
+An ACK replaces a held value only when that value is provably not newer: a
+value with its own revision compares revisions; a value without one (a detail,
+a row) is proven by its read finishing before the operation was created
+(`observedAt` on cache envelopes, `observe`/`carryObservation` in memory).
+Otherwise the cache drops the value and a live owner re-reads it
+(`applyOwnerAck`). Pending overlays fold the queue with `overlay`. Never
+hand-write another revision comparison in a family. Ported so far: Tag links
+(Work and Folder), Work source, Work notes, Folder fields, Work filing,
+Person Group fields and memberships, PDF annotations. See *ACK ordering: one shared core* in
+`docs/local-first-sync.md`.
+
 A family becomes durable only by being *implemented* as one — a semantic
 operation with validation, a revision or an explicit "no base revision" rule,
 reconciliation and named refusals. See *Adding a family: the four shapes and
@@ -94,7 +108,12 @@ background. During that window no cached value in the domain may be served. The
 domain unblocks only when the sweep **for that same generation** completed
 successfully: a superseded generation's completion may never unblock, reset, or
 publish eligibility for a newer one, and a failed sweep leaves the domain
-conservatively blocked for the life of the runtime. Safe degradation is
+conservatively blocked for the life of the runtime. The one exception is a
+generation an ACK reconcile starts (`advanceDomainGeneration`): it only fences
+reads in flight, and the reconcile patches or drops each row it touches
+itself, so it adds nothing for a sweep to delete. A sweep still pending when it
+starts carries its result to that generation; otherwise the domain would stay
+blocked although every stale row is gone. Safe degradation is
 "unavailable offline," never "known-stale shown offline"; online PRKS keeps
 working normally either way. A read associated with a domain captures its
 generation when the authoritative request begins and may publish a cache write
