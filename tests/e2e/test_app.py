@@ -14208,7 +14208,9 @@ class SettingsCategoryWorkflowTests(_BrowserE2E):
         toggle.focus()
         page.keyboard.press("Shift+Tab")
         page.keyboard.press("Tab")
-        self.assertNotEqual(toggle.evaluate("e => getComputedStyle(e).outlineStyle"), "none")
+        ring = toggle.evaluate(
+            "e => { const s = getComputedStyle(e); return [s.outlineStyle, s.outlineWidth, s.outlineColor]; }")
+        self.assertEqual(ring, ["solid", "2px", "rgb(109, 108, 247)"])
 
     def test_storage_status_is_shown_read_only(self):
         server, page, _collector = self._start_app()
