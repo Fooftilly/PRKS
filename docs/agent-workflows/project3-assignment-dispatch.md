@@ -191,7 +191,7 @@ The apply runs in one job:
 
 1. It refuses a plan whose REST estimate does not fit, a manifest that is not the approved one, and the plan rules of [Multi-batch plans](#multi-batch-plans): used batch digests, started steps and a revocation status. Before it scans the claim history, it waits until the current rate-limit window has 201 requests.
 2. It claims step 1 and checks every batch against its manifest digest before the first write. This check reads each Project item again, so a change after the job loaded the Project is found here. A stale later batch ends the manifest here, with no write.
-3. For each batch in order, it waits for REST budget when needed, claims the step, reads the revocation status, checks the batch again, claims the batch digest, applies the batch with the per-write guards and marks both claims `success`.
+3. For each batch in order, it waits for REST budget when needed, reads the revocation status, checks the batch again, claims the batch digest and applies the batch with the per-write guards. It then claims the next step and marks this batch and its step `success`. A stop during the next budget wait therefore always leaves the next step started.
 4. Any refusal, failure, revocation, budget stop or cancellation marks the open claims `failure` and stops. The summary says how many batches are verified, whether the stopped batch is **FAILED / POSSIBLY PARTIAL** or refused before any write, and which batches were not applied. The workflow then refreshes the agent queue and the planning snapshot.
 
 Recovery after a stopped full plan uses the steps of [Multi-batch plans](#multi-batch-plans). Check only the remaining rows as a new full plan and approve its new manifest digest.

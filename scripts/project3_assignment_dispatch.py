@@ -706,9 +706,6 @@ def execute_full(command: str, *, project: pm.Project,
                 _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
             for index, rows in enumerate(batches, start=1):
                 budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
-                if index > 1:
-                    held = [steps[index - 1]]
-                    claims.mark(held[0], "pending")
                 if claims.recent(revoke_claim(approval)):
                     raise DispatchError("the maintainer revoked this manifest during the run")
                 plan, digest = _plan_batch(rows, given, index, project, read, preflight=False)
@@ -716,14 +713,18 @@ def execute_full(command: str, *, project: pm.Project,
                 held.insert(0, batch_claim(digest))
                 wrote = True
                 changed += triage.apply_order(plan, project, read)
+                # The next step is claimed while this batch's quota is reserved, so a stop
+                # during the next budget wait cannot leave the manifest resumable.
+                following = steps[index:index + 1]
+                for context in following:
+                    claims.mark(context, "pending")
                 for context in held:
                     claims.mark(context, "success")
-                held, wrote, done = [], False, index
+                held, wrote, done = following, False, index
                 publish([f"batch {index}/{total} verified: "
                          + ", ".join(f"#{row['number']}={row['order']}" for row in rows)])
         except BaseException:
-            # A stop between batches still ends the manifest.
-            _fail(claims, held or steps[done:done + 1])
+            _fail(claims, held)
             state = "FAILED / POSSIBLY PARTIAL" if wrote else "REFUSED before any write in this batch"
             rest = f"; {_later(index, total)} not applied" if index < total else ""
             publish([f"order full plan; manifest digest {approval}: {done} of {total} batches "

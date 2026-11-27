@@ -120,10 +120,11 @@ class FullPlanTests(unittest.TestCase):
                          (f"APPLIED — {ORDER} verified; 3 batches; manifest digest {approval}", 3, 3))
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, 5])
         self.assertEqual({m[1]["field"] for m in self.fx.api.mutations}, {manifest["field"]["id"]})
-        expected = []
+        expected = [(dispatch.plan_claim(approval, 1), "pending")]
         for n, entry in enumerate(manifest["batches"], start=1):
             step, batch = dispatch.plan_claim(approval, n), dispatch.batch_claim(entry["digest"])
-            expected += [(step, "pending"), (batch, "pending"), (batch, "success"), (step, "success")]
+            following = [(dispatch.plan_claim(approval, n + 1), "pending")] if n < 3 else []
+            expected += [(batch, "pending"), *following, (batch, "success"), (step, "success")]
         self.assertEqual(self.claims.log, expected)
         self.assertIn("batch 2/3 verified: #509=4", self.published)
 
@@ -227,8 +228,8 @@ class FullPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(dispatch.DispatchError, "batch 3: live evidence differs"):
             self.apply(manifest)
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, None])
-        self.assertEqual(self.claims.log[-2:], [(dispatch.plan_claim(approval, 3), "pending"),
-                                                (dispatch.plan_claim(approval, 3), "failure")])
+        self.assertIn((dispatch.plan_claim(approval, 3), "pending"), self.claims.log)
+        self.assertEqual(self.claims.log[-1], (dispatch.plan_claim(approval, 3), "failure"))
         self.assertFalse(self.claims.states([dispatch.batch_claim(manifest["batches"][2]["digest"])]))
         self.assertIn("2 of 3 batches verified; batch 3: REFUSED before any write", self.published[-1])
 
@@ -313,6 +314,32 @@ class FullPlanTests(unittest.TestCase):
             self.apply(manifest)
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, None])
         self.assertIn((dispatch.plan_claim(approval, 3), "failure"), self.claims.log)
+
+    def test_cancel_during_a_wait_with_no_quota_left_ends_the_manifest(self):
+        _, manifest, _ = self.check()
+        approval = dispatch.manifest_digest(manifest)
+        waits: list[int] = []
+        mark = self.claims.mark
+
+        def exhausted(context, state):
+            raise dispatch.DispatchError("order approval claim request failed: HTTPError")
+
+        def wait(cost):
+            waits.append(cost)
+            if len(waits) == 6:
+                self.claims.mark = exhausted
+                raise KeyboardInterrupt("signal 15")
+
+        self.budget.wait = wait
+        with self.assertRaises(KeyboardInterrupt):
+            self.apply(manifest)
+        self.claims.mark = mark
+        self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, None, None])
+        with self.assertRaisesRegex(dispatch.DispatchError, "batch 2 already started"):
+            dispatch.run(plan_command(manifest, 2, self.batches[1], "apply"),
+                         project=self.fx.project(apply=True), read=self.fx.read,
+                         env=armed_for(approval), claims=self.claims)
+        self.assertIsNone(self.order_of(509))
 
     def test_writer_steps_exec_python_so_cancellation_signals_reach_it(self):
         for name, script in (("project3-assignment-dispatch.yml", "project3_assignment_dispatch.py"),
