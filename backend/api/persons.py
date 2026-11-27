@@ -232,6 +232,9 @@ ROUTES = (
     route("GET", "/api/persons/{person_id}/profile-image", profile_image, contract=Operation(
         "getPersonProfileImage", "A Person's cached portrait, fetched and cached on a miss", _TAG,
         {200: ok(BINARY, "The portrait.", media_type=("image/webp", "image/jpeg"),
-                 headers={"Cache-Control": Header("``private, max-age=<seconds>``.", required=True)}),
+                 headers={"Cache-Control": Header("Private: a day from the cache, an hour when just fetched.",
+                                                  {"type": "string",
+                                                   "enum": ["private, max-age=86400", "private, max-age=3600"]},
+                                                  required=True)}),
          404: plain("No such Person, no image_url, or the image could not be fetched.")})),
 )
