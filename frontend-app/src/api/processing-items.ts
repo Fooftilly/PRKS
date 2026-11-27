@@ -6,7 +6,7 @@
  * write sequencing: the queue page does.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { components } from './generated/processing-items'
+import type { components } from './generated/openapi'
 
 type Schemas = components['schemas']
 export type ProcessingItem = Schemas['ProcessingItem']

@@ -12,8 +12,7 @@ from pydantic import ValidationError
 
 from backend.api_contract.boundary import dump_response
 from backend.api_contract.openapi import (
-    PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION,
-    performance_diagnostics_openapi_document,
+    openapi_document,
 )
 from backend.api_contract.performance import (
     PerformanceCounters,
@@ -27,7 +26,6 @@ from backend.runtime.performance import COUNTER_NAMES, reset, snapshot
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CLIENT = _ROOT / "frontend-app" / "src" / "api" / "performance-diagnostics.ts"
-_ARTIFACT = _ROOT / "docs" / "api" / "openapi-performance-diagnostics.json"
 _SRC = _ROOT / "frontend-app" / "src"
 
 
@@ -55,7 +53,7 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
             dump_response(PerformanceDiagnosticsReset, {"status": "reset"}),
             {"status": "reset"},
         )
-        status = performance_diagnostics_openapi_document()["components"]["schemas"][
+        status = openapi_document()["components"]["schemas"][
             "PerformanceDiagnosticsReset"
         ]["properties"]["status"]
         self.assertEqual(status.get("const"), "reset")
@@ -83,43 +81,8 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
                 self.assertEqual(_ts_keys(const_name), set(model.model_fields))
         self.assertEqual(set(PerformanceCounters.model_fields), set(COUNTER_NAMES))
 
-    def test_openapi_document_version_matches_the_typescript_client(self):
-        document = performance_diagnostics_openapi_document()
-        self.assertEqual(document["openapi"], "3.1.0")
-        self.assertEqual(document["info"]["version"], PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION)
-        self.assertIn("/api/diagnostics/performance", document["paths"])
-        self.assertIn("/api/diagnostics/performance/reset", document["paths"])
-        client = _CLIENT.read_text(encoding="utf-8")
-        self.assertIn(
-            f"PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION = '{PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION}'",
-            client,
-        )
-        api = OpenAPI.from_dict(document)
-        body = dump_response(PerformanceSnapshot, snapshot())
-        assert isinstance(body, dict)
-        request = MockRequest(
-            host_url="http://127.0.0.1",
-            method="get",
-            path="/api/diagnostics/performance",
-        )
-        response = MockResponse(
-            data=json.dumps(body).encode(),
-            status_code=200,
-            content_type="application/json",
-        )
-        api.validate_request(request)
-        api.validate_response(request, response)
-
-    def test_checked_in_openapi_artifact_matches_generator(self):
-        self.assertTrue(
-            _ARTIFACT.is_file(),
-            "commit docs/api/openapi-performance-diagnostics.json",
-        )
-        on_disk = json.loads(_ARTIFACT.read_text(encoding="utf-8"))
-        self.assertEqual(on_disk, performance_diagnostics_openapi_document())
-
     def test_reset_operation_requires_json(self):
-        document = performance_diagnostics_openapi_document()
+        document = openapi_document()
         operation = document["paths"]["/api/diagnostics/performance/reset"]["post"]
         request_body = operation["requestBody"]
         self.assertTrue(request_body["required"])
@@ -136,6 +99,8 @@ class PerformanceDiagnosticsContractTests(unittest.TestCase):
         error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
         for status in ("400", "413", "415"):
             response = operation["responses"][status]
+            if "$ref" in response:  # a refusal every JSON route shares
+                response = document["components"]["responses"][response["$ref"].rsplit("/", 1)[1]]
             self.assertEqual(
                 response["content"]["application/json"]["schema"],
                 error_ref,

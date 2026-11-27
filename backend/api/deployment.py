@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from backend.api_contract.deployment import DeploymentSettings
+from backend.api_contract.operation import Operation, ok
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -38,7 +40,6 @@ def body(environ: Any = None, root_source: Any = None) -> dict[str, Any]:
     from ``--storage-root`` or the bootstrap file rather than ``PRKS_STORAGE``.
     """
     from backend.api_contract.boundary import dump_response
-    from backend.api_contract.deployment import DeploymentSettings
     from backend.runtime.config_reference import BY_KEY, Effective, browser_view
 
     rows = browser_view(os.environ if environ is None else environ)
@@ -72,5 +73,8 @@ def deployment_settings(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", PATH, deployment_settings),
+    route("GET", PATH, deployment_settings, contract=Operation(
+        "getDeploymentSettings", "Deployment settings, read-only", "settings",
+        {200: ok(DeploymentSettings, "Every deployment setting with its effective value and source. "
+                                     "Secrets and host paths show only that they are set.")})),
 )

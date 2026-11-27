@@ -3,7 +3,7 @@
  * Already-effective rows/detail from the legacy coordinator — not a second
  * catalogue or durable-operation store.
  *
- * These are not aliases of `src/api/generated/positions.ts`. That module is
+ * These are not aliases of `src/api/generated/openapi.ts`. That module is
  * the compile-time HTTP contract (`PositionSummary`, wire `PositionDetail`,
  * sync state, create/update bodies). The projection below drops timestamps,
  * coerces description to text, and carries Argument rows the coordinator has

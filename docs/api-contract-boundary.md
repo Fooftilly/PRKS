@@ -49,12 +49,25 @@ serializes.
 | Shared error envelope | `backend/api_contract/errors.py` |
 | Parse / dump helpers | `backend/api_contract/boundary.py` |
 | Per-family DTOs | `backend/api_contract/<family>.py` |
-| OpenAPI builder | `backend/api_contract/openapi.py` (extend or add sibling builders) |
-| Checked-in OpenAPI artifact | `docs/api/openapi-positions.json` (and later siblings) |
-| Live document | `GET /api/openapi.json` (Positions slice today; grows with families) |
+| Route contract types | `backend/api_contract/operation.py` (`Operation`, `Reply`, `Param`, `body`, `ok`, `error`) |
+| Route contracts | the `contract=` of each row of `ROUTES` in `backend/api/<family>.py` |
+| OpenAPI builder | `backend/api_contract/openapi.py` (`openapi_document()`, from `backend.api.ROUTES`) |
+| Checked-in document | `docs/api/openapi.json` (`python scripts/write_openapi.py`) |
+| Live document | `GET /api/openapi.json` |
+| TypeScript types | `frontend-app/src/api/generated/openapi.ts` (`npm run openapi:types`) |
+
+There is one document (#1431). A route's contract is declared once, on its
+route row, so a route and its description cannot drift apart. The builder
+adds the refusals every route of a kind shares (`components.responses`): the
+JSON body gate (400 `invalid_request`, 413, 415) for a JSON route, and
+admission (401, 403, 503; for a mutation admission holds to the Library
+epoch, `backend.api.session.epoch_fenced`, also 400 `LIBRARY_EPOCH_REQUIRED`,
+409 `LIBRARY_EPOCH_CHANGED` and 503 `MAINTENANCE`, which only that path
+checks) for an `/api/` route. A route declares only
+its own answers; when it declares a status the builder would add, the shared
+refusal's description is appended to the route's own.
 
 Do **not** introduce a framework solely to obtain OpenAPI.
-Route extraction (#67) is a separate track; typed models do not require it.
 
 ## Steps for the next family
 
@@ -83,37 +96,34 @@ Route extraction (#67) is a separate track; typed models do not require it.
    `invalid_request`. For **mutating** routes, send the domain result dict
    after commit without `dump_response` (see Boundary rule above); use
    `dump_response` on safe GETs if desired.
-5. Extend `positions_openapi_document()` (or add `*_openapi_document()` and
-   merge) so paths and `components.schemas` stay generated from the same
-   models. Document the **real** HTTP status codes the adapter returns
-   (e.g. `position_in_use` → 409, not 400).
-6. Regenerate/commit `docs/api/openapi-*.json` so #45 has a machine-readable
-   artifact without requiring FastAPI. Positions:
+5. Declare the route's `contract=Operation(...)` on its `ROUTES` row:
+   operation id, summary, tag, query/header `Param`s, `body(Model)` for a
+   request body and `ok(Model, ...)` / `error(...)` replies by status.
+   Document the **real** HTTP status codes the route returns (e.g.
+   `position_in_use` → 409, not 400). A `HEAD` route uses the `GET`
+   contract's `.head()`. Remove the route from `UNTYPED` in
+   `tests/test_openapi_document.py`; the list only shrinks.
+6. Regenerate and commit `docs/api/openapi.json` and the TypeScript types:
 
    ```bash
-   python -c "import json; from backend.api_contract.openapi import positions_openapi_document as d; print(json.dumps(d(), indent=2))" > docs/api/openapi-positions.json
+   python scripts/write_openapi.py
+   (cd frontend-app && npm run openapi:types)
    ```
 
-   Performance diagnostics uses the same checked-in fragment,
-   `docs/api/openapi-performance-diagnostics.json`, from
-   `performance_diagnostics_openapi_document()`. `GET /api/openapi/performance-diagnostics.json`
-   still serves that function. The type generator reads the file, not the server.
-   Do not fold these fragments into a combined document here.
-
-   `test_checked_in_openapi_artifact_matches_generator` only detects drift
-   against the generator; it does not rewrite the file.
-7. For a family whose Vue client already owns typed transport DTOs, regenerate
-   compile-time TypeScript from that checked-in artifact and replace the
-   duplicated hand-written wire types with aliases of the generated schema.
-   Generation is offline (`frontend-app` `npm run openapi:types`); it reads
-   `docs/api/openapi-<family>.json` and writes
-   `frontend-app/src/api/generated/<family>.ts`. One module per family. Do not
-   generate fetch clients, TanStack Query hooks, or domain services. Keep
-   `prksApiRequest`, the hand-written service, and the runtime response
-   parsers. `npm run openapi:check` fails when the committed types drift.
-   When #45 has a real combined document, point the family list at it; do not
-   invent that document in the type generator.
-8. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
+   `tests/test_openapi_document.py` and `npm run openapi:check` fail when
+   either is stale; they never rewrite the files.
+7. A Vue client that owns typed transport DTOs aliases the generated schema
+   types from `frontend-app/src/api/generated/openapi.ts` instead of
+   hand-written wire types. Do not generate fetch clients, TanStack Query
+   hooks, or domain services. Keep `prksApiRequest`, the hand-written service,
+   and the runtime response parsers.
+8. The PostgreSQL HTTP test servers (`tests/pg/http_fixtures.py`) hold
+   every answer of a typed route to its contract (`tests/contract_check.py`):
+   an undocumented status, a JSON answer outside its schema, or a request
+   body answered `2xx` that its request schema refuses fails the test that
+   sent it. It sees only what a route handler returns: a handler that raises,
+   and the dispatcher's own answers (admission refusals, the JSON body gate,
+   the exception mapper), go unchecked there and keep their own tests. Add unit tests that (a) exercise happy-path HTTP behavior unchanged,
    (b) assert live responses validate through openapi-core
    (`validate_request` / `validate_response`) and response DTOs
    (`PositionDetail.model_validate`, …), and (c) cover wrong-type
@@ -164,12 +174,10 @@ Map those Pydantic type/missing failures at the family parse helper (see
 `parse_position_request`) so clients keep the established codes and messages.
 Keep length, emptiness, control characters, and uniqueness in the domain.
 
-## Compatibility with #45 / #67 / #68
+## Relation to #45 / #1424
 
-- **#45** owns the long-term full OpenAPI surface and versioning policy. This
-  slice contributes the first executable fragment and the migration pattern.
-- **#67** may later extract Positions routes into `backend/api/…`; keep calling
-  the same domain functions and the same `api_contract` models.
-- **#68** supplies canonical `*_on_conn` mutations. Prefer typing families that
-  already share HTTP + sync (as Positions does) or rebase onto that tip when
-  typing a family that Track A is actively moving.
+- **#45** owns the long-term API surface and versioning policy; the one
+  document's `info.version` is `CONTRACT_VERSION` in
+  `backend/api_contract/openapi.py`.
+- **#1424** made every route a row of the route table; #1431 attaches each
+  route's contract to that row and builds the document from the table.

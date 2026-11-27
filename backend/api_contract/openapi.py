@@ -1,1245 +1,233 @@
-"""Build a machine-readable OpenAPI 3.1 document for the Positions API family.
+"""The one OpenAPI 3.1 document, built from the route table (#1431).
 
-Generated from the Pydantic boundary models so schema and implementation share
-one source of truth for wire shape. This is a vertical slice toward #45 — not
-the full PRKS surface.
+Every route of ``backend.api.ROUTES`` that declares a ``contract``
+(:class:`backend.api_contract.operation.Operation`) is one operation here.
+Schemas are generated from the Pydantic boundary models in
+``backend/api_contract/``, so a route, its models and its description come
+from one declaration. ``GET /api/openapi.json`` serves this document and
+``docs/api/openapi.json`` is its checked-in copy (the TypeScript types and
+the Schemathesis runs read that file).
+
+The builder adds the answers every route of a kind can send, so routes
+declare only their own:
+
+- a JSON body route: ``400 invalid_request`` (not one JSON object),
+  ``413 request_too_large`` and ``415 unsupported_media_type``
+  (``backend.web.dispatch.read_json_body``);
+- an ``/api/`` route: admission (``backend/api/session.py``): ``401``
+  without a live session, ``403`` without the capability or from another
+  Origin, ``503`` when the Library is unavailable or in maintenance; a
+  mutation also ``400 LIBRARY_EPOCH_REQUIRED`` and ``409`` for another
+  Library epoch.
 """
+
 from __future__ import annotations
 
-from typing import Any
+import functools
+import re
+from typing import Any, Iterable, Optional
 
-from backend.api_contract.citations import (
-    CitationsBibtex,
-    CitationsCslJson,
-    CitationsRequest,
-)
-from backend.api_contract.deployment import DeploymentSetting, DeploymentSettings
-from backend.api_contract.storage import (
-    StorageDatabase,
-    StorageFilesystem,
-    StorageIdentity,
-    StorageObjects,
-    StorageRoot,
-    StorageStatus,
-)
+from pydantic import BaseModel, TypeAdapter
+
 from backend.api_contract.errors import ApiErrorEnvelope
-from backend.api_contract.jobs import (
-    EmbeddedJobWorker,
-    JobDiagnostics,
-    JobQueueDepth,
-    JobWorkerCounters,
-)
-from backend.api_contract.performance import (
-    PerformanceCounters,
-    PerformanceDiagnosticsReset,
-    PerformanceDiagnosticsResetRequest,
-    PerformanceRequestTotals,
-    PerformanceRouteStat,
-    PerformanceSnapshot,
-    PerformanceSpanStat,
-)
-from backend.api_contract.positions import (
-    PositionCreateRequest,
-    PositionDeleted,
-    PositionDetail,
-    PositionSummary,
-    PositionSyncFields,
-    PositionSyncState,
-    PositionUpdateRequest,
-)
-from backend.api_contract.processing_items import (
-    ProcessingImportRequest,
-    ProcessingImportResults,
-    ProcessingItem,
-    ProcessingItemImported,
-    ProcessingItemPage,
-    ProcessingItemRefusal,
-    ProcessingItemUpdateRequest,
-    ProcessingItemUploaded,
-)
-from backend.api_contract.publishers import (
-    PublisherAliasAdded,
-    PublisherAliasRequest,
-    PublisherCreated,
-    PublisherCreateRequest,
-    PublisherDeleted,
-    PublisherInUse,
-)
-from backend.api_contract.saved_views import (
-    SavedView,
-    SavedViewCreateRequest,
-    SavedViewDeleted,
-    SavedViewSearch,
-    SavedViewSearchInput,
-    SavedViewUpdateRequest,
-)
+from backend.api_contract.operation import JSON, Operation, Reply, RequestBody, Schema
+
+CONTRACT_VERSION = "0.2.0"
+REF = "#/components/schemas/{model}"
+# The router takes any identifier as a parameter name.
+_PATH_PARAMETER = re.compile(r"\{([^\W\d]\w*)(?::path)?\}")
+
+# The answers every route of a kind can send: components.responses.
+_SHARED: dict[str, str] = {
+    "InvalidRequest": "The body is not one JSON object, or not JSON (invalid_request).",
+    "RequestTooLarge": "The body is larger than the JSON body limit (request_too_large).",
+    "UnsupportedMediaType": "No or another Content-Type than application/json (unsupported_media_type).",
+    "NotAuthenticated": "No live session (not_authenticated).",
+    "Forbidden": "The session's role lacks the route's capability, or the Origin is not allowed.",
+    "Unavailable": "The Library is unavailable (unavailable).",
+    "UnavailableOrMaintenance": "The Library is unavailable or in maintenance (unavailable, MAINTENANCE).",
+    "EpochRequired": "No or a malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED).",
+    "BadRequest": ("The body is not one JSON object, or not JSON (invalid_request), or no or a "
+                   "malformed PRKS-Library-Epoch header (LIBRARY_EPOCH_REQUIRED)."),
+    "EpochChanged": "PRKS-Library-Epoch names another epoch than the Library's (LIBRARY_EPOCH_CHANGED).",
+}
 
 
-def _schema(model) -> dict[str, Any]:
-    return model.model_json_schema(ref_template="#/components/schemas/{model}")
+class SchemaConflict(ValueError):
+    """Two different schemas were published under one component name."""
 
 
-def _merge_defs(components: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
-    """Fold ``$defs`` from a model schema into components.schemas."""
-    defs = schema.pop("$defs", None) or {}
-    for name, body in defs.items():
-        components.setdefault(name, body)
-    # Top-level model name
-    title = schema.get("title")
-    if title:
-        components[title] = {k: v for k, v in schema.items() if k != "title"}
-    return schema
+class _Components:
+    def __init__(self) -> None:
+        self.schemas: dict[str, Any] = {}
+
+    def _add(self, name: str, body: dict[str, Any]) -> None:
+        body = {k: v for k, v in body.items() if k != "title"}  # the component name says it
+        known = self.schemas.get(name)
+        if known is not None and known != body:
+            raise SchemaConflict(f"two different schemas are named {name!r}")
+        self.schemas[name] = body
+
+    def _fold(self, schema: dict[str, Any]) -> dict[str, Any]:
+        for name, body in (schema.pop("$defs", None) or {}).items():
+            self._add(name, body)
+        return schema
+
+    def ref(self, spec: Schema) -> dict[str, Any]:
+        """The JSON Schema for ``spec``, its named models folded into components."""
+        if isinstance(spec, dict):
+            return dict(spec)
+        if isinstance(spec, type) and issubclass(spec, BaseModel):
+            schema = self._fold(spec.model_json_schema(ref_template=REF))
+            name = spec.__name__
+            self._add(name, schema)
+            return {"$ref": REF.format(model=name)}
+        return self._fold(TypeAdapter(spec).json_schema(ref_template=REF))
 
 
-def positions_openapi_document() -> dict[str, Any]:
-    """Return an OpenAPI 3.1 object covering Positions HTTP routes."""
-    schemas: dict[str, Any] = {}
-    for model in (
-        ApiErrorEnvelope,
-        PositionCreateRequest,
-        PositionUpdateRequest,
-        PositionSummary,
-        PositionDetail,
-        PositionDeleted,
-        PositionSyncFields,
-        PositionSyncState,
-    ):
-        raw = _schema(model)
-        _merge_defs(schemas, raw)
+def openapi_path(pattern: str) -> str:
+    """The OpenAPI path of a route pattern: ``{name:path}`` is ``{name}``."""
+    return _PATH_PARAMETER.sub(lambda m: "{" + m.group(1) + "}", pattern)
 
-    # List responses use arrays of PositionSummary
-    schemas["PositionSummaryList"] = {
-        "type": "array",
-        "items": {"$ref": "#/components/schemas/PositionSummary"},
-    }
 
-    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
-    detail_ref = {"$ref": "#/components/schemas/PositionDetail"}
-    summary_list_ref = {"$ref": "#/components/schemas/PositionSummaryList"}
+def _content(components: _Components, media_type: str | tuple[str, ...], spec: Schema) -> dict[str, Any]:
+    schema = components.ref(spec)
+    types = (media_type,) if isinstance(media_type, str) else media_type
+    return {one: {"schema": dict(schema)} for one in types}
 
-    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema_ref}}
 
-    def _json_error(description: str) -> dict[str, Any]:
-        return {
-            "description": description,
-            "content": _json_content(error_ref),
-        }
+def _reply(components: _Components, reply: Reply) -> dict[str, Any]:
+    out: dict[str, Any] = {"description": reply.description}
+    if reply.headers:
+        out["headers"] = {name: {"description": h.description, "schema": dict(h.schema),
+                                 **({"required": True} if h.required else {})}
+                          for name, h in reply.headers.items()}
+    if reply.schema is not None:
+        out["content"] = _content(components, reply.media_type, reply.schema)
+    return out
 
-    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST/PATCH).
-    mutation_body_read_errors = {
-        "413": _json_error(
-            "Request body larger than the JSON body limit (request_too_large)."
-        ),
-        "415": _json_error(
-            "Missing or unsupported Content-Type (unsupported_media_type)."
-        ),
-    }
 
-    paths: dict[str, Any] = {
-        "/api/positions": {
-            "get": {
-                "operationId": "listPositions",
-                "summary": "List Positions",
-                "tags": ["positions"],
-                "responses": {
-                    "200": {
-                        "description": "Position index (no embedded arguments).",
-                        "content": _json_content(summary_list_ref),
-                    },
-                },
-            },
-            "post": {
-                "operationId": "createPosition",
-                "summary": "Create a Position",
-                "tags": ["positions"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/PositionCreateRequest"}
-                    ),
-                },
-                "responses": {
-                    "201": {
-                        "description": "Created Position detail.",
-                        "content": _json_content(detail_ref),
-                    },
-                    "400": _json_error("Validation or domain refusal."),
-                    **mutation_body_read_errors,
-                },
-            },
-        },
-        "/api/positions/{position_id}": {
-            "parameters": [
-                {
-                    "name": "position_id",
-                    "in": "path",
-                    "required": True,
-                    "schema": {"type": "string"},
-                }
-            ],
-            "get": {
-                "operationId": "getPosition",
-                "summary": "Get Position detail",
-                "tags": ["positions"],
-                "responses": {
-                    "200": {
-                        "description": "Position detail with targeting Arguments.",
-                        "content": _json_content(detail_ref),
-                    },
-                    "404": _json_error("Not found."),
-                },
-            },
-            "patch": {
-                "operationId": "updatePosition",
-                "summary": "Update Position fields",
-                "tags": ["positions"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/PositionUpdateRequest"}
-                    ),
-                },
-                "responses": {
-                    "200": {
-                        "description": "Updated Position detail.",
-                        "content": _json_content(detail_ref),
-                    },
-                    "400": _json_error("Validation or domain refusal."),
-                    "404": _json_error("Not found."),
-                    **mutation_body_read_errors,
-                },
-            },
-            "delete": {
-                "operationId": "deletePosition",
-                "summary": "Delete a Position",
-                "tags": ["positions"],
-                "responses": {
-                    "200": {
-                        "description": "Deleted.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/PositionDeleted"}
-                        ),
-                    },
-                    "404": _json_error("Not found."),
-                    "409": _json_error(
-                        "Position is still targeted by an Argument or Stance "
-                        "(position_in_use)."
-                    ),
-                },
-            },
-        },
-        "/api/positions/{position_id}/sync-state": {
-            "parameters": [
-                {
-                    "name": "position_id",
-                    "in": "path",
-                    "required": True,
-                    "schema": {"type": "string"},
-                }
-            ],
-            "get": {
-                "operationId": "getPositionSyncState",
-                "summary": "Position field revisions (sync-state)",
-                "tags": ["positions"],
-                "parameters": [
-                    {
-                        "name": "If-None-Match",
-                        "in": "header",
-                        "required": False,
-                        "schema": {"type": "string"},
-                        "description": (
-                            "Conditional read: when equal to the current ETag, "
-                            "responds 304 Not Modified (bodyless)."
-                        ),
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Revisions only.",
-                        "headers": {
-                            "ETag": {
-                                "description": (
-                                    "Opaque revision token for conditional GETs."
-                                ),
-                                "schema": {"type": "string"},
-                            }
-                        },
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/PositionSyncState"}
-                        ),
-                    },
-                    "304": {
-                        "description": (
-                            "Not modified: If-None-Match matched the current "
-                            "ETag. Bodyless."
-                        ),
-                        "headers": {
-                            "ETag": {
-                                "description": (
-                                    "Current revision token (same as a matching "
-                                    "200)."
-                                ),
-                                "schema": {"type": "string"},
-                            }
-                        },
-                    },
-                    "404": _json_error("Not found."),
-                },
-            },
-        },
-    }
+_OPTIONAL_JSON = "Left out, the request still sends Content-Type: application/json (else 415)."
 
+
+def _request(components: _Components, request: RequestBody) -> dict[str, Any]:
+    out: dict[str, Any] = {"required": request.required,
+                           "content": _content(components, request.media_type, request.schema)}
+    description = request.description
+    if not request.required and request.media_type == JSON:
+        # The dispatcher reads an optional JSON body only under the JSON Content-Type (#1424).
+        description = (f"{description} " if description else "") + _OPTIONAL_JSON
+    if description:
+        out["description"] = description
+    return out
+
+
+def _shared_for(route: Any) -> dict[str, str]:
+    """``status -> components.responses name`` this route can send besides its own."""
+    from backend.api.session import epoch_fenced
+    from backend.web.routing import Body
+
+    shared: dict[str, str] = {}
+    if route.pattern == "/api" or route.pattern.startswith("/api/"):
+        shared.update({"401": "NotAuthenticated", "403": "Forbidden", "503": "Unavailable"})
+        if epoch_fenced(route.method, route.pattern):  # library_command: the maintenance lock and epoch fence
+            shared.update({"400": "EpochRequired", "409": "EpochChanged", "503": "UnavailableOrMaintenance"})
+    if route.body_kind is Body.JSON:
+        bad = "BadRequest" if shared.get("400") == "EpochRequired" else "InvalidRequest"
+        shared.update({"400": bad, "413": "RequestTooLarge", "415": "UnsupportedMediaType"})
+    return shared
+
+
+def _operation(components: _Components, route: Any, contract: Operation, shared: set[str]) -> dict[str, Any]:
+    out: dict[str, Any] = {"operationId": contract.id, "summary": contract.summary, "tags": [contract.tag]}
+    if contract.description:
+        out["description"] = contract.description
+    if contract.params:
+        out["parameters"] = [
+            {"name": p.name, "in": p.where, "required": p.required, "schema": dict(p.schema),
+             **({"description": p.description} if p.description else {})}
+            for p in contract.params
+        ]
+    if contract.request is not None:
+        out["requestBody"] = _request(components, contract.request)
+    responses = {str(status): _reply(components, reply) for status, reply in contract.responses.items()}
+    for status, name in _shared_for(route).items():
+        if status in responses:
+            own = responses[status]
+            if "$ref" not in own and route.method != "HEAD":  # the route's own answer, and the shared one
+                own["description"] = f"{own['description']} Also: {_SHARED[name]}"
+            continue
+        if route.method == "HEAD":
+            responses[status] = {"description": _SHARED[name]}  # a HEAD answer has no body
+        else:
+            responses[status] = {"$ref": f"#/components/responses/{name}"}
+            shared.add(name)
+    out["responses"] = dict(sorted(responses.items()))
+    return out
+
+
+def untyped(routes: Iterable[Any]) -> list[tuple[str, str]]:
+    """``(method, pattern)`` of each route that declares no contract yet."""
+    return [(r.method, r.pattern) for r in routes if r.contract is None]
+
+
+def build_document(routes: Iterable[Any]) -> dict[str, Any]:
+    """The OpenAPI document of ``routes`` (routes without a contract are left out)."""
+    components = _Components()
+    components.ref(ApiErrorEnvelope)
+    paths: dict[str, dict[str, Any]] = {}
+    seen_ids: dict[str, str] = {}
+    tags: set[str] = set()
+    shared: set[str] = set()
+    templates: dict[str, str] = {}
+    for route in sorted(routes, key=lambda r: (openapi_path(r.pattern), r.method)):
+        contract: Optional[Operation] = route.contract
+        if contract is None:
+            continue
+        where = f"{route.method} {route.pattern}"
+        if contract.id in seen_ids:
+            raise ValueError(f"operationId {contract.id!r} is used by {seen_ids[contract.id]} and {where}")
+        seen_ids[contract.id] = where
+        tags.add(contract.tag)
+        path = openapi_path(route.pattern)
+        template = _PATH_PARAMETER.sub("{}", route.pattern)
+        if templates.setdefault(template, path) != path:
+            raise ValueError(f"{where} uses {path!r}, a template equivalent to {templates[template]!r}")
+        item = paths.setdefault(path, {})
+        if route.method.lower() in item:
+            raise ValueError(f"{where} duplicates an operation at {path!r}")
+        names = _PATH_PARAMETER.findall(route.pattern)
+        if names and "parameters" not in item:
+            item["parameters"] = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
+                                  for n in names]
+        item[route.method.lower()] = _operation(components, route, contract, shared)
     return {
         "openapi": "3.1.0",
         "info": {
-            "title": "PRKS API — Positions slice",
-            "version": "0.1.0",
+            "title": "PRKS API",
+            "version": CONTRACT_VERSION,
             "description": (
-                "Vertical-slice OpenAPI for the Positions HTTP family "
-                "(#180 / #45). Not the full PRKS surface. Request/response "
-                "schemas are generated from Pydantic boundary models; "
-                "canonical mutations remain in research_network/position_sync."
+                "The PRKS HTTP API, generated from the route table (backend/api) and the "
+                "Pydantic boundary models (backend/api_contract). Every /api/ request needs "
+                "a live session; a mutation also sends the PRKS-Library-Epoch header."
             ),
         },
+        "tags": [{"name": tag} for tag in sorted(tags)],
         "paths": paths,
         "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION = "0.1.0"
-
-
-def performance_diagnostics_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the performance-diagnostics HTTP family (#45 / #232).
-
-    Same Pydantic-generated contract style as the Positions slice. Not a
-    second API model and not the full PRKS surface.
-    """
-    schemas: dict[str, Any] = {}
-    for model in (
-        ApiErrorEnvelope,
-        PerformanceRequestTotals,
-        PerformanceRouteStat,
-        PerformanceSpanStat,
-        PerformanceCounters,
-        PerformanceSnapshot,
-        PerformanceDiagnosticsReset,
-        PerformanceDiagnosticsResetRequest,
-    ):
-        raw = _schema(model)
-        _merge_defs(schemas, raw)
-
-    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
-    snapshot_ref = {"$ref": "#/components/schemas/PerformanceSnapshot"}
-    reset_ref = {"$ref": "#/components/schemas/PerformanceDiagnosticsReset"}
-
-    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema_ref}}
-
-    def _json_error(description: str) -> dict[str, Any]:
-        return {
-            "description": description,
-            "content": _json_content(error_ref),
-        }
-
-    # Same body-read refusals as Positions POST/PATCH: backend.web.dispatch.read_json_body.
-    mutation_body_read_errors = {
-        "400": _json_error(
-            "JSON body gate refusal, or a body that is not an empty object."
-        ),
-        "413": _json_error(
-            "Request body larger than the JSON body limit (request_too_large)."
-        ),
-        "415": _json_error(
-            "Missing or unsupported Content-Type (unsupported_media_type)."
-        ),
-    }
-
-    paths: dict[str, Any] = {
-        "/api/diagnostics/performance": {
-            "get": {
-                "operationId": "getPerformanceDiagnostics",
-                "summary": "Runtime performance diagnostics snapshot",
-                "tags": ["diagnostics"],
-                "responses": {
-                    "200": {
-                        "description": "Aggregate in-process measurements.",
-                        "content": _json_content(snapshot_ref),
-                    },
-                },
-            },
-        },
-        "/api/diagnostics/performance/reset": {
-            "post": {
-                "operationId": "resetPerformanceDiagnostics",
-                "summary": "Clear the in-process performance window",
-                "tags": ["diagnostics"],
-                "requestBody": {
-                    "required": True,
-                    "description": "Empty JSON object. Additional properties are rejected.",
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/PerformanceDiagnosticsResetRequest"}
-                    ),
-                },
-                "responses": {
-                    "200": {
-                        "description": "Measurements were reset.",
-                        "content": _json_content(reset_ref),
-                    },
-                    **mutation_body_read_errors,
-                },
+            "schemas": dict(sorted(components.schemas.items())),
+            "responses": {
+                name: {"description": text,
+                       "content": {"application/json": {"schema": {"$ref": REF.format(model="ApiErrorEnvelope")}}}}
+                for name, text in _SHARED.items() if name in shared
             },
         },
     }
 
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Performance diagnostics slice",
-            "version": PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for performance diagnostics "
-                "(#45 / #232). Schemas are generated from the same Pydantic "
-                "boundary as the rest of backend/api_contract. The snapshot "
-                "is disposable process metadata, not canonical library data."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
 
+@functools.cache
+def openapi_document() -> dict[str, Any]:
+    """The served document: ``backend.api.ROUTES``. Callers must not change it."""
+    from backend.api import ROUTES
 
-JOB_DIAGNOSTICS_CONTRACT_VERSION = "0.1.0"
-
-
-def job_diagnostics_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the job-diagnostics HTTP family (L-J-1 #627, §12.4).
-
-    Served only by the PostgreSQL (``PRKS_AUTH``) runtime, to the Library
-    owner. Same Pydantic-generated contract style as the other slices.
-    """
-    schemas: dict[str, Any] = {}
-    for model in (ApiErrorEnvelope, JobWorkerCounters, EmbeddedJobWorker, JobQueueDepth, JobDiagnostics):
-        _merge_defs(schemas, _schema(model))
-
-    paths: dict[str, Any] = {
-        "/api/diagnostics/jobs": {
-            "get": {
-                "operationId": "getJobDiagnostics",
-                "summary": "Job worker and queue diagnostics",
-                "tags": ["diagnostics"],
-                "responses": {
-                    "200": {
-                        "description": (
-                            "The embedded worker's state and process-local counters, and the "
-                            "queue's depth and oldest age by job kind and state."
-                        ),
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/JobDiagnostics"}
-                            }
-                        },
-                    },
-                    "401": {"description": "No live session (not_authenticated)."},
-                    "403": {"description": "The session's role is not the Library owner."},
-                    "404": {"description": "The server runs without a jobs runtime (test servers only)."},
-                    "503": {
-                        "description": "The database cannot be read (unavailable).",
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/ApiErrorEnvelope"}
-                            }
-                        },
-                    },
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Job diagnostics slice",
-            "version": JOB_DIAGNOSTICS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for job diagnostics (L-J-1 #627). "
-                "Counts, ages, job kinds and reason codes only; the counters "
-                "are disposable process metadata, not canonical library data."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-DEPLOYMENT_SETTINGS_CONTRACT_VERSION = "0.1.0"
-
-
-def deployment_settings_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the read-only deployment settings (#612)."""
-    schemas: dict[str, Any] = {}
-    for model in (DeploymentSetting, DeploymentSettings):
-        _merge_defs(schemas, _schema(model))
-
-    paths: dict[str, Any] = {
-        "/api/deployment-settings": {
-            "get": {
-                "operationId": "getDeploymentSettings",
-                "summary": "Deployment settings, read-only",
-                "tags": ["settings"],
-                "responses": {
-                    "200": {
-                        "description": (
-                            "Every deployment setting with its effective value and source. "
-                            "Secrets and host paths show only that they are set."
-                        ),
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/DeploymentSettings"}
-                            }
-                        },
-                    },
-                    "401": {"description": "No live session (not_authenticated)."},
-                    "403": {"description": "The session's role is not the Library owner."},
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Deployment settings slice",
-            "version": DEPLOYMENT_SETTINGS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for the deployment settings Settings shows (#612). "
-                "Read-only: deployment values are set on the host and need a restart."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-STORAGE_STATUS_CONTRACT_VERSION = "0.1.0"
-
-
-def storage_status_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the owner's storage status (storage-architecture §11.1, #720)."""
-    schemas: dict[str, Any] = {}
-    for model in (StorageRoot, StorageIdentity, StorageFilesystem, StorageObjects, StorageDatabase, StorageStatus):
-        _merge_defs(schemas, _schema(model))
-
-    paths: dict[str, Any] = {
-        "/api/storage-status": {
-            "get": {
-                "operationId": "getStorageStatus",
-                "summary": "Storage status, read-only",
-                "tags": ["settings"],
-                "responses": {
-                    "200": {
-                        "description": (
-                            "Where the Library's files are, the source that chose that place, the root "
-                            "marker's identity, filesystem facts, object counts and the paired database. "
-                            "Carries host paths, so it is sent Cache-Control: no-store."
-                        ),
-                        "headers": {
-                            "Cache-Control": {
-                                "description": "Always no-store.",
-                                "schema": {"type": "string", "const": "no-store"},
-                            }
-                        },
-                        "content": {
-                            "application/json": {
-                                "schema": {"$ref": "#/components/schemas/StorageStatus"}
-                            }
-                        },
-                    },
-                    "401": {"description": "No live session (not_authenticated)."},
-                    "403": {"description": "The session's role is not the Library owner."},
-                    "503": {"description": "Storage is not bound (unavailable)."},
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Storage status slice",
-            "version": STORAGE_STATUS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for the storage status Settings shows (#720). Read-only: "
-                "under PostgreSQL the data root is paired with the database and changes only on the host."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-PUBLISHERS_CONTRACT_VERSION = "0.1.0"
-
-
-def publishers_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the online-only Publishers HTTP family (#45 / #232).
-
-    Same Pydantic-generated contract style as the Positions slice. Publishers
-    have no durable operation, revision, or sync state.
-    """
-    schemas: dict[str, Any] = {}
-    for model in (
-        ApiErrorEnvelope,
-        PublisherInUse,
-        PublisherCreateRequest,
-        PublisherCreated,
-        PublisherAliasRequest,
-        PublisherAliasAdded,
-        PublisherDeleted,
-    ):
-        raw = _schema(model)
-        _merge_defs(schemas, raw)
-
-    schemas["PublisherInUseList"] = {
-        "type": "array",
-        "items": {"$ref": "#/components/schemas/PublisherInUse"},
-    }
-
-    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
-    deleted_ref = {"$ref": "#/components/schemas/PublisherDeleted"}
-
-    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema_ref}}
-
-    def _json_error(description: str) -> dict[str, Any]:
-        return {
-            "description": description,
-            "content": _json_content(error_ref),
-        }
-
-    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST).
-    mutation_body_read_errors = {
-        "413": _json_error(
-            "Request body larger than the JSON body limit (request_too_large)."
-        ),
-        "415": _json_error(
-            "Missing or unsupported Content-Type (unsupported_media_type)."
-        ),
-    }
-
-    publisher_id_parameter = {
-        "name": "publisher_id",
-        "in": "path",
-        "required": True,
-        "schema": {"type": "string"},
-    }
-
-    paths: dict[str, Any] = {
-        "/api/publishers": {
-            "get": {
-                "operationId": "listPublishersInUse",
-                "summary": "List canonical Publishers with aliases and Work counts",
-                "tags": ["publishers"],
-                "parameters": [
-                    {
-                        "name": "used",
-                        "in": "query",
-                        "required": False,
-                        "description": (
-                            "`1`, `true`, or `yes` returns the catalog. Any "
-                            "other value returns an empty list."
-                        ),
-                        "schema": {"type": "string"},
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Publishers ordered by name, case-insensitively.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/PublisherInUseList"}
-                        ),
-                    },
-                },
-            },
-            "post": {
-                "operationId": "createPublisher",
-                "summary": "Create a canonical Publisher, or return the existing one",
-                "tags": ["publishers"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/PublisherCreateRequest"}
-                    ),
-                },
-                "responses": {
-                    "200": {
-                        "description": "Created or existing Publisher.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/PublisherCreated"}
-                        ),
-                    },
-                    "400": _json_error("Schema or domain refusal (empty name)."),
-                    **mutation_body_read_errors,
-                },
-            },
-        },
-        "/api/publishers/{publisher_id}": {
-            "parameters": [publisher_id_parameter],
-            "delete": {
-                "operationId": "deletePublisher",
-                "summary": "Delete a Publisher group and its aliases",
-                "description": "Works keep their publisher text. Deleting a missing id is not an error.",
-                "tags": ["publishers"],
-                "responses": {
-                    "200": {
-                        "description": "Deleted.",
-                        "content": _json_content(deleted_ref),
-                    },
-                },
-            },
-        },
-        "/api/publishers/{publisher_id}/aliases": {
-            "parameters": [publisher_id_parameter],
-            "post": {
-                "operationId": "addPublisherAlias",
-                "summary": "Add an alternate spelling to a Publisher",
-                "tags": ["publishers"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/PublisherAliasRequest"}
-                    ),
-                },
-                "responses": {
-                    "200": {
-                        "description": "Added, or already an alias of this Publisher.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/PublisherAliasAdded"}
-                        ),
-                    },
-                    "400": _json_error(
-                        "Schema or domain refusal (empty, unknown Publisher, "
-                        "canonical name, or used elsewhere)."
-                    ),
-                    **mutation_body_read_errors,
-                },
-            },
-            "delete": {
-                "operationId": "removePublisherAlias",
-                "summary": "Remove an alternate spelling from a Publisher",
-                "tags": ["publishers"],
-                "parameters": [
-                    {
-                        "name": "alias",
-                        "in": "query",
-                        "required": True,
-                        "schema": {"type": "string"},
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Removed.",
-                        "content": _json_content(deleted_ref),
-                    },
-                    "400": _json_error("Missing alias."),
-                    "404": _json_error("This Publisher has no such alias."),
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Publishers slice",
-            "version": PUBLISHERS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for the online-only Publishers family "
-                "(#45 / #232). Schemas are generated from the same Pydantic "
-                "boundary as the rest of backend/api_contract."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-CITATIONS_CONTRACT_VERSION = "0.1.0"
-
-
-def citations_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for ``POST /api/citations`` (Citation V1, #41).
-
-    A read made with POST, because a selection of Works does not fit a query
-    string. CSL-JSON is the citation interchange boundary (#179): formatted
-    citations and bibliographies are built from these items in the client.
-    """
-    schemas: dict[str, Any] = {}
-    for model in (ApiErrorEnvelope, CitationsRequest, CitationsCslJson, CitationsBibtex):
-        _merge_defs(schemas, _schema(model))
-    schemas["CitationsResult"] = {
-        "oneOf": [
-            {"$ref": "#/components/schemas/CitationsCslJson"},
-            {"$ref": "#/components/schemas/CitationsBibtex"},
-        ],
-        "discriminator": {
-            "propertyName": "format",
-            "mapping": {
-                "csl-json": "#/components/schemas/CitationsCslJson",
-                "bibtex": "#/components/schemas/CitationsBibtex",
-            },
-        },
-    }
-
-    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema_ref}}
-
-    def _json_error(description: str) -> dict[str, Any]:
-        return {
-            "description": description,
-            "content": _json_content({"$ref": "#/components/schemas/ApiErrorEnvelope"}),
-        }
-
-    paths: dict[str, Any] = {
-        "/api/citations": {
-            "post": {
-                "operationId": "exportCitations",
-                "summary": "Read the selected Works' citations as CSL-JSON or BibTeX",
-                "description": (
-                    "Changes nothing. Each Work is cited from its citation "
-                    "Manifestation. Ids this Library has no Work for are "
-                    "listed in `missing` and left out."
-                ),
-                "tags": ["citations"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content({"$ref": "#/components/schemas/CitationsRequest"}),
-                },
-                "responses": {
-                    "200": {
-                        "description": "The found Works' citations, in request order.",
-                        "content": _json_content({"$ref": "#/components/schemas/CitationsResult"}),
-                    },
-                    "400": _json_error(
-                        "Domain refusal: not an object, unknown format, or an "
-                        "empty, malformed or too large selection."
-                    ),
-                    "413": _json_error(
-                        "Request body larger than the JSON body limit (request_too_large)."
-                    ),
-                    "415": _json_error(
-                        "Missing or unsupported Content-Type (unsupported_media_type)."
-                    ),
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Citations slice",
-            "version": CITATIONS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for citation export (#41). Schemas are "
-                "generated from the same Pydantic boundary as the rest of "
-                "backend/api_contract."
-            ),
-        },
-        "paths": paths,
-        "components": {"schemas": schemas},
-    }
-
-
-SAVED_VIEWS_CONTRACT_VERSION = "0.2.0"
-
-
-def saved_views_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the online-only Saved Views HTTP family (#45 / #232).
-
-    Same Pydantic-generated contract style as Publishers. Saved Views have no
-    durable operation or sync state; each carries a ``revision`` that an update
-    must name (#873). Results are never stored.
-    """
-    schemas: dict[str, Any] = {}
-    for model in (
-        ApiErrorEnvelope,
-        SavedViewSearch,
-        SavedViewSearchInput,
-        SavedView,
-        SavedViewCreateRequest,
-        SavedViewUpdateRequest,
-        SavedViewDeleted,
-    ):
-        raw = _schema(model)
-        _merge_defs(schemas, raw)
-
-    schemas["SavedViewList"] = {
-        "type": "array",
-        "items": {"$ref": "#/components/schemas/SavedView"},
-    }
-
-    error_ref = {"$ref": "#/components/schemas/ApiErrorEnvelope"}
-    view_ref = {"$ref": "#/components/schemas/SavedView"}
-
-    def _json_content(schema_ref: dict[str, Any]) -> dict[str, Any]:
-        return {"application/json": {"schema": schema_ref}}
-
-    def _json_error(description: str) -> dict[str, Any]:
-        return {
-            "description": description,
-            "content": _json_content(error_ref),
-        }
-
-    # Shared body-read refusals from backend.web.dispatch.read_json_body (POST/PATCH).
-    mutation_body_read_errors = {
-        "413": _json_error(
-            "Request body larger than the JSON body limit (request_too_large)."
-        ),
-        "415": _json_error(
-            "Missing or unsupported Content-Type (unsupported_media_type)."
-        ),
-    }
-
-    view_id_parameter = {
-        "name": "view_id",
-        "in": "path",
-        "required": True,
-        "schema": {"type": "string"},
-    }
-
-    paths: dict[str, Any] = {
-        "/api/saved-views": {
-            "get": {
-                "operationId": "listSavedViews",
-                "summary": "List Saved Views",
-                "tags": ["saved-views"],
-                "responses": {
-                    "200": {
-                        "description": "Saved Views ordered by name, case-insensitively.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/SavedViewList"}
-                        ),
-                    },
-                },
-            },
-            "post": {
-                "operationId": "createSavedView",
-                "summary": "Save a named search definition",
-                "tags": ["saved-views"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/SavedViewCreateRequest"}
-                    ),
-                },
-                "responses": {
-                    "201": {
-                        "description": "Created.",
-                        "content": _json_content(view_ref),
-                    },
-                    "400": _json_error(
-                        "Domain refusal: wrong type, empty or too long name, "
-                        "or an incomplete or invalid search definition."
-                    ),
-                    "409": _json_error(
-                        "Name already used, or the library has the maximum "
-                        "number of Saved Views."
-                    ),
-                    **mutation_body_read_errors,
-                },
-            },
-        },
-        "/api/saved-views/{view_id}": {
-            "parameters": [view_id_parameter],
-            "get": {
-                "operationId": "getSavedView",
-                "summary": "Read one Saved View",
-                "tags": ["saved-views"],
-                "responses": {
-                    "200": {
-                        "description": "The Saved View.",
-                        "content": _json_content(view_ref),
-                    },
-                    "404": _json_error("No such Saved View."),
-                },
-            },
-            "patch": {
-                "operationId": "updateSavedView",
-                "summary": "Rename a Saved View or change its search",
-                "tags": ["saved-views"],
-                "requestBody": {
-                    "required": True,
-                    "content": _json_content(
-                        {"$ref": "#/components/schemas/SavedViewUpdateRequest"}
-                    ),
-                },
-                "responses": {
-                    "200": {
-                        "description": "Updated.",
-                        "content": _json_content(view_ref),
-                    },
-                    "400": _json_error(
-                        "Nothing to update, or a domain refusal of the name "
-                        "or search definition."
-                    ),
-                    "404": _json_error("No such Saved View."),
-                    "409": _json_error(
-                        "Name already used by another Saved View, or the view "
-                        "changed since `base_revision` (code `revision_conflict`)."
-                    ),
-                    **mutation_body_read_errors,
-                },
-            },
-            "delete": {
-                "operationId": "deleteSavedView",
-                "summary": "Delete a Saved View",
-                "description": "Deleting a view never deletes Works or files.",
-                "tags": ["saved-views"],
-                "responses": {
-                    "200": {
-                        "description": "Deleted.",
-                        "content": _json_content(
-                            {"$ref": "#/components/schemas/SavedViewDeleted"}
-                        ),
-                    },
-                    "404": _json_error("No such Saved View."),
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Saved Views slice",
-            "version": SAVED_VIEWS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for the online-only Saved Views family "
-                "(#45 / #232). Schemas are generated from the same Pydantic "
-                "boundary as the rest of backend/api_contract."
-            ),
-        },
-        "paths": paths,
-        "components": {
-            "schemas": schemas,
-        },
-    }
-
-
-PROCESSING_ITEMS_CONTRACT_VERSION = "0.1.0"
-
-
-def processing_items_openapi_document() -> dict[str, Any]:
-    """OpenAPI 3.1 for the Processing queue (``docs/postgresql-architecture.md`` §11.5).
-
-    Every route needs an admitted session, and every mutation the
-    ``PRKS-Library-Epoch`` header (admission, ``backend/api/session.py``).
-    """
-    schemas: dict[str, Any] = {}
-    for model in (
-        ProcessingItem,
-        ProcessingItemPage,
-        ProcessingItemUploaded,
-        ProcessingItemUpdateRequest,
-        ProcessingItemImported,
-        ProcessingImportRequest,
-        ProcessingImportResults,
-        ProcessingItemRefusal,
-    ):
-        _merge_defs(schemas, _schema(model))
-
-    def _json(name: str) -> dict[str, Any]:
-        return {"application/json": {"schema": {"$ref": f"#/components/schemas/{name}"}}}
-
-    # Every refusal here is ProcessingItemRefusal: {error[, code, message, item]}.
-    def _error(description: str) -> dict[str, Any]:
-        return {"description": description, "content": _json("ProcessingItemRefusal")}
-
-    def _refusal(description: str) -> dict[str, Any]:
-        return {"description": description, "content": _json("ProcessingItemRefusal")}
-
-    item_id_parameter = {"name": "item_id", "in": "path", "required": True, "schema": {"type": "string"}}
-    not_found = _refusal("No such item in this Library (ENTITY_NOT_FOUND).")
-    pdf = {"application/pdf": {"schema": {"type": "string", "format": "binary"}}}
-
-    paths: dict[str, Any] = {
-        "/api/processing-items": {
-            "get": {
-                "operationId": "listProcessingItems",
-                "summary": "One page of the queue: ready items, oldest upload first",
-                "tags": ["processing-items"],
-                "parameters": [
-                    {"name": "limit", "in": "query", "required": False,
-                     "schema": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}},
-                    {"name": "cursor", "in": "query", "required": False,
-                     "description": "The previous page's `next_cursor`.", "schema": {"type": "string"}},
-                ],
-                "responses": {
-                    "200": {"description": "The page.", "content": _json("ProcessingItemPage")},
-                    "400": _error("A limit out of range or a malformed cursor (VALIDATION_ERROR)."),
-                },
-            },
-            "post": {
-                "operationId": "uploadProcessingItem",
-                "summary": "Upload one PDF into the queue",
-                "description": (
-                    "The body is the PDF. A used `Idempotency-Key` answers with its item without "
-                    "reading the body. Any answer sent before the whole body was read carries "
-                    "`Connection: close`. Duplicates by content are a warning only."
-                ),
-                "tags": ["processing-items"],
-                "parameters": [
-                    {"name": "Idempotency-Key", "in": "header", "required": True,
-                     "description": "Minted by the client per file: 1-128 of `A-Z a-z 0-9 . _ : -`.",
-                     "schema": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"}},
-                    {"name": "PRKS-Filename", "in": "header", "required": False,
-                     "description": "The original filename, percent-encoded UTF-8; display only.",
-                     "schema": {"type": "string"}},
-                    {"name": "Content-Length", "in": "header", "required": True,
-                     "schema": {"type": "integer", "minimum": 5}},
-                ],
-                "requestBody": {"required": True, "content": pdf},
-                "responses": {
-                    "200": {"description": "The key was used: its item.", "content": _json("ProcessingItemUploaded")},
-                    "201": {"description": "The item was created.", "content": _json("ProcessingItemUploaded")},
-                    "400": _error(
-                        "A bad Idempotency-Key, filename or Content-Length (VALIDATION_ERROR), or a "
-                        "body shorter than Content-Length (PROCESSING_UPLOAD_INCOMPLETE)."
-                    ),
-                    "408": _error(
-                        "The body stalled for 30 seconds, or did not arrive within 60 seconds plus "
-                        "its length at 256 KiB/s (PROCESSING_UPLOAD_TIMEOUT)."
-                    ),
-                    "409": _refusal("The key's item was deleted (PROCESSING_ITEM_DELETED)."),
-                    "411": _error("No Content-Length (PROCESSING_LENGTH_REQUIRED)."),
-                    "413": _error("Larger than the upload limit (PROCESSING_UPLOAD_TOO_LARGE)."),
-                    "415": _error(
-                        "Not sent as application/pdf (unsupported_media_type), or the body does not "
-                        "start with %PDF- (PROCESSING_NOT_A_PDF)."
-                    ),
-                },
-            },
-        },
-        "/api/processing-items/{item_id}": {
-            "parameters": [item_id_parameter],
-            "get": {
-                "operationId": "getProcessingItem",
-                "summary": "An item, or the marker an import or delete left",
-                "tags": ["processing-items"],
-                "responses": {
-                    "200": {"description": "The item.", "content": _json("ProcessingItem")},
-                    "404": not_found,
-                },
-            },
-            "patch": {
-                "operationId": "updateProcessingItem",
-                "summary": "Edit a ready item's draft at its revision",
-                "tags": ["processing-items"],
-                "requestBody": {"required": True, "content": _json("ProcessingItemUpdateRequest")},
-                "responses": {
-                    "200": {"description": "The item, one revision on.", "content": _json("ProcessingItem")},
-                    "400": _error(
-                        "No or a bad revision, or a refused draft value, folder, person, tag or role "
-                        "type (VALIDATION_ERROR)."
-                    ),
-                    "404": not_found,
-                    "409": _refusal(
-                        "A stale revision (REVISION_CONFLICT), or a marker (PROCESSING_ITEM_IMPORTED, "
-                        "PROCESSING_ITEM_DELETED); `item` is the item as it now is."
-                    ),
-                },
-            },
-            "delete": {
-                "operationId": "deleteProcessingItem",
-                "summary": "Remove a ready item; deleting it again changes nothing",
-                "tags": ["processing-items"],
-                "responses": {
-                    "200": {"description": "The deleted marker.", "content": _json("ProcessingItem")},
-                    "404": not_found,
-                    "409": _refusal("The item was imported (PROCESSING_ITEM_IMPORTED)."),
-                },
-            },
-        },
-        "/api/processing-items/{item_id}/pdf": {
-            "parameters": [item_id_parameter],
-            "get": {
-                "operationId": "getProcessingItemPdf",
-                "summary": "A ready item's PDF as uploaded, with Range support (also HEAD)",
-                "tags": ["processing-items"],
-                "responses": {
-                    "200": {"description": "The whole file.", "content": pdf},
-                    "206": {"description": "The requested range.", "content": pdf},
-                    "404": _refusal("No ready item with that id (ENTITY_NOT_FOUND)."),
-                    "416": {"description": "The range is outside the file."},
-                },
-            },
-        },
-        "/api/processing-items/{item_id}/import": {
-            "parameters": [item_id_parameter],
-            "post": {
-                "operationId": "importProcessingItem",
-                "summary": "Turn a ready item into a Work, in one transaction",
-                "description": "A retry of a finished import answers with the same Work and creates nothing.",
-                "tags": ["processing-items"],
-                "requestBody": {
-                    "required": True,
-                    "description": "A JSON object, ignored. Send `{}`.",
-                    "content": {"application/json": {"schema": {"type": "object"}}},
-                },
-                "responses": {
-                    "200": {"description": "Imported before: its Work.", "content": _json("ProcessingItemImported")},
-                    "201": {"description": "Imported.", "content": _json("ProcessingItemImported")},
-                    "400": _error(
-                        "A refused draft value (VALIDATION_ERROR), or a body that is not a JSON object "
-                        "(invalid_request)."
-                    ),
-                    "404": not_found,
-                    "409": _refusal(
-                        "A deleted item (PROCESSING_ITEM_DELETED), an imported item whose Work was "
-                        "deleted (IMPORTED_WORK_DELETED), or missing bytes (PROCESSING_OBJECT_MISSING)."
-                    ),
-                },
-            },
-        },
-        "/api/processing-items/import": {
-            "post": {
-                "operationId": "importProcessingItems",
-                "summary": "Import several items, each in its own transaction",
-                "description": "One item's failure never affects another's: each has its own result.",
-                "tags": ["processing-items"],
-                "requestBody": {"required": True, "content": _json("ProcessingImportRequest")},
-                "responses": {
-                    "200": {"description": "A result per item, in order.", "content": _json("ProcessingImportResults")},
-                    "400": _error("item_ids missing, empty, not strings, or more than 500, or another key sent (VALIDATION_ERROR)."),
-                },
-            },
-        },
-    }
-
-    return {
-        "openapi": "3.1.0",
-        "info": {
-            "title": "PRKS API — Processing queue slice",
-            "version": PROCESSING_ITEMS_CONTRACT_VERSION,
-            "description": (
-                "Vertical-slice OpenAPI for the Processing queue (§11.5), served by the "
-                "PostgreSQL runtime. Schemas are generated from backend/api_contract."
-            ),
-        },
-        "paths": paths,
-        "components": {"schemas": schemas},
-    }
+    return build_document(ROUTES)

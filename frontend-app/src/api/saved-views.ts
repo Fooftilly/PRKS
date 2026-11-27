@@ -1,14 +1,12 @@
 /**
  * Typed client for the online-only Saved Views HTTP family.
- * Transport types come from docs/api/openapi-saved-views.json. Runtime parsers
+ * Transport types come from docs/api/openapi.json. Runtime parsers
  * still check response shape. This module does not own query caching.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { SavedView, SavedViewSearch } from './generated/saved-views'
+import type { SavedView, SavedViewSearch } from './generated/openapi'
 
 export type { SavedView, SavedViewSearch }
-
-export const SAVED_VIEWS_CONTRACT_VERSION = '0.2.0'
 
 export const SAVED_VIEW_KEYS = ['id', 'name', 'search', 'revision', 'created_at', 'updated_at'] as const
 export const SAVED_VIEW_SEARCH_KEYS = ['mode', 'q', 'tag', 'author', 'publisher'] as const

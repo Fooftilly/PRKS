@@ -109,11 +109,11 @@ class SavedViewTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest, MockResponse
 
-        from backend.api_contract.openapi import saved_views_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         res = self.get(path) if method == "GET" else self.send(method, path, payload)
         data = None if payload is None else json.dumps(payload).encode()
-        api = OpenAPI.from_dict(saved_views_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method=method.lower(), path=urlsplit(path).path,
                               data=data)
         if schema_valid:
@@ -179,7 +179,7 @@ class SavedViewTests(ServerApiTestCase):
         from openapi_core import OpenAPI
         from openapi_core.testing import MockRequest
 
-        from backend.api_contract.openapi import saved_views_openapi_document
+        from backend.api_contract.openapi import openapi_document
 
         search = {**SEARCH, "q": "parity"}
         status, created = self.views("POST", "/api/saved-views", {"name": "Parity", "search": {**search, "extra": 1},
@@ -199,7 +199,7 @@ class SavedViewTests(ServerApiTestCase):
         short = {"name": "Short", "search": {"mode": "all", "q": "x"}}
         self.assertEqual(self.views("POST", "/api/saved-views", short, schema_valid=False),
                          (400, {"error": "Search definition is incomplete."}))
-        api = OpenAPI.from_dict(saved_views_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         with self.assertRaises(Exception):
             api.validate_request(MockRequest(host_url="http://127.0.0.1", method="post", path="/api/saved-views",
                                              data=json.dumps(short).encode()))

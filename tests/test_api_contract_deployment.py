@@ -10,13 +10,12 @@ from openapi_core.testing import MockRequest, MockResponse
 
 from backend.api import deployment as deployment_api
 from backend.api.session import route_capability
-from backend.api_contract.openapi import deployment_settings_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.runtime.config_reference import Scope, in_scope
 from backend.domain.identity.authorization import Capability
 from backend.runtime.log_safety import safe_route
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ARTIFACT = _ROOT / "docs" / "api" / "openapi-deployment-settings.json"
 
 _ENV = {
     "PRKS_DATABASE_URL": "postgresql://u:hunter2@db/prks",
@@ -27,12 +26,8 @@ _ENV = {
 
 
 class DeploymentSettingsTests(unittest.TestCase):
-    def test_checked_in_openapi_artifact_matches_generator(self) -> None:
-        self.assertTrue(_ARTIFACT.is_file(), "commit docs/api/openapi-deployment-settings.json")
-        self.assertEqual(json.loads(_ARTIFACT.read_text(encoding="utf-8")), deployment_settings_openapi_document())
-
     def test_the_body_validates_against_the_document(self) -> None:
-        api = OpenAPI.from_dict(deployment_settings_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/deployment-settings")
         api.validate_request(request)
         data = json.dumps(deployment_api.body(_ENV)).encode()
@@ -69,7 +64,7 @@ class DeploymentSettingsTests(unittest.TestCase):
         self.assertIs(route_capability("GET", deployment_api.PATH), Capability.ADMIN_LIBRARY)
 
     def test_routes_are_logged_as_themselves(self) -> None:
-        for route in (deployment_api.PATH, "/api/openapi/deployment-settings.json"):
+        for route in (deployment_api.PATH, "/api/openapi.json"):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), route)
 

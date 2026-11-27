@@ -19,9 +19,9 @@ from openapi_core.testing import MockRequest, MockResponse
 from backend.api.session import Reply, _refused, route_failure
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.openapi import (
-    positions_openapi_document,
-    publishers_openapi_document,
-    saved_views_openapi_document,
+    openapi_document,
+    openapi_document,
+    openapi_document,
 )
 from backend.db.errors import DatabaseError, DatabaseUnavailableError
 from backend.domain.identity.authorization import AccessRefused, Refusal
@@ -56,11 +56,11 @@ class RefusalBodiesMatchTheEnvelope(unittest.TestCase):
         taken = route_failure(DatabaseError("SAVED_VIEW_NAME_TAKEN", "That name is taken.", http_status=409))
         assert epoch_changed is not None and taken is not None
         cases: tuple[tuple[Callable[[], dict[str, Any]], str, str, Reply], ...] = (
-            (positions_openapi_document, "post", "/api/positions", epoch_required),
-            (publishers_openapi_document, "post", "/api/publishers", epoch_required),
-            (saved_views_openapi_document, "post", "/api/saved-views", epoch_required),
-            (saved_views_openapi_document, "post", "/api/saved-views", epoch_changed),
-            (saved_views_openapi_document, "post", "/api/saved-views", taken),
+            (openapi_document, "post", "/api/positions", epoch_required),
+            (openapi_document, "post", "/api/publishers", epoch_required),
+            (openapi_document, "post", "/api/saved-views", epoch_required),
+            (openapi_document, "post", "/api/saved-views", epoch_changed),
+            (openapi_document, "post", "/api/saved-views", taken),
         )
         for builder, method, path, reply in cases:
             with self.subTest(path=path, code=reply.body["code"]):

@@ -125,6 +125,11 @@ _NON_LIBRARY_MUTATIONS = {
 }
 
 
+def epoch_fenced(method: str, path: str) -> bool:
+    """Whether admission holds this ``/api/`` request to the Library epoch (400/409)."""
+    return method in _MUTATING_METHODS and path not in _NON_LIBRARY_MUTATIONS
+
+
 @dataclass(frozen=True)
 class Reply:
     """A response :func:`handle` decided; the route does not run."""
@@ -461,9 +466,8 @@ def _identity_route(auth: WebAuth, request: HttpRequest) -> Optional[Outcome]:
 
 def _admit(auth: WebAuth, request: HttpRequest) -> Union[Reply, Admitted]:
     method, path = request.method, request.path
-    mutation = method in _MUTATING_METHODS
     capability = route_capability(method, path)
-    fenced = mutation and path not in _NON_LIBRARY_MUTATIONS
+    fenced = epoch_fenced(method, path)
     epoch = _epoch_claim(request) if fenced else None
     try:
         session = _principal(auth, request)

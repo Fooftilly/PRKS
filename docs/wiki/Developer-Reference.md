@@ -6,21 +6,18 @@ The authoritative contributor/agent rules remain in [AGENTS.md](https://github.c
 
 ## Typed API boundary (#180 / #45)
 
-Positions is the first HTTP family with Pydantic request/response models at the
-adapter boundary only. See [docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
-for the migration pattern, error envelope, and openapi-core / Schemathesis notes.
-Live fragment: `GET /api/openapi.json`. Checked-in artifact:
-`docs/api/openapi-positions.json`. Publishers, Saved Views, Files for
-Processing, citation export, and performance diagnostics follow the same pattern
-(`GET /api/openapi/publishers.json`, `docs/api/openapi-publishers.json`;
-`GET /api/openapi/saved-views.json`, `docs/api/openapi-saved-views.json`;
-`GET /api/openapi/processing-items.json`, `docs/api/openapi-processing-items.json`;
-`GET /api/openapi/citations.json`, `docs/api/openapi-citations.json`;
-`GET /api/openapi/performance-diagnostics.json`,
-`docs/api/openapi-performance-diagnostics.json`). `npm run openapi:types`
-reads those checked-in artifacts and writes compile-time modules under
-`frontend-app/src/api/generated/`. It does not read a live server and does
-not build the combined `/api/openapi.json` document.
+Each route declares its contract (request body, parameters, replies by
+status) on its row in `backend/api/<family>.py`, with Pydantic models from
+`backend/api_contract/`. One OpenAPI 3.1 document is built from the route
+table: `GET /api/openapi.json` serves it and `docs/api/openapi.json` is its
+checked-in copy (`python scripts/write_openapi.py`; `tests/test_openapi_document.py`
+fails when it is stale). Routes not typed yet are listed in that test's
+`UNTYPED`, which only shrinks (#1431). See
+[docs/api-contract-boundary.md](https://github.com/Fooftilly/PRKS/blob/master/docs/api-contract-boundary.md)
+for the pattern, the error envelope and the openapi-core / Schemathesis notes.
+`npm run openapi:types` reads the checked-in document and writes the
+compile-time module `frontend-app/src/api/generated/openapi.ts`. It does not
+read a live server.
 
 ## UI design
 

@@ -4,11 +4,9 @@
  * still check the response shape. A read: it changes nothing on the server.
  */
 import { PrksApiError, prksApiRequest } from './http'
-import type { CitationsBibtex, CitationsCslJson, CslItem } from './generated/citations'
+import type { CitationsBibtex, CitationsCslJson, CslItem } from './generated/openapi'
 
 export type { CitationsBibtex, CitationsCslJson, CslItem }
-
-export const CITATIONS_CONTRACT_VERSION = '0.1.0'
 
 /** The most Works one request may name: `PRKS_BULK_WORK_MAX` in `backend/domain/works/rules.py`. */
 export const CITATION_EXPORT_MAX = 500

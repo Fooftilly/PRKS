@@ -13,7 +13,7 @@ from openapi_core.testing import MockRequest, MockResponse
 
 from backend.api import storage as storage_api
 from backend.api.session import route_capability
-from backend.api_contract.openapi import storage_status_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.domain.identity.authorization import Capability
 from backend.runtime.log_safety import safe_route
 from backend.storage import root_binding, status
@@ -32,7 +32,6 @@ from backend.web.http import Headers, Request, Response
 from backend.web.routing import Match
 
 _ROOT = Path(__file__).resolve().parents[1]
-_ARTIFACT = _ROOT / "docs" / "api" / "openapi-storage-status.json"
 
 
 def _get(app: App) -> Response:
@@ -65,16 +64,13 @@ class StatusTestCase(unittest.TestCase):
 
 
 class StorageStatusFactsTests(StatusTestCase):
-    def test_checked_in_openapi_artifact_matches_generator(self) -> None:
-        self.assertTrue(_ARTIFACT.is_file(), "commit docs/api/openapi-storage-status.json")
-        self.assertEqual(json.loads(_ARTIFACT.read_text(encoding="utf-8")), storage_status_openapi_document())
-
     def test_the_body_validates_against_the_document(self) -> None:
-        api = OpenAPI.from_dict(storage_status_openapi_document())
+        api = OpenAPI.from_dict(openapi_document())
         request = MockRequest(host_url="http://127.0.0.1", method="get", path="/api/storage-status")
         api.validate_request(request)
         data = json.dumps(self.body(conninfo="postgresql://prks:hunter2@db:5432/prks")).encode()
-        api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json"))
+        api.validate_response(request, MockResponse(data=data, status_code=200, content_type="application/json",
+                                                    headers={"Cache-Control": "no-store"}))
 
     def test_identity_and_root_come_from_the_marker_and_the_binding(self) -> None:
         body = self.body()
@@ -171,7 +167,7 @@ class StorageRouteTests(StatusTestCase):
         self.assertIs(route_capability("GET", storage_api.PATH), Capability.ADMIN_LIBRARY)
 
     def test_routes_are_logged_as_themselves(self) -> None:
-        for route in (storage_api.PATH, "/api/openapi/storage-status.json"):
+        for route in (storage_api.PATH, "/api/openapi.json"):
             with self.subTest(route=route):
                 self.assertEqual(safe_route(route), route)
 

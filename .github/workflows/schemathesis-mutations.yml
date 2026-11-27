@@ -25,9 +25,7 @@ on:
       - "tests/e2e/harness.py"
       - "tests/e2e/postgres_identity.py"
       - "tests/ux_tour/fixtures.py"
-      - "docs/api/openapi-positions.json"
-      - "docs/api/openapi-saved-views.json"
-      - "docs/api/openapi-publishers.json"
+      - "docs/api/openapi.json"
       - "requirements.txt"
       - "requirements-dev.txt"
       - "scripts/ci/install_pinned_python.py"
@@ -87,7 +85,7 @@ jobs:
           cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
           ## Schemathesis mutation scan (advisory, isolated)
           - Families: positions, saved views, publishers, each with an exact operation allowlist
-          - Schemas: docs/api/openapi-*.json, checked against the live fragment and Pydantic builder
+          - Schema: each family's paths in docs/api/openapi.json, checked against the live document and the route table
           - Synthetic disposable --testing instance on loopback, its own PostgreSQL database
           - Requests carry the instance's Origin and Library epoch so generated input reaches the route
           - Fixed seed 855; max 50 examples per operation, 120s CLI timeout per family, single worker, 50 requests/s

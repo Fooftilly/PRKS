@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from backend.api_contract.operation import Header, Operation, error, ok
+from backend.api_contract.storage import StorageStatus
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
@@ -84,7 +86,6 @@ def body(
 ) -> dict[str, Any]:
     """The response body. ``database`` and ``storage`` give the object counts."""
     from backend.api_contract.boundary import dump_response
-    from backend.api_contract.storage import StorageStatus
     from backend.storage.resolver import ROOT_SOURCES
     from backend.storage.status import root_status
 
@@ -176,5 +177,12 @@ def storage_status(req: Request) -> Response:
 
 
 ROUTES = (
-    route("GET", PATH, storage_status),
+    route("GET", PATH, storage_status, contract=Operation(
+        "getStorageStatus", "Storage status, read-only", "settings",
+        {200: ok(StorageStatus,
+                 "Where the Library's files are, the source that chose that place, the root marker's "
+                 "identity, filesystem facts, object counts and the paired database. Carries host "
+                 "paths, so it is sent Cache-Control: no-store.",
+                 headers={"Cache-Control": Header("Always no-store.", {"type": "string", "const": "no-store"}, required=True)}),
+         503: error("Storage is not bound (unavailable).")})),
 )

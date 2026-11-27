@@ -6,9 +6,11 @@ does, so it is held tighter than the pilot rather than looser:
 
 * only a fresh ``AppServer --testing`` instance on loopback, on its own
   disposable PostgreSQL database seeded with synthetic data, is ever targeted;
-* only the families in :data:`FAMILIES`, each with its exact operation
-  inventory: a family whose published fragment gains or loses an operation, or
-  differs from its Pydantic builder, stops the scan before any request;
+* only the families in :data:`FAMILIES`, each the paths under its prefix in
+  the one OpenAPI document (``docs/api/openapi.json``) with its exact
+  operation inventory: a family that gains or loses an operation, or a
+  checked-in document that differs from the route table's, stops the scan
+  before any request;
 * every request carries the instance's own Origin and Library epoch, so the
   generated input reaches the route instead of the admission refusal;
 * no stateful sequences, no coverage phase, a fixed seed, a request rate limit
@@ -39,11 +41,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend.api_contract.openapi import (  # noqa: E402
-    positions_openapi_document,
-    publishers_openapi_document,
-    saved_views_openapi_document,
-)
+from backend.api_contract.openapi import openapi_document  # noqa: E402
 from scripts.ci.schemathesis_pilot import print_failure_diagnostics  # noqa: E402
 from tests.e2e.harness import AppServer  # noqa: E402
 from tests.ux_tour.fixtures import seed_ux_tour_library  # noqa: E402
@@ -56,25 +54,28 @@ CHECKS = ("not_a_server_error,status_code_conformance,"
 EPOCH_HEADER = "PRKS-Library-Epoch"
 
 
+DOCUMENT = ROOT / "docs" / "api" / "openapi.json"
+
+
 @dataclass(frozen=True)
 class Family:
     name: str
-    fragment: Path
-    builder: Callable[[], dict[str, Any]]
+    prefix: str
     operations: frozenset[tuple[str, str]]
+    builder: Callable[[], dict[str, Any]] = openapi_document
 
 
 FAMILIES = (
-    Family("positions", ROOT / "docs" / "api" / "openapi-positions.json", positions_openapi_document,
+    Family("positions", "/api/positions",
            frozenset({("get", "/api/positions"), ("post", "/api/positions"),
                       ("get", "/api/positions/{position_id}"), ("patch", "/api/positions/{position_id}"),
                       ("delete", "/api/positions/{position_id}"),
                       ("get", "/api/positions/{position_id}/sync-state")})),
-    Family("saved-views", ROOT / "docs" / "api" / "openapi-saved-views.json", saved_views_openapi_document,
+    Family("saved-views", "/api/saved-views",
            frozenset({("get", "/api/saved-views"), ("post", "/api/saved-views"),
                       ("get", "/api/saved-views/{view_id}"), ("patch", "/api/saved-views/{view_id}"),
                       ("delete", "/api/saved-views/{view_id}")})),
-    Family("publishers", ROOT / "docs" / "api" / "openapi-publishers.json", publishers_openapi_document,
+    Family("publishers", "/api/publishers",
            frozenset({("get", "/api/publishers"), ("post", "/api/publishers"),
                       ("delete", "/api/publishers/{publisher_id}"),
                       ("post", "/api/publishers/{publisher_id}/aliases"),
@@ -88,15 +89,24 @@ def operations(document: dict[str, Any]) -> frozenset[tuple[str, str]]:
                      for method in item if method in _METHODS)
 
 
+def family_paths(document: dict[str, Any], prefix: str) -> dict[str, Any]:
+    """``document`` with only the paths at or under ``prefix``."""
+    selected = dict(document)
+    selected["paths"] = {path: item for path, item in document.get("paths", {}).items()
+                         if path == prefix or path.startswith(prefix + "/")}
+    return selected
+
+
 def checked_contract(family: Family) -> dict[str, Any]:
-    """The family's fragment, refused on drift or an unreviewed operation."""
-    checked_in = json.loads(family.fragment.read_text(encoding="utf-8"))
+    """The family's slice of the document, refused on drift or an unreviewed operation."""
+    checked_in = json.loads(DOCUMENT.read_text(encoding="utf-8"))
     generated = family.builder()
     if checked_in != generated:
-        raise ValueError(f"{family.name} OpenAPI fragment differs from its builder")
-    if operations(generated) != family.operations:
+        raise ValueError("docs/api/openapi.json differs from the route table's document")
+    selected = family_paths(generated, family.prefix)
+    if operations(selected) != family.operations:
         raise ValueError(f"{family.name} operation inventory changed; review the allowlist")
-    return generated
+    return selected
 
 
 def _loopback_port(origin: str) -> int:
@@ -122,17 +132,17 @@ def library_epoch(origin: str) -> str:
     return epoch
 
 
-def live_contract_matches(origin: str, family: Family, document: dict[str, Any]) -> None:
+def live_contract_matches(origin: str, document: dict[str, Any]) -> None:
     port = _loopback_port(origin)
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=8)
     try:
-        connection.request("GET", f"/api/openapi/{family.name}.json", headers={"Host": f"127.0.0.1:{port}"})
+        connection.request("GET", "/api/openapi.json", headers={"Host": f"127.0.0.1:{port}"})
         response = connection.getresponse()
         live = json.loads(response.read().decode("utf-8"))
     finally:
         connection.close()
     if response.status != 200 or live != document:
-        raise AssertionError(f"live {family.name} OpenAPI differs from the checked-in fragment")
+        raise AssertionError("live OpenAPI document differs from the checked-in one")
 
 
 def command(schema: Path, origin: str, epoch: str, binary: str) -> list[str]:
@@ -170,9 +180,8 @@ def scan(*, debug_local: bool = False) -> int:
     try:
         server.start()
         epoch = library_epoch(server.origin)
-        # Every live fragment before the first write, not family by family.
-        for family, document in contracts:
-            live_contract_matches(server.origin, family, document)
+        # The live document before the first write.
+        live_contract_matches(server.origin, openapi_document())
         for family, document in contracts:
             with tempfile.TemporaryDirectory(prefix="prks-schemathesis-mutations-") as directory:
                 schema = Path(directory) / f"{family.name}.json"

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PrksApiError } from './http'
 import {
-  PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION,
   getPerformanceDiagnostics,
   parsePerformanceSnapshot,
   resetPerformanceDiagnostics,
@@ -52,10 +51,6 @@ afterEach(() => {
 })
 
 describe('performance diagnostics contract client', () => {
-  it('names the OpenAPI document version', () => {
-    expect(PERFORMANCE_DIAGNOSTICS_CONTRACT_VERSION).toBe('0.1.0')
-  })
-
   it('parses a snapshot and rejects a missing required key', () => {
     const parsed = parsePerformanceSnapshot(performanceSnapshotFixture())
     expect(parsed.routes[0]?.route).toBe('/api/works')

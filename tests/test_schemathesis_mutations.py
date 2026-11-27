@@ -13,7 +13,7 @@ from scripts.ci import schemathesis_mutations as scan
 
 
 class SchemathesisMutationScanSafeguards(unittest.TestCase):
-    def test_every_family_fragment_matches_its_builder_and_allowlist(self):
+    def test_every_family_slice_matches_the_document_and_allowlist(self):
         for family in scan.FAMILIES:
             with self.subTest(family=family.name):
                 document = scan.checked_contract(family)
@@ -25,7 +25,7 @@ class SchemathesisMutationScanSafeguards(unittest.TestCase):
             scan.checked_contract(dataclasses.replace(family, operations=family.operations - {
                 next(iter(family.operations))}))
 
-    def test_a_fragment_that_drifted_from_its_builder_stops_the_scan(self):
+    def test_a_document_that_drifted_from_the_route_table_stops_the_scan(self):
         family = scan.FAMILIES[0]
         drifted = copy.deepcopy(family.builder())
         drifted["info"]["version"] = "wrong"

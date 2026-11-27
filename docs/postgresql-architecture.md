@@ -2192,7 +2192,7 @@ client-minted `Idempotency-Key` per file. One request carries one file, so a
 picker selection and a drop share the same call, and each file has its own
 progress, failure and retry. The controller is `backend/api/processing.py`;
 the wire contract is `backend/api_contract/processing_items.py` and
-`docs/api/openapi-processing-items.json`.
+the `processing-items` operations of `docs/api/openapi.json`.
 
 1. Authenticate, resolve the Library and check maintenance and the epoch,
    before reading the body.
@@ -2589,7 +2589,7 @@ parameters, search terms or library metadata are recorded.
 
 The job counters and queue depth are served to the Library owner at
 `GET /api/diagnostics/jobs` (contract
-`docs/api/openapi-job-diagnostics.json`, operator notes in
+`getJobDiagnostics` in `docs/api/openapi.json`, operator notes in
 `docs/job-worker.md`).
 
 ---

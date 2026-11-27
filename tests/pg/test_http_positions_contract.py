@@ -15,7 +15,7 @@ import json
 from typing import Any, Optional
 from unittest import mock
 
-from backend.api_contract.openapi import positions_openapi_document
+from backend.api_contract.openapi import openapi_document
 from backend.api_contract.positions import PositionDetail, PositionSummary
 from tests.pg.server_api_fixtures import ServerApiTestCase
 from tests.test_api_contract_positions_boundary import _validate_http_against_openapi as validate
@@ -35,10 +35,11 @@ class PositionHttpContractTests(ServerApiTestCase):
     def create(self, name: str, description: str = "") -> dict[str, Any]:
         return self.call_json("POST", "/api/positions", {"name": name, "description": description}, status=201)[0]
 
-    def test_the_openapi_endpoint_serves_the_positions_slice(self) -> None:
+    def test_the_openapi_endpoint_serves_the_one_document(self) -> None:
         doc = self.call_json("GET", "/api/openapi.json", status=200)[0]
-        self.assertEqual(doc["info"]["title"], "PRKS API — Positions slice")
-        self.assertEqual(doc, positions_openapi_document())
+        self.assertEqual(doc["info"]["title"], "PRKS API")
+        self.assertEqual(doc, openapi_document())
+        self.assertEqual(self.get("/api/openapi/positions.json").status, 404)
 
     def test_create_list_get_patch_sync_and_delete(self) -> None:
         created, raw, request, _ = self.call_json("POST", "/api/positions",
