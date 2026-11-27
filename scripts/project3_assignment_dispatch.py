@@ -36,8 +36,9 @@ ORDER_ROW_KEYS = frozenset(("number", "order", "expected_before", "reason",
 # A master commit that is never rewritten; it holds one claim per approval.
 ORDER_CLAIM_SHA = "126d25fb6f50ef9bd00cfad52065461eca993c7e"
 ORDER_CLAIM_PREFIX = "prks/project3-order-approval/"
-# Two statuses per apply, so this bound is about 50,000 applies.
-ORDER_CLAIM_PAGES = 1000
+# About 10,000 applies at two statuses each, and far below the Actions
+# token's hourly REST limit of 1,000 requests.
+ORDER_CLAIM_PAGES = 200
 
 
 class DispatchError(Exception):
