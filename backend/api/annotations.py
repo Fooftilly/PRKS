@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from typing import Any
+from typing import Any, Optional
 
 from backend.api.common import objects, revalidated
 from backend.api_contract.annotations import (
@@ -47,6 +47,18 @@ from backend.pdf.work_pdf_replace import stale_materialization_body
 from backend.web.http import Request, Response, json_response
 from backend.web.routing import route
 
+
+
+_SAFE_FLOAT = 2 ** 53
+
+
+def _whole(value: Any) -> Optional[int]:
+    """A revision as JSON Schema reads an integer: ``1.0`` is 1; bool, a fraction and an unsafe float are not."""
+    if type(value) is int:
+        return value
+    if type(value) is float and value.is_integer() and abs(value) <= _SAFE_FLOAT:
+        return int(value)
+    return None
 
 def annotations_state(req: Request) -> Response:
     from backend.domain.annotations import annotation_commands
@@ -108,6 +120,10 @@ def post_pdf(req: Request) -> Response:
     data = req.data
     file_b64 = data.get("file_b64", "")
     claimed_set_rev = data.get("materialized_annotation_set_revision", None)
+    if claimed_set_rev is not None:
+        # Not a whole number: kept as sent, so the claim check refuses it as stale.
+        whole = _whole(claimed_set_rev)
+        claimed_set_rev = claimed_set_rev if whole is None else whole
     if not file_b64:
         return json_response(req, 400, {"error": "No file_b64 provided"})
     if not isinstance(file_b64, str):
@@ -159,11 +175,9 @@ def replace_all(req: Request) -> Response:
     # materialized_annotation_set_revision (the same claim path as durable).
     # The client must send its acknowledged tip so a stale viewer cannot
     # overwrite newer annotations or delete siblings omitted locally.
-    base = data.get("canonical_annotation_set_revision")
-    # JSON Schema counts 1.0 as an integer. bool is an int in Python; null would skip the stale check.
-    if type(base) is float and base.is_integer():
-        base = int(base)
-    if type(base) is not int:
+    base = _whole(data.get("canonical_annotation_set_revision"))
+    # Null would skip the stale check.
+    if base is None:
         return json_response(req, 400, {"error": "canonical_annotation_set_revision must be an integer",
                                         "code": "malformed_annotation_payload"})
     try:

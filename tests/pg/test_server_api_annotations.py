@@ -285,6 +285,15 @@ class MaterializationClaimTests(AnnotationHttpTestCase):
         self.assertEqual((state["materialized_pdf_annotation_revision"], state["canonical_annotation_set_revision"]),
                          (gen_a, gen_b))
 
+    def test_a_whole_number_claim_written_as_a_fraction_materializes(self) -> None:
+        work_id = self.pdf_work("Claim Float")
+        tip = self.save(work_id, [row("r1", "A")])["canonical_annotation_set_revision"]
+        for claim in (True, float(tip) + 0.5, float(2 ** 60)):
+            with self.subTest(claim=claim):
+                self.refused(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=claim), 409)
+        self.ok(self.post_pdf(work_id, "bytes", materialized_annotation_set_revision=float(tip)))
+        self.assertFalse(self.materialization(work_id)["stale"])
+
     def test_a_claim_overtaken_by_another_save_is_refused_and_the_current_one_wins(self) -> None:
         work_id = self.pdf_work("Legacy Race Claim")
         gen_a = self.save(work_id, [row("r1", "A")])["canonical_annotation_set_revision"]
