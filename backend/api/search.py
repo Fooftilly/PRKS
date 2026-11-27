@@ -60,7 +60,8 @@ ROUTES = (
                 _filter("author", "An author name."), _filter("publisher", "A publisher name."),
                 Param("any", schema={"type": "string"},
                       description="``1``, ``true`` or ``yes``: OR one term across the filters and add "
-                                  "the Works whose PDF text matches ``q``.")))),
+                                  "the Works whose PDF text matches ``q`` and the author and publisher "
+                                  "filters. Ignored with ``tag``: the Tag filter wins.")))),
     route("POST", "/api/works/reindex-pdf-text", reindex_pdf_text, contract=Operation(
         "queuePdfTextRebuild", "Queue the rebuild of the PDF text index", "works",
         {200: ok(TextRebuildQueued, "Queued, or one already was; the counters are zero.")},
