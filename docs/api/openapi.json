@@ -3026,9 +3026,13 @@
             "description": "The portrait.",
             "headers": {
               "Cache-Control": {
-                "description": "``private, max-age=<seconds>``.",
+                "description": "Private: a day from the cache, an hour when just fetched.",
                 "schema": {
-                  "type": "string"
+                  "type": "string",
+                  "enum": [
+                    "private, max-age=86400",
+                    "private, max-age=3600"
+                  ]
                 },
                 "required": true
               }

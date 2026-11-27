@@ -7116,8 +7116,8 @@ export interface operations {
             /** @description The portrait. */
             200: {
                 headers: {
-                    /** @description ``private, max-age=<seconds>``. */
-                    "Cache-Control": string;
+                    /** @description Private: a day from the cache, an hour when just fetched. */
+                    "Cache-Control": "private, max-age=86400" | "private, max-age=3600";
                     [name: string]: unknown;
                 };
                 content: {
