@@ -162,7 +162,8 @@ PROJECT_Q = """query($owner:String!,$number:Int!){user(login:$owner){projectV2(n
 fields(first:50){nodes{... on ProjectV2FieldCommon{id name dataType} ... on ProjectV2SingleSelectField{options{id name}}}}}}}"""
 
 ITEM_FIELDS = """id isArchived
-fieldValues(first:40){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}}}
+fieldValues(first:40){nodes{... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}
+... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}}}
 content{__typename ... on Issue{number state repository{nameWithOwner}} ... on PullRequest{number state repository{nameWithOwner}}}"""
 
 ITEMS_Q = ("query($owner:String!,$number:Int!,$after:String){user(login:$owner){projectV2(number:$number){"
@@ -251,9 +252,12 @@ def _parse_item(node: dict) -> Optional[tuple[tuple[str, int], dict]]:
         return None
     if content["repository"]["nameWithOwner"] != REPOSITORY:
         return None
-    values = {v["field"]["name"]: v["name"] for v in node["fieldValues"]["nodes"] if v and v.get("field")}
+    nodes = [v for v in node["fieldValues"]["nodes"] if v and v.get("field")]
+    values = {v["field"]["name"]: v["name"] for v in nodes if "name" in v}
+    numbers = {v["field"]["name"]: v["number"] for v in nodes if "number" in v}
     return (content["__typename"], content["number"]), {
-        "id": node["id"], "state": content["state"], "archived": node["isArchived"], "values": values}
+        "id": node["id"], "state": content["state"], "archived": node["isArchived"],
+        "values": values, "numbers": numbers}
 
 
 class Project:

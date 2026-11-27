@@ -82,6 +82,41 @@ checks that the repository, Git ref, event, sender ID and first-run attempt
 match, then reads the Project through the protected secret and reads
 issues/dependencies with the job's scoped GITHUB_TOKEN.
 
+## Implementation Order commands
+
+The same workflow accepts an order-only command. It changes only the NUMBER field `Implementation Order`, through the reviewed editor in `project3-triage.md`:
+
+```json
+{
+  "version": 1,
+  "kind": "implementation-order",
+  "operation": "check",
+  "items": [
+    {"number": 815, "order": 3, "expected_before": null,
+     "reason": "Ranked after the PostgreSQL slice; reviewed roadmap and open PRs.",
+     "roadmap_checked": true, "overlap_checked": true}
+  ]
+}
+```
+
+Each row MUST have exactly these keys. `expected_before` is the live rank or `null`. The rules for `order` are in `project3-triage.md`. A batch has 1–10 rows.
+
+Approval is bound to the exact batch:
+
+1. Run the command with `"operation": "check"`. The run summary prints `order digest <sha256>`. The digest covers `kind` and `items`, including `expected_before`, so check and apply of one batch have the same digest.
+2. The maintainer reviews the batch and sets the digest in the protected environment:
+
+   ```bash
+   gh variable set PROJECT3_ORDER_APPROVED_SHA256 --repo Fooftilly/PRKS \
+     --env project-automation --body '<digest from the check run>'
+   ```
+
+3. Run the same batch with `"operation": "apply"`. It writes only when `PROJECT3_ORDER_WRITE_MODE` is `apply` and the digest equals `PROJECT3_ORDER_APPROVED_SHA256`. Another value refuses the run before any write.
+
+`PROJECT3_ORDER_WRITE_MODE` is off by default and separate from `PROJECT3_ASSIGN_DISPATCH_MODE`. Neither mode enables the other. Agents MUST NOT set either variable or the digest: a successful check, an agent proposal or an owner-attributed commit is not human review. To turn order writes off, delete `PROJECT3_ORDER_WRITE_MODE`. Delete the digest after the apply.
+
+A replayed apply fails because `expected_before` no longer matches the live rank. A run that fails after a write reports **POSSIBLY PARTIAL** and refreshes both the agent queue and the readiness/planning snapshots.
+
 ## Safety and audit
 
 The workflow uses exactly the same reviewed `project3_triage` preflight and

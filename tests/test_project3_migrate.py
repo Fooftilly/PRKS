@@ -64,7 +64,9 @@ class FakeAPI:
         it = self.items[iid]
         c = self.content[it["number"]]
         return {"id": iid, "isArchived": it["archived"],
-                "fieldValues": {"nodes": [{"name": v, "field": {"name": f}} for f, v in it["values"].items()] + [{}]},
+                "fieldValues": {"nodes": [{"name": v, "field": {"name": f}} if isinstance(v, str)
+                                          else {"number": v, "field": {"name": f}}
+                                          for f, v in it["values"].items()] + [{}]},
                 "content": {"__typename": c["__typename"], "number": c["number"], "state": c["state"], "repository": {"nameWithOwner": c["repo"]}}}
 
     def _fid(self, name):
@@ -87,8 +89,9 @@ class FakeAPI:
             if iid not in self.items:
                 return {"node": None}
             return {"node": dict(self._node(iid), project={"id": pm.PROJECT_ID})}
-        # A field whose options are None is a text field.
+        # A field whose options are None is a text field; "NUMBER" is a number field.
         fields = [{"id": self._fid(n), "name": n, "dataType": "TEXT"} if opts is None else
+                  {"id": self._fid(n), "name": n, "dataType": "NUMBER"} if opts == "NUMBER" else
                   {"id": self._fid(n), "name": n, "dataType": "SINGLE_SELECT", "options": [{"id": f"{n}:{o}", "name": o} for o in opts]}
                   for n, opts in self.fields.items()]
         return {"user": {"projectV2": {"id": self.project_id, "number": 3, "owner": {"login": "Fooftilly"}, "fields": {"nodes": fields}}}}
@@ -105,7 +108,8 @@ class FakeAPI:
             return {name: {"item": {"id": self._add(int(variables["content"][1:]))}}}
         item = self.items[variables["item"]]
         field = next(f for f in self.fields if self._fid(f) == variables["field"])
-        item["values"][field] = variables["option"].split(":", 1)[1]
+        item["values"][field] = (variables["number"] if "number" in variables
+                                 else variables["option"].split(":", 1)[1])
         return {name: {"projectV2Item": {"id": variables["item"]}}}
 
     def _add(self, n):

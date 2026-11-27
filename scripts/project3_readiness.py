@@ -3,9 +3,12 @@
 
 Commands:
 
-  snapshot  read Project #3 and the open PRKS issues and write one JSON
-            snapshot of each issue's Project Status, Execution and Agent
-  check     validate a downloaded snapshot and enforce its freshness limit
+  snapshot        read Project #3 and the open PRKS issues and write one JSON
+                  snapshot of each issue's Project Status, Execution and Agent
+  check           validate a downloaded snapshot and enforce its freshness limit
+  planning        write the planning snapshot: every PRKS issue item with its
+                  Implementation Order and other planning fields
+  check-planning  validate a downloaded planning snapshot and its freshness
 
 Runs from ``.github/workflows/project3-readiness.yml``. The snapshot lets a
 triage that cannot query Project V2 custom fields (the ChatGPT PRKS Daily
@@ -42,6 +45,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import os
 import re
 import sys
@@ -72,6 +76,22 @@ MAX_FUTURE_SKEW = timedelta(minutes=5)
 PAGE_SIZE = 100
 MAX_PAGES = 100
 ASSIGNEES_PAGE = 20
+PLANNING_SCHEMA = "prks-project3-planning/v1"
+PLANNING_ARTIFACT_FILE = "project3-planning.json"
+# Planning snapshot key -> (Project #3 field name, required data type).
+PLANNING_FIELDS = {
+    "status": ("Status", "SINGLE_SELECT"),
+    "execution": ("Execution", "SINGLE_SELECT"),
+    "agent": ("Agent", "SINGLE_SELECT"),
+    "implementation_order": ("Implementation Order", "NUMBER"),
+    "roadmap_order": ("Roadmap Order", "NUMBER"),
+    "priority": ("Priority", "SINGLE_SELECT"),
+    "effort": ("Effort", "SINGLE_SELECT"),
+    "horizon": ("Horizon", "SINGLE_SELECT"),
+    "work_type": ("Work Type", "SINGLE_SELECT"),
+    "commitment": ("Commitment", "SINGLE_SELECT"),
+}
+LABELS_PAGE = 50
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 Transport = Callable[[str, dict[str, Any]], dict[str, Any]]
@@ -235,7 +255,35 @@ ISSUES_QUERY = (
     "}\n"
 )
 
-QUERIES = (PROJECT_QUERY, ITEMS_QUERY, QUEUE_ITEMS_QUERY, ISSUES_QUERY)
+_PLANNING_VALUE = ("{ __typename ... on ProjectV2ItemFieldSingleSelectValue { name } "
+                   "... on ProjectV2ItemFieldNumberValue { number } }")
+
+PLANNING_ITEMS_QUERY = (
+    "query($owner: String!, $number: Int!, $after: String, "
+    + ", ".join(f"${key}: String!" for key in PLANNING_FIELDS) + ") {\n"
+    "  user(login: $owner) {\n"
+    "    projectV2(number: $number) {\n"
+    "      id\n"
+    f"      items(first: {PAGE_SIZE}, after: $after) {{\n"
+    "        totalCount\n"
+    "        pageInfo { hasNextPage endCursor }\n"
+    "        nodes {\n"
+    "          id isArchived\n"
+    + "".join(f"          {key}: fieldValueByName(name: ${key}) {_PLANNING_VALUE}\n" for key in PLANNING_FIELDS)
+    + "          content {\n"
+    "            __typename\n"
+    "            ... on Issue { number state repository { nameWithOwner isPrivate }\n"
+    f"              labels(first: {LABELS_PAGE}) {{ totalCount nodes {{ name }} }}\n"
+    "              parent { number repository { nameWithOwner } } }\n"
+    "          }\n"
+    "        }\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "}\n"
+)
+
+QUERIES = (PROJECT_QUERY, ITEMS_QUERY, QUEUE_ITEMS_QUERY, ISSUES_QUERY, PLANNING_ITEMS_QUERY)
 
 
 # --- parsing ------------------------------------------------------------------
@@ -286,6 +334,27 @@ def _field_value(value: Any, what: str) -> Optional[str]:
     if node.get("__typename") != "ProjectV2ItemFieldSingleSelectValue":
         raise Malformed(f"{what} is not a single-select value")
     return _str(node.get("name"), f"{what} name")
+
+
+def _number_value(value: Any, what: str) -> Optional[int | float]:
+    if value is None:
+        return None
+    node = _obj(value, what)
+    if node.get("__typename") != "ProjectV2ItemFieldNumberValue":
+        raise Malformed(f"{what} is not a number value")
+    number = node.get("number")
+    if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number):
+        raise Malformed(f"{what} is not a finite number")
+    return int(number) if number == int(number) else number
+
+
+def check_planning_fields(data: dict[str, Any]) -> None:
+    project = _obj(_obj(data.get("user"), "user").get("projectV2"), "projectV2")
+    nodes = _list(_obj(project.get("fields"), "project fields").get("nodes"), "project fields")
+    types = {node["name"]: node.get("dataType") for node in nodes if isinstance(node, dict) and node.get("name")}
+    for name, kind in PLANNING_FIELDS.values():
+        if types.get(name) != kind:
+            raise ReadinessError(f"Project #3 field {name!r} is missing or not {kind}")
 
 
 def check_project(data: dict[str, Any]) -> dict[str, Any]:
@@ -416,6 +485,77 @@ def read_open_issues(gql: ReadOnlyGraphQL) -> list[dict[str, Any]]:
     return found
 
 
+def _labels(issue: dict[str, Any], what: str) -> list[str]:
+    conn = _obj(issue.get("labels"), f"{what} labels")
+    names = sorted(_str(_obj(label, f"{what} label").get("name"), f"{what} label name")
+                   for label in _list(conn.get("nodes"), f"{what} labels"))
+    if _int(conn.get("totalCount"), f"{what} labels totalCount") != len(names):
+        raise Malformed(f"{what} has more labels than one page returned")
+    return names
+
+
+def _parent(issue: dict[str, Any], what: str) -> Optional[str]:
+    parent = issue.get("parent")
+    if parent is None:
+        return None
+    node = _obj(parent, f"{what} parent")
+    repo = _str(_obj(node.get("repository"), f"{what} parent repository").get("nameWithOwner"),
+                f"{what} parent repository")
+    return f"{repo}#{_int(node.get('number'), f'{what} parent number')}"
+
+
+def read_planning_items(gql: ReadOnlyGraphQL) -> tuple[list[dict[str, Any]], Counter[str]]:
+    variables = {"owner": OWNER, "number": PROJECT_NUMBER,
+                 **{key: name for key, (name, _) in PLANNING_FIELDS.items()}}
+
+    def items(data: dict[str, Any]) -> dict[str, Any]:
+        project = _obj(_obj(data.get("user"), "user").get("projectV2"), "projectV2")
+        if project.get("id") != PROJECT_ID:
+            raise ReadinessError("project identity changed between pages")
+        return _obj(project.get("items"), "project items")
+
+    rows: dict[int, dict[str, Any]] = {}
+    item_ids: set[str] = set()
+    skipped: Counter[str] = Counter()
+    for raw in _pages(gql, PLANNING_ITEMS_QUERY, variables, items, "project items"):
+        node = _obj(raw, "project item")
+        item_id = _str(node.get("id"), "project item id")
+        if item_id in item_ids:
+            raise Malformed(f"project item {item_id} was returned twice")
+        item_ids.add(item_id)
+        content = node.get("content")
+        kind = content.get("__typename") if isinstance(content, dict) else None
+        if kind != "Issue":
+            skipped[{"PullRequest": "pull_requests", "DraftIssue": "draft_issues"}.get(
+                kind or "", "redacted_or_unknown")] += 1
+            continue
+        issue = _obj(content, "issue content")
+        repo = _obj(issue.get("repository"), "issue repository")
+        if repo.get("nameWithOwner") != REPOSITORY:
+            skipped["other_repositories"] += 1
+            continue
+        if _bool(repo.get("isPrivate"), "repository isPrivate"):
+            raise Confidential(f"{REPOSITORY} is private; no snapshot was written")
+        number = _int(issue.get("number"), "issue number")
+        what = f"issue #{number}"
+        if number in rows:
+            raise Malformed(f"issue #{number} has more than one Project #3 item")
+        values: dict[str, Any] = {}
+        for key, (name, data_type) in PLANNING_FIELDS.items():
+            reader = _number_value if data_type == "NUMBER" else _field_value
+            values[key] = reader(node.get(key), f"{what} {name}")
+        rows[number] = {
+            "number": number,
+            "state": _str(issue.get("state"), f"{what} state"),
+            "project_item_id": item_id,
+            "archived": _bool(node.get("isArchived"), f"{what} isArchived"),
+            **values,
+            "labels": _labels(issue, what),
+            "parent": _parent(issue, what),
+        }
+    return [rows[n] for n in sorted(rows)], skipped
+
+
 def _iso(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -463,6 +603,35 @@ def build_snapshot(transport: Transport, *, generated_at: datetime,
     }
 
 
+def build_planning(transport: Transport, *, generated_at: datetime,
+                   source: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    gql = ReadOnlyGraphQL(transport)
+    identity = {"owner": OWNER, "number": PROJECT_NUMBER}
+    first = gql.query(PROJECT_QUERY, identity)
+    project = check_project(first)
+    check_planning_fields(first)
+    rows, skipped = read_planning_items(gql)
+    again = gql.query(PROJECT_QUERY, identity)
+    if check_project(again) != project:
+        raise ReadinessError("Project #3 changed while it was read; rerun")
+    check_planning_fields(again)
+    return {
+        "schema": PLANNING_SCHEMA,
+        "complete": True,
+        "generated_at": _iso(generated_at),
+        "stale_after": _iso(generated_at + timedelta(hours=MAX_AGE_HOURS)),
+        "max_age_hours": MAX_AGE_HOURS,
+        "project": project,
+        "repository": REPOSITORY,
+        "coverage": "every Fooftilly/PRKS issue item on Project #3, open or closed",
+        "dependencies": "not included: read GET /repos/Fooftilly/PRKS/issues/{n}/dependencies/blocked_by live; a failed read is unknown, not none",
+        "fields": {key: name for key, (name, _) in PLANNING_FIELDS.items()},
+        "source": source,
+        "counts": {"issues": len(rows), "skipped_items": dict(sorted(skipped.items()))},
+        "issues": rows,
+    }
+
+
 # --- consumer-side validation -------------------------------------------------
 
 def _parse_time(value: Any, what: str) -> datetime:
@@ -505,11 +674,70 @@ def check_snapshot(snapshot: Any, *, now: datetime, max_age_hours: float = MAX_A
     return generated
 
 
+_PLANNING_ROW_KEYS = frozenset({"number", "state", "project_item_id", "archived",
+                                "labels", "parent", *PLANNING_FIELDS})
+
+
+def _check_planning_row(raw: Any) -> dict[str, Any]:
+    row = _obj(raw, "planning issue")
+    if set(row) != _PLANNING_ROW_KEYS:
+        raise Malformed(f"planning issue has keys {sorted(row)}, expected {sorted(_PLANNING_ROW_KEYS)}")
+    number = _int(row["number"], "planning issue number")
+    what = f"planning issue #{number}"
+    if number < 1 or row["state"] not in ("OPEN", "CLOSED"):
+        raise Malformed(f"{what} has an invalid number or state")
+    _str(row["project_item_id"], f"{what} project_item_id")
+    _bool(row["archived"], f"{what} archived")
+    for key, (_, data_type) in PLANNING_FIELDS.items():
+        value = row[key]
+        if value is None:
+            continue
+        if data_type == "NUMBER":
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise Malformed(f"{what} {key} is not a finite number")
+        else:
+            _str(value, f"{what} {key}")
+    labels = _list(row["labels"], f"{what} labels")
+    if any(not isinstance(label, str) or not label for label in labels) or labels != sorted(set(labels)):
+        raise Malformed(f"{what} labels are not sorted unique names")
+    if row["parent"] is not None and not re.fullmatch(r"[^\s#]+/[^\s#]+#[0-9]+", _str(row["parent"], f"{what} parent")):
+        raise Malformed(f"{what} parent is not owner/repo#number")
+    return row
+
+
+def check_planning(snapshot: Any, *, now: datetime, max_age_hours: float = MAX_AGE_HOURS) -> datetime:
+    """Raise unless the planning snapshot is complete, for Project #3 and fresh."""
+    data = _obj(snapshot, "planning snapshot")
+    if data.get("schema") != PLANNING_SCHEMA:
+        raise Malformed(f"unknown planning snapshot schema {data.get('schema')!r}")
+    if data.get("complete") is not True:
+        raise ReadinessError("planning snapshot is not marked complete")
+    project = _obj(data.get("project"), "planning snapshot project")
+    if (project.get("id"), project.get("number"), project.get("owner")) != (PROJECT_ID, PROJECT_NUMBER, OWNER) \
+            or data.get("repository") != REPOSITORY:
+        raise ReadinessError("planning snapshot is not for Project #3 / Fooftilly/PRKS")
+    generated = _parse_time(data.get("generated_at"), "generated_at")
+    if generated - now > MAX_FUTURE_SKEW:
+        raise ReadinessError("planning snapshot is dated in the future")
+    age = now - generated
+    if age > timedelta(hours=max_age_hours):
+        raise ReadinessError(f"planning snapshot is stale: {age.total_seconds() / 3600:.1f} h old, limit {max_age_hours:g} h")
+    if data.get("fields") != {key: name for key, (name, _) in PLANNING_FIELDS.items()}:
+        raise Malformed("planning snapshot fields do not match")
+    rows = [_check_planning_row(r) for r in _list(data.get("issues"), "planning issues")]
+    numbers = [r["number"] for r in rows]
+    if numbers != sorted(set(numbers)):
+        raise Malformed("planning issues are not sorted and unique")
+    if _obj(data.get("counts"), "planning counts").get("issues") != len(rows):
+        raise Malformed("planning counts do not match its issues")
+    return generated
+
+
 ARTIFACT_FILE = "project3-readiness.json"
 MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024
 
 
-def decode_download(raw: bytes) -> Any:
+def decode_download(raw: bytes, name: str = ARTIFACT_FILE) -> Any:
     """Decode a downloaded artifact by its content, not its name: the raw
     JSON file (``archive: false``) or a ZIP holding exactly that one file.
     Anything else is refused."""
@@ -517,8 +745,8 @@ def decode_download(raw: bytes) -> Any:
         try:
             with zipfile.ZipFile(BytesIO(raw)) as archive:
                 members = archive.infolist()
-                if [m.filename for m in members] != [ARTIFACT_FILE]:
-                    raise Malformed(f"artifact ZIP must hold only {ARTIFACT_FILE}")
+                if [m.filename for m in members] != [name]:
+                    raise Malformed(f"artifact ZIP must hold only {name}")
                 if members[0].file_size > MAX_SNAPSHOT_BYTES:
                     raise Malformed("artifact file is too large")
                 raw = archive.read(members[0])
@@ -620,6 +848,19 @@ def summary_markdown(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def planning_summary(snapshot: dict[str, Any]) -> str:
+    ranked = sum(1 for r in snapshot["issues"] if r["implementation_order"] is not None)
+    return "\n".join([
+        "## Project #3 planning snapshot",
+        "",
+        f"Generated {snapshot['generated_at']}, stale after {snapshot['stale_after']}.",
+        "",
+        f"- Issue items: {snapshot['counts']['issues']} ({ranked} with Implementation Order)",
+        f"- Skipped items: {json.dumps(snapshot['counts']['skipped_items'], sort_keys=True)}",
+        "",
+    ])
+
+
 def _source(env: Mapping[str, str]) -> Optional[dict[str, Any]]:
     if env.get("GITHUB_REPOSITORY") != REPOSITORY or not env.get("GITHUB_RUN_ID", "").isdigit():
         return None
@@ -640,17 +881,26 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
     chk = sub.add_parser("check", help="validate a snapshot and its freshness")
     chk.add_argument("--snapshot", required=True, help="file under home or temp, or - for standard input")
     chk.add_argument("--max-age-hours", type=float, default=MAX_AGE_HOURS)
+    plan = sub.add_parser("planning", help="write a planning snapshot (read-only)")
+    plan.add_argument("--out", required=True, help="output .json path, outside the repository")
+    plan.add_argument("--summary", help="append a Markdown summary to this file (job summary)")
+    plan_chk = sub.add_parser("check-planning", help="validate a planning snapshot and its freshness")
+    plan_chk.add_argument("--snapshot", required=True, help="file under home or temp, or - for standard input")
+    plan_chk.add_argument("--max-age-hours", type=float, default=MAX_AGE_HOURS)
     args = parser.parse_args(argv)
     try:
-        if args.command == "check":
+        if args.command in ("check", "check-planning"):
             if args.snapshot == "-":
                 # Standard input reads a downloaded file from anywhere (for
                 # example /mnt/data) without widening the path confinement.
                 raw = sys.stdin.buffer.read(MAX_SNAPSHOT_BYTES + 1)
             else:
                 raw = _confined(args.snapshot, "--snapshot").read_bytes()
-            data = decode_download(raw)
-            generated = check_snapshot(data, now=clock(), max_age_hours=args.max_age_hours)
+            if args.command == "check":
+                checker, data = check_snapshot, decode_download(raw)
+            else:
+                checker, data = check_planning, decode_download(raw, PLANNING_ARTIFACT_FILE)
+            generated = checker(data, now=clock(), max_age_hours=args.max_age_hours)
             print(f"ok: snapshot generated {_iso(generated)} is complete and fresh")
             return 0
         out = _confined(args.out, "--out", ".json")
@@ -660,11 +910,13 @@ def main(argv: Optional[Sequence[str]] = None, env: Optional[Mapping[str, str]] 
         token = env.get("PROJECT3_READINESS_TOKEN", "")
         if not token:
             raise NotConfigured("PROJECT3_READINESS_TOKEN is not set; nothing was read or written")
-        snapshot = build_snapshot(transport_factory(token), generated_at=clock(), source=_source(env))
+        build = build_snapshot if args.command == "snapshot" else build_planning
+        snapshot = build(transport_factory(token), generated_at=clock(), source=_source(env))
         _write_atomic(out, json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
         if summary:
             with open(summary, "a", encoding="utf-8") as handle:
-                handle.write(summary_markdown(snapshot))
+                handle.write(summary_markdown(snapshot) if args.command == "snapshot"
+                             else planning_summary(snapshot))
         print(f"ok: wrote {snapshot['counts']['issues']} issues to {out}")
         return 0
     except Confidential as error:

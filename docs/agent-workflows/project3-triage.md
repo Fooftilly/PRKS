@@ -47,6 +47,28 @@ python scripts/project3_triage.py apply --plan ~/prks-project3-triage/plan.json 
 
 There is no cross-item atomic transaction in GitHub Projects. If a failure occurs halfway through, earlier verified field updates may have been applied; the tool stops, reports the failure and refuses to replay the old plan if its expected-before values are stale. Inspect live state, prepare and approve a new plan for the remaining work. It never silently repairs a manual state change.
 
+## Implementation Order plans
+
+The same tool ranks issues. An order plan changes **only** the NUMBER field `Implementation Order`. It never changes Status, Agent, Execution, labels or dependencies. Put this proposal in the same local folder:
+
+```json
+{
+  "operation": "order",
+  "items": [
+    {"number": 815, "order": 3,
+     "reason": "Ranked after the PostgreSQL slice; reviewed roadmap and open PRs.",
+     "roadmap_checked": true, "overlap_checked": true}
+  ]
+}
+```
+
+- `order` MUST be an integer from 1 to 10000. Booleans, fractions, strings and `null` are refused. Two rows in one batch MUST NOT share an issue or a rank. The batch has 1–25 rows.
+- To unset a rank, edit the field in the Project UI. The tool cannot clear a value.
+- `propose` verifies that the live field is named `Implementation Order` and has type NUMBER. It writes its node ID into the plan, with `expected_before` (the live rank or `null`) and the issue snapshot. All rows start with `"approved": false`.
+- `check` and `apply` work as above. `apply` refuses when the field ID, the live rank, the item (missing, archived, closed) or the issue snapshot changed. A live rank that is not an integer from 1 to 10000 is refused; correct it in the UI first.
+- Each write re-reads the item and the issue first, and verifies afterwards that the rank is set and every other field is unchanged. A row whose rank already matches is a no-op.
+- Inbox, Backlog, Blocked and unaccepted candidate issues can be ranked. A rank never makes them actionable.
+
 ## Protected states and approvals
 
 - Only the `Inbox`, `Backlog`, `Ready` and `In Progress` values may be written to Status; existing `Blocked` and `Done` issue statuses are never overwritten by this tool.

@@ -1,7 +1,8 @@
 name: Project 3 readiness
 
-# Read-only snapshot of each PRKS issue's Project #3 Status, Execution and
-# Agent, published as a short-lived JSON artifact for triage (#441). See
+# Read-only snapshots of PRKS issues' Project #3 fields: readiness (Status,
+# Execution, Agent) and planning (Implementation Order and other planning
+# fields), published as short-lived JSON artifacts for triage (#441). See
 # docs/agent-workflows/project-3.md section 14. It never writes to Project #3,
 # issues or dependencies: scripts/project3_readiness.py sends GraphQL queries
 # only. It refuses to publish anything unless Project #3 is public, because
@@ -54,6 +55,27 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           path: ${{ runner.temp }}/project3-readiness.json
+          archive: false
+          retention-days: 2
+          if-no-files-found: error
+
+      # Separate artifact and schema, so strict readiness v1 consumers are
+      # unaffected and a planning failure never withholds the readiness file.
+      - name: Read Project #3 planning fields (queries only)
+        id: planning
+        if: ${{ !cancelled() }}
+        env:
+          PROJECT3_READINESS_TOKEN: ${{ secrets.PROJECT_SYNC_TOKEN }}
+        run: >-
+          python3 scripts/project3_readiness.py planning
+          --out "$RUNNER_TEMP/project3-planning.json"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload planning snapshot
+        if: ${{ !cancelled() && steps.planning.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ runner.temp }}/project3-planning.json
           archive: false
           retention-days: 2
           if-no-files-found: error

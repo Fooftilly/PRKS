@@ -5,6 +5,8 @@ propose: read live values and write a plan (all rows unapproved).
 check:   read-only preflight and print the exact plan SHA-256.
 apply:   update only approved rows, requiring that exact reviewed SHA-256.
 
+A plan edits either Agent/Status/Execution or only Implementation Order.
+
 See docs/agent-workflows/project-3.md. No writes without "apply".
 """
 from __future__ import annotations
@@ -12,6 +14,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -39,6 +42,10 @@ AGENT_ALIASES = {
     "manual": "Manual", "unassigned": "Unassigned",
 }
 ALLOWED = {"Status": STATUS, "Agent": AGENTS, "Execution": EXECUTION}
+ORDER_FIELD = "Implementation Order"
+ORDER_SCHEMA = "prks-project3-order/v1"
+ORDER_MIN, ORDER_MAX = 1, 10000
+SET_NUMBER_M = """mutation($project:ID!,$item:ID!,$field:ID!,$number:Float!){updateProjectV2ItemFieldValue(input:{projectId:$project,itemId:$item,fieldId:$field,value:{number:$number}}){projectV2Item{id}}}"""
 
 
 class TriageError(Exception):
@@ -132,12 +139,16 @@ def _validate_edits(number: int, edits: Any) -> None:
 
 
 def _validate_plan_snapshot(number: int, row: dict) -> None:
-    if type(row["approved"]) is not bool:
-        raise TriageError(f"#{number}: approved must be a boolean")
     before = row["expected_before"]
     if (not isinstance(before, dict) or set(before) != set(FIELDS)
             or any(value is not None and not isinstance(value, str) for value in before.values())):
         raise TriageError(f"#{number}: all expected_before fields must be explicit")
+    _validate_issue_snapshot(number, row)
+
+
+def _validate_issue_snapshot(number: int, row: dict) -> None:
+    if type(row["approved"]) is not bool:
+        raise TriageError(f"#{number}: approved must be a boolean")
     issue = row["expected_issue"]
     if not isinstance(issue, dict) or set(issue) != {"state", "updated_at", "labels", "open_blockers"}:
         raise TriageError(f"#{number}: expected_issue snapshot missing")
@@ -147,21 +158,53 @@ def _validate_plan_snapshot(number: int, row: dict) -> None:
         raise TriageError(f"#{number}: invalid issue snapshot")
 
 
-def validate_row(row: Any, *, plan: bool) -> None:
-    common = {"number", "set", "reason", "roadmap_checked", "overlap_checked"}
+def _validate_review(row: Any, edit_key: str, *, plan: bool) -> int:
+    common = {"number", edit_key, "reason", "roadmap_checked", "overlap_checked"}
     keys = common | ({"approved", "expected_before", "expected_issue"} if plan else set())
     if not isinstance(row, dict) or set(row) != keys:
         raise TriageError("invalid triage row keys")
     number = row["number"]
     if type(number) is not int or number < 1:
         raise TriageError("issue number must be a positive integer")
-    _validate_edits(number, row["set"])
     if not isinstance(row["reason"], str) or len(row["reason"].strip()) < 16:
         raise TriageError(f"#{number}: provide a substantive reason")
     if row["roadmap_checked"] is not True or row["overlap_checked"] is not True:
         raise TriageError(f"#{number}: roadmap and overlapping PR review must be attested")
+    return number
+
+
+def validate_row(row: Any, *, plan: bool) -> None:
+    number = _validate_review(row, "set", plan=plan)
+    _validate_edits(number, row["set"])
     if plan:
         _validate_plan_snapshot(number, row)
+
+
+def order_value(value: Any, what: str, *, nullable: bool) -> int | None:
+    """Ranks are bounded integers; null means unset and is never a write target."""
+    if value is None and nullable:
+        return None
+    if type(value) is not int or not ORDER_MIN <= value <= ORDER_MAX:
+        raise TriageError(f"{what} must be an integer from {ORDER_MIN} to {ORDER_MAX}"
+                          + (" or null" if nullable else ""))
+    return value
+
+
+def validate_order_row(row: Any, *, plan: bool) -> None:
+    number = _validate_review(row, "order", plan=plan)
+    order_value(row["order"], f"#{number}: order", nullable=False)
+    if plan:
+        order_value(row["expected_before"], f"#{number}: expected_before", nullable=True)
+        _validate_issue_snapshot(number, row)
+
+
+def _check_order_batch(rows: Any) -> None:
+    if not isinstance(rows, list) or not 1 <= len(rows) <= MAX_ITEMS:
+        raise TriageError("order batch needs 1–25 issue rows")
+    if len({r["number"] for r in rows}) != len(rows):
+        raise TriageError("duplicate issue number")
+    if len({r["order"] for r in rows}) != len(rows):
+        raise TriageError("duplicate Implementation Order in one batch")
 
 def load_proposals(path: Path) -> list[dict]:
     data = json.loads(path.read_text("utf-8"))
@@ -177,8 +220,21 @@ def load_proposals(path: Path) -> list[dict]:
     return rows
 
 
+def load_order_proposals(data: Any) -> list[dict]:
+    if not isinstance(data, dict) or set(data) != {"operation", "items"} or data["operation"] != "order":
+        raise TriageError("order proposal must be an object with operation 'order' and items")
+    if not isinstance(data["items"], list):
+        raise TriageError("order batch needs 1–25 issue rows")
+    for row in data["items"]:
+        validate_order_row(row, plan=False)
+    _check_order_batch(data["items"])
+    return data["items"]
+
+
 def load_plan(raw: bytes) -> dict:
     data = json.loads(raw.decode("utf-8"))
+    if isinstance(data, dict) and data.get("schema") == ORDER_SCHEMA:
+        return _load_order_plan(data)
     if not isinstance(data, dict) or set(data) != {"schema", "scope", "items"} or data["schema"] != SCHEMA or data["scope"] != SCOPE:
         raise TriageError("invalid Project #3 plan schema or scope")
     rows = data["items"]
@@ -188,6 +244,20 @@ def load_plan(raw: bytes) -> dict:
         validate_row(row, plan=True)
     if len({r["number"] for r in rows}) != len(rows):
         raise TriageError("duplicate issue number")
+    return data
+
+
+def _load_order_plan(data: dict) -> dict:
+    field = data.get("field")
+    if (set(data) != {"schema", "scope", "field", "items"} or data["scope"] != SCOPE
+            or not isinstance(field, dict) or set(field) != {"name", "id"}
+            or field["name"] != ORDER_FIELD or not isinstance(field["id"], str) or not field["id"]):
+        raise TriageError("invalid Implementation Order plan schema, scope or field")
+    if not isinstance(data["items"], list):
+        raise TriageError("order batch needs 1–25 issue rows")
+    for row in data["items"]:
+        validate_order_row(row, plan=True)
+    _check_order_batch(data["items"])
     return data
 
 
@@ -292,6 +362,99 @@ def apply(plan: dict, project: pm.Project, read: Callable[[str], Any]) -> int:
     return changed
 
 
+def order_field(project: pm.Project) -> dict:
+    meta = project.fields.get(ORDER_FIELD)
+    if not meta or meta["type"] != "NUMBER":
+        raise TriageError(f"Project #3 has no NUMBER field {ORDER_FIELD!r}")
+    return {"name": ORDER_FIELD, "id": meta["id"]}
+
+
+def live_order(item: dict, number: int) -> int | None:
+    value = item.get("numbers", {}).get(ORDER_FIELD)
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+            or value != int(value) or not ORDER_MIN <= value <= ORDER_MAX):
+        raise TriageError(f"#{number}: live {ORDER_FIELD} is not an integer from "
+                          f"{ORDER_MIN} to {ORDER_MAX}; correct it in Project #3")
+    return int(value)
+
+
+def order_guard(row: dict, current: dict | None, issue: dict) -> None:
+    """Ranking never changes lifecycle fields, so any Status may be ranked."""
+    n = row["number"]
+    if current is None or current["archived"] or current["state"] != "OPEN":
+        raise TriageError(f"#{n}: missing, archived or closed Project item")
+    if live_order(current, n) != row["expected_before"]:
+        raise TriageError(f"#{n}: {ORDER_FIELD} changed since review")
+    if issue != row["expected_issue"]:
+        raise TriageError(f"#{n}: issue labels, update time or blockers changed since review")
+
+
+def propose_order(rows: list[dict], project: pm.Project, read: Callable[[str], Any]) -> dict:
+    field = order_field(project)
+    plans = []
+    for r in rows:
+        current = project_live(project, r["number"])
+        issue = inspect_issue(r["number"], read)
+        row = {**r, "approved": False,
+               "expected_before": live_order(current, r["number"]),
+               "expected_issue": issue}
+        order_guard(row, current, issue)
+        plans.append(row)
+    return {"schema": ORDER_SCHEMA, "scope": SCOPE, "field": field, "items": plans}
+
+
+def preflight_order(plan: dict, project: pm.Project,
+                    read: Callable[[str], Any]) -> list[tuple[dict, str]]:
+    if order_field(project) != plan["field"]:
+        raise TriageError(f"{ORDER_FIELD} field identity changed since review")
+    rows = []
+    for row in plan["items"]:
+        item = project_live(project, row["number"])
+        order_guard(row, project.refresh(item["id"]), inspect_issue(row["number"], read))
+        rows.append((row, item["id"]))
+    return rows
+
+
+def _unrelated(item: dict) -> tuple[dict, dict]:
+    return item["values"], {k: v for k, v in item["numbers"].items() if k != ORDER_FIELD}
+
+
+def apply_order(plan: dict, project: pm.Project, read: Callable[[str], Any]) -> int:
+    rows = preflight_order(plan, project, read)
+    changed = 0
+    for row, item_id in rows:
+        n = row["number"]
+        if not row["approved"]:
+            print(f"#{n}: held (not approved)")
+            continue
+        if row["order"] == row["expected_before"]:
+            print(f"#{n}: no-op (already {row['order']})")
+            continue
+        live = project.refresh(item_id)
+        try:
+            order_guard(row, live, inspect_issue(n, read))
+        except TriageError as error:
+            raise TriageError(f"{error}; concurrent change; stopped after {changed} writes") from None
+        assert live is not None
+        project.gql.mutate("updateProjectV2ItemFieldValue", SET_NUMBER_M, {
+            "project": pm.PROJECT_ID, "item": item_id,
+            "field": plan["field"]["id"], "number": row["order"],
+        })
+        verified = project.refresh(item_id)
+        if (verified is None or verified["archived"] or verified["state"] != "OPEN"
+                or live_order(verified, n) != row["order"]
+                or _unrelated(verified) != _unrelated(live)):
+            raise TriageError(f"#{n}: post-write verification failed after {changed} earlier "
+                              "writes; STOP and inspect live fields")
+        changed += 1
+        if inspect_issue(n, read) != row["expected_issue"]:
+            raise TriageError(f"#{n}: issue changed during write; inspect live state")
+        print(f"#{n}: verified")
+    return changed
+
+
 def external_plan_path(path: Path) -> Path:
     """Constrain all input/output to a dedicated maintainer-local JSON folder."""
     root = TRIAGE_DIR.expanduser().resolve()
@@ -324,7 +487,12 @@ def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
         gql = pm.GraphQL(transport, allow_mutations=args.command == "apply")
         project = pm.Project(gql)
         if args.command == "propose":
-            plan = propose(load_proposals(external_plan_path(args.input)), project, read)
+            source = external_plan_path(args.input)
+            data = json.loads(source.read_text("utf-8"))
+            if isinstance(data, dict) and "operation" in data:
+                plan = propose_order(load_order_proposals(data), project, read)
+            else:
+                plan = propose(load_proposals(source), project, read)
             # Use an out-of-repository local plan; do not commit approvals or
             # snapshots of Project fields. Do not overwrite an existing plan.
             args.out = external_plan_path(args.out)
@@ -341,13 +509,14 @@ def main(argv: list[str] | None = None, *, transport=None, read=None) -> int:
         plan = load_plan(raw)
         if args.command == "apply" and args.plan_sha256 != digest:
             raise TriageError("SHA-256 differs from reviewed plan; apply refused")
-        preflight(plan, project, read)
+        ordering = plan["schema"] == ORDER_SCHEMA
+        (preflight_order if ordering else preflight)(plan, project, read)
         print(f"Project #3 triage: {len(plan['items'])} rows; {sum(r['approved'] for r in plan['items'])} approved")
         print(f"Plan SHA-256: {digest}")
         if args.command == "check":
             print("Read-only preflight passed; no GitHub fields changed.")
             return 0
-        print(f"Applied and verified {apply(plan, project, read)} field edits.")
+        print(f"Applied and verified {(apply_order if ordering else apply)(plan, project, read)} field edits.")
         return 0
     except (TriageError, pm.MigrationError, OSError, ValueError, KeyError, TypeError) as exc:
         print(f"triage refused: {type(exc).__name__}: {exc}", file=sys.stderr)
