@@ -124,5 +124,12 @@
     "name": "unchanged other-device write advances the revision",
     "from": "case OtherWrite(v) => if Canonical(v) == s.history[Cur(s)] then s else",
     "to": "case OtherWrite(v) => if false then s else"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "reload keeps the Edit form",
+    "from": "case Reload => s.(form := None)",
+    "to": "case Reload => s"
   }
 ]

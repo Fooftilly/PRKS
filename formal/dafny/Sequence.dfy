@@ -186,7 +186,8 @@ module Sequence {
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
     case Replay(id) => Reconciled(m, s, s.ops[id], s.ledger[id])
     case ClockStep(_) => s
-    case Reload => s
+    // The Edit pin lives in the page; the queue, ledger and cache are durable.
+    case Reload => s.(form := None)
   }
 
   function Step(m: Model, s: State, e: Event): State requires Enabled(m, s, e) {
@@ -618,5 +619,28 @@ module Sequence {
     ss, es := Push(M1, ss, es, Save(B));
     assert Last(ss).op == Some(Op(0, B, 0, 4, 0, A));
     ss, es := Push(M1, ss, es, Send);
+  }
+
+  // A reload drops the Edit form, and a queued ACK still reconciles after it.
+  lemma ReloadDropsTheForm() returns (ss: seq<State>, es: seq<Event>)
+    ensures Trace(M1, ss, es) && NoClock(es) && NoReplay(es) && |es| >= 1
+    ensures es[|es| - 1] == Deliver && ss[|es| - 1].form.None? && !Enabled(M1, ss[|es| - 1], Save(B))
+    ensures ss[|es|].cache == Some(Cached(B, 0, 1))
+  {
+    ss, es := Start(M1);
+    ss, es := Push(M1, ss, es, Read(0, true));
+    assert Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, ReadEditBase(0, true));
+    assert Last(ss).editBase == Ok(A, 0, None, None);
+    ss, es := Push(M1, ss, es, Open);
+    assert Last(ss).form == Some(Form(A, Some(Base(A, 0, None, None, None)), ReadPair, A));
+    ss, es := Push(M1, ss, es, Save(B));
+    assert Last(ss).op == Some(Op(0, B, 0, 3, 0, A));
+    ss, es := Push(M1, ss, es, Open);
+    ss, es := Push(M1, ss, es, Send);
+    assert Last(ss).history == [A, B] && Last(ss).ledger == map[0 := 1];
+    ss, es := Push(M1, ss, es, Reload);
+    assert Last(ss).form.None? && Last(ss).cache == Some(Cached(A, 0, 0));
+    ss, es := Push(M1, ss, es, Deliver);
   }
 }

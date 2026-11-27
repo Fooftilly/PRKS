@@ -111,6 +111,10 @@
     "UnchangedOtherWriteKeepsTheRevision": {
       "file": "Sequence.dfy",
       "sha256": "68a1cfdf6d3b99f55171e30c20153f5b5f8f90b53bcc5e67b32a7b87fa4fe32b"
+    },
+    "ReloadDropsTheForm": {
+      "file": "Sequence.dfy",
+      "sha256": "a866abe7a181a4d8f5b083f14d5fffe6d54b0c5e26c990caaadaaaa88e6ecfb5"
     }
   },
   "witnesses": {

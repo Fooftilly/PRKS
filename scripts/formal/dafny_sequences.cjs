@@ -208,7 +208,9 @@ function implStep(mode, s0, e, C, stats) {
         break;
     case 'Deliver': reconcile(mode, s, s.op, s.ledger[s.op.id], C, stats); s.op = null; break;
     case 'Replay': reconcile(mode, s, s.ops[e.id], s.ledger[e.id], C, stats); break;
-    case 'ClockStep': case 'Reload': break;
+    /* The Edit pin is page state (intents.ts playlistEditPin). */
+    case 'Reload': s.form = null; break;
+    case 'ClockStep': break;
     default: throw new Error('unknown event ' + e.kind);
     }
     s.now = e.kind === 'ClockStep' ? e.to : s0.now + 1;
