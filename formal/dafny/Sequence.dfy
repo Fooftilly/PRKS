@@ -475,6 +475,8 @@ module Sequence {
     assert Last(ss).op == Some(Op(1, C, 1, 7, 1, B));
     ss, es := Push(M0, ss, es, Send);
     assert Last(ss).history == [A, B, C] && Last(ss).ledger == map[0 := 1, 1 := 2];
+    assert Last(ss).cache == Some(Cached(B, 0, 1)) && Last(ss).proj.None?;
+    assert PlanAck(Evidence(Valid(2), Absent, At(0), At(7), false)) == Return(Apply);
     ss, es := Push(M0, ss, es, Deliver);
     assert Last(ss).cache == Some(Cached(C, 0, 2));
     ss, es := Push(M0, ss, es, Replay(0));
