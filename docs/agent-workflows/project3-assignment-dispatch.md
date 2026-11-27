@@ -161,7 +161,7 @@ To recover after a failure:
 
 1. Read the refreshed planning snapshot and compare it with the manifest. Batches before the failed one are done. The failed batch is possibly partial. Later batches are pending.
 2. Check the remaining rows again as new batches. Use the live `expected_before` values. When the failed batch reached its batch claim, its digest is used: change its `reason`, for example by adding the date, to get a new digest. A batch refused by its live preflight keeps an unused digest.
-3. Write a new manifest for the remaining batches and get a new approval.
+3. Write a new manifest for the remaining batches and get a new approval. The new manifest digest MUST differ from the old one. When batch 1 failed and every recheck gives the old digests, the new manifest equals the old one and stays blocked: change the `reason` of one row and check that batch again.
 
 To revoke a plan, delete `PROJECT3_ORDER_WRITE_MODE` or change `PROJECT3_ORDER_APPROVED_SHA256`. Batches that already ran stay applied.
 
