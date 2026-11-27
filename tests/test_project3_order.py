@@ -631,7 +631,14 @@ class OrderPlanTests(unittest.TestCase):
             self.run_plan(2, env)
         written = "".join(call.args[0] for call in err.write.call_args_list)
         self.assertIn(f"batch 2/3; manifest digest {self.approval}: FAILED / POSSIBLY PARTIAL", written)
-        self.assertIn("batches 3–3 stay blocked", written)
+        self.assertIn("batch 3 stays blocked under this manifest", written)
+        manifest = self.build(self.batches[2:])
+        approval = dispatch.manifest_digest(manifest)
+        with mock.patch("sys.stderr") as err, self.assertRaises(t.pm.MigrationError):
+            self.run_plan(1, armed_for(approval), manifest, self.batches[2])
+        written = "".join(call.args[0] for call in err.write.call_args_list)
+        self.assertIn("batch 1/1", written)
+        self.assertIn("no later batches under this manifest", written)
 
     def stale(self, change, restore, error="live evidence differs"):
         self.setUp()

@@ -461,8 +461,11 @@ def execute_plan(command: str, *, project: pm.Project,
             except DispatchError:
                 print("order approval claim completion failed; pending claim is durable",
                       file=sys.stderr)
-        print(f"order plan {where}: FAILED / POSSIBLY PARTIAL; batches {index + 1}–{total} "
-              "stay blocked under this manifest", file=sys.stderr)
+        later = ("no later batches" if index == total
+                 else f"batch {total} stays blocked" if index + 1 == total
+                 else f"batches {index + 1}–{total} stay blocked")
+        print(f"order plan {where}: FAILED / POSSIBLY PARTIAL; {later} under this manifest",
+              file=sys.stderr)
         raise
     for context in held:
         claims.mark(context, "success")
