@@ -173,6 +173,44 @@ class FullPlanTests(unittest.TestCase):
         self.assertEqual(self.fx.api.mutations, [])
         self.assertEqual(self.claims.log[-1], (dispatch.plan_claim(approval, 1), "failure"))
 
+    def test_rank_change_after_project_load_fails_the_check(self):
+        project = self.fx.project()
+        self.fx.api.items["I635"]["values"][ORDER] = 42
+        with (mock.patch.object(dispatch, "publish") as published,
+              self.assertRaisesRegex(t.TriageError, "#635: .* changed since review")):
+            dispatch.run(full_command(self.batches), project=project, read=self.fx.read, env={},
+                         claims=self.claims, budget=self.budget)
+        published.assert_not_called()
+        self.assertEqual((self.fx.api.mutations, self.claims.log), ([], []))
+
+    def test_low_current_quota_waits_before_the_claim_history_scan(self):
+        _, manifest, _ = self.check()
+        quota = {"remaining": 10, "now": 1000.0}
+        history: list[dict] = [{"context": "ci/other", "state": "success"}] * 1100
+
+        def send(url, payload=None):
+            quota["remaining"] -= 1
+            if quota["remaining"] < 0:
+                raise dispatch.DispatchError("order approval claim request failed: HTTPError")
+            if payload is not None:
+                status = json.loads(payload)
+                history.insert(0, status)
+                return status
+            page = int(url.rsplit("page=", 1)[1])
+            return history[(page - 1) * 100:page * 100]
+
+        def sleep(seconds: float) -> None:
+            quota["now"] += seconds
+            quota["remaining"] = 1000
+
+        self.budget = dispatch.GitHubRateBudget("t", clock=lambda: quota["now"], sleep=sleep)
+        self.budget._core = lambda: (1000, quota["remaining"], 1600.0)
+        self.claims = dispatch.GitHubOrderClaims("t", "77")
+        with mock.patch.object(self.claims, "_send", side_effect=send), mock.patch("builtins.print"):
+            outcome, _, _ = self.apply(manifest)
+        self.assertTrue(outcome.startswith("APPLIED"))
+        self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, 4, 5])
+
     def test_stale_later_batch_during_apply_stops_and_reports_the_remainder(self):
         _, manifest, _ = self.check()
         approval = dispatch.manifest_digest(manifest)
@@ -263,7 +301,7 @@ class FullPlanTests(unittest.TestCase):
 
         def wait(cost):
             waits.append(cost)
-            if len(waits) == 6:
+            if len(waits) == 7:
                 self.claims.log.append((dispatch.revoke_claim(approval), "failure"))
 
         self.budget.wait = wait
@@ -337,7 +375,7 @@ class FullPlanTests(unittest.TestCase):
             self.apply(manifest)
         self.assertEqual((self.claims.log, self.fx.api.mutations), ([], []))
         self.budget = FakeBudget()
-        self.budget.fail_wait_after = 4
+        self.budget.fail_wait_after = 5
         with self.assertRaisesRegex(dispatch.DispatchError, "run out before the job deadline"):
             self.apply(manifest)
         self.assertEqual([self.order_of(n) for n in (815, 509, 635)], [3, None, None])

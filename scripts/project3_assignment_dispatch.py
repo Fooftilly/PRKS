@@ -667,6 +667,7 @@ def execute_full(command: str, *, project: pm.Project,
         for rows in batches:
             budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
             plan, digest = _checked_batch(rows, project, read, preflight=False)
+            _fresh_items(plan, project)
             if field not in (None, plan["field"]):
                 raise DispatchError(f"{triage.ORDER_FIELD} field identity changed during the check")
             field = plan["field"]
@@ -691,6 +692,7 @@ def execute_full(command: str, *, project: pm.Project,
         raise DispatchError("order apply refused: no approval claim store")
     budget.require(ORDER_CLAIM_PAGES + issues * (CHECK_COST_PER_ROW + APPLY_COST_PER_ROW)
                    + total * BATCH_OVERHEAD)
+    budget.wait(ORDER_CLAIM_PAGES + 1)
     steps = _plan_sequence(claims, given, approval, 1)
     held: list[str] = []
     done, changed, index, wrote = 0, 0, 1, False
@@ -703,10 +705,10 @@ def execute_full(command: str, *, project: pm.Project,
                 budget.wait(len(rows) * CHECK_COST_PER_ROW + BATCH_OVERHEAD)
                 _fresh_items(_plan_batch(rows, given, n, project, read, preflight=False)[0], project)
             for index, rows in enumerate(batches, start=1):
+                budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
                 if index > 1:
                     held = [steps[index - 1]]
                     claims.mark(held[0], "pending")
-                budget.wait(len(rows) * APPLY_COST_PER_ROW + BATCH_OVERHEAD)
                 if claims.recent(revoke_claim(approval)):
                     raise DispatchError("the maintainer revoked this manifest during the run")
                 plan, digest = _plan_batch(rows, given, index, project, read, preflight=False)
@@ -720,7 +722,8 @@ def execute_full(command: str, *, project: pm.Project,
                 publish([f"batch {index}/{total} verified: "
                          + ", ".join(f"#{row['number']}={row['order']}" for row in rows)])
         except BaseException:
-            _fail(claims, held)
+            # A stop between batches still ends the manifest.
+            _fail(claims, held or steps[done:done + 1])
             state = "FAILED / POSSIBLY PARTIAL" if wrote else "REFUSED before any write in this batch"
             rest = f"; {_later(index, total)} not applied" if index < total else ""
             publish([f"order full plan; manifest digest {approval}: {done} of {total} batches "
