@@ -438,8 +438,14 @@ class RateBudgetTests(unittest.TestCase):
         self.assertEqual(sleeps, [])
 
     def test_no_batch_starts_after_the_deadline(self):
-        budget, _ = self.budget([(1000, 1000, 5000.0)], now=1000.0, seconds=60)
-        budget._clock = lambda: 1061.0
+        clock = {"now": 1000.0}
+        budget = dispatch.GitHubRateBudget("t", seconds=60, clock=lambda: clock["now"])
+
+        def slow_core():
+            clock["now"] = 1061.0
+            return 1000, 1000, 5000.0
+
+        budget._core = slow_core
         with self.assertRaisesRegex(dispatch.DispatchError, "deadline passed"):
             budget.wait(1)
 
