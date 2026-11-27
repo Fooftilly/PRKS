@@ -199,7 +199,8 @@ function implStep(mode, s0, e, C, stats) {
         else s.ledger[s.op.id] = answer.revision;
         break;
     }
-    case 'Discard': s.op = null; s.refused = false; break;
+    /* sync-diagnostics invalidate(): the cached rows and the state projection go. */
+    case 'Discard': s.op = null; s.refused = false; s.cache = null; s.proj = null; break;
     /* set_field keeps the revision when the stored value is unchanged. */
     case 'OtherWrite':
         if (canonical(e.v) === s.history[cur(s)]) stats.hit('other:unchanged');

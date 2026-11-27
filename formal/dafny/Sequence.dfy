@@ -180,7 +180,8 @@ module Sequence {
     case Open => Opened(s)
     case Save(v) => Saved(s, v)
     case Send => Received(s)
-    case Discard => s.(op := None, refused := false)
+    // Diagnostics invalidates the cached rows and the projection the edit overlaid.
+    case Discard => s.(op := None, refused := false, cache := None, proj := None)
     case OtherWrite(v) => if Canonical(v) == s.history[Cur(s)] then s else s.(history := s.history + [Canonical(v)])
     case Deliver => Reconciled(m, s, s.op.value, s.ledger[s.op.value.id]).(op := None)
     case Replay(id) => Reconciled(m, s, s.ops[id], s.ledger[id])
