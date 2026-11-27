@@ -1,6 +1,6 @@
-1.73.0
+1.77.0
 source: https://github.com/lucide-icons/lucide
-npm: lucide@1.73.0
+npm: lucide@1.77.0
 asset: node_modules/lucide/dist/umd/lucide.min.js
-sha256: ed271ffbe31f0905af8a6ef7b45a70831a517a70909795e637135e218a543c5e
+sha256: ba7d3dceda7534309da9eb5e48ec0b2434b4374431bca9772873e76184f8bf7f
 license: ISC
