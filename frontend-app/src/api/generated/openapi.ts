@@ -478,6 +478,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/docs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The API reference page
+         * @description Library owner only.
+         */
+        get: operations["getApiDocs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/folders": {
         parameters: {
             query?: never;
@@ -8236,6 +8256,31 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             413: components["responses"]["RequestTooLarge"];
             415: components["responses"]["UnsupportedMediaType"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getApiDocs: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description An HTML page that renders this document with Swagger UI. */
+            200: {
+                headers: {
+                    /** @description Always no-store. */
+                    "Cache-Control": "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            401: components["responses"]["NotAuthenticated"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["Unavailable"];
         };
     };

@@ -84,4 +84,17 @@ const errorText = computed(() => (query.error.value ? deploymentSettingsErrorMes
       <PrksButton @click="query.refetch()">Try again</PrksButton>
     </div>
   </section>
+  <section
+    v-if="query.data.value"
+    class="prks-settings-section prks-settings-section--sep"
+    aria-labelledby="prks-settings-api-docs-heading"
+  >
+    <PrksSectionHeader id="prks-settings-api-docs-heading">API reference</PrksSectionHeader>
+    <p class="prks-settings-hint">
+      Every PRKS HTTP route, with its parameters, request bodies and replies. Only the Library owner can open it.
+    </p>
+    <p class="prks-settings-hint">
+      <a id="prks-api-docs-link" href="/api/docs" target="_blank" rel="noopener noreferrer">Open the API reference</a>
+    </p>
+  </section>
 </template>

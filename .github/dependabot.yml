@@ -57,7 +57,7 @@ updates:
     cooldown:
       default-days: 7
 
-  # Maintainer-only ordinary frontend vendor pins (DOMPurify, EasyMDE, CodeMirror, Lucide).
+  # Maintainer-only ordinary frontend vendor pins (DOMPurify, EasyMDE, CodeMirror, Lucide, citeproc-js, Swagger UI).
   - package-ecosystem: "npm"
     directory: "/tools/frontend-vendor"
     schedule:

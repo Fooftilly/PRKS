@@ -134,6 +134,8 @@ REGISTERED_VENDOR_RUNTIME_FILES = (
     "cytoscape/cytoscape.min.js",
     "idb/idb.min.js",
     "citeproc/citeproc.js",
+    "swagger-ui/swagger-ui-bundle.js",
+    "swagger-ui/swagger-ui.css",
     *CSL_VENDOR_FILES,
     "prks-pdf-viewer/prks-pdf-viewer.js",
     "prks-pdf-viewer/prks-pdf-viewer.css",
@@ -458,6 +460,12 @@ def validate_frontend_vendor_island(repo_root: Path | None = None) -> GateResult
         ("codemirror", "codemirror", ["codemirror.js", "show-hint.js", "show-hint.css"], None),
         ("lucide", "lucide", ["lucide.min.js"], "sha256"),
         ("citeproc", "citeproc", ["citeproc.js"], "sha256"),
+        (
+            "swagger-ui-dist",
+            "swagger-ui",
+            ["swagger-ui-bundle.js", "swagger-ui-bundle.js.LICENSE.txt", "swagger-ui.css"],
+            None,
+        ),
     ]
     for dep_name, folder, files, primary_sha_key in checks:
         want = deps.get(dep_name)
@@ -667,6 +675,12 @@ def build_dependency_manifest(repo_root: Path | None = None) -> dict[str, Any]:
     )
     add("lucide", fv["lucide"], ["lucide/lucide.min.js"], "npm:tools/frontend-vendor")
     add("citeproc", fv["citeproc"], ["citeproc/citeproc.js"], "npm:tools/frontend-vendor")
+    add(
+        "swagger-ui",
+        fv["swagger-ui-dist"],
+        ["swagger-ui/swagger-ui-bundle.js", "swagger-ui/swagger-ui.css"],
+        "npm:tools/frontend-vendor",
+    )
 
     cy = load_json(root / "tools" / "research-graph" / "package.json")["dependencies"]["cytoscape"]
     add("cytoscape", cy, ["cytoscape/cytoscape.min.js"], "npm:tools/research-graph")

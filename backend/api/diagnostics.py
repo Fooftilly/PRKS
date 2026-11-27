@@ -9,6 +9,8 @@
   only (``backend.runtime.log_safety.client_error_log_fields``).
 - ``GET /api/openapi.json``: the OpenAPI document of the route table
   (``backend.api_contract.openapi``, #1431).
+- ``GET /api/docs``: owner-only API reference page. Swagger UI
+  (``frontend/vendor/swagger-ui/``) renders ``/api/openapi.json``.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import logging
 from typing import Any
 
 from backend.api_contract.openapi import openapi_document
-from backend.api_contract.operation import Operation, Reply, body, error, ok, plain
+from backend.api_contract.operation import NO_STORE, Operation, Reply, body, error, ok, plain
 from backend.api_contract.boundary import dump_response, parse_request
 from backend.api_contract.client_errors import ClientErrorLogged, ClientErrorReport
 from backend.api_contract.jobs import JobDiagnostics
@@ -29,7 +31,7 @@ from backend.api_contract.performance import (
 from backend.runtime.log_safety import client_error_log_fields, format_client_error_log
 from backend.runtime.performance import reset as reset_performance
 from backend.runtime.performance import snapshot as performance_snapshot
-from backend.web.http import Request, Response, error_response, json_response
+from backend.web.http import Request, Response, bytes_response, error_response, json_response
 from backend.web.routing import Route, route
 
 LOGGER = logging.getLogger("prks.server")
@@ -73,6 +75,32 @@ def document(req: Request) -> Response:
     return json_response(req, 200, openapi_document())
 
 
+# The CSP allows no inline script or style, so the page loads its start-up
+# script as a file.
+API_DOCS_PAGE = b"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRKS API reference</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/vendor/swagger-ui/swagger-ui.css">
+<link rel="stylesheet" href="/css/api-docs.css">
+</head>
+<body>
+<main id="prks-api-docs"></main>
+<script src="/vendor/swagger-ui/swagger-ui-bundle.js"></script>
+<script src="/js/api-docs.js"></script>
+</body>
+</html>
+"""
+_HTML = "text/html"
+
+
+def api_docs(req: Request) -> Response:
+    return bytes_response(200, API_DOCS_PAGE, _HTML + "; charset=utf-8", [("Cache-Control", "no-store")])
+
+
 _TAG = "diagnostics"
 
 ROUTES: tuple[Route, ...] = (
@@ -100,4 +128,9 @@ ROUTES: tuple[Route, ...] = (
     route("GET", "/api/openapi.json", document, contract=Operation(
         "getOpenApiDocument", "This OpenAPI document", "meta",
         {200: ok({"type": "object"}, "The OpenAPI 3.1 document of every typed route.")})),
+    route("GET", "/api/docs", api_docs, contract=Operation(
+        "getApiDocs", "The API reference page", "meta",
+        {200: ok({"type": "string"}, "An HTML page that renders this document with Swagger UI.",
+                 media_type=_HTML, headers={"Cache-Control": NO_STORE})},
+        description="Library owner only.")),
 )
