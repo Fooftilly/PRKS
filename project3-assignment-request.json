@@ -1,105 +1,85 @@
 {
   "version": 1,
-  "kind": "implementation-order-plan",
-  "operation": "apply",
-  "manifest": {
-    "schema": "prks-project3-order-manifest/v1",
-    "field": {
-      "name": "Implementation Order",
-      "id": "PVTF_lAHOAsc2_s4BkAo3zhrqP3o"
-    },
-    "batches": [
-      {
-        "digest": "3239b111d51eef4086f82130ae8bac83a41a6b3d966e355376f68e66281d644a",
-        "items": [
-          [
-            689,
-            220
-          ],
-          [
-            403,
-            240
-          ],
-          [
-            601,
-            260
-          ],
-          [
-            558,
-            280
-          ],
-          [
-            559,
-            300
-          ]
-        ]
-      },
-      {
-        "digest": "0d85a0cf54e0d2b86ccd97964f2671797f17630a08032e435740707eef68dc1a",
-        "items": [
-          [
-            1089,
-            320
-          ],
-          [
-            1072,
-            340
-          ],
-          [
-            1475,
-            360
-          ],
-          [
-            66,
-            380
-          ],
-          [
-            721,
-            400
-          ]
-        ]
-      }
-    ]
-  },
-  "batch": 2,
+  "kind": "implementation-order",
+  "operation": "check",
   "items": [
     {
-      "number": 1089,
-      "order": 320,
+      "number": 1425,
+      "order": 420,
       "expected_before": null,
-      "reason": "Candidate pending acceptance: current sync-runtime.js can leave a claimed row syncing after pending-state update failure; coordinate generated queue tests #1465.",
+      "reason": "Verify remaining shared ACK reconciliation acceptance; linked findings are closed. Coordinate #179, #1473 and open proof pilot PR #1484; no duplicate refactor.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1072,
-      "order": 340,
+      "number": 466,
+      "order": 440,
       "expected_before": null,
-      "reason": "Candidate pending acceptance: current sync-runtime.js startup recovery resets syncing rows without a cross-tab lock when deps.lock is absent; coordinate #1465 and #1089.",
+      "reason": "Revalidate remaining reload/tab-close recovery acceptance under #58; prior rechecks retained text, so do not assume current loss.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 1475,
-      "order": 360,
+      "number": 476,
+      "order": 460,
       "expected_before": null,
-      "reason": "Proposed release compatibility design under #616; specify supported disconnected-client upgrades before ledger retention decisions; not implementation approval.",
+      "reason": "Assess remaining cross-tab note ACK ownership under #58/#310 after #1072 and #1425; candidate design, not execution approval.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 66,
-      "order": 380,
+      "number": 609,
+      "order": 480,
       "expected_before": null,
-      "reason": "Candidate research/design: canonical sync contract still defers ledger compaction; sequence after #1475 establishes compatibility and replay limits, preserve exact replay.",
+      "reason": "Revalidate conflict feedback for Research Notes and Reminders under #58; preserve refusal and user intent; coordinate #476.",
       "roadmap_checked": true,
       "overlap_checked": true
     },
     {
-      "number": 721,
-      "order": 400,
+      "number": 758,
+      "order": 500,
       "expected_before": null,
-      "reason": "Storage relocation implementation under #57 and #310; native prerequisite issues #635 and #720 closed; coordinate merged Asset storage and #1463.",
+      "reason": "Revalidate hash-history wrong-Work editing under #58; preserve workspace leave guards; candidate reported on older master.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 843,
+      "order": 520,
+      "expected_before": null,
+      "reason": "Review destructive Folder confirmation for saved Reminders under #57; coordinate #570 and preserve recovery semantics.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 590,
+      "order": 540,
+      "expected_before": null,
+      "reason": "Revalidate dirty metadata and Concept Definition page-leave handling under #58; coordinate shared editor lifecycle with #691/#621.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 691,
+      "order": 560,
+      "expected_before": null,
+      "reason": "Revalidate unsaved annotation comment lifecycle under #39/#58; coordinate #590; saved-comment retry is not the reported defect.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1390,
+      "order": 580,
+      "expected_before": null,
+      "reason": "Revalidate narrow-pane offline note render under #58; wider view retained content, not confirmed data loss.",
+      "roadmap_checked": true,
+      "overlap_checked": true
+    },
+    {
+      "number": 1474,
+      "order": 600,
+      "expected_before": null,
+      "reason": "Design local-only recovery export under #58/#57 after #1475; protect identity, revision, epoch and user intent; candidate.",
       "roadmap_checked": true,
       "overlap_checked": true
     }
