@@ -24,19 +24,17 @@ declare only their own:
 from __future__ import annotations
 
 import functools
-import re
-from typing import Any, Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from pydantic import BaseModel, TypeAdapter
 
 from backend.api_contract.errors import ApiErrorEnvelope
 from backend.api_contract.operation import JSON, Operation, Param, Reply, RequestBody, Schema
 from backend.domain.identity.secret_tokens import SESSION_COOKIE
+from backend.web.routing import compile_pattern
 
 CONTRACT_VERSION = "0.2.0"
 REF = "#/components/schemas/{model}"
-# The router takes any identifier as a parameter name.
-_PATH_PARAMETER = re.compile(r"\{([^\W\d]\w*)(?::path)?\}")
 
 EPOCH_HEADER = "PRKS-Library-Epoch"
 SESSION_SCHEME = "session"
@@ -98,7 +96,12 @@ class _Components:
 
 def openapi_path(pattern: str) -> str:
     """The OpenAPI path of a route pattern: ``{name:path}`` is ``{name}``."""
-    return _PATH_PARAMETER.sub(lambda m: "{" + m.group(1) + "}", pattern)
+    return _template(pattern, lambda name: "{" + name + "}")
+
+
+def _template(pattern: str, parameter: Callable[[str], str]) -> str:
+    return "/" + "/".join(one.literal if one.literal is not None else parameter(one.name)
+                          for one in compile_pattern(pattern))
 
 
 def _content(components: _Components, media_type: str | tuple[str, ...], spec: Schema) -> dict[str, Any]:
@@ -243,13 +246,13 @@ def build_document(routes: Iterable[Any], admission: Iterable[Any] = ()) -> dict
         seen_ids[contract.id] = where
         tags.add(contract.tag)
         path = openapi_path(route.pattern)
-        template = _PATH_PARAMETER.sub("{}", route.pattern)
+        template = _template(route.pattern, lambda _name: "{}")
         if templates.setdefault(template, path) != path:
             raise ValueError(f"{where} uses {path!r}, a template equivalent to {templates[template]!r}")
         item = paths.setdefault(path, {})
         if route.method.lower() in item:
             raise ValueError(f"{where} duplicates an operation at {path!r}")
-        names = _PATH_PARAMETER.findall(route.pattern)
+        names = [one.name for one in compile_pattern(route.pattern) if one.literal is None]
         if names and "parameters" not in item:
             item["parameters"] = [{"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
                                   for n in names]
