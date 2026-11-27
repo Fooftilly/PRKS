@@ -1,23 +1,15 @@
 {
   "version": 1,
-  "operation": "apply",
+  "kind": "implementation-order",
+  "operation": "check",
   "items": [
     {
-      "number": 410,
-      "set": {
-        "Agent": "Unassigned",
-        "Status": "Inbox",
-        "Execution": "Agent"
-      },
-      "expected_before": {
-        "Agent": "ChatGPT/Codex",
-        "Status": "Ready",
-        "Execution": "Agent"
-      },
-      "reason": "Remove visually dependent issue #410 from ChatGPT/Codex Ready queue per maintainer direction: the 30px EasyMDE layout defect requires visual acceptance across routes and light/dark themes, which this executor cannot personally verify. Return to Inbox with no named agent; keep agent execution category for later visual-capable assignment. No code or PostgreSQL cutover changes; reviewed current issue and open PR overlap.",
+      "number": 1473,
+      "order": 20,
+      "expected_before": null,
+      "reason": "First live order-only acceptance probe for #1478; confirmed open stale ACK correctness issue #1473, reviewed #1461 and current open PRs; no native blockers. Provisional first rank, not execution authorization.",
       "roadmap_checked": true,
-      "overlap_checked": true,
-      "allow_reassignment": true
+      "overlap_checked": true
     }
   ]
 }
