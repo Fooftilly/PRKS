@@ -50,7 +50,7 @@ jobs:
       - name: Verify (under 60 s)
         run: |
           start=$(date +%s)
-          "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
+          "$DAFNY" verify --resource-limit "$PRKS_DAFNY_RLIMIT" \
             --log-format "csv;LogFileName=$RUNNER_TEMP/verify.csv" formal/dafny/Reconcile.dfy formal/dafny/Sequence.dfy
           elapsed=$(( $(date +%s) - start ))
           echo "Verification took ${elapsed} s"

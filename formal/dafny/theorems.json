@@ -26,7 +26,7 @@
     },
     "PinKinds": {
       "file": "Reconcile.dfy",
-      "sha256": "7219633a021a5bba81aad8fe661ee3e0b90006c1b54919002a46419401050525"
+      "sha256": "c7ff7629c0c1c01eb6a380ea27c9444a507256f084fa7297b81cf6c783808b38"
     },
     "ReadTaggedPinsAreReadPairs": {
       "file": "Reconcile.dfy",
@@ -46,7 +46,7 @@
     },
     "AcknowledgedPairIsTheWriteAtTheAck": {
       "file": "Reconcile.dfy",
-      "sha256": "371bdfb4988ea151d32d81f429d058b3ee64ee04331c48d1a1e5a6dac2389b55"
+      "sha256": "b694db7bb83fd9205aa8f4b33160b8a0dcba74b05b2ec34a7d5fa1857fc73d7f"
     },
     "InvInit": {
       "file": "Sequence.dfy",

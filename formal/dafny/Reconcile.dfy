@@ -116,12 +116,12 @@ module Reconcile {
     ensures var (pin, tag) := PinField(shown, entry, own);
       (pin.None? <==> tag == Unknown) &&
       (tag == ReadPair ==> entry.Ok? && own.NoOwn? && pin == Some(Base(shown, entry.revision, None, None, None))) &&
-      (tag == MaxRead ==> entry.Ok? && own.Own? && own.value == shown && entry.value == shown &&
-        entry.revision >= own.revision && pin == Some(Base(shown, entry.revision, None, own.pendingOp, None))) &&
-      (tag == MaxWrite ==> entry.Ok? && own.Own? && own.value == shown && entry.value == shown &&
-        own.revision > entry.revision && pin == Some(Base(shown, own.revision, None, own.pendingOp, None))) &&
-      (tag == WriteBase ==> entry.Ok? && own.Own? && own.value == shown && entry.value != shown &&
-        entry.revision == own.revision && pin == Some(Base(entry.value, entry.revision, Some(shown), own.pendingOp, None)))
+      (tag == MaxRead ==> (entry.Ok? && own.Own? && own.value == shown && entry.value == shown &&
+        entry.revision >= own.revision && pin == Some(Base(shown, entry.revision, None, own.pendingOp, None)))) &&
+      (tag == MaxWrite ==> (entry.Ok? && own.Own? && own.value == shown && entry.value == shown &&
+        own.revision > entry.revision && pin == Some(Base(shown, own.revision, None, own.pendingOp, None)))) &&
+      (tag == WriteBase ==> (entry.Ok? && own.Own? && own.value == shown && entry.value != shown &&
+        entry.revision == own.revision && pin == Some(Base(entry.value, entry.revision, Some(shown), own.pendingOp, None))))
   {}
 
   // A read-tagged pin is a pair the read held. A MaxWrite pin is not.
@@ -190,9 +190,9 @@ module Reconcile {
   lemma AcknowledgedPairIsTheWriteAtTheAck<V>(entry: Entry<V>, value: V, baseRevision: Rev, ackRevision: nat)
     ensures var got := AcknowledgeEditBase(entry, value, baseRevision, ackRevision);
       (got.Keep? <==> entry.Ok? && (entry.revision > ackRevision || (entry.revision == ackRevision && entry.ackOp.Some?))) &&
-      (got.Pair? ==> entry.Ok? && got.revision == ackRevision &&
+      (got.Pair? ==> (entry.Ok? && got.revision == ackRevision &&
         (entry.revision == ackRevision ==> got.value == entry.value) &&
-        (entry.revision < ackRevision ==> got.value == value && baseRevision == Valid(entry.revision))) &&
+        (entry.revision < ackRevision ==> got.value == value && baseRevision == Valid(entry.revision)))) &&
       (got.Clear? ==> entry.Broken? || (entry.revision < ackRevision && baseRevision != Valid(entry.revision)))
   {}
 }
