@@ -1,87 +1,171 @@
 {
   "version": 1,
-  "kind": "implementation-order",
+  "kind": "implementation-order-full-plan",
   "operation": "check",
-  "items": [
-    {
-      "number": 1388,
-      "order": 620,
-      "expected_before": null,
-      "reason": "Revalidate note-specific saved feedback after reconnect under #58; reported content persisted; coordinate #609.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 1391,
-      "order": 640,
-      "expected_before": null,
-      "reason": "Revalidate first-preview Concept links under #50/#58; reported backend indexing succeeded; avoid duplicate indexing fixes.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 570,
-      "order": 660,
-      "expected_before": null,
-      "reason": "Review confirmed Folder deletion recovery cleanup under #57/#58; preserve pending/refused drafts and account identity.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 483,
-      "order": 680,
-      "expected_before": null,
-      "reason": "Revalidate per-section metadata save feedback under #58; coordinate #590 and existing Work editor ownership.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 400,
-      "order": 700,
-      "expected_before": null,
-      "reason": "Revalidate Playlist editor Done and dirty leave guard under #58; coordinate #403 and #436.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 607,
-      "order": 720,
-      "expected_before": null,
-      "reason": "Revalidate Concept Definition discard and save shortcuts under #50/#58; coordinate #590.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 621,
-      "order": 740,
-      "expected_before": null,
-      "reason": "Verify PostgreSQL Processing draft reload behavior under #40/#58; existing in-app guard is not the defect.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 842,
-      "order": 760,
-      "expected_before": null,
-      "reason": "Review destructive confirmation focus under #58 and DESIGN; coordinate #154 and #274.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 274,
-      "order": 780,
-      "expected_before": null,
-      "reason": "Revalidate workspace leave decision serialization under #58/#179; coordinate #1371 and #758.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    },
-    {
-      "number": 371,
-      "order": 800,
-      "expected_before": null,
-      "reason": "Revalidate unknown-route snapshot preservation under #58; coordinate #758 and #1371.",
-      "roadmap_checked": true,
-      "overlap_checked": true
-    }
+  "batches": [
+    [
+      {
+        "number": 1425,
+        "order": 420,
+        "expected_before": null,
+        "reason": "Verify remaining shared ACK reconciliation acceptance; linked findings are closed. Coordinate #179, #1473 and open proof pilot PR #1484; no duplicate refactor.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 466,
+        "order": 440,
+        "expected_before": null,
+        "reason": "Revalidate remaining reload/tab-close recovery acceptance under #58; prior rechecks retained text, so do not assume current loss.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 476,
+        "order": 460,
+        "expected_before": null,
+        "reason": "Assess remaining cross-tab note ACK ownership under #58/#310 after #1072 and #1425; candidate design, not execution approval.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 609,
+        "order": 480,
+        "expected_before": null,
+        "reason": "Revalidate conflict feedback for Research Notes and Reminders under #58; preserve refusal and user intent; coordinate #476.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 758,
+        "order": 500,
+        "expected_before": null,
+        "reason": "Revalidate hash-history wrong-Work editing under #58; preserve workspace leave guards; candidate reported on older master.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 843,
+        "order": 520,
+        "expected_before": null,
+        "reason": "Review destructive Folder confirmation for saved Reminders under #57; coordinate #570 and preserve recovery semantics.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 590,
+        "order": 540,
+        "expected_before": null,
+        "reason": "Revalidate dirty metadata and Concept Definition page-leave handling under #58; coordinate shared editor lifecycle with #691/#621.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 691,
+        "order": 560,
+        "expected_before": null,
+        "reason": "Revalidate unsaved annotation comment lifecycle under #39/#58; coordinate #590; saved-comment retry is not the reported defect.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1390,
+        "order": 580,
+        "expected_before": null,
+        "reason": "Revalidate narrow-pane offline note render under #58; wider view retained content, not confirmed data loss.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1474,
+        "order": 600,
+        "expected_before": null,
+        "reason": "Design local-only recovery export under #58/#57 after #1475; protect identity, revision, epoch and user intent; candidate.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      }
+    ],
+    [
+      {
+        "number": 1388,
+        "order": 620,
+        "expected_before": null,
+        "reason": "Revalidate note-specific saved feedback after reconnect under #58; reported content persisted; coordinate #609.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1391,
+        "order": 640,
+        "expected_before": null,
+        "reason": "Revalidate first-preview Concept links under #50/#58; reported backend indexing succeeded; avoid duplicate indexing fixes.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 570,
+        "order": 660,
+        "expected_before": null,
+        "reason": "Review confirmed Folder deletion recovery cleanup under #57/#58; preserve pending/refused drafts and account identity.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 483,
+        "order": 680,
+        "expected_before": null,
+        "reason": "Revalidate per-section metadata save feedback under #58; coordinate #590 and existing Work editor ownership.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 400,
+        "order": 700,
+        "expected_before": null,
+        "reason": "Revalidate Playlist editor Done and dirty leave guard under #58; coordinate #403 and #436.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 607,
+        "order": 720,
+        "expected_before": null,
+        "reason": "Revalidate Concept Definition discard and save shortcuts under #50/#58; coordinate #590.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 621,
+        "order": 740,
+        "expected_before": null,
+        "reason": "Verify PostgreSQL Processing draft reload behavior under #40/#58; existing in-app guard is not the defect.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 842,
+        "order": 760,
+        "expected_before": null,
+        "reason": "Review destructive confirmation focus under #58 and DESIGN; coordinate #154 and #274.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 274,
+        "order": 780,
+        "expected_before": null,
+        "reason": "Revalidate workspace leave decision serialization under #58/#179; coordinate #1371 and #758.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 371,
+        "order": 800,
+        "expected_before": null,
+        "reason": "Revalidate unknown-route snapshot preservation under #58; coordinate #758 and #1371.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      }
+    ]
   ]
 }
