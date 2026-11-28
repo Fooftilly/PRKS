@@ -1,270 +1,417 @@
 {
   "version": 1,
   "kind": "implementation-order-full-plan",
-  "operation": "apply",
+  "operation": "check",
   "batches": [
     [
       {
-        "number": 1425,
-        "order": 420,
+        "number": 773,
+        "order": 820,
         "expected_before": null,
-        "reason": "Verify remaining shared ACK reconciliation acceptance; linked findings are closed. Coordinate #179, #1473 and open proof pilot PR #1484; no duplicate refactor.",
+        "reason": "Revalidate accidental double-click deletion of annotation and comment; coordinate #39/#57 and safe confirmation focus #842.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 466,
-        "order": 440,
+        "number": 35,
+        "order": 840,
         "expected_before": null,
-        "reason": "Revalidate remaining reload/tab-close recovery acceptance under #58; prior rechecks retained text, so do not assume current loss.",
+        "reason": "Accepted Work deletion recoverability design input to #57; sequence recovery model before UI affordance, not independent trash system.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 476,
-        "order": 460,
+        "number": 370,
+        "order": 860,
         "expected_before": null,
-        "reason": "Assess remaining cross-tab note ACK ownership under #58/#310 after #1072 and #1425; candidate design, not execution approval.",
+        "reason": "Triage refused creates and mutations as false success across entity families under #58/#616; coordinate specific refusal issues.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 609,
-        "order": 480,
+        "number": 657,
+        "order": 880,
         "expected_before": null,
-        "reason": "Revalidate conflict feedback for Research Notes and Reminders under #58; preserve refusal and user intent; coordinate #476.",
+        "reason": "Revalidate Concept/Argument deletion refusal feedback under #50/#58; preserve canonical reference integrity and coordinate #370.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 758,
-        "order": 500,
+        "number": 661,
+        "order": 900,
         "expected_before": null,
-        "reason": "Revalidate hash-history wrong-Work editing under #58; preserve workspace leave guards; candidate reported on older master.",
+        "reason": "Revalidate refused duplicate Concept/Group rename feedback and recovery under #58; coordinate #370/#1470.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 843,
-        "order": 520,
+        "number": 622,
+        "order": 920,
         "expected_before": null,
-        "reason": "Review destructive Folder confirmation for saved Reminders under #57; coordinate #570 and preserve recovery semantics.",
+        "reason": "Revalidate deleted Playlist 404 versus offline refusal; coordinate authoritative cache retirement #644 and Playlist base ownership.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 590,
-        "order": 540,
+        "number": 1470,
+        "order": 940,
         "expected_before": null,
-        "reason": "Revalidate dirty metadata and Concept Definition page-leave handling under #58; coordinate shared editor lifecycle with #691/#621.",
+        "reason": "Person Group inline save refusal feedback under shared editor ownership #58; coordinate #370/#661 and DESIGN.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 691,
-        "order": 560,
+        "number": 561,
+        "order": 960,
         "expected_before": null,
-        "reason": "Revalidate unsaved annotation comment lifecycle under #39/#58; coordinate #590; saved-comment retry is not the reported defect.",
+        "reason": "Verify residual Folder Reminders ACK regression after shared reconciliation #1425; close if already covered, no parallel core.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 1390,
-        "order": 580,
+        "number": 826,
+        "order": 980,
         "expected_before": null,
-        "reason": "Revalidate narrow-pane offline note render under #58; wider view retained content, not confirmed data loss.",
+        "reason": "Revalidate WORK_MERGED terminal settlement under #60/#58 before exposing merge workflow; preserve ledger replay.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 1474,
-        "order": 600,
+        "number": 916,
+        "order": 1000,
         "expected_before": null,
-        "reason": "Design local-only recovery export under #58/#57 after #1475; protect identity, revision, epoch and user intent; candidate.",
+        "reason": "Revalidate PostgreSQL duplicate CREATE_WORK convergence after filing targets disappear under #60/#58; no SQLite work.",
         "roadmap_checked": true,
         "overlap_checked": true
       }
     ],
     [
       {
-        "number": 1388,
-        "order": 620,
+        "number": 1486,
+        "order": 1010,
         "expected_before": null,
-        "reason": "Revalidate note-specific saved feedback after reconnect under #58; reported content persisted; coordinate #609.",
+        "reason": "New candidate: verify unrelated pending Concept parent intent survives deleting another parent; coordinate #50/#58 and queue sequence tests #1465.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 1391,
-        "order": 640,
+        "number": 1104,
+        "order": 1020,
         "expected_before": null,
-        "reason": "Revalidate first-preview Concept links under #50/#58; reported backend indexing succeeded; avoid duplicate indexing fixes.",
+        "reason": "Revalidate pending Playlist membership removal against effective state under #58; coordinate #1465.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 570,
-        "order": 660,
+        "number": 1103,
+        "order": 1040,
         "expected_before": null,
-        "reason": "Review confirmed Folder deletion recovery cleanup under #57/#58; preserve pending/refused drafts and account identity.",
+        "reason": "Revalidate cyclic effective Folder moves without hiding entities under #58; coordinate #539 and pending overlay tests.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 483,
-        "order": 680,
+        "number": 1097,
+        "order": 1060,
         "expected_before": null,
-        "reason": "Revalidate per-section metadata save feedback under #58; coordinate #590 and existing Work editor ownership.",
+        "reason": "Revalidate cached annotation base hydration on failed snapshot read under #39/#58; coordinate #646 and #1425.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 400,
-        "order": 700,
+        "number": 1061,
+        "order": 1080,
         "expected_before": null,
-        "reason": "Revalidate Playlist editor Done and dirty leave guard under #58; coordinate #403 and #436.",
+        "reason": "Revalidate pending Work roles hydration in browse surfaces under #58; preserve canonical versus effective state.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 607,
-        "order": 720,
+        "number": 1065,
+        "order": 1100,
         "expected_before": null,
-        "reason": "Revalidate Concept Definition discard and save shortcuts under #50/#58; coordinate #590.",
+        "reason": "Revalidate pending Folder rename overlay in Work details under #58; coordinate #1103.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 621,
-        "order": 740,
+        "number": 816,
+        "order": 1120,
         "expected_before": null,
-        "reason": "Verify PostgreSQL Processing draft reload behavior under #40/#58; existing in-app guard is not the defect.",
+        "reason": "Revalidate duplicate conflict-resolution clicks and misleading error under #58; coordinate #609 and preserve single intent.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 842,
-        "order": 760,
+        "number": 572,
+        "order": 1140,
         "expected_before": null,
-        "reason": "Review destructive confirmation focus under #58 and DESIGN; coordinate #154 and #274.",
+        "reason": "Revalidate offline Concept editing and related Group base availability under #58; coordinate #1425/#1097.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 274,
-        "order": 780,
+        "number": 1476,
+        "order": 1160,
         "expected_before": null,
-        "reason": "Revalidate workspace leave decision serialization under #58/#179; coordinate #1371 and #758.",
+        "reason": "Research only: compare bounded three-way note merge after conflict and recovery review #609/#466; preserve revision and ledger contracts.",
         "roadmap_checked": true,
         "overlap_checked": true
       },
       {
-        "number": 371,
-        "order": 800,
+        "number": 510,
+        "order": 1180,
         "expected_before": null,
-        "reason": "Revalidate unknown-route snapshot preservation under #58; coordinate #758 and #1371.",
+        "reason": "Revalidate retry-backoff starvation in shared sync drainer under #58; coordinate #512/#1465.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      }
+    ],
+    [
+      {
+        "number": 512,
+        "order": 1200,
+        "expected_before": null,
+        "reason": "Revalidate lost wake notifications in shared drainer under #58; coordinate #510/#1465.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 822,
+        "order": 1220,
+        "expected_before": null,
+        "reason": "Assess remaining mutation-lane stall only; read lane fixed by #824. Preserve uncertain write safety under #179/#58.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 426,
+        "order": 1240,
+        "expected_before": null,
+        "reason": "Revalidate mutation outcome independent of cache refetch under #179/#40; coordinate request-lane #822.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 514,
+        "order": 1260,
+        "expected_before": null,
+        "reason": "Revalidate durable invalidation across reload under #58; coordinate #644/#645/#646 and keep disposable cache separate.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 527,
+        "order": 1280,
+        "expected_before": null,
+        "reason": "Revalidate cache clear false-success handling under #58; coordinate #514 and durable reset #558.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 644,
+        "order": 1300,
+        "expected_before": null,
+        "reason": "Revalidate authoritative 404 cache retirement under #58; coordinate #514/#622.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 645,
+        "order": 1320,
+        "expected_before": null,
+        "reason": "Revalidate invalidation fence after awaited fallback read under #58; coordinate #514/#644.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 646,
+        "order": 1340,
+        "expected_before": null,
+        "reason": "Revalidate annotation-base peek bypass of invalidation under #39/#58; coordinate #645/#1097.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 560,
+        "order": 1360,
+        "expected_before": null,
+        "reason": "Revalidate transient blocked disposable IndexedDB upgrade recovery under #58; distinct from durable reset #558.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 701,
+        "order": 1380,
+        "expected_before": null,
+        "reason": "Revalidate denied theme-storage reads at startup under #179/#58; coordinate fail-soft localStorage ownership.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      }
+    ],
+    [
+      {
+        "number": 700,
+        "order": 1400,
+        "expected_before": null,
+        "reason": "Revalidate workspace persistence recovery after transient storage error under #58; coordinate #1371/#701.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 702,
+        "order": 1420,
+        "expected_before": null,
+        "reason": "Revalidate denied layout storage skipping note initialization under #58; coordinate #1390/#701.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 791,
+        "order": 1440,
+        "expected_before": null,
+        "reason": "Revalidate non-PDF cache response replacing valid PDF under #39/#58; coordinate service-worker cache validation #792.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 792,
+        "order": 1460,
+        "expected_before": null,
+        "reason": "Revalidate HTML fallback acceptance for required static resources under #58/#179; coordinate #791/#793.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 793,
+        "order": 1480,
+        "expected_before": null,
+        "reason": "Revalidate partial service-worker activation cache publication under #58/#179; preserve working offline shell.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 794,
+        "order": 1500,
+        "expected_before": null,
+        "reason": "Revalidate detached service-worker cache writes under #58; coordinate #793 without guaranteeing background delivery.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 813,
+        "order": 1520,
+        "expected_before": null,
+        "reason": "Revalidate online request survival when optional CacheStorage fails under #58; coordinate #791–#794.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 460,
+        "order": 1540,
+        "expected_before": null,
+        "reason": "Revalidate lazy video Work dependency availability offline under #58; coordinate current service-worker precache and packaging.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 523,
+        "order": 1560,
+        "expected_before": null,
+        "reason": "Revalidate offline PDF Range semantics and bounded memory under #39/#58; coordinate #520.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 544,
+        "order": 1580,
+        "expected_before": null,
+        "reason": "Revalidate Vue response-body transport failure classification under #179/#58; coordinate #559/#822.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      }
+    ],
+    [
+      {
+        "number": 814,
+        "order": 1600,
+        "expected_before": null,
+        "reason": "Revalidate PostgreSQL job reaping/pruning under sustained queue load under #310; preserve queue leases and retries.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1070,
+        "order": 1620,
+        "expected_before": null,
+        "reason": "Revalidate per-object stat failure isolation in PostgreSQL orphan sweeps under #57/#310; coordinate Asset invariants #1463.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1050,
+        "order": 1640,
+        "expected_before": null,
+        "reason": "Revalidate PostgreSQL Processing batch import per-item failure isolation under #40/#310; preserve independent commits.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 970,
+        "order": 1660,
+        "expected_before": null,
+        "reason": "Revalidate bounded performance route cardinality under concurrent completion; coordinate backend architecture #179.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 1370,
+        "order": 1680,
+        "expected_before": null,
+        "reason": "Revalidate source-qualified thumbnail cleanup under #57/#310; coordinate #1463 and current Asset naming.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 934,
+        "order": 1700,
+        "expected_before": null,
+        "reason": "Revalidate managed PDF extraction freshness under same-size/time replacement; coordinate #57/#60 and Asset identity.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 519,
+        "order": 1720,
+        "expected_before": null,
+        "reason": "Revalidate PDF thumbnail browser freshness after replacement under #39/#60; coordinate #1370/#934.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 520,
+        "order": 1740,
+        "expected_before": null,
+        "reason": "Revalidate stable managed PDF Range headers and bytes under #39/#310 on current ASGI/Asset implementation, not retired server.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 530,
+        "order": 1760,
+        "expected_before": null,
+        "reason": "Revalidate legacy annotation-author setting migration under #39; consider prerelease compatibility policy #616 before implementing.",
+        "roadmap_checked": true,
+        "overlap_checked": true
+      },
+      {
+        "number": 539,
+        "order": 1780,
+        "expected_before": null,
+        "reason": "Revalidate cyclic pending Person Group hierarchy under #58; coordinate #1103 and shared overlay tests #1465.",
         "roadmap_checked": true,
         "overlap_checked": true
       }
     ]
-  ],
-  "manifest": {
-    "batches": [
-      {
-        "digest": "703d5c3e74f7333cb89222627abc6fd1ac69b15d4e3f21c621f561d5e26e26e0",
-        "items": [
-          [
-            1425,
-            420
-          ],
-          [
-            466,
-            440
-          ],
-          [
-            476,
-            460
-          ],
-          [
-            609,
-            480
-          ],
-          [
-            758,
-            500
-          ],
-          [
-            843,
-            520
-          ],
-          [
-            590,
-            540
-          ],
-          [
-            691,
-            560
-          ],
-          [
-            1390,
-            580
-          ],
-          [
-            1474,
-            600
-          ]
-        ]
-      },
-      {
-        "digest": "83512eaf45d58011a5ad28e77da9462f8c51df23ede789918deccc2180e7b644",
-        "items": [
-          [
-            1388,
-            620
-          ],
-          [
-            1391,
-            640
-          ],
-          [
-            570,
-            660
-          ],
-          [
-            483,
-            680
-          ],
-          [
-            400,
-            700
-          ],
-          [
-            607,
-            720
-          ],
-          [
-            621,
-            740
-          ],
-          [
-            842,
-            760
-          ],
-          [
-            274,
-            780
-          ],
-          [
-            371,
-            800
-          ]
-        ]
-      }
-    ],
-    "field": {
-      "id": "PVTF_lAHOAsc2_s4BkAo3zhrqP3o",
-      "name": "Implementation Order"
-    },
-    "schema": "prks-project3-order-manifest/v1"
-  }
+  ]
 }
