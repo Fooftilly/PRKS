@@ -19,6 +19,7 @@ on:
       - Mutation testing (advisory)
       - E2E coverage map (advisory)
       - E2E selection accuracy (advisory)
+      - Advisory Dafny pilot
     types: [completed]
 
 permissions:

@@ -2,15 +2,11 @@ name: Advisory Dafny pilot
 
 # The #1472 research pilot: proofs of the reconcile model (formal/dafny),
 # the required-theorem manifest and the mutant set. Advisory: not a required
-# check. Runs on a push that touches the model, because a workflow_dispatch
-# file must exist on the default branch first.
+# check. scheduled-report.yml opens an issue when a scheduled run fails.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/formal-dafny.yml"
-      - "formal/dafny/**"
-      - "scripts/formal/**"
+  schedule:
+    - cron: "29 5 * * 0"
 
 permissions:
   contents: read
