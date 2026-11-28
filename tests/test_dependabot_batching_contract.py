@@ -16,6 +16,7 @@ ECOSYSTEMS = {
     ("npm", "/tools/research-graph"),
     ("npm", "/tools/frontend-vendor"),
     ("npm", "/frontend-app"),
+    ("npm", "/scripts/formal/difftest"),
     ("docker", "/"),
     ("github-actions", "/"),
 }

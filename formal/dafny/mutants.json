@@ -1,0 +1,135 @@
+[
+  {
+    "group": "function",
+    "name": "constant unproven",
+    "file": "Reconcile.dfy",
+    "from": "    else DecideAck(Evidence(e.ack, Absent, e.observed, e.created, false))",
+    "to": "    else Return(Unproven)"
+  },
+  {
+    "group": "function",
+    "name": "<= for <",
+    "file": "Reconcile.dfy",
+    "from": "observed.t < created.t",
+    "to": "observed.t <= created.t"
+  },
+  {
+    "group": "function",
+    "name": "sibling revision proves apply",
+    "file": "Reconcile.dfy",
+    "from": "    else if e.agrees then Return(Unchanged)\n    else DecideAck",
+    "to": "    else if e.held.Present? && e.held.r.Valid? && e.ack.Valid? then Return(Apply)\n    else if e.agrees then Return(Unchanged)\n    else DecideAck"
+  },
+  {
+    "group": "function",
+    "name": "planAck validates nothing",
+    "file": "Reconcile.dfy",
+    "from": ".Throws? then Throws",
+    "to": ".Throws? then Return(Unproven)"
+  },
+  {
+    "group": "function",
+    "name": "max case keeps entry.revision",
+    "file": "Reconcile.dfy",
+    "from": "own.revision, None, own.pendingOp, None)), MaxWrite)",
+    "to": "entry.revision, None, own.pendingOp, None)), MaxWrite)"
+  },
+  {
+    "group": "function",
+    "name": "max case keeps own.revision",
+    "file": "Reconcile.dfy",
+    "from": "entry.revision, None, own.pendingOp, None)), MaxRead)",
+    "to": "own.revision, None, own.pendingOp, None)), MaxRead)"
+  },
+  {
+    "group": "function",
+    "name": "pinEditBase drops pendingOp",
+    "file": "Reconcile.dfy",
+    "from": "own.pendingOp, None)), MaxRead)",
+    "to": "None, None)), MaxRead)"
+  },
+  {
+    "group": "function",
+    "name": "stamp replaced at equal revisions",
+    "file": "Reconcile.dfy",
+    "from": "then read.(ackOp := held.ackOp)",
+    "to": "then read"
+  },
+  {
+    "group": "function",
+    "name": "acknowledged stamp replaced",
+    "file": "Reconcile.dfy",
+    "from": "if entry.ackOp.Some? then Keep else Pair(entry.value, entry.revision)",
+    "to": "Pair(entry.value, entry.revision)"
+  },
+  {
+    "group": "model",
+    "name": "M1 without O1 (clock steps)",
+    "file": "Sequence.dfy",
+    "from": "case ClockStep(_) => m == M0",
+    "to": "case ClockStep(_) => true"
+  },
+  {
+    "group": "model",
+    "name": "M1 without O2 (second sender)",
+    "file": "Sequence.dfy",
+    "from": "case Replay(id) => m == M0 &&",
+    "to": "case Replay(id) => true &&"
+  },
+  {
+    "group": "model",
+    "name": "M1 with raw-payload stamps",
+    "file": "Sequence.dfy",
+    "from": "{ if m == M0 then v else Canonical(v) }",
+    "to": "{ v }"
+  },
+  {
+    "group": "model",
+    "name": "ACK applied without proof",
+    "file": "Sequence.dfy",
+    "from": "if plan == Return(Apply) then",
+    "to": "if plan == Return(Apply) || plan == Return(Unproven) then"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "Save measured against the current edit base",
+    "from": "Created(s, v, q.0.revision, q.1)",
+    "to": "Created(s, v, if s.editBase.Ok? then s.editBase.revision else q.0.revision, if s.editBase.Ok? then s.editBase.value else q.1)"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "stale convergent write refused",
+    "from": "    if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])\n    else if o.base != Cur(s) then s.(refused := true)",
+    "to": "    if o.base != Cur(s) then s.(refused := true)\n    else if Canonical(o.value) == s.history[Cur(s)] then s.(ledger := s.ledger[o.id := Cur(s)])"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "a revert to the pin queues a write",
+    "from": "if v == q.0.value && s.op.Some? then",
+    "to": "if false then"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "pin not settled after its edit syncs",
+    "from": "    then (Base(p.pending.value, s.editBase.revision, None, None, None), s.editBase.value)\n    else (p, f.origin)",
+    "to": "    then (p, f.origin)\n    else (p, f.origin)"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "unchanged other-device write advances the revision",
+    "from": "case OtherWrite(v) => if Canonical(v) == s.history[Cur(s)] then s else",
+    "to": "case OtherWrite(v) => if false then s else"
+  },
+  {
+    "group": "model",
+    "file": "Sequence.dfy",
+    "name": "reload keeps the Edit form",
+    "from": "case Reload => s.(form := None)",
+    "to": "case Reload => s"
+  }
+]

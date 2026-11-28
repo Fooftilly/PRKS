@@ -1,0 +1,108 @@
+name: Advisory Dafny pilot
+
+# The #1472 research pilot: proofs of the reconcile model (formal/dafny),
+# the required-theorem manifest and the mutant set. Advisory: not a required
+# check. Runs on a push that touches the model, because a workflow_dispatch
+# file must exist on the default branch first.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/formal-dafny.yml"
+      - "formal/dafny/**"
+      - "scripts/formal/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: formal-dafny-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DAFNY_VERSION: "4.11.0"
+  DAFNY_SHA256: a46a9ff7cdd720f7955854c78e95df13f4cfe6b80691b05f8654fe19e8267179
+  PRKS_DAFNY_RLIMIT: "10000000"
+
+jobs:
+  verify:
+    name: Dafny proofs, manifest and mutants (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Dafny
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL -o "$RUNNER_TEMP/dafny.zip" \
+            "https://github.com/dafny-lang/dafny/releases/download/v${DAFNY_VERSION}/dafny-${DAFNY_VERSION}-x64-ubuntu-22.04.zip"
+          echo "${DAFNY_SHA256}  $RUNNER_TEMP/dafny.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/dafny.zip" -d "$RUNNER_TEMP"
+          echo "DAFNY=$RUNNER_TEMP/dafny/dafny" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/dafny/dafny" --version
+
+      - name: Required-theorem manifest
+        run: python3 scripts/formal/dafny_theorems.py
+
+      - name: Verify (under 60 s)
+        run: |
+          start=$(date +%s)
+          "$DAFNY" verify --resource-limit "$PRKS_DAFNY_RLIMIT" \
+            --log-format "csv;LogFileName=$RUNNER_TEMP/verify.csv" formal/dafny/Reconcile.dfy formal/dafny/Sequence.dfy
+          elapsed=$(( $(date +%s) - start ))
+          echo "Verification took ${elapsed} s"
+          echo "Verification took ${elapsed} s" >> "$GITHUB_STEP_SUMMARY"
+          test "$elapsed" -lt 60
+
+      - name: Every required lemma verified
+        run: python3 scripts/formal/dafny_theorems.py --verified "$RUNNER_TEMP/verify.csv"
+
+      - name: Resource use per proof
+        if: always()
+        run: |
+          test -f "$RUNNER_TEMP/verify.csv" || exit 0
+          set -o pipefail
+          python3 scripts/formal/dafny_resources.py "$RUNNER_TEMP/verify.csv" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Stable across 3 solver seeds
+        run: |
+          for seed in 1 2 3; do
+            "$DAFNY" verify --allow-warnings --resource-limit "$PRKS_DAFNY_RLIMIT" \
+              --boogie "-randomSeed:${seed}" formal/dafny/Reconcile.dfy formal/dafny/Sequence.dfy
+          done
+
+      - name: Mutants
+        run: |
+          set -o pipefail
+          python3 scripts/formal/dafny_mutants.py | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Compile the model to JS
+        id: compile
+        if: always()
+        run: |
+          "$DAFNY" translate js --no-verify --include-runtime --output "$RUNNER_TEMP/model/model" formal/dafny/Sequence.dfy
+          echo "generated=$(find "$RUNNER_TEMP/model" -name '*.js' | head -n 1)" >> "$GITHUB_OUTPUT"
+          npm ci --ignore-scripts --no-audit --no-fund --prefix scripts/formal/difftest
+
+      - name: Keep the compiled model
+        if: always() && steps.compile.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dafny-model-js
+          path: ${{ runner.temp }}/model
+          retention-days: 7
+
+      - name: Differential test against sync-reconcile.js
+        if: always() && steps.compile.outcome == 'success'
+        env:
+          GENERATED: ${{ steps.compile.outputs.generated }}
+        run: node scripts/formal/dafny_differential.cjs "$GENERATED" scripts/formal/difftest/node_modules
+
+      - name: Bounded sequences against sync-reconcile.js
+        if: always() && steps.compile.outcome == 'success'
+        env:
+          GENERATED: ${{ steps.compile.outputs.generated }}
+        run: node scripts/formal/dafny_sequences.cjs "$GENERATED" scripts/formal/difftest/node_modules
