@@ -2,8 +2,9 @@
 
 Each mutant is one exact text edit of a model file. An edit that does not
 match exactly once is an error, so a model change cannot silently disarm it.
-A mutant is killed only by a proof failure. A run out of resource, timed out
-or stopped before verification is inconclusive and fails the harness.
+A mutant is killed only by a proof failure. A run with no proof failure that
+ran out of resource, timed out or stopped before verification is inconclusive
+and fails the harness.
 """
 
 from __future__ import annotations
@@ -47,9 +48,9 @@ def classify(returncode: int, output: str) -> str:
     found = SUMMARY.search(output)
     if returncode != VERIFICATION_ERROR or found is None:
         return "inconclusive"
-    if int(found.group(1)) == 0 or found.group(2).strip():
-        return "inconclusive"
-    return "killed"
+    # Dafny counts resource and time-out failures apart from errors, so one
+    # error is a proof failure even when another lemma ran out of resource.
+    return "killed" if int(found.group(1)) > 0 else "inconclusive"
 
 
 def prepared(directory: Path, mutant: dict[str, str] | None) -> bool:

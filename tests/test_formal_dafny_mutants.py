@@ -31,11 +31,13 @@ class ClassifyTest(unittest.TestCase):
     def test_resource_exhaustion_is_inconclusive(self) -> None:
         out = "Dafny program verifier finished with 79 verified, 0 errors, 2 out of resource\n"
         self.assertEqual(mutants.classify(4, out), "inconclusive")
+
+    def test_a_proof_failure_beside_resource_exhaustion_kills(self) -> None:
         out = "Dafny program verifier finished with 78 verified, 1 error, 2 out of resource\n"
-        self.assertEqual(mutants.classify(4, out), "inconclusive")
+        self.assertEqual(mutants.classify(4, out), "killed")
 
     def test_a_time_out_is_inconclusive(self) -> None:
-        out = "Dafny program verifier finished with 79 verified, 1 error, 1 time out\n"
+        out = "Dafny program verifier finished with 79 verified, 0 errors, 1 time out\n"
         self.assertEqual(mutants.classify(4, out), "inconclusive")
 
     def test_a_resolution_error_is_inconclusive(self) -> None:

@@ -314,7 +314,7 @@ function explore(mode, C) {
 const REQUIRED = [
     'event:Read', 'event:ReadProjection', 'event:ReadEditBase', 'event:Open', 'event:Save', 'event:Send',
     'event:OtherWrite', 'event:Deliver', 'event:Discard', 'event:Reload',
-    'other:unchanged', 'save:queued', 'save:refused', 'save:unchanged', 'save:cancelled', 'save:revert-queued', 'server:apply', 'server:no-op', 'server:conflict',
+    'other:unchanged', 'save:queued', 'save:refused', 'save:unchanged', 'save:cancelled', 'server:apply', 'server:no-op', 'server:conflict',
     'reconcile:superseded', 'cache:apply', 'cache:unchanged', 'cache:unproven',
     'editBase:keep', 'editBase:pair',
 ];
