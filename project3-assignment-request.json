@@ -1,7 +1,7 @@
 {
   "version": 1,
   "kind": "implementation-order-full-plan",
-  "operation": "check",
+  "operation": "apply",
   "batches": [
     [
       {
@@ -167,5 +167,104 @@
         "overlap_checked": true
       }
     ]
-  ]
+  ],
+  "manifest": {
+    "batches": [
+      {
+        "digest": "703d5c3e74f7333cb89222627abc6fd1ac69b15d4e3f21c621f561d5e26e26e0",
+        "items": [
+          [
+            1425,
+            420
+          ],
+          [
+            466,
+            440
+          ],
+          [
+            476,
+            460
+          ],
+          [
+            609,
+            480
+          ],
+          [
+            758,
+            500
+          ],
+          [
+            843,
+            520
+          ],
+          [
+            590,
+            540
+          ],
+          [
+            691,
+            560
+          ],
+          [
+            1390,
+            580
+          ],
+          [
+            1474,
+            600
+          ]
+        ]
+      },
+      {
+        "digest": "83512eaf45d58011a5ad28e77da9462f8c51df23ede789918deccc2180e7b644",
+        "items": [
+          [
+            1388,
+            620
+          ],
+          [
+            1391,
+            640
+          ],
+          [
+            570,
+            660
+          ],
+          [
+            483,
+            680
+          ],
+          [
+            400,
+            700
+          ],
+          [
+            607,
+            720
+          ],
+          [
+            621,
+            740
+          ],
+          [
+            842,
+            760
+          ],
+          [
+            274,
+            780
+          ],
+          [
+            371,
+            800
+          ]
+        ]
+      }
+    ],
+    "field": {
+      "id": "PVTF_lAHOAsc2_s4BkAo3zhrqP3o",
+      "name": "Implementation Order"
+    },
+    "schema": "prks-project3-order-manifest/v1"
+  }
 }
