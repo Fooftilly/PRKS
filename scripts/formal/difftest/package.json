@@ -3,7 +3,7 @@
   "private": true,
   "description": "Test-only dependencies of the #1472 differential test (scripts/formal/dafny_differential.cjs).",
   "devDependencies": {
-    "bignumber.js": "9.1.2",
+    "bignumber.js": "11.1.5",
     "fast-check": "4.10.3"
   }
 }
